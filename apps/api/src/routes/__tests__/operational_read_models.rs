@@ -416,8 +416,9 @@ async fn operational_http_database_contract() {
     write("operational-actual.json", &normalized);
     f.cleanup().await;
     if std::env::var_os("OPERATIONAL_CAPTURE").is_none() {
-        let expected =
+        let mut expected =
             serde_json::from_str::<Value>(include_str!("operational_expected.json")).unwrap();
+        numeric_correction::corrected_outputs(&mut expected);
         let differences: Vec<_> = normalized
             .as_object()
             .unwrap()
@@ -616,3 +617,6 @@ async fn operational_stream_failure_and_cancellation_contract() {
     );
     f.cleanup().await;
 }
+
+#[path = "operational_grafana_numeric.rs"]
+mod numeric_correction;

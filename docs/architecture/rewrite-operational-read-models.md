@@ -72,7 +72,12 @@ request, or cloud resource is involved.
 
 The original implementation passes frozen expectations before replacement. The
 baseline includes an inherited Grafana timestamp decoding failure on populated
-queries; correctness changes must be separate from replacement parity. Missing
+queries. A separate regression first observes HTTP 500, then a separate correction
+casts epoch milliseconds to PostgreSQL `float8`, matching the existing Rust `f64`
+wire representation. Eleven frozen response cases receive explicit hand-written
+correction expectations; the original golden file remains byte-for-byte unchanged.
+Additional tests cover the 10,000-point cap, fractional and pre-epoch timestamps,
+and a non-finite sensor value serialized as null. Missing
 collector ownership can also produce the inherited nullable-running decode error.
 No repair of unrelated collector behavior is claimed.
 

@@ -9,7 +9,7 @@ static QUERIES: LazyLock<Vec<String>> = LazyLock::new(|| {
         .iter()
         .map(|column| {
             format!(
-                "SELECT extract(epoch FROM ts) * 1000.0 AS ts_ms, {column}::float8 AS value \
+                "SELECT (extract(epoch FROM ts) * 1000.0)::float8 AS ts_ms, {column}::float8 AS value \
          FROM timeseries.telemetry WHERE vehicle_id = $1 AND ts BETWEEN $2 AND $3 \
          AND {column} IS NOT NULL ORDER BY ts LIMIT $4"
             )
