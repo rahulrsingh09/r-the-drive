@@ -1,3 +1,7 @@
+mod curves;
+mod history;
+mod mutations;
+mod summary;
 use super::charging_sql as c;
 use crate::{
     db::vehicles::{
@@ -559,165 +563,7 @@ async fn update_charge_session(
     session_id: Uuid,
     payload: SessionLocationUpdate,
 ) -> Result<(), AppError> {
-    require_vehicle_manager_access(pool, auth, vehicle_id).await?;
-
-    let location_mode = payload.location_mode.or(match payload.place_id {
-        PatchField::Value(_) => Some(LocationOverrideMode::SavedPlace),
-        PatchField::Null => Some(LocationOverrideMode::None),
-        PatchField::Absent => None,
-    });
-
-    let requested_place_id = match payload.place_id {
-        PatchField::Value(id) => Some(id),
-        PatchField::Absent | PatchField::Null => None,
-    };
-    if location_mode == Some(LocationOverrideMode::SavedPlace) && requested_place_id.is_none() {
-        return Err(AppError::Validation(
-            "place_id required when location_mode is saved_place".into(),
-        ));
-    }
-    if payload.cost_mode == Some(CostOverrideMode::Manual)
-        && !payload
-            .cost_usd
-            .is_some_and(|value| value.is_finite() && value >= 0.0)
-    {
-        return Err(AppError::Validation(
-            "cost_usd must be a non-negative number when cost_mode is manual".into(),
-        ));
-    }
-    if payload.cost_mode != Some(CostOverrideMode::Manual) && payload.cost_usd.is_some() {
-        return Err(AppError::Validation(
-            "cost_usd is only valid when cost_mode is manual".into(),
-        ));
-    }
-
-    let updated_session_id = if location_mode == Some(LocationOverrideMode::SavedPlace) {
-        let place_id = requested_place_id.expect("validated saved place id");
-        let place = sqlx::query_as::<_, PlaceLookupRow>(
-            "SELECT address_id, is_home, latitude, longitude, cost_profile_id
-               FROM panda.geofences
-              WHERE id=$1 AND user_id=$2",
-        )
-        .bind(place_id)
-        .bind(auth.user_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-
-        sqlx::query_scalar::<_, Uuid>(
-            "UPDATE panda.charge_sessions
-               SET geofence_id=$1,
-                   address_id=$2,
-                   is_home=$3,
-                   location_lat=$4,
-                   location_lng=$5,
-                   cost_profile_id=$6,
-                   location_override_mode='saved_place'
-             WHERE id=$7 AND vehicle_id=$8
-             RETURNING id",
-        )
-        .bind(place_id)
-        .bind(place.address_id)
-        .bind(place.is_home)
-        .bind(place.latitude)
-        .bind(place.longitude)
-        .bind(cost_profile_for_location(
-            LocationOverrideMode::SavedPlace,
-            place.cost_profile_id,
-        ))
-        .bind(session_id)
-        .bind(vehicle_id)
-        .fetch_optional(pool)
-        .await?
-    } else if location_mode == Some(LocationOverrideMode::None) {
-        sqlx::query_scalar::<_, Uuid>(
-            "UPDATE panda.charge_sessions
-               SET geofence_id=NULL,
-                   address_id=NULL,
-                   is_home=NULL,
-                   location_lat=NULL,
-                   location_lng=NULL,
-                   cost_profile_id=$1,
-                   location_override_mode='none'
-             WHERE id=$2 AND vehicle_id=$3
-             RETURNING id",
-        )
-        .bind(cost_profile_for_location(LocationOverrideMode::None, None))
-        .bind(session_id)
-        .bind(vehicle_id)
-        .fetch_optional(pool)
-        .await?
-    } else if location_mode == Some(LocationOverrideMode::Automatic) {
-        sqlx::query_scalar::<_, Uuid>(
-            r#"UPDATE panda.charge_sessions cs
-                SET geofence_id=(
-                      SELECT g.id FROM panda.geofences g
-                       WHERE g.user_id=$3 AND cs.source_location_lat IS NOT NULL AND cs.source_location_lng IS NOT NULL
-                         AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m)
-                             @> ll_to_earth(cs.source_location_lat, cs.source_location_lng)
-                         AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
-                       ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
-                    address_id=(
-                      SELECT g.address_id FROM panda.geofences g
-                       WHERE g.user_id=$3 AND cs.source_location_lat IS NOT NULL AND cs.source_location_lng IS NOT NULL
-                         AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m) @> ll_to_earth(cs.source_location_lat, cs.source_location_lng)
-                         AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
-                       ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
-                    is_home=(
-                      SELECT g.is_home FROM panda.geofences g
-                       WHERE g.user_id=$3 AND cs.source_location_lat IS NOT NULL AND cs.source_location_lng IS NOT NULL
-                         AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m) @> ll_to_earth(cs.source_location_lat, cs.source_location_lng)
-                         AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
-                       ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
-                    location_lat=cs.source_location_lat, location_lng=cs.source_location_lng,
-                    cost_profile_id=$4,
-                    location_override_mode='automatic'
-              WHERE cs.id=$1 AND cs.vehicle_id=$2 RETURNING cs.id"#,
-        )
-        .bind(session_id)
-        .bind(vehicle_id)
-        .bind(auth.user_id)
-        .bind(cost_profile_for_location(LocationOverrideMode::Automatic, None))
-        .fetch_optional(pool)
-        .await?
-    } else {
-        sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM panda.charge_sessions WHERE id=$1 AND vehicle_id=$2",
-        )
-        .bind(session_id)
-        .bind(vehicle_id)
-        .fetch_optional(pool)
-        .await?
-    };
-
-    if let Some(cost_mode) = payload.cost_mode {
-        sqlx::query(
-            "UPDATE panda.charge_sessions
-                SET cost_override_mode=$1, cost_override_usd=$2
-              WHERE id=$3 AND vehicle_id=$4",
-        )
-        .bind(cost_mode.as_str())
-        .bind(if cost_mode == CostOverrideMode::Manual {
-            payload.cost_usd
-        } else {
-            None
-        })
-        .bind(session_id)
-        .bind(vehicle_id)
-        .execute(pool)
-        .await?;
-    }
-
-    match updated_session_id {
-        Some(_) => {
-            let recomputed = recompute_charge_session_cost(pool, session_id).await?;
-            if recomputed.is_none() {
-                return Err(AppError::NotFound);
-            }
-            Ok(())
-        }
-        None => Err(AppError::NotFound),
-    }
+    mutations::update(pool, auth, vehicle_id, session_id, payload).await
 }
 
 async fn list_network_preferences(
@@ -751,51 +597,8 @@ async fn update_network_preference(
     Path((vehicle_id, vendor)): Path<(Uuid, String)>,
     Json(payload): Json<NetworkPreferenceUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    let normalized = vendor.trim().to_lowercase();
-    if normalized.is_empty() {
-        return Err(AppError::Validation("network vendor required".into()));
-    }
-    let observed: Option<String> = sqlx::query_scalar(
-        "SELECT MIN(trim(network_vendor)) FROM panda.charge_sessions
-          WHERE vehicle_id=$1 AND lower(trim(network_vendor))=$2",
-    )
-    .bind(vehicle_id)
-    .bind(&normalized)
-    .fetch_one(&state.pool)
-    .await?;
-    let Some(observed) = observed else {
-        return Err(AppError::NotFound);
-    };
-
-    sqlx::query(
-        r#"INSERT INTO panda.vehicle_charging_network_preferences
-              (vehicle_id, vendor_normalized, network_vendor, cost_mode)
-           VALUES ($1,$2,$3,$4)
-           ON CONFLICT (vehicle_id, vendor_normalized) DO UPDATE
-             SET network_vendor=EXCLUDED.network_vendor, cost_mode=EXCLUDED.cost_mode, updated_at=now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(&normalized)
-    .bind(&observed)
-    .bind(payload.cost_mode.as_str())
-    .execute(&state.pool)
-    .await?;
-
-    let sessions = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM panda.charge_sessions
-          WHERE vehicle_id=$1 AND lower(trim(COALESCE(network_vendor, '')))=$2
-            AND cost_override_mode='automatic'",
-    )
-    .bind(vehicle_id)
-    .bind(&normalized)
-    .fetch_all(&state.pool)
-    .await?;
-    for id in sessions {
-        recompute_charge_session_cost(&state.pool, id).await?;
-    }
     Ok(Json(
-        serde_json::json!({ "network_vendor": observed, "cost_mode": payload.cost_mode.as_str() }),
+        mutations::network(&state.pool, &auth, vehicle_id, vendor, payload).await?,
     ))
 }
 
@@ -939,85 +742,7 @@ async fn list_sessions_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
-    let to = p.to.unwrap_or_else(Utc::now);
-    let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
-    let page = p.page.unwrap_or(1).max(1);
-    let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
-
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *tx)
-        .await?;
-
-    let rows = sqlx::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(format!(
-        "SELECT cs.id, cs.started_at, \
-            TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM panda.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
-            cs.ended_at, cs.location_lat, cs.location_lng, \
-                cs.source_location_lat, cs.source_location_lng, cs.location_override_mode, \
-                cs.cost_override_mode, cs.cost_override_usd, \
-                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
-                cs.is_home, COALESCE(cs.charger_type, \
-                    CASE \
-                        WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' \
-                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
-                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
-                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
-                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 50 THEN 'ac_l2' \
-                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
-                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) IS NOT NULL THEN 'dc' \
-                    END \
-                ) AS charger_type, \
-                COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                {}, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
-                cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
-                cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
-                {} \
-         FROM panda.charge_sessions cs \
-         LEFT JOIN panda.geofences g ON g.id = cs.geofence_id \
-         LEFT JOIN panda.addresses a ON a.id = cs.address_id \
-         {} \
-            WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-              AND ($6 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM panda.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') = $6) \
-            ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5",
-        c::COST, c::LIST, c::LATEST,
-    )))
-        .bind(vehicle_id)
-        .bind(from)
-        .bind(to)
-        .bind(limit)
-        .bind(offset)
-        .bind(p.session_day_local.clone())
-        .fetch_all(&mut *tx)
-        .await?;
-
-    let total: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM panda.charge_sessions cs \
-         WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-           AND ($4 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM panda.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') = $4)"
-    )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .bind(p.session_day_local)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    tx.rollback().await?;
-
-    Ok(Json(serde_json::json!({
-        "data": rows,
-        "items": rows,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "page": (offset / limit) + 1,
-        "per_page": limit
-    })))
+    history::history(state, user_id, vehicle_id, p).await
 }
 
 async fn get_chart_series_response(
@@ -1082,16 +807,18 @@ async fn get_chart_series_response(
 fn build_charge_chart_series(
     rows: Vec<ChartSeriesSessionSourceRow>,
 ) -> (Vec<ChargeChartSeriesDay>, Vec<ChargeChartSeriesSession>) {
-    let mut sessions = rows
-        .into_iter()
-        .map(|row| {
-            let day_local = row
-                .session_day_local
-                .unwrap_or_else(|| row.started_at.format("%Y-%m-%d").to_string());
-            ChargeChartSeriesSession {
+    let mut groups = std::collections::BTreeMap::<String, Vec<ChargeChartSeriesSession>>::new();
+    for row in rows {
+        let day = row
+            .session_day_local
+            .unwrap_or_else(|| row.started_at.format("%Y-%m-%d").to_string());
+        groups
+            .entry(day.clone())
+            .or_default()
+            .push(ChargeChartSeriesSession {
                 session_id: row.session_id,
-                day_start: day_start_from_label(&day_local),
-                day_local,
+                day_start: day_start_from_label(&day),
+                day_local: day,
                 started_at: row.started_at,
                 energy_added_kwh: row.energy_kwh,
                 cost_usd: row.cost_usd,
@@ -1101,36 +828,25 @@ fn build_charge_chart_series(
                     row.peak_power_kw,
                 ),
                 location_name: row.location_name,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    sessions.sort_by(|left, right| {
-        left.day_local
-            .cmp(&right.day_local)
-            .then(left.started_at.cmp(&right.started_at))
-            .then(left.session_id.cmp(&right.session_id))
-    });
-
-    let mut daily = Vec::<ChargeChartSeriesDay>::new();
-    for session in &sessions {
-        let energy = session.energy_added_kwh.unwrap_or(0.0).max(0.0);
-        if let Some(current) = daily.last_mut() {
-            if current.day_local == session.day_local {
-                current.total_energy_kwh += energy;
-                current.session_count += 1;
-                continue;
-            }
-        }
-
-        daily.push(ChargeChartSeriesDay {
-            day_local: session.day_local.clone(),
-            day_start: session.day_start,
-            total_energy_kwh: energy,
-            session_count: 1,
-        });
+            });
     }
-
+    let mut daily = Vec::with_capacity(groups.len());
+    let mut sessions = Vec::new();
+    for (day_local, mut group) in groups {
+        group.sort_by_key(|session| (session.started_at, session.session_id));
+        let first = &group[0];
+        let mut total_energy_kwh = first.energy_added_kwh.unwrap_or(0.0).max(0.0);
+        for session in group.iter().skip(1) {
+            total_energy_kwh += session.energy_added_kwh.unwrap_or(0.0).max(0.0);
+        }
+        daily.push(ChargeChartSeriesDay {
+            day_local,
+            day_start: first.day_start,
+            total_energy_kwh,
+            session_count: group.len() as i64,
+        });
+        sessions.extend(group);
+    }
     (daily, sessions)
 }
 
@@ -1179,66 +895,7 @@ async fn get_session_response(
     vehicle_id: Uuid,
     id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
-
-    let session = sqlx::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(format!(
-        "SELECT cs.id, cs.started_at, \
-            TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM panda.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
-            cs.ended_at, cs.location_lat, cs.location_lng, \
-                cs.source_location_lat, cs.source_location_lng, cs.location_override_mode, \
-                cs.cost_override_mode, cs.cost_override_usd, \
-                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
-                cs.is_home, COALESCE(cs.charger_type, \
-                    CASE \
-                        WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' \
-                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
-                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
-                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
-                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 50 THEN 'ac_l2' \
-                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
-                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) IS NOT NULL THEN 'dc' \
-                    END \
-                ) AS charger_type, \
-                COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                {}, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
-                cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
-                cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
-                {} \
-         FROM panda.charge_sessions cs \
-         LEFT JOIN panda.geofences g ON g.id = cs.geofence_id \
-         LEFT JOIN panda.addresses a ON a.id = cs.address_id \
-         LEFT JOIN LATERAL ( \
-             SELECT COUNT(*)::int8 AS sample_count \
-             FROM timeseries.telemetry t \
-             WHERE t.vehicle_id = cs.vehicle_id \
-               AND t.ts BETWEEN cs.started_at \
-                            AND COALESCE(cs.ended_at, now()) \
-         ) telem ON true \
-         {} \
-            WHERE cs.id=$1 AND cs.vehicle_id=$2",
-        c::COST, c::DETAIL, c::TELEM,
-    )))
-        .bind(id)
-        .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    let curve = load_curve(
-        &state.pool,
-        vehicle_id,
-        session.id,
-        session.started_at,
-        session.ended_at,
-        session.charger_type.as_deref(),
-    )
-    .await?;
-
-    Ok(Json(serde_json::json!({
-        "session": session,
-        "curve": curve,
-    })))
+    history::detail(state, user_id, vehicle_id, id).await
 }
 
 async fn get_session_curve_response(
@@ -1277,205 +934,7 @@ async fn get_summary_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
-
-    let agg = sqlx::query_as::<_, SummaryAggRow>(
-        "WITH normalized AS (
-            SELECT
-                COALESCE(kwh_added, energy_added_wh / 1000.0) AS energy_kwh,
-                is_home,
-                charger_type,
-                network_vendor,
-                charge_limit,
-                cost_usd,
-                energy_used_wh,
-                is_free_session,
-                range_added_km,
-                rivian_paid_total,
-                COALESCE(max_charge_rate_kw, avg_charge_rate_kw,
-                    CASE WHEN duration_minutes > 0 THEN COALESCE(kwh_added, energy_added_wh / 1000.0) / (duration_minutes::float8 / 60.0) END
-                ) AS rate_kw
-            FROM panda.charge_sessions
-            WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-        ),
-        typed AS (
-            SELECT *,
-                COALESCE(charger_type, CASE
-                    WHEN lower(COALESCE(network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-                    WHEN rate_kw < 12 THEN 'ac'
-                    WHEN rate_kw < 50 THEN 'ac_l2'
-                    WHEN rate_kw IS NOT NULL THEN 'dc'
-                END) AS derived_type
-            FROM normalized
-        )
-        SELECT COALESCE(SUM(energy_kwh),0) AS total_kwh,
-            COUNT(*) AS session_count,
-            COALESCE(SUM(CASE WHEN is_home THEN energy_kwh ELSE 0 END),0) AS home_kwh,
-            COALESCE(SUM(CASE WHEN is_home = false THEN energy_kwh ELSE 0 END),0) AS away_kwh,
-            COALESCE(SUM(CASE WHEN is_home IS NULL THEN energy_kwh ELSE 0 END),0) AS unknown_location_kwh,
-            COALESCE(SUM(CASE WHEN derived_type='ac' THEN energy_kwh ELSE 0 END),0) AS ac_kwh,
-            COALESCE(SUM(CASE WHEN derived_type='ac_l2' THEN energy_kwh ELSE 0 END),0) AS ac_l2_kwh,
-            COALESCE(SUM(CASE WHEN derived_type='dc' THEN energy_kwh ELSE 0 END),0) AS dc_kwh,
-            COUNT(derived_type) AS typed_session_count,
-            MAX(charge_limit) AS max_charge_limit_pct,
-            MAX(rate_kw) AS max_charge_rate_kw,
-            SUM(GREATEST(energy_kwh, COALESCE(energy_used_wh / 1000.0, 0))) AS total_energy_used_kwh,
-            SUM(cost_usd) AS total_cost_usd,
-            COUNT(cost_usd) AS known_cost_session_count,
-            COUNT(*) FILTER (WHERE cost_usd IS NULL) AS unknown_cost_session_count,
-            COUNT(*) FILTER (WHERE is_free_session) AS free_session_count,
-            SUM(range_added_km) AS total_range_added_km,
-            SUM(rivian_paid_total) AS rivian_paid_total_usd
-         FROM typed"
-    )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .fetch_one(&state.pool)
-    .await?;
-
-    let capacity_sources = sqlx::query_as::<_, CapacitySourcesRow>(
-        "SELECT
-            (SELECT battery_capacity_wh
-             FROM panda.vehicles
-             WHERE id=$1 AND battery_capacity_wh IS NOT NULL
-             LIMIT 1) AS vehicle_capacity_wh,
-            (SELECT battery_capacity_wh
-             FROM timeseries.telemetry
-             WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL
-             ORDER BY ts DESC
-             LIMIT 1) AS telemetry_latest_capacity_wh,
-            (SELECT max(battery_capacity_wh)
-             FROM timeseries.telemetry
-             WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL) AS telemetry_max_capacity_wh",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&state.pool)
-    .await?;
-    let capacity_kwh = capacity_sources
-        .vehicle_capacity_wh
-        .and_then(normalize_capacity_kwh)
-        .or_else(|| {
-            capacity_sources
-                .telemetry_latest_capacity_wh
-                .and_then(normalize_capacity_kwh)
-        })
-        .or_else(|| {
-            capacity_sources
-                .telemetry_max_capacity_wh
-                .and_then(normalize_capacity_kwh)
-        });
-
-    let weekly = sqlx::query_as::<_, WeeklySummaryRow>(
-        "SELECT date_trunc('week', started_at) AS week_start,
-            COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)),0) AS kwh,
-            SUM(cost_usd) AS cost_usd,
-            COUNT(*) AS sessions
-         FROM panda.charge_sessions
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-         GROUP BY 1 ORDER BY 1",
-    )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let network_breakdown = sqlx::query_as::<_, NetworkBreakdownRow>(
-        "SELECT
-                CASE
-                    WHEN is_home = true THEN 'Home Charging'
-                    WHEN network_vendor IS NOT NULL THEN network_vendor
-                    WHEN charger_type IN ('ac', 'ac_l2') THEN 'Other AC'
-                    ELSE NULL
-                END AS network_vendor,
-                COUNT(*) AS session_count,
-                SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS energy_kwh,
-                SUM(cost_usd) AS cost_usd,
-                COUNT(*) FILTER (WHERE is_free_session) AS free_sessions
-         FROM panda.charge_sessions
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND (
-               is_home = true
-               OR network_vendor IS NOT NULL
-               OR charger_type IN ('ac', 'ac_l2')
-           )
-         GROUP BY 1
-         ORDER BY energy_kwh DESC NULLS LAST",
-    )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
-
-    let total_kwh = agg.total_kwh.unwrap_or(0.0);
-    let total_energy_used_kwh = agg.total_energy_used_kwh.unwrap_or(0.0);
-    let charging_cycles = capacity_kwh.and_then(|cap| {
-        if cap > 0.0 {
-            Some((total_kwh / cap).floor())
-        } else {
-            None
-        }
-    });
-    if let (Some(cycles), Some(cap)) = (charging_cycles, capacity_kwh) {
-        if cycles >= 500.0 {
-            tracing::warn!(
-                %vehicle_id,
-                total_kwh,
-                capacity_kwh = cap,
-                charging_cycles = cycles,
-                "charging summary cycles unusually high"
-            );
-        }
-    }
-    let charging_efficiency_pct = if total_energy_used_kwh > 0.0 {
-        Some(total_kwh / total_energy_used_kwh * 100.0)
-    } else {
-        None
-    };
-
-    Ok(Json(serde_json::json!({
-        "total_kwh":       total_kwh,
-        "total_energy_kwh": total_kwh,
-        "total_cost_usd":  if agg.session_count == 0 { Some(0.0) } else { agg.total_cost_usd },
-        "session_count":   agg.session_count,
-        "home_kwh":        agg.home_kwh,
-        "away_kwh":        agg.away_kwh,
-        "unknown_location_kwh": agg.unknown_location_kwh,
-        "by_type": {
-            "ac_kwh":   agg.ac_kwh,
-            "ac_l2_kwh": agg.ac_l2_kwh,
-            "dc_kwh":   agg.dc_kwh,
-        },
-        "charging_cycles": charging_cycles,
-        "charging_efficiency_pct": charging_efficiency_pct,
-        "total_energy_used_kwh": total_energy_used_kwh,
-        "max_charge_limit_pct": agg.max_charge_limit_pct,
-        "max_charge_rate_kw": agg.max_charge_rate_kw,
-        "typed_session_count": agg.typed_session_count,
-        "known_cost_session_count": agg.known_cost_session_count,
-        "unknown_cost_session_count": agg.unknown_cost_session_count,
-        "free_session_count": agg.free_session_count,
-        "total_range_added_km": agg.total_range_added_km,
-        "rivian_paid_total_usd": agg.rivian_paid_total_usd,
-        "network_breakdown": network_breakdown.iter().map(|r| serde_json::json!({
-            "network_vendor": r.network_vendor,
-            "session_count":  r.session_count,
-            "energy_kwh":     r.energy_kwh,
-            "cost_usd":       r.cost_usd,
-            "free_sessions":  r.free_sessions,
-        })).collect::<Vec<_>>(),
-        "weekly": weekly.iter().map(|r| serde_json::json!({
-            "week_start": r.week_start,
-            "kwh":        r.kwh,
-            "energy_kwh": r.kwh,
-            "cost_usd":   r.cost_usd,
-            "sessions":   r.sessions,
-        })).collect::<Vec<_>>(),
-    })))
+    summary::response(state, user_id, vehicle_id, p).await
 }
 
 #[cfg(test)]
@@ -1759,221 +1218,15 @@ async fn load_curve(
     ended_at: Option<DateTime<Utc>>,
     charger_type: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    // Open sessions use now; completed sessions keep their authoritative end.
-    let ended_at = ended_at.unwrap_or_else(Utc::now);
-
-    // Context-aware cap: DC fast chargers can peak ~220 kW on a Rivian so we
-    // allow up to 300 kW.  AC sessions (L1 or L2) are hard-limited by circuit
-    // amperage — even a 80A/240V L2 circuit tops out around 19 kW.  We cap at
-    // 22 kW to give a comfortable margin without letting SOC-gap spikes (from
-    // offline periods) corrupt the curve.  Unknown/null types get the AC cap as
-    // a conservative default; misclassifying a DC session as AC is unlikely
-    // since the charge_detector's AC-spike filter already screens those.
-    let is_dc = matches!(
-        charger_type.map(str::to_ascii_lowercase).as_deref(),
-        Some("dc" | "dcfc")
-    );
-
-    let linked_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)::int8
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1
-             AND charge_session_id=$2
-             AND ts >= $3
-             AND ts <= $4"#,
+    curves::detail(
+        pool,
+        vehicle_id,
+        session_id,
+        started_at,
+        ended_at,
+        charger_type,
     )
-    .bind(vehicle_id)
-    .bind(session_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_one(pool)
-    .await?;
-
-    let (rows, sample_source) = if linked_sample_count >= 2 {
-        (
-            sqlx::query_as::<_, CurveRow>(
-                r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM panda.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-                samples AS (
-                    SELECT time_bucket('1 minute', t.ts) AS bucket,
-                           AVG(t.battery_level) AS avg_soc,
-                           AVG(ABS(t.power_kw)) FILTER (WHERE t.power_kw IS NOT NULL) AS avg_power_kw,
-                           AVG(t.battery_capacity_wh) AS bucket_cap_wh
-                    FROM timeseries.telemetry t
-                   WHERE t.vehicle_id=$1
-                     AND t.charge_session_id=$2
-                     AND t.ts >= $3
-                     AND t.ts <= $4
-                   GROUP BY 1
-                )
-               SELECT EXTRACT(EPOCH FROM (bucket - $3))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              COALESCE(avg_power_kw, CASE
-                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(bucket_cap_wh, cap.default_cap_wh) / 1000.0
-                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
-                              END)
-                          )
-                      ) AS charge_rate_kw,
-                      avg_soc AS soc,
-                      CASE
-                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
-                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                          THEN 'soc_delta'
-                      END AS power_method
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
-            )
-            .bind(vehicle_id)
-            .bind(session_id)
-            .bind(started_at)
-            .bind(ended_at)
-            .bind(is_dc)
-            .fetch_all(pool)
-            .await?,
-            "telemetry",
-        )
-    } else {
-        (
-            sqlx::query_as::<_, CurveRow>(
-                r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM panda.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-               samples AS (
-                   SELECT bucket,
-                          avg_soc,
-                          avg_power_kw,
-                          battery_capacity_wh
-                   FROM timeseries.telemetry_1min
-                   WHERE vehicle_id=$1
-                     AND bucket >= $2
-                     AND bucket <= $3
-               )
-               SELECT EXTRACT(EPOCH FROM (bucket - $2))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              COALESCE(ABS(avg_power_kw), CASE
-                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(battery_capacity_wh, cap.default_cap_wh) / 1000.0
-                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
-                              END)
-                          )
-                      ) AS charge_rate_kw,
-                      avg_soc AS soc,
-                      CASE
-                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
-                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                          THEN 'soc_delta'
-                      END AS power_method
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
-            )
-            .bind(vehicle_id)
-            .bind(started_at)
-            .bind(ended_at)
-            .bind(is_dc)
-            .fetch_all(pool)
-            .await?,
-            "telemetry_1min",
-        )
-    };
-
-    if rows.len() < 2 {
-        // Fallback: combine the two explicitly associated curve stores. A
-        // Parallax point wins an exact timestamp collision because it carries
-        // the richer graph sample; canonical telemetry still owns lifecycle.
-        let fallback = sqlx::query_as::<_, CurveRow>(
-            r#"WITH candidates AS (
-                   SELECT ts,power_kw,NULL::float8 AS soc,'rivian_charge_curve_points'::text AS sample_source,1 AS precedence
-                   FROM panda.rivian_charge_curve_points
-                   WHERE vehicle_id=$1 AND charge_session_id=$3 AND power_kw IS NOT NULL AND power_kw > 0
-                   UNION ALL
-                   SELECT source_at AS ts,power_kw,soc,'parallax_charge_curve_points'::text AS sample_source,2 AS precedence
-                   FROM timeseries.parallax_charge_curve_points
-                   WHERE vehicle_id=$1 AND charge_session_id=$3 AND power_kw IS NOT NULL AND power_kw > 0
-               ), resolved AS (
-                   SELECT DISTINCT ON (ts) ts,power_kw,soc,sample_source
-                   FROM candidates ORDER BY ts,precedence DESC
-               )
-               SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
-                            GREATEST(0.0, power_kw)) AS charge_rate_kw,
-                      soc,
-                      'recorded'::text AS power_method,
-                      sample_source
-               FROM resolved
-               ORDER BY ts"#,
-        )
-        .bind(vehicle_id)
-        .bind(started_at)
-        .bind(session_id)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?;
-        if !fallback.is_empty() {
-            return Ok(fallback
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "minutes_elapsed": r.minutes_elapsed,
-                        "charge_rate_kw": r.charge_rate_kw,
-                        "soc": r.soc,
-                        "sample_source": r.sample_source.as_deref().unwrap_or("rivian_charge_curve_points"),
-                        "power_method": r.power_method,
-                    })
-                })
-                .collect());
-        }
-    }
-
-    Ok(rows
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "minutes_elapsed": r.minutes_elapsed,
-                "charge_rate_kw": r.charge_rate_kw,
-                "soc": r.soc,
-                "sample_source": sample_source,
-                "power_method": r.power_method,
-            })
-        })
-        .collect())
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1987,276 +1240,17 @@ async fn load_curve_analysis_samples(
     soc_start: Option<f64>,
     soc_end: Option<f64>,
 ) -> Result<Vec<CurveSampleRow>, AppError> {
-    let Some(ended_at) = ended_at else {
-        return Ok(vec![]);
-    };
-
-    let is_dc = matches!(
-        charger_type
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("dc" | "dcfc")
-    );
-    let cap_kw = if is_dc { 300.0 } else { 22.0 };
-
-    let linked_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)::int8
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1
-             AND charge_session_id=$2
-             AND ts >= $3
-             AND ts <= $4"#,
-    )
-    .bind(vehicle_id)
-    .bind(session_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_one(pool)
-    .await?;
-
-    let primary_rows = if linked_sample_count >= 2 {
-        sqlx::query_as::<_, CurveAnalysisValueRow>(
-            r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM panda.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-                samples AS (
-                    SELECT t.ts AS bucket,
-                           t.battery_level AS soc,
-                           ABS(t.power_kw) AS power_kw,
-                           t.battery_capacity_wh AS capacity_wh
-                    FROM timeseries.telemetry t
-                   WHERE t.vehicle_id=$1
-                     AND t.charge_session_id=$2
-                     AND t.ts >= $3
-                     AND t.ts <= $4
-                ),
-                intervals AS (
-                    SELECT bucket,
-                           soc,
-                           power_kw,
-                           capacity_wh,
-                           LAG(bucket) OVER (ORDER BY bucket) AS previous_bucket,
-                           LAG(soc) OVER (ORDER BY bucket) AS previous_soc
-                    FROM samples
-                    WHERE soc IS NOT NULL
-                ),
-                calculated AS (
-                    SELECT bucket,
-                           soc,
-                           power_kw,
-                           CASE
-                               WHEN power_kw IS NULL
-                                AND soc > previous_soc
-                                AND EXTRACT(EPOCH FROM (bucket - previous_bucket)) BETWEEN 10 AND 300
-                               THEN 3600.0 * (soc - previous_soc) / 100.0
-                                   * COALESCE(capacity_wh, cap.default_cap_wh) / 1000.0
-                                   / EXTRACT(EPOCH FROM (bucket - previous_bucket))
-                           END AS derived_power_kw
-                    FROM intervals
-                    CROSS JOIN cap
-                ),
-                session_soc_points AS (
-                    SELECT MIN(bucket) AS ts,
-                           EXTRACT(EPOCH FROM (MIN(bucket) - $3))::float8 / 60.0 AS minutes_elapsed,
-                           soc,
-                           CASE
-                               WHEN COUNT(*) FILTER (WHERE power_kw IS NOT NULL) > 0
-                               THEN AVG(power_kw) FILTER (WHERE power_kw IS NOT NULL)
-                               ELSE AVG(derived_power_kw)
-                           END AS charge_rate_kw,
-                           CASE
-                               WHEN COUNT(*) FILTER (WHERE power_kw IS NOT NULL) > 0 THEN 'recorded'
-                               WHEN COUNT(*) FILTER (WHERE derived_power_kw IS NOT NULL) > 0 THEN 'soc_delta'
-                           END AS power_method
-                    FROM calculated
-                    WHERE power_kw IS NOT NULL OR derived_power_kw IS NOT NULL
-                    GROUP BY soc
-                )
-               SELECT ts,
-                      minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              charge_rate_kw
-                          )
-                      ) AS charge_rate_kw,
-                      soc,
-                      power_method
-               FROM session_soc_points
-               ORDER BY ts"#,
-        )
-        .bind(vehicle_id)
-        .bind(session_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?
-    } else {
-        Vec::new()
-    };
-
-    if primary_rows.len() >= 2 {
-        return Ok(primary_rows
-            .into_iter()
-            .map(|row| CurveSampleRow {
-                session_id,
-                minutes_elapsed: row.minutes_elapsed,
-                charge_rate_kw: row.charge_rate_kw.unwrap_or(0.0),
-                soc: row.soc,
-                sample_source: "telemetry".to_string(),
-                charger_type: charger_type.clone(),
-                power_method: if row.power_method.as_deref() == Some("recorded") {
-                    "recorded"
-                } else {
-                    "soc_delta"
-                },
-            })
-            .collect());
-    }
-
-    let minute_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*)::int8
-           FROM timeseries.telemetry_1min
-           WHERE vehicle_id=$1
-             AND bucket >= $2
-             AND bucket <= $3
-             AND avg_soc IS NOT NULL"#,
-    )
-    .bind(vehicle_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_one(pool)
-    .await?;
-
-    let minute_rows = if minute_sample_count >= 2 {
-        sqlx::query_as::<_, CurveAnalysisValueRow>(
-            r#"WITH cap AS (
-                   SELECT COALESCE(
-                       (SELECT battery_capacity_wh
-                        FROM panda.vehicles
-                        WHERE id=$1
-                          AND battery_capacity_wh IS NOT NULL
-                        LIMIT 1),
-                       (SELECT max(battery_capacity_wh)
-                        FROM timeseries.telemetry
-                        WHERE vehicle_id=$1
-                          AND battery_capacity_wh IS NOT NULL)
-                   ) AS default_cap_wh
-               ),
-               samples AS (
-                   SELECT bucket,
-                          avg_soc,
-                          avg_power_kw,
-                          battery_capacity_wh
-                   FROM timeseries.telemetry_1min
-                   WHERE vehicle_id=$1
-                     AND bucket >= $2
-                     AND bucket <= $3
-               )
-               SELECT bucket AS ts,
-                      EXTRACT(EPOCH FROM (bucket - $2))::float8 / 60.0 AS minutes_elapsed,
-                      LEAST(
-                          CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
-                          GREATEST(
-                              0.0,
-                              COALESCE(ABS(avg_power_kw), CASE
-                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(battery_capacity_wh, cap.default_cap_wh) / 1000.0
-                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
-                              END)
-                          )
-                      ) AS charge_rate_kw,
-                      avg_soc AS soc,
-                      CASE
-                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
-                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
-                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
-                          THEN 'soc_delta'
-                      END AS power_method
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
-        )
-        .bind(vehicle_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?
-    } else {
-        Vec::new()
-    };
-
-    if minute_rows.len() >= 2 {
-        return Ok(minute_rows
-            .into_iter()
-            .map(|row| CurveSampleRow {
-                session_id,
-                minutes_elapsed: row.minutes_elapsed,
-                charge_rate_kw: row.charge_rate_kw.unwrap_or(0.0),
-                soc: row.soc,
-                sample_source: "telemetry_1min".to_string(),
-                charger_type: charger_type.clone(),
-                power_method: if row.power_method.as_deref() == Some("recorded") {
-                    "recorded"
-                } else {
-                    "soc_delta"
-                },
-            })
-            .collect());
-    }
-
-    let fallback = sqlx::query_as::<_, RawCurvePointRow>(
-        r#"WITH candidates AS (
-               SELECT ts,power_kw,'rivian_charge_curve_points'::text AS sample_source,1 AS precedence
-               FROM panda.rivian_charge_curve_points
-               WHERE vehicle_id=$1 AND charge_session_id=$2 AND power_kw IS NOT NULL AND power_kw > 0
-               UNION ALL
-               SELECT source_at AS ts,power_kw,'parallax_charge_curve_points'::text AS sample_source,2 AS precedence
-               FROM timeseries.parallax_charge_curve_points
-               WHERE vehicle_id=$1 AND charge_session_id=$2 AND power_kw IS NOT NULL AND power_kw > 0
-           )
-           SELECT DISTINCT ON (ts) ts,power_kw,sample_source
-           FROM candidates ORDER BY ts,precedence DESC"#,
-    )
-    .bind(vehicle_id)
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
-
-    let Some((soc_start, soc_end)) = soc_start.zip(soc_end) else {
-        return Ok(vec![]);
-    };
-    if fallback.is_empty() {
-        return Ok(vec![]);
-    }
-
-    Ok(build_fallback_curve_samples(
+    curves::analysis(
+        pool,
+        vehicle_id,
         session_id,
         started_at,
         ended_at,
-        charger_type.as_deref(),
+        charger_type,
         soc_start,
         soc_end,
-        &fallback,
-        cap_kw,
-    ))
+    )
+    .await
 }
 
 #[cfg(test)]
