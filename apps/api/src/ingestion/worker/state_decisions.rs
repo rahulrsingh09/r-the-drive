@@ -1,9 +1,50 @@
-//! Pure decisions derived from WebSocket control messages.
+//! Pure source, routing and protocol-health decisions for inbound envelopes.
 //!
 //! Keeping these mappings separate from database writers makes protocol-state
 //! changes directly testable without constructing a worker or database pool.
 
 use crate::ingestion::ws_client::WsInboundEvent;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SampleSource {
+    Socket,
+    Baseline,
+    Parallax,
+}
+
+impl SampleSource {
+    pub(super) fn of(inbound: &WsInboundEvent) -> Self {
+        match inbound.message_type.as_deref() {
+            Some(kind) if kind.starts_with("parallax:") => Self::Parallax,
+            Some("baseline") => Self::Baseline,
+            _ => Self::Socket,
+        }
+    }
+
+    pub(super) fn is_parallax(self) -> bool {
+        self == Self::Parallax
+    }
+    pub(super) fn accounts_for_socket(self) -> bool {
+        self == Self::Socket
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EnvelopeRoute {
+    Projection,
+    Heartbeat,
+    Telemetry,
+}
+
+impl EnvelopeRoute {
+    pub(super) fn of(inbound: &WsInboundEvent) -> Self {
+        match (&inbound.telemetry, inbound.kind) {
+            (None, _) => Self::Projection,
+            (Some(_), crate::ingestion::ws_client::WsInboundKind::Heartbeat) => Self::Heartbeat,
+            (Some(_), _) => Self::Telemetry,
+        }
+    }
+}
 
 pub(super) fn is_synthetic_control(message_type: Option<&str>) -> bool {
     matches!(
@@ -138,6 +179,40 @@ mod tests {
             telemetry: None,
             charging_session: None,
             battery_cell_type: None,
+        }
+    }
+
+    #[test]
+    fn envelope_routing_keeps_source_and_payload_policy_independent() {
+        for (message, source) in [
+            ("next", SampleSource::Socket),
+            ("baseline", SampleSource::Baseline),
+            ("parallax:power", SampleSource::Parallax),
+            ("Parallax:power", SampleSource::Socket),
+        ] {
+            for kind in [
+                WsInboundKind::Control,
+                WsInboundKind::Heartbeat,
+                WsInboundKind::Telemetry,
+                WsInboundKind::ChargingSession,
+            ] {
+                let mut inbound = control(message, serde_json::Value::Null);
+                inbound.kind = kind;
+                assert_eq!(SampleSource::of(&inbound), source);
+                assert_eq!(EnvelopeRoute::of(&inbound), EnvelopeRoute::Projection);
+                inbound.telemetry = Some(crate::models::telemetry::TelemetryEvent::empty(
+                    uuid::Uuid::nil(),
+                    Utc::now(),
+                ));
+                assert_eq!(
+                    EnvelopeRoute::of(&inbound),
+                    if kind == WsInboundKind::Heartbeat {
+                        EnvelopeRoute::Heartbeat
+                    } else {
+                        EnvelopeRoute::Telemetry
+                    }
+                );
+            }
         }
     }
 

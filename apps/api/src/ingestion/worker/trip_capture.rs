@@ -598,4 +598,78 @@ mod tests {
         drop(conn);
         db.finish().await;
     }
+    #[tokio::test]
+    #[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+    async fn conflicting_outbox_payload_does_not_advance_checkpoint_or_drop_pending_trip() {
+        let db = TestDb::new().await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let mut capture = TripCapture::load(&db.pool, db.vehicle_id).await.unwrap();
+        capture.process(&event(db.vehicle_id, 0, 10.0, PowerState::Drive));
+        capture.save(&mut conn).await.unwrap();
+        let TripEvent::TripEnded { trip } =
+            capture.process(&event(db.vehicle_id, 60, 11.0, PowerState::Sleep))
+        else {
+            panic!("expected completion")
+        };
+        let mut conflicting = serde_json::to_value(&trip).unwrap();
+        conflicting["soc_end"] = serde_json::json!(1.0);
+        sqlx::query(
+            "INSERT INTO panda.pending_trip_completions(trip_id,vehicle_id,trip) VALUES($1,$2,$3)",
+        )
+        .bind(trip.trip_id)
+        .bind(db.vehicle_id)
+        .bind(conflicting)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let error = capture.save(&mut conn).await.unwrap_err();
+        assert!(error.to_string().contains("conflicting pending trip"));
+        assert_eq!(capture.pending.len(), 1);
+        conn.ping().await.unwrap();
+        let recovered = TripCapture::load(&db.pool, db.vehicle_id).await.unwrap();
+        assert_eq!(recovered.detector().active_trip_id(), Some(trip.trip_id));
+        sqlx::query("DELETE FROM panda.pending_trip_completions WHERE trip_id=$1")
+            .bind(trip.trip_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        capture.save(&mut conn).await.unwrap();
+        assert!(capture.pending.is_empty());
+        assert_eq!(db.counts().await, (0, 1, 0));
+        drop(conn);
+        db.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+    async fn recovery_rejects_other_vehicle_checkpoint_without_overwriting_it() {
+        let db = TestDb::new().await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let mut capture = TripCapture::load(&db.pool, db.vehicle_id).await.unwrap();
+        capture.save(&mut conn).await.unwrap();
+        let mut wrong = serde_json::to_value(&capture.checkpoint).unwrap();
+        wrong["detector"]["vehicle_id"] = serde_json::json!(Uuid::new_v4());
+        sqlx::query("UPDATE panda.active_trip_checkpoints SET snapshot=$2 WHERE vehicle_id=$1")
+            .bind(db.vehicle_id)
+            .bind(&wrong)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let result = TripCapture::load(&db.pool, db.vehicle_id).await;
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("trip checkpoint vehicle mismatch"));
+        let stored: serde_json::Value = sqlx::query_scalar(
+            "SELECT snapshot FROM panda.active_trip_checkpoints WHERE vehicle_id=$1",
+        )
+        .bind(db.vehicle_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, wrong);
+        drop(conn);
+        db.finish().await;
+    }
 }
