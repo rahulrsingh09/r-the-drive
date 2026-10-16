@@ -352,8 +352,16 @@ async fn nonempty_durable_state_survives_rollback_restore_and_worker_restart() {
     health.abort();
     let _ = health.await;
     fixture.cleanup().await;
-    assert_eq!(
-        actual,
-        serde_json::from_str::<Value>(include_str!("restore_execution/durable.json")).unwrap()
-    );
+    let mut expected =
+        serde_json::from_str::<Value>(include_str!("restore_execution/durable.json")).unwrap();
+    for (index, stage) in [(3, "restart-0"), (4, "restart-1")] {
+        assert_eq!(expected[index]["stage"], stage);
+        let charge = &mut expected[index]["state"]["panda.charge_sessions"][1];
+        assert_eq!(charge["id"], Uuid::from_u128(7014).to_string());
+        assert_eq!(charge["peak_voltage"], json!(12.12345679012364));
+        assert_eq!(charge["peak_voltage"], charge["max_charge_rate_kw"]);
+        // The frozen baseline misfiled detector power as voltage.
+        charge["peak_voltage"] = Value::Null;
+    }
+    assert_eq!(actual, expected);
 }
