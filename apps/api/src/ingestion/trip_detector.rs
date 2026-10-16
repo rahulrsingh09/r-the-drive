@@ -1,6 +1,6 @@
-//! Detects trip boundaries from a stream of TelemetryEvents.
-//! Extended with odometer, range, power envelope, elevation, inside temp,
-//! regen energy tracking, and an energy-strategy ensemble.
+//! Trip lifecycle reducer with durable vehicle observations and trip aggregates.
+//! Start anchors, active-frame accumulation, and completion share the existing
+//! checkpoint layout used by ingestion recovery.
 
 use crate::models::telemetry::{PowerState, TelemetryEvent};
 use chrono::{DateTime, Utc};
@@ -139,6 +139,80 @@ pub struct TripDetectorState {
 /// now (a missed drive must not be attributed to a much later one).
 const GEAR_ANCHOR_MAX_AGE_SECS: i64 = 15 * 60;
 
+#[derive(Clone, Copy)]
+enum StartDecision {
+    Active,
+    MissingPower,
+    InactivePower,
+    MissingSpeed,
+    Stopped,
+    Eligible,
+}
+
+impl StartDecision {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Active => "already_active",
+            Self::MissingPower => "power_missing",
+            Self::InactivePower => "power_not_awake",
+            Self::MissingSpeed => "speed_missing",
+            Self::Stopped => "speed_below_threshold",
+            Self::Eligible => "eligible",
+        }
+    }
+}
+
+struct StartAnchor {
+    odometer: Option<f64>,
+    at: DateTime<Utc>,
+    parked: Option<TrackPoint>,
+}
+
+impl StartAnchor {
+    fn resolve(
+        state: &mut TripDetectorState,
+        event: &TelemetryEvent,
+        prior_odometer: Option<f64>,
+    ) -> Self {
+        let fresh = |at: DateTime<Utc>| {
+            at <= event.ts && (event.ts - at).num_seconds() <= GEAR_ANCHOR_MAX_AGE_SECS
+        };
+        let shifted_at = state.gear_at.take().filter(|at| fresh(*at));
+        let shifted_odometer = state.gear_odometer.take().filter(|_| shifted_at.is_some());
+        let current = event.odometer_miles.or(prior_odometer);
+        let odometer = shifted_odometer
+            .filter(|gear| current.is_none_or(|now| *gear <= now))
+            .or_else(|| {
+                prior_odometer.filter(|prior| event.odometer_miles.is_some_and(|now| now > *prior))
+            })
+            .or(current);
+        let backdated = matches!((odometer, current), (Some(start), Some(now)) if start < now);
+        let parked = state
+            .last_parked_fix
+            .take()
+            .filter(|fix| backdated && fresh(fix.ts));
+        Self {
+            odometer,
+            at: if backdated {
+                shifted_at.unwrap_or(event.ts)
+            } else {
+                event.ts
+            },
+            parked,
+        }
+    }
+}
+
+fn track_point(event: &TelemetryEvent, speed_mph: f64) -> Option<TrackPoint> {
+    valid_location_pair(event.latitude, event.longitude).map(|(lat, lng)| TrackPoint {
+        ts: event.ts,
+        lat,
+        lng,
+        speed_mph,
+        altitude_m: event.altitude_m,
+    })
+}
+
 impl TripDetectorState {
     pub fn new(vehicle_id: Uuid) -> Self {
         Self {
@@ -147,8 +221,7 @@ impl TripDetectorState {
         }
     }
 
-    /// Returns the active trip_id so the ingestion worker can stamp each
-    /// telemetry row with the in-progress trip while driving.
+    /// Identity carried by live telemetry and durable checkpoints.
     pub fn active_trip_id(&self) -> Option<Uuid> {
         self.active_trip_id
     }
@@ -158,7 +231,7 @@ impl TripDetectorState {
     }
 
     pub(super) fn resume_after_restart(&mut self) {
-        // Never integrate energy, elevation, or a parked anchor across downtime.
+        // Downtime cannot connect energy samples, elevations, or parked anchors.
         self.last_regen_ts = None;
         self.last_altitude = None;
         self.gear_at = None;
@@ -167,295 +240,111 @@ impl TripDetectorState {
     }
 
     pub(super) fn close_interrupted_trip(&mut self, at: DateTime<Utc>) -> TripEvent {
-        let event = if self.active_trip_id.is_some() {
+        let result = if self.active_trip_id.is_some() {
             self.close_trip(at)
         } else {
             TripEvent::NoChange
         };
         *self = Self::new(self.vehicle_id);
-        event
+        result
     }
 
-    /// The same start predicate used by process, exposed without trip contents.
-    pub fn start_decision(&self, event: &TelemetryEvent) -> &'static str {
+    fn decision(&self, event: &TelemetryEvent) -> StartDecision {
         if self.active_trip_id.is_some() {
-            "already_active"
-        } else if event.power_state.is_none() {
-            "power_missing"
-        } else if !matches!(
-            event.power_state,
-            Some(PowerState::Drive | PowerState::Go | PowerState::Ready)
-        ) {
-            "power_not_awake"
-        } else if event.speed_mph.is_none() {
-            "speed_missing"
-        } else if !event
-            .speed_mph
-            .is_some_and(|speed| speed > STOPPED_SPEED_MPH)
-        {
-            "speed_below_threshold"
-        } else {
-            "eligible"
+            return StartDecision::Active;
         }
+        match event.power_state {
+            None => StartDecision::MissingPower,
+            Some(PowerState::Drive | PowerState::Go | PowerState::Ready) => match event.speed_mph {
+                None => StartDecision::MissingSpeed,
+                Some(speed) if speed > STOPPED_SPEED_MPH => StartDecision::Eligible,
+                Some(_) => StartDecision::Stopped,
+            },
+            Some(_) => StartDecision::InactivePower,
+        }
+    }
+
+    /// Uses the same typed decision as process without exposing trip contents.
+    pub fn start_decision(&self, event: &TelemetryEvent) -> &'static str {
+        self.decision(event).name()
     }
 
     pub fn process(&mut self, event: &TelemetryEvent) -> TripEvent {
-        let start_decision = self.start_decision(event);
-        let power = event.power_state.as_ref();
-        let speed = event.speed_mph.unwrap_or(0.0);
-        let ts = event.ts;
-
-        if let Some(soc) = event.battery_level {
-            self.last_soc = Some(soc);
-        }
-        if let Some(cap) = event.battery_capacity_wh {
-            self.battery_capacity = Some(cap);
-        }
+        let decision = self.decision(event);
         let prior_odometer = self.last_odometer;
-        if let Some(odo) = event.odometer_miles {
-            self.last_odometer = Some(odo);
+        self.observe_vehicle(event, prior_odometer);
+        match decision {
+            StartDecision::Eligible => {
+                let anchor = StartAnchor::resolve(self, event, prior_odometer);
+                self.begin_trip(event, anchor)
+            }
+            StartDecision::Active => {
+                self.accumulate(event);
+                self.advance_regen_clock(event);
+                if event
+                    .speed_mph
+                    .is_some_and(|speed| speed > STOPPED_SPEED_MPH)
+                {
+                    self.last_moving_at = Some(event.ts);
+                }
+                let stopped = self
+                    .last_moving_at
+                    .is_some_and(|last| (event.ts - last).num_seconds() > STOPPED_DURATION_SECS);
+                if matches!(event.power_state, Some(PowerState::Sleep)) || stopped {
+                    self.close_trip(event.ts)
+                } else {
+                    TripEvent::NoChange
+                }
+            }
+            _ => {
+                self.advance_regen_clock(event);
+                if !self.in_gear
+                    && !event
+                        .speed_mph
+                        .is_some_and(|speed| speed > STOPPED_SPEED_MPH)
+                {
+                    if let Some(point) = track_point(event, 0.0) {
+                        self.last_parked_fix = Some(point);
+                    }
+                }
+                TripEvent::NoChange
+            }
         }
-        if let Some(r) = event.distance_to_empty_mi {
-            self.last_range = Some(r);
-        }
+    }
 
-        let is_moving = speed > STOPPED_SPEED_MPH;
-        let is_asleep = matches!(power, Some(PowerState::Sleep));
-
-        if let Some(power) = power {
+    fn observe_vehicle(&mut self, event: &TelemetryEvent, prior_odometer: Option<f64>) {
+        self.last_soc = event.battery_level.or(self.last_soc);
+        self.battery_capacity = event.battery_capacity_wh.or(self.battery_capacity);
+        self.last_odometer = event.odometer_miles.or(self.last_odometer);
+        self.last_range = event.distance_to_empty_mi.or(self.last_range);
+        if let Some(power) = &event.power_state {
             let in_gear = matches!(power, PowerState::Drive | PowerState::Go);
-            if in_gear && !self.in_gear {
-                self.gear_odometer = prior_odometer.or(event.odometer_miles);
-                self.gear_at = Some(ts);
-            } else if !in_gear {
-                self.gear_odometer = None;
-                self.gear_at = None;
+            match (self.in_gear, in_gear) {
+                (false, true) => {
+                    self.gear_odometer = prior_odometer.or(event.odometer_miles);
+                    self.gear_at = Some(event.ts);
+                }
+                (_, false) => {
+                    self.gear_odometer = None;
+                    self.gear_at = None;
+                }
+                (true, true) => {}
             }
             self.in_gear = in_gear;
         }
-
-        if self.active_trip_id.is_some() {
-            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
-                self.track_points.push(TrackPoint {
-                    ts,
-                    lat,
-                    lng,
-                    speed_mph: speed,
-                    altitude_m: event.altitude_m,
-                });
-            }
-
-            if let Some(dm) = &event.drive_mode {
-                self.drive_modes.push(dm.as_str().to_string());
-            }
-
-            // Power envelope
-            if let Some(kw) = event.power_kw {
-                self.power_max = Some(self.power_max.map_or(kw, |m: f64| m.max(kw)));
-                self.power_min = Some(self.power_min.map_or(kw, |m: f64| m.min(kw)));
-            }
-
-            // Elevation gain/loss from consecutive altitude samples
-            if let Some(alt) = event.altitude_m {
-                if let Some(prev) = self.last_altitude {
-                    let delta = alt - prev;
-                    if delta > 0.0 {
-                        self.elevation_gain_acc += delta;
-                    } else {
-                        self.elevation_loss_acc += -delta;
-                    }
-                }
-                self.last_altitude = Some(alt);
-            }
-
-            // Inside (cabin) temperature running average
-            if let Some(t) = event.cabin_temp_c {
-                self.inside_temp_sum += t;
-                self.inside_temp_count += 1;
-            }
-
-            // Outside (ambient) temperature running average
-            if let Some(t) = event.outside_temp_c {
-                self.outside_temp_sum += t;
-                self.outside_temp_count += 1;
-            }
-
-            // Regen energy: negative regen_power_kw × Δt
-            if let (Some(last_t), Some(kw)) = (self.last_regen_ts, event.regen_power_kw) {
-                // Clamp dt to 0 so out-of-order events don't corrupt the accumulator.
-                let dt_hours = ((ts - last_t).num_milliseconds() as f64 / 3_600_000.0).max(0.0);
-                if kw.is_finite() && kw < 0.0 {
-                    self.regen_wh_acc += kw.abs() * 1000.0 * dt_hours;
-                }
-            }
-        }
-
-        // Partial state frames must not shorten the energy sample interval.
-        // Keep the boundary monotonic when a regen sample arrives late.
-        if event.regen_power_kw.is_some_and(f64::is_finite)
-            && self.last_regen_ts.is_none_or(|prior| ts >= prior)
-        {
-            self.last_regen_ts = Some(ts);
-        }
-
-        // Where the vehicle sat before shifting: the start of the next trip.
-        // Fixes after the shift may already be on the road, unseen.
-        if self.active_trip_id.is_none() && !self.in_gear && !is_moving {
-            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
-                self.last_parked_fix = Some(TrackPoint {
-                    ts,
-                    lat,
-                    lng,
-                    speed_mph: 0.0,
-                    altitude_m: event.altitude_m,
-                });
-            }
-        }
-
-        // ── Trip START ──────────────────────────────────────────────────────
-        if start_decision == "eligible" {
-            let trip_id = Uuid::new_v4();
-            self.active_trip_id = Some(trip_id);
-            self.soc_at_start = self.last_soc;
-            let fresh =
-                |at: DateTime<Utc>| at <= ts && (ts - at).num_seconds() <= GEAR_ANCHOR_MAX_AGE_SECS;
-            let gear_at = self.gear_at.take().filter(|at| fresh(*at));
-            let gear_odometer = self.gear_odometer.take().filter(|_| gear_at.is_some());
-            // Motion may first be seen after the odometer has already
-            // advanced, or on a sample carrying no odometer at all; the
-            // reading before that motion is the trip's true starting point.
-            let current_odometer = event.odometer_miles.or(prior_odometer);
-            self.start_odometer = match (gear_odometer, prior_odometer) {
-                (Some(gear), _) if current_odometer.is_none_or(|now| gear <= now) => Some(gear),
-                (_, Some(prior)) if event.odometer_miles.is_some_and(|now| now > prior) => {
-                    Some(prior)
-                }
-                _ => current_odometer,
-            };
-            // Sparse vehicles see motion only after the first odometer steps.
-            // When the start odometer is backdated, backdate the start time to
-            // the shift and the start place to where the vehicle was parked,
-            // so duration, average speed, and start geofences agree with it.
-            let backdated = matches!(
-                (self.start_odometer, current_odometer),
-                (Some(start), Some(now)) if start < now
-            );
-            let started_at = if backdated { gear_at.unwrap_or(ts) } else { ts };
-            self.trip_started_at = Some(started_at);
-            let parked_fix = self.last_parked_fix.take();
-            if backdated {
-                if let Some(fix) = parked_fix.filter(|fix| fresh(fix.ts)) {
-                    self.track_points.push(fix);
-                }
-            }
-            self.range_at_start = self.last_range;
-            self.last_moving_at = Some(ts);
-            self.last_altitude = event.altitude_m;
-            self.elevation_gain_acc = 0.0;
-            self.elevation_loss_acc = 0.0;
-            self.inside_temp_sum = 0.0;
-            self.inside_temp_count = 0;
-            self.outside_temp_sum = 0.0;
-            self.outside_temp_count = 0;
-            self.regen_wh_acc = 0.0;
-            self.last_regen_ts = Some(ts);
-            self.power_max = event.power_kw;
-            self.power_min = event.power_kw;
-
-            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
-                self.track_points.push(TrackPoint {
-                    ts,
-                    lat,
-                    lng,
-                    speed_mph: speed,
-                    altitude_m: event.altitude_m,
-                });
-            }
-            return TripEvent::TripStarted {
-                trip_id,
-                started_at,
-            };
-        }
-
-        // ── Trip END ────────────────────────────────────────────────────────
-        if self.active_trip_id.is_some() {
-            if is_moving {
-                self.last_moving_at = Some(ts);
-            }
-
-            let stopped_long_enough = self
-                .last_moving_at
-                .is_some_and(|last| (ts - last).num_seconds() > STOPPED_DURATION_SECS);
-
-            if is_asleep || stopped_long_enough {
-                return self.close_trip(ts);
-            }
-        }
-
-        TripEvent::NoChange
     }
 
-    fn close_trip(&mut self, ended_at: DateTime<Utc>) -> TripEvent {
-        let trip_id = self.active_trip_id.unwrap_or_else(Uuid::new_v4);
-
-        let inside_temp_avg = if self.inside_temp_count > 0 {
-            Some(self.inside_temp_sum / self.inside_temp_count as f64)
-        } else {
-            None
-        };
-        let outside_temp_avg = if self.outside_temp_count > 0 {
-            Some(self.outside_temp_sum / self.outside_temp_count as f64)
-        } else {
-            None
-        };
-        let elevation_gain = if self.elevation_gain_acc > 0.0 {
-            Some(self.elevation_gain_acc)
-        } else {
-            None
-        };
-        let elevation_loss = if self.elevation_loss_acc > 0.0 {
-            Some(self.elevation_loss_acc)
-        } else {
-            None
-        };
-        let regen_wh = if self.regen_wh_acc > 0.0 {
-            Some(self.regen_wh_acc)
-        } else {
-            None
-        };
-
-        let data = CompletedTripData {
-            trip_id,
-            vehicle_id: self.vehicle_id,
-            started_at: self.trip_started_at.unwrap_or(ended_at),
-            ended_at,
-            points: std::mem::take(&mut self.track_points),
-            soc_start: self.soc_at_start,
-            soc_end: self.last_soc,
-            battery_capacity_wh: self.battery_capacity,
-            start_odometer_mi: self.start_odometer,
-            end_odometer_mi: self.last_odometer,
-            range_start_mi: self.range_at_start,
-            range_end_mi: self.last_range,
-            power_max_kw: self.power_max,
-            power_min_kw: self.power_min,
-            elevation_gain_m: elevation_gain,
-            elevation_loss_m: elevation_loss,
-            inside_temp_avg_c: inside_temp_avg,
-            outside_temp_avg_c: outside_temp_avg,
-            regen_wh,
-            dominant_drive_mode: mode_of(&self.drive_modes),
-        };
-
-        self.active_trip_id = None;
-        self.trip_started_at = None;
-        self.soc_at_start = None;
-        self.last_moving_at = None;
-        self.start_odometer = None;
-        self.range_at_start = None;
-        self.power_max = None;
-        self.power_min = None;
-        self.last_altitude = None;
+    fn begin_trip(&mut self, event: &TelemetryEvent, anchor: StartAnchor) -> TripEvent {
+        let trip_id = Uuid::new_v4();
+        self.active_trip_id = Some(trip_id);
+        self.trip_started_at = Some(anchor.at);
+        self.start_odometer = anchor.odometer;
+        self.soc_at_start = self.last_soc;
+        self.range_at_start = self.last_range;
+        self.last_moving_at = Some(event.ts);
+        self.last_altitude = event.altitude_m;
+        self.power_max = event.power_kw;
+        self.power_min = event.power_kw;
         self.elevation_gain_acc = 0.0;
         self.elevation_loss_acc = 0.0;
         self.inside_temp_sum = 0.0;
@@ -463,14 +352,103 @@ impl TripDetectorState {
         self.outside_temp_sum = 0.0;
         self.outside_temp_count = 0;
         self.regen_wh_acc = 0.0;
-        self.last_regen_ts = None;
-        self.drive_modes.clear();
-        if self.in_gear {
-            self.gear_odometer = self.last_odometer;
-            self.gear_at = Some(ended_at);
+        // The start is the first integration boundary, including partial frames.
+        self.last_regen_ts = Some(event.ts);
+        self.track_points.extend(anchor.parked);
+        self.track_points
+            .extend(track_point(event, event.speed_mph.unwrap_or(0.0)));
+        TripEvent::TripStarted {
+            trip_id,
+            started_at: anchor.at,
         }
+    }
 
-        TripEvent::TripEnded { trip: data }
+    fn accumulate(&mut self, event: &TelemetryEvent) {
+        self.track_points
+            .extend(track_point(event, event.speed_mph.unwrap_or(0.0)));
+        if let Some(mode) = &event.drive_mode {
+            self.drive_modes.push(mode.as_str().to_owned());
+        }
+        if let Some(kw) = event.power_kw {
+            self.power_max = Some(self.power_max.map_or(kw, |prior| prior.max(kw)));
+            self.power_min = Some(self.power_min.map_or(kw, |prior| prior.min(kw)));
+        }
+        if let Some(altitude) = event.altitude_m {
+            if let Some(prior) = self.last_altitude.replace(altitude) {
+                let delta = altitude - prior;
+                if delta > 0.0 {
+                    self.elevation_gain_acc += delta;
+                } else {
+                    self.elevation_loss_acc += -delta;
+                }
+            }
+        }
+        if let Some(temperature) = event.cabin_temp_c {
+            self.inside_temp_sum += temperature;
+            self.inside_temp_count += 1;
+        }
+        if let Some(temperature) = event.outside_temp_c {
+            self.outside_temp_sum += temperature;
+            self.outside_temp_count += 1;
+        }
+        if let (Some(prior), Some(kw)) = (self.last_regen_ts, event.regen_power_kw) {
+            if kw.is_finite() && kw < 0.0 {
+                let hours = ((event.ts - prior).num_milliseconds() as f64 / 3_600_000.0).max(0.0);
+                self.regen_wh_acc += kw.abs() * 1000.0 * hours;
+            }
+        }
+    }
+
+    fn advance_regen_clock(&mut self, event: &TelemetryEvent) {
+        if event.regen_power_kw.is_some_and(f64::is_finite)
+            && self.last_regen_ts.is_none_or(|prior| event.ts >= prior)
+        {
+            self.last_regen_ts = Some(event.ts);
+        }
+    }
+
+    fn close_trip(&mut self, ended_at: DateTime<Utc>) -> TripEvent {
+        let finished = std::mem::replace(self, Self::new(self.vehicle_id));
+        // Only vehicle observations and the next start anchor survive completion.
+        self.last_soc = finished.last_soc;
+        self.battery_capacity = finished.battery_capacity;
+        self.last_odometer = finished.last_odometer;
+        self.last_range = finished.last_range;
+        self.in_gear = finished.in_gear;
+        self.last_parked_fix = finished.last_parked_fix;
+        (self.gear_odometer, self.gear_at) = if self.in_gear {
+            (self.last_odometer, Some(ended_at))
+        } else {
+            (finished.gear_odometer, finished.gear_at)
+        };
+        TripEvent::TripEnded {
+            trip: CompletedTripData {
+                trip_id: finished.active_trip_id.unwrap_or_else(Uuid::new_v4),
+                vehicle_id: finished.vehicle_id,
+                started_at: finished.trip_started_at.unwrap_or(ended_at),
+                ended_at,
+                points: finished.track_points,
+                soc_start: finished.soc_at_start,
+                soc_end: finished.last_soc,
+                battery_capacity_wh: finished.battery_capacity,
+                start_odometer_mi: finished.start_odometer,
+                end_odometer_mi: finished.last_odometer,
+                range_start_mi: finished.range_at_start,
+                range_end_mi: finished.last_range,
+                power_max_kw: finished.power_max,
+                power_min_kw: finished.power_min,
+                elevation_gain_m: (finished.elevation_gain_acc > 0.0)
+                    .then_some(finished.elevation_gain_acc),
+                elevation_loss_m: (finished.elevation_loss_acc > 0.0)
+                    .then_some(finished.elevation_loss_acc),
+                inside_temp_avg_c: (finished.inside_temp_count > 0)
+                    .then(|| finished.inside_temp_sum / finished.inside_temp_count as f64),
+                outside_temp_avg_c: (finished.outside_temp_count > 0)
+                    .then(|| finished.outside_temp_sum / finished.outside_temp_count as f64),
+                regen_wh: (finished.regen_wh_acc > 0.0).then_some(finished.regen_wh_acc),
+                dominant_drive_mode: mode_of(&finished.drive_modes),
+            },
+        }
     }
 }
 
@@ -495,13 +473,11 @@ pub fn compute_distance_odometer_or_gps(
     end_odo: Option<f64>,
     points: &[TrackPoint],
 ) -> f64 {
-    if let (Some(s), Some(e)) = (start_odo, end_odo) {
-        let delta = e - s;
-        if delta > 0.0 {
-            return delta;
-        }
-    }
-    compute_distance_miles(points)
+    start_odo
+        .zip(end_odo)
+        .map(|(start, end)| end - start)
+        .filter(|distance| *distance > 0.0)
+        .unwrap_or_else(|| compute_distance_miles(points))
 }
 
 /// Estimate trip energy using a ranked ensemble strategy.
@@ -515,29 +491,29 @@ pub fn compute_trip_energy(
     distance_miles: f64,
     historical_wh_per_mi: Option<f64>,
 ) -> Option<(f64, &'static str)> {
-    // Strategy 1: SOC delta × pack capacity (most accurate)
-    if let (Some(s0), Some(s1), Some(cap)) = (soc_start, soc_end, battery_capacity_wh) {
-        let delta_pct = s0 - s1;
-        if delta_pct >= 1.0 {
-            return Some(((delta_pct / 100.0) * cap, "soc_delta"));
-        }
-    }
-    // Strategy 2: Range delta × historical efficiency coefficient
-    if let (Some(r0), Some(r1)) = (range_start_mi, range_end_mi) {
-        let range_delta = r0 - r1;
-        if range_delta >= 1.0 {
-            if let Some(eff) = historical_wh_per_mi {
-                return Some((range_delta * eff, "range_delta"));
-            }
-        }
-    }
-    // Strategy 3: Distance × historical efficiency (final fallback)
-    if let Some(eff) = historical_wh_per_mi {
-        if distance_miles > 0.0 {
-            return Some((distance_miles * eff, "historical"));
-        }
-    }
-    None
+    let soc_estimate =
+        soc_start
+            .zip(soc_end)
+            .zip(battery_capacity_wh)
+            .and_then(|((start, end), capacity)| {
+                let loss = start - end;
+                (loss >= 1.0).then(|| ((loss / 100.0) * capacity, "soc_delta"))
+            });
+    soc_estimate
+        .or_else(|| {
+            range_start_mi
+                .zip(range_end_mi)
+                .zip(historical_wh_per_mi)
+                .and_then(|((start, end), efficiency)| {
+                    let loss = start - end;
+                    (loss >= 1.0).then(|| (loss * efficiency, "range_delta"))
+                })
+        })
+        .or_else(|| {
+            historical_wh_per_mi
+                .filter(|_| distance_miles > 0.0)
+                .map(|efficiency| (distance_miles * efficiency, "historical"))
+        })
 }
 
 pub fn compute_distance_miles(points: &[TrackPoint]) -> f64 {

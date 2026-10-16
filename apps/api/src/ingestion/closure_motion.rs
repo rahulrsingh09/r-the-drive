@@ -32,58 +32,66 @@ pub struct ClosureMotionTracker {
     motion: BTreeMap<String, (ClosureMotion, DateTime<Utc>)>,
 }
 
+#[derive(Clone, Copy)]
+enum ClosureObservation {
+    Settled(bool),
+    Moving(ClosureTransition),
+}
+
 impl ClosureMotionTracker {
-    /// Fold in one sample from any source. Returns the full motion map when
-    /// it changed, so the status stream can replace the previous one.
+    /// Returns a replacement map only when visible directions change.
     pub fn observe(
         &mut self,
         event: &TelemetryEvent,
         now: DateTime<Utc>,
     ) -> Option<ClosureMotionMap> {
-        let before = self.current();
-        let transitions = event.closure_transitions.clone().unwrap_or_default();
-
-        for (field, closed) in closure_values(event) {
-            let Some(closed) = closed else {
-                continue;
-            };
-            if transitions.contains_key(field) {
-                continue;
-            }
-            self.settled_closed.insert(field.to_owned(), closed);
-            // A settled reading ends the movement it completes. Legacy can
-            // lag Parallax by a second or two, so a late reading of the
-            // starting state does not cancel the movement.
-            if let Some((motion, _)) = self.motion.get(field) {
-                let completes = match motion {
-                    ClosureMotion::Opening => !closed,
-                    ClosureMotion::Closing => closed,
-                };
-                if completes {
-                    self.motion.remove(field);
+        let readings = closure_values(event)
+            .into_iter()
+            .filter_map(|(field, closed)| {
+                closed.map(|closed| (field, ClosureObservation::Settled(closed)))
+            });
+        let transitions = event.closure_transitions.iter().flat_map(|values| {
+            values.iter().map(|(field, transition)| {
+                (field.as_str(), ClosureObservation::Moving(*transition))
+            })
+        });
+        // A transition overrides the binary reading of that same closure.
+        let observations: BTreeMap<_, _> = readings.chain(transitions).collect();
+        let mut changed = false;
+        for (field, observation) in observations {
+            let previous = self.motion.get(field).map(|(motion, _)| *motion);
+            match observation {
+                ClosureObservation::Settled(closed) => {
+                    self.settled_closed.insert(field.to_owned(), closed);
+                    if matches!(
+                        (previous, closed),
+                        (Some(ClosureMotion::Opening), false)
+                            | (Some(ClosureMotion::Closing), true)
+                    ) {
+                        self.motion.remove(field);
+                    }
+                }
+                ClosureObservation::Moving(transition) => {
+                    let direction = match transition {
+                        ClosureTransition::Opening => Some(ClosureMotion::Opening),
+                        ClosureTransition::Closing => Some(ClosureMotion::Closing),
+                        ClosureTransition::Ajar => match self.settled_closed.get(field) {
+                            Some(true) => Some(ClosureMotion::Opening),
+                            Some(false) => Some(ClosureMotion::Closing),
+                            None => previous,
+                        },
+                    };
+                    if let Some(direction) = direction {
+                        self.motion.insert(field.to_owned(), (direction, now));
+                    }
                 }
             }
+            changed |= previous != self.motion.get(field).map(|(motion, _)| *motion);
         }
-
-        for (field, transition) in transitions {
-            let motion = match transition {
-                ClosureTransition::Opening => Some(ClosureMotion::Opening),
-                ClosureTransition::Closing => Some(ClosureMotion::Closing),
-                ClosureTransition::Ajar => match self.settled_closed.get(&field) {
-                    Some(true) => Some(ClosureMotion::Opening),
-                    Some(false) => Some(ClosureMotion::Closing),
-                    // No settled state yet: keep any direction already known.
-                    None => self.motion.get(&field).map(|(motion, _)| *motion),
-                },
-            };
-            if let Some(motion) = motion {
-                self.motion.insert(field, (motion, now));
-            }
-        }
-
+        let before_expiry = self.motion.len();
         self.motion.retain(|_, (_, at)| now - *at < MOTION_TTL);
-        let after = self.current();
-        (after != before).then_some(after)
+        changed |= before_expiry != self.motion.len();
+        changed.then(|| self.current())
     }
 
     fn current(&self) -> ClosureMotionMap {
