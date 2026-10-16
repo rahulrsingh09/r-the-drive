@@ -1,0 +1,14 @@
+{
+  "name": "@panda/config",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    "./typescript/base.json": "./typescript/base.json",
+    "./typescript/react.json": "./typescript/react.json",
+    "./tailwind/*": "./tailwind/*.ts"
+  },
+  "devDependencies": {
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:"
+  }
+}

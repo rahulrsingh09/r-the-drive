@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE panda.trips\n               SET energy_wh = $2,\n                   energy_strategy = $3,\n                   efficiency_wh_per_mile = COALESCE($4, efficiency_wh_per_mile)\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "43d6e000af6bc262648ffc084c1725b3eb3fcff3f4ed969063f1f23829751b0f"
+}

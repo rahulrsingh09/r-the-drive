@@ -1,0 +1,13 @@
+services:
+  panda:
+    environment:
+      JWT_SECRET_FILE: /run/secrets/panda/jwt_private.pem
+      JWT_PUBLIC_KEY_FILE: /run/secrets/panda/jwt_public.pem
+      AGE_ENCRYPTION_KEY_FILE: /run/secrets/panda/age_key.txt
+    volumes:
+      - type: bind
+        source: ${PANDA_KEYS_SOURCE:?Set PANDA_KEYS_SOURCE to the separately stored key bundle directory}
+        target: /run/secrets/panda
+        read_only: true
+        bind:
+          create_host_path: false

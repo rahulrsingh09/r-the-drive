@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.geofences\n           (user_id, name, latitude, longitude, radius_m, address_id, is_home, is_work, cost_profile_id)\n           VALUES ($1, $2, $3, $4, $5, $6, true, false, $7)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "geofences",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "71118df09e83888f53018630ea687b383e6ba909040b474dd55b0c14679b8d5f"
+}

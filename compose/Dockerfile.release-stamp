@@ -1,0 +1,6 @@
+# Adds only the release identity on top of an already-tested candidate image.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG PANDA_BUILD_VERSION
+ENV PANDA_BUILD_VERSION=${PANDA_BUILD_VERSION}
+LABEL org.opencontainers.image.version=${PANDA_BUILD_VERSION}

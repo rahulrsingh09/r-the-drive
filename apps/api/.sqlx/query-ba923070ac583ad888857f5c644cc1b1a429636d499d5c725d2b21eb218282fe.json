@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM panda.vehicle_state_periods",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "ba923070ac583ad888857f5c644cc1b1a429636d499d5c725d2b21eb218282fe"
+}

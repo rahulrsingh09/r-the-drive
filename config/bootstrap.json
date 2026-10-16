@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "f9482c7dc207adbdb2b43c3f247023f2e20323d6",
+  "repository": "your-org/r-the-drive",
+  "defaultBranch": "mainline",
+  "namespace": "panda",
+  "applicationBrand": "R:The Drive",
+  "freshDatabaseRequired": true,
+  "deploymentConfigured": false,
+  "repositoryId": 0,
+  "validationWorkflowId": 0
+}

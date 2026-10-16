@@ -1,0 +1,44 @@
+[
+  {
+    "ecosystem": "cargo",
+    "id": "RUSTSEC-2023-0071",
+    "package": "rsa",
+    "version": "0.9.10",
+    "owner": "Release maintainer",
+    "reviewed": "2026-10-05",
+    "expires": "2026-12-31",
+    "source": "https://rustsec.org/advisories/RUSTSEC-2023-0071.html",
+    "reason": "Only active reverse dependency is openidconnect 4.0.1. The OIDC callback uses public-key ID-token verification, not this crate's private-key operations. No upstream patched release exists.",
+    "removal": "Remove when a fixed RSA release is available or the OIDC dependency is replaced. Any new RSA caller or private-key use invalidates this exception."
+  },
+  {
+    "ecosystem": "pnpm",
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "version": "3.0.3",
+    "pathPrefix": "apps__docs>",
+    "pathSuffixes": [">chokidar>braces", ">micromatch>braces"],
+    "owner": "Release maintainer",
+    "reviewed": "2026-10-05",
+    "expires": "2026-11-05",
+    "source": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+    "reason": "Reachable in Docusaurus build/watch tooling through chokidar and micromatch. Only reviewed repository-controlled glob patterns are processed. Production serves compiled static files, not the Docusaurus development server. npm has not published the suggested braces 3.0.4.",
+    "removal": "Remove when a fixed release is published or the tooling dependency is replaced. Untrusted/user-supplied glob patterns or running Docusaurus as an exposed service invalidates this exception."
+  },
+  {
+    "ecosystem": "pnpm",
+    "id": "GHSA-ch52-4w7c-c8xp",
+    "package": "http-cache-semantics",
+    "version": "4.2.0",
+    "pathPrefix": "apps__docs>",
+    "pathSuffixes": [
+      ">update-notifier>latest-version>package-json>got>cacheable-request>http-cache-semantics"
+    ],
+    "owner": "Release maintainer",
+    "reviewed": "2026-10-05",
+    "expires": "2026-11-05",
+    "source": "https://github.com/kornelski/http-cache-semantics/issues/56",
+    "reason": "Disputed max-stale/shared-cache advisory with no verified upstream fix. Used only by Docusaurus's update-notifier registry client, not an HTTP server or cross-user shared cache; got caching is disabled by default. Version 4.2.1 is unpublished; 4.3.0 does not change the reported max-stale path.",
+    "removal": "Remove when the advisory is withdrawn, an independently verified fix is published, or the dependency is removed. Any shared-cache or request-header input from application users invalidates this exception."
+  }
+]

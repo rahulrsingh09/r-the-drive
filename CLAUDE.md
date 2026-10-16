@@ -1,0 +1,154 @@
+# CLAUDE.md
+
+This is the Claude companion guide for Panda. For repo policy and the canonical documentation workflow, start with [`AGENTS.md`](./AGENTS.md).
+
+## Canonical Source Of Truth
+
+- Repo operating rules, doc-update triggers, and workflow policy live in [`AGENTS.md`](./AGENTS.md).
+- Human-facing repo onboarding lives in [`README.md`](./README.md).
+- Deeper documentation routing lives in [`docs/index.md`](./docs/index.md).
+
+Use this file for command references, architecture reminders, and Claude-oriented execution detail.
+
+## Commands
+
+### Full dev stack
+
+```bash
+pnpm run dev:stack
+```
+
+Before it allocates ports, `dev:stack` clears only stale host processes that
+belong to this checkout: the local `panda-api` binary and Vite processes
+launched from `apps/web`. It does not terminate unrelated applications that
+happen to use the usual development ports; those still trigger fallback-port
+allocation.
+
+The launcher uses the existing `panda` Docker Compose project by default
+for the infrastructure services it starts: TimescaleDB, Redis, and Garage.
+Active bindings are preserved. The API, web, and restore-agent processes are
+host-run and use independently allocated ports. Set
+`DEV_COMPOSE_PROJECT_NAME` (or `COMPOSE_PROJECT_NAME`) to a unique value when
+intentional checkout isolation is required. Isolating a worktree gives it
+separate development data, while using the shared project requires compatible
+migration/schema revisions.
+
+Before allocation, it verifies existing project metadata identifies this
+repository's `compose/docker-compose.dev.yml`. Missing, mixed, or production
+Compose identity metadata fails closed and reports that
+`DEV_COMPOSE_PROJECT_NAME` should be set to a unique isolated name. A shared
+project still requires compatible migration and data/schema revisions;
+preserving its active bindings does not reconcile incompatible callers.
+
+The launcher compiles the host-run Rust targets with the checked-in SQLx query
+metadata. This allows a fresh database to build before the API applies its
+embedded migrations; refresh the metadata whenever a compile-time query
+changes.
+
+### Workspace
+
+Installed Git hooks check staged whitespace for the first commit and compare
+against HEAD thereafter. Migration integrity checks apply to both cases.
+
+```bash
+pnpm build
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm test:coverage
+pnpm test:e2e
+pnpm test:api
+pnpm docs:check
+pnpm docs:build
+pnpm docs:dev
+pnpm storybook
+```
+
+### Frontend
+
+```bash
+pnpm --filter @panda/web test
+pnpm --filter @panda/web test:coverage
+pnpm --filter @panda/web test:e2e
+pnpm --filter @panda/web exec vitest run src/routes/__tests__/battery.test.tsx
+```
+
+### Backend
+
+From `apps/api/`:
+
+```bash
+cargo run
+cargo test
+cargo test -- --ignored
+cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --all --check
+```
+
+### Database
+
+```bash
+pnpm db:migrate
+$env:PANDA_ALLOW_DATABASE_RESET='local-development'
+pnpm db:reset -- --yes
+pnpm db:rebaseline
+```
+
+`pnpm db:migrate` invokes the migration coordinator, which owns the public
+SQLx ledger and fails closed on contradictory bookkeeping. `pnpm db:rebaseline`
+is the explicit, backup-evidenced adoption command for the release baseline;
+it is not a normal migration repair command.
+
+`pnpm db:reset` is destructive and developer-only. It requires both the
+one-shot acknowledgement above and `--yes`, refuses production environments,
+and accepts only a loopback `DATABASE_URL`. Normal startup, Compose updates,
+and release workflows never call it.
+
+## Architecture Reminders
+
+### Monorepo layout
+
+```text
+apps/api/          Rust API, ingestion, auth, storage
+apps/web/          React app
+packages/
+  dashboards/      dashboard schema, renderer, widgets, defaults
+  hooks/           API client, auth store, React Query hooks
+  types/           shared TypeScript contracts
+  ui/              primitives, charts, tables, tokens
+  config/          shared tool configuration
+```
+
+### Key frontend seams
+
+- Route files should stay thin.
+- `DashboardPageShell` owns shared page shell behavior.
+- `DashboardRenderer` is layout-only.
+- Widget registry lives in `packages/dashboards`.
+- Shared UI patterns should route through `packages/ui` and the branding doc.
+
+### Key backend seams
+
+- `apps/api/src/routes` owns the HTTP surface.
+- `apps/api/src/ingestion` owns Rivian connectivity and telemetry flow.
+- `apps/api/src/services` owns shared backend business logic.
+- `apps/api/migrations` owns schema evolution.
+
+## Critical Conventions
+
+- Prefer shared seams before local patches.
+- Use design tokens only; no raw colors.
+- If UI behavior changes a reusable pattern, update [`docs/branding.md`](./docs/branding.md).
+- New or changed shared UI/app surfaces must be mobile-friendly by default and checked at small-screen breakpoints in the same change.
+- If routes, env vars, auth flows, or operational behavior change, update the relevant canonical docs in the same change.
+- If a change touches shared seams, ingestion, routing, or other significant runtime behavior, run `pnpm build` before handing it off.
+- User-facing installation and operation documentation belongs in `docs/guides/`; the complete `docs/` tree is published directly through Docusaurus after relevant changes reach `main`.
+
+## References
+
+- Primary agent guide: [`AGENTS.md`](./AGENTS.md)
+- Documentation hub: [docs/index.md](./docs/index.md) (hosting is not configured)
+- Docs hub: [`docs/index.md`](./docs/index.md)
+- Visual system: [`docs/branding.md`](./docs/branding.md)
+- Architecture: [`docs/architecture/overview.md`](./docs/architecture/overview.md)
+- Backend data flow: [`docs/architecture/backend-data-flow.md`](./docs/architecture/backend-data-flow.md)

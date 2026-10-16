@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE panda.cost_profiles\n               SET name = $3,\n                   billing_type = $4,\n                   rate = $5,\n                   session_fee = $6,\n                   currency = $7,\n                   timezone = $8,\n                   tou_periods = $9\n               WHERE id = $1 AND user_id = $2\n               RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Float8",
+        "Float8",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "52c0069214b69f07cc18469932f545f350b41198063a03488f0069c20cf3d4c0"
+}

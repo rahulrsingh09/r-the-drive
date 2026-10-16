@@ -1,0 +1,1007 @@
+use std::io::Cursor;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::{
+    body::{to_bytes, Body},
+    extract::ConnectInfo,
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE},
+        HeaderMap, Method, Request, StatusCode,
+    },
+    Router,
+};
+use flate2::{write::GzEncoder, Compression};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
+use tar::{Builder, Header};
+use tower::ServiceExt;
+use uuid::Uuid;
+
+use panda_api::{
+    config::Config,
+    ingestion::supervisor::SupervisorHandle,
+    keys::bootstrap_development_keys,
+    middleware::auth::{AppState, JwtKeys},
+    routes,
+    services::restore_compatibility,
+};
+
+struct TestResponse {
+    status: StatusCode,
+    #[allow(dead_code)]
+    headers: HeaderMap,
+    body: Value,
+}
+
+struct TestApp {
+    router: Router,
+    pool: PgPool,
+}
+
+impl TestApp {
+    async fn new() -> Self {
+        Self::new_with_s3_development_origin(None).await
+    }
+
+    async fn new_with_s3_development_origin(endpoint: Option<String>) -> Self {
+        let base_db_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://panda:devpassword@127.0.0.1:5432/panda".into());
+        let admin_db_url = replace_database_name(&base_db_url, "postgres");
+        let db_name = format!("panda_backup_test_{}", Uuid::new_v4().simple());
+
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&admin_db_url)
+            .await
+            .expect("admin db connect");
+        admin
+            .execute(sqlx::AssertSqlSafe(format!(
+                "CREATE DATABASE \"{db_name}\""
+            )))
+            .await
+            .expect("create test database");
+
+        let db_url = replace_database_name(&base_db_url, &db_name);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&db_url)
+            .await
+            .expect("db connect");
+        panda_api::db::migrations::MIGRATOR
+            .run(&pool)
+            .await
+            .expect("migrate");
+        let backup_dir =
+            std::env::temp_dir().join(format!("panda-backups-{}", Uuid::new_v4().simple()));
+
+        let keys = bootstrap_development_keys(&pool)
+            .await
+            .expect("bootstrap keys");
+        let jwt_keys =
+            Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"));
+
+        let state = AppState {
+            pool: pool.clone(),
+            redis: redis::Client::open("redis://127.0.0.1:6379/").expect("redis client"),
+            jwt_keys,
+            age_key: keys.age_key,
+            config: Config {
+                database_url: db_url,
+                redis_url: "redis://127.0.0.1:6379/".into(),
+                jwt_secret: None,
+                jwt_public_key: None,
+                age_encryption_key: None,
+                port: 0,
+                allowed_origins: vec![],
+                s3_endpoint: endpoint.clone(),
+                s3_access_key: None,
+                s3_secret_key: None,
+                backup_artifact_dir: backup_dir.to_string_lossy().into_owned(),
+                backup_driver: "pg_dump".into(),
+                backup_poll_interval_seconds: 60,
+                restore_agent_url: "http://127.0.0.1:3002".into(),
+                restore_agent_key_file: "/backups/.restore-agent-key".into(),
+                recovery: panda_api::config::RecoveryConfig::default(),
+                origin_bind: panda_api::config::OriginBindConfig::default(),
+                security: panda_api::config::SecurityConfig {
+                    s3_allow_development_garage: endpoint.is_some(),
+                    ..Default::default()
+                },
+                rivian_ws_reconnect_initial_seconds: 10,
+                rivian_ws_reconnect_max_seconds: 900,
+                rivian_raw_event_retention_days: 7,
+                rivian_persist_raw_events: true,
+                rivian_suppress_duplicate_telemetry: true,
+                panda_env: endpoint.map(|_| "development".into()),
+                cookie_insecure: None,
+                allow_insecure_lan_http_auth: false,
+                vehicle_image_cache_dir: std::env::temp_dir()
+                    .join("panda-backup-test-images")
+                    .to_string_lossy()
+                    .into_owned(),
+                rate_limit: Default::default(),
+            },
+            nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            supervisor: SupervisorHandle::noop(),
+            resources: Default::default(),
+        };
+
+        Self {
+            router: routes::build_router(state),
+            pool,
+        }
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        bearer_token: Option<&str>,
+        cookie: Option<&str>,
+    ) -> TestResponse {
+        let mut req = Request::builder().method(method).uri(path);
+        if let Some(token) = bearer_token {
+            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        if let Some(cookie_value) = cookie {
+            req = req.header(COOKIE, cookie_value);
+        }
+
+        let mut request = if let Some(json_body) = body {
+            req.header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json_body.to_string()))
+                .expect("request body")
+        } else {
+            req.body(Body::empty()).expect("empty request")
+        };
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("json body")
+        };
+
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    async fn request_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        bytes: Vec<u8>,
+        bearer_token: &str,
+        file_name: &str,
+    ) -> TestResponse {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(AUTHORIZATION, format!("Bearer {bearer_token}"))
+            .header(CONTENT_TYPE, "application/gzip")
+            .header("x-panda-file-name", file_name)
+            .body(Body::from(bytes))
+            .expect("raw request");
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response bytes");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("json body")
+        };
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
+}
+
+async fn wait_for_backup(app: &TestApp, token: &str) -> Value {
+    for _ in 0..1_200 {
+        let overview = app
+            .request(Method::GET, "/v1/admin/backups", None, Some(token), None)
+            .await;
+        let status = overview.body["recent_runs"]
+            .as_array()
+            .and_then(|runs| runs.first())
+            .and_then(|run| run["status"].as_str());
+        if matches!(status, Some("succeeded" | "failed" | "canceled")) {
+            return overview.body;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("backup did not reach a terminal status within 60 seconds");
+}
+
+fn replace_database_name(database_url: &str, database_name: &str) -> String {
+    let (prefix, _) = database_url
+        .rsplit_once('/')
+        .expect("database url with db name");
+    format!("{prefix}/{database_name}")
+}
+
+fn test_recovery_package() -> Vec<u8> {
+    let mut database = b"PGDMP".to_vec();
+    let mut state = 0x9e37_79b9_u32;
+    for _ in 0..(96 * 1024) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        database.push(state as u8);
+    }
+    let settings = br#"{"present":false}"#;
+    let manifest = serde_json::to_vec(&json!({
+        "format": "panda-recovery-v1",
+        "format_version": 1,
+        "components": {
+            "database": {
+                "path": "database.dump",
+                "sha256": hex::encode(Sha256::digest(&database)),
+                "size_bytes": database.len()
+            },
+            "backup_settings": {
+                "path": "backup-settings.json",
+                "sha256": hex::encode(Sha256::digest(settings)),
+                "size_bytes": settings.len()
+            },
+            "vehicle_image_cache": { "files": [] }
+        }
+    }))
+    .expect("manifest JSON");
+
+    let encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut archive = Builder::new(encoder);
+    for (path, bytes) in [
+        ("manifest.json", manifest.as_slice()),
+        ("database.dump", database.as_slice()),
+        ("backup-settings.json", settings.as_slice()),
+    ] {
+        let mut header = Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o600);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, path, Cursor::new(bytes))
+            .expect("append recovery component");
+    }
+    let mut directory = Header::new_gnu();
+    directory.set_entry_type(tar::EntryType::Directory);
+    directory.set_size(0);
+    directory.set_mode(0o700);
+    directory.set_cksum();
+    archive
+        .append_data(
+            &mut directory,
+            "vehicle-image-cache",
+            Cursor::new(Vec::<u8>::new()),
+        )
+        .expect("append artwork directory");
+    archive
+        .into_inner()
+        .expect("finish tar")
+        .finish()
+        .expect("finish gzip")
+}
+
+async fn register_and_login(app: &TestApp, email: &str) -> String {
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/auth/register",
+            Some(json!({"email": email, "password": "hunter2hunter2"})),
+            None,
+            None,
+        )
+        .await;
+
+    response.body["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_string()
+}
+
+async fn lookup_user_id(pool: &PgPool, email: &str) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM panda.users WHERE email = $1")
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .expect("lookup user")
+}
+
+async fn promote_admin(pool: &PgPool, user_id: Uuid) {
+    sqlx::query("UPDATE panda.users SET role = 'admin' WHERE id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .expect("promote admin");
+}
+
+#[tokio::test]
+async fn backup_overview_requires_admin_role() {
+    let app = TestApp::new().await;
+    let email = "backup-user@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    sqlx::query("UPDATE panda.users SET role = 'user' WHERE id = $1")
+        .bind(user_id)
+        .execute(&app.pool)
+        .await
+        .expect("demote test user");
+
+    let response = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(response.body["error"]["code"], "FORBIDDEN");
+}
+
+#[tokio::test]
+async fn admin_can_read_default_backup_settings() {
+    let app = TestApp::new().await;
+    let email = "backup-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let response = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.body["settings"]["enabled"], false);
+    assert_eq!(response.body["settings"]["frequency"], "weekly");
+    assert_eq!(response.body["settings"]["target_type"], "s3");
+    assert_eq!(response.body["settings"]["has_secret_key"], false);
+    assert!(response.body["next_run_at"].is_null());
+    assert_eq!(response.body["runtime_readiness"]["run_now_allowed"], true);
+    assert!(response.body["runtime_readiness"]["reason"].is_null());
+    assert_eq!(
+        response.body["recent_runs"].as_array().map(Vec::len),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn authenticated_users_can_read_but_not_update_app_timezone() {
+    let app = TestApp::new().await;
+    let email = "app-timezone-user@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    sqlx::query("UPDATE panda.users SET role = 'user' WHERE id = $1")
+        .bind(user_id)
+        .execute(&app.pool)
+        .await
+        .expect("demote test user");
+
+    let read = app
+        .request(
+            Method::GET,
+            "/v1/settings/timezone",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.body["timezone"], "UTC");
+
+    let update = app
+        .request(
+            Method::PUT,
+            "/v1/settings/timezone",
+            Some(json!({"timezone": "America/Chicago"})),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(update.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_can_update_app_timezone_and_invalid_zones_are_rejected() {
+    let app = TestApp::new().await;
+    let email = "app-timezone-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let invalid = app
+        .request(
+            Method::PUT,
+            "/v1/settings/timezone",
+            Some(json!({"timezone": "Not/A_Timezone"})),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let update = app
+        .request(
+            Method::PUT,
+            "/v1/settings/timezone",
+            Some(json!({"timezone": "America/Chicago"})),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(update.status, StatusCode::OK);
+    assert_eq!(update.body["timezone"], "America/Chicago");
+
+    let backup_timezone: String =
+        sqlx::query_scalar("SELECT value FROM panda.system_config WHERE key = 'app_timezone'")
+            .fetch_one(&app.pool)
+            .await
+            .expect("backup timezone");
+    assert_eq!(backup_timezone, "America/Chicago");
+}
+
+#[tokio::test]
+async fn app_timezone_reads_existing_backup_timezone_when_setting_is_missing() {
+    let app = TestApp::new().await;
+    sqlx::query(
+        "INSERT INTO panda.backup_settings (id, timezone) VALUES (TRUE, $1)
+         ON CONFLICT (id) DO UPDATE SET timezone = EXCLUDED.timezone",
+    )
+    .bind("Europe/Berlin")
+    .execute(&app.pool)
+    .await
+    .expect("seed backup timezone");
+    sqlx::query("DELETE FROM panda.system_config WHERE key = 'app_timezone'")
+        .execute(&app.pool)
+        .await
+        .expect("remove app timezone");
+
+    let email = "app-timezone-migration@example.com";
+    let token = register_and_login(&app, email).await;
+    let read = app
+        .request(
+            Method::GET,
+            "/v1/settings/timezone",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.body["timezone"], "Europe/Berlin");
+}
+
+#[tokio::test]
+async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
+    // Use an explicitly trusted local fixture origin, rather than a fictitious
+    // DNS name. No live object store or external DNS is needed for encryption.
+    let app = TestApp::new_with_s3_development_origin(Some("https://127.0.0.1:9".into())).await;
+    let email = "backup-settings-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let update = app
+        .request(
+            Method::PUT,
+            "/v1/admin/backups/settings",
+            Some(json!({
+                "enabled": true,
+                "local_enabled": true,
+                "s3_enabled": true,
+                "frequency": "monthly",
+                "run_at": "02:30",
+                "timezone": "America/Chicago",
+                "day_of_week": null,
+                "day_of_month": 28,
+                "retention_count": 12,
+                "target_type": "s3",
+                "endpoint": "https://127.0.0.1:9",
+                "region": "us-east-1",
+                "bucket": "panda-backups",
+                "prefix": "prod/panda",
+                "access_key": "backup-user",
+                "secret_key": "super-secret-value"
+            })),
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(update.status, StatusCode::OK);
+    assert_eq!(update.body["enabled"], true);
+    assert_eq!(update.body["frequency"], "monthly");
+    assert_eq!(update.body["day_of_month"], 28);
+    assert_eq!(update.body["has_secret_key"], true);
+
+    let overview = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(overview.status, StatusCode::OK);
+    assert_eq!(overview.body["settings"]["bucket"], "panda-backups");
+    assert_eq!(overview.body["settings"]["prefix"], "prod/panda");
+    assert_eq!(overview.body["settings"]["timezone"], "America/Chicago");
+    assert_eq!(overview.body["settings"]["has_secret_key"], true);
+    assert!(overview.body["next_run_at"].is_string());
+    assert_eq!(overview.body["runtime_readiness"]["run_now_allowed"], true);
+
+    let encrypted_secret: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT secret_key_encrypted FROM panda.backup_settings WHERE id = TRUE",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("load encrypted secret");
+
+    assert!(encrypted_secret.is_some());
+    assert_ne!(encrypted_secret.unwrap(), b"super-secret-value");
+}
+
+#[tokio::test]
+async fn default_s3_policy_rejects_unsafe_endpoints_before_storing_secrets() {
+    let app = TestApp::new().await;
+    let email = "backup-policy-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    promote_admin(&app.pool, lookup_user_id(&app.pool, email).await).await;
+    for endpoint in [
+        "http://1.1.1.1",
+        "https://127.0.0.1:9",
+        "https://169.254.169.254",
+    ] {
+        let response = app
+            .request(
+                Method::PUT,
+                "/v1/admin/backups/settings",
+                Some(json!({
+                    "enabled":false, "local_enabled":true, "s3_enabled":true,
+                    "frequency":"daily", "run_at":"02:30", "timezone":"UTC",
+                    "day_of_week":null, "day_of_month":null, "retention_count":3,
+                    "target_type":"s3", "endpoint":endpoint, "region":"garage",
+                    "bucket":"security-fixture", "prefix":"integration",
+                    "access_key":"test-access-key", "secret_key":"test-secret-value"
+                })),
+                Some(&token),
+                None,
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{endpoint}"
+        );
+        assert!(!response.body.to_string().contains("test-secret-value"));
+    }
+    let stored: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM panda.backup_settings WHERE id=TRUE AND secret_key_encrypted IS NOT NULL)",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert!(!stored);
+}
+
+#[tokio::test]
+async fn admin_can_run_backup_and_get_catalog_entry() {
+    let app = TestApp::new().await;
+    let email = "backup-run-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.body);
+    assert!(matches!(
+        response.body["run"]["status"].as_str(),
+        Some("running" | "pending")
+    ));
+    assert!(response.body["artifacts"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(
+        completed["recent_runs"][0]["status"], "succeeded",
+        "backup run details: {}",
+        completed["recent_runs"][0]
+    );
+    assert_eq!(completed["recent_runs"][0]["phase"], "completed");
+    assert_eq!(completed["recent_runs"][0]["progress_percent"], 100);
+    assert_eq!(completed["artifacts"][0]["storage_type"], "local");
+    assert!(completed["artifacts"][0]["storage_path"].is_string());
+
+    let overview = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(overview.status, StatusCode::OK);
+    assert_eq!(
+        overview.body["recent_runs"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(overview.body["artifacts"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn backup_progress_failure_is_finalized_as_failed() {
+    let app = TestApp::new().await;
+    let email = "backup-progress-failure-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    sqlx::query(
+        r#"
+        CREATE FUNCTION public.reject_backup_dumping_progress() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.phase = 'dumping' THEN
+                RAISE EXCEPTION 'intentional backup progress failure';
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+        "#,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install backup progress failure function");
+    sqlx::query(
+        "CREATE TRIGGER reject_backup_dumping_progress BEFORE UPDATE ON panda.backup_runs FOR EACH ROW EXECUTE FUNCTION public.reject_backup_dumping_progress()",
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install backup progress failure trigger");
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.body);
+
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(completed["recent_runs"][0]["status"], "failed");
+    assert_eq!(completed["recent_runs"][0]["phase"], "failed");
+    assert_ne!(completed["recent_runs"][0]["status"], "running");
+}
+
+#[tokio::test]
+async fn admin_can_import_external_recovery_package() {
+    let app = TestApp::new().await;
+    let email = "backup-import-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let bytes = test_recovery_package();
+    assert!(
+        bytes.len() > 64 * 1024,
+        "fixture must exercise large upload routing"
+    );
+
+    let imported = app
+        .request_bytes(
+            Method::POST,
+            "/v1/admin/backups/imports",
+            bytes,
+            &token,
+            "other-server.rma.tar.gz",
+        )
+        .await;
+
+    assert_eq!(imported.status, StatusCode::CREATED);
+    assert_eq!(imported.body["artifact"]["storage_type"], "uploaded");
+    assert_eq!(
+        imported.body["artifact"]["manifest"]["package"]["format"],
+        "panda-recovery-v1"
+    );
+
+    let plan = restore_compatibility::plan_restore(
+        &json!({
+            "format": "panda-recovery-v1",
+            "format_version": 1
+        }),
+        "legacy-package-checksum",
+        &app.pool,
+        None,
+    )
+    .await
+    .expect("legacy package plan");
+    assert!(!plan.compatible);
+    assert!(plan.blocking_errors.iter().any(|error| {
+        error.code == restore_compatibility::RestoreBlockingCode::UnsupportedMigrationChain
+    }));
+}
+
+#[tokio::test]
+async fn admin_can_create_restore_request_for_artifact() {
+    let app = TestApp::new().await;
+    let email = "restore-request-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let run = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(run.status, StatusCode::ACCEPTED, "{}", run.body);
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(
+        completed["recent_runs"][0]["status"], "succeeded",
+        "backup run details: {}",
+        completed["recent_runs"][0]
+    );
+    let artifact_id = completed["artifacts"][0]["id"]
+        .as_str()
+        .expect("artifact id");
+
+    let restore = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/restore-requests",
+            Some(json!({
+                "artifact_id": artifact_id,
+                "confirmation_phrase": "RESTORE",
+                "notes": "Operator requested maintenance restore"
+            })),
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(restore.status, StatusCode::CREATED);
+    assert_eq!(restore.body["status"], "pending");
+    assert_eq!(restore.body["artifact_id"], artifact_id);
+
+    let overview = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(
+        overview.body["restore_requests"].as_array().map(Vec::len),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn admin_can_preflight_a_versioned_recovery_package() {
+    let app = TestApp::new().await;
+    let email = "restore-preflight-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let run = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(run.status, StatusCode::ACCEPTED, "{}", run.body);
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(
+        completed["recent_runs"][0]["status"], "succeeded",
+        "{}",
+        completed
+    );
+    let artifact_id = completed["artifacts"][0]["id"]
+        .as_str()
+        .expect("artifact id");
+
+    let admission = panda_api::services::backups::acquire_recovery_mutation_lock(&app.pool)
+        .await
+        .expect("hold recovery admission");
+    let conflict = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/restores/preflight",
+            Some(json!({ "artifact_id": artifact_id })),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT, "{}", conflict.body);
+    admission.release().await;
+
+    let preflight = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/restores/preflight",
+            Some(json!({ "artifact_id": artifact_id })),
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(preflight.status, StatusCode::OK, "{}", preflight.body);
+    assert_eq!(preflight.body["plan"]["compatible"], true);
+    assert_eq!(
+        preflight.body["plan"]["package_format"],
+        "panda-recovery-v3"
+    );
+    let latest_migration_version = restore_compatibility::latest_migration_version();
+    assert_eq!(
+        preflight.body["plan"]["source"]["migration_version"],
+        latest_migration_version
+    );
+    assert_eq!(
+        preflight.body["plan"]["target"]["migration_version"],
+        latest_migration_version
+    );
+    assert!(preflight.body["plan"]["plan_id"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    let admission = panda_api::services::backups::acquire_recovery_mutation_lock(&app.pool)
+        .await
+        .expect("preflight released recovery admission");
+    admission.release().await;
+    let artifact_path: String =
+        sqlx::query_scalar("SELECT storage_path FROM panda.backup_artifacts WHERE id=$1")
+            .bind(Uuid::parse_str(artifact_id).unwrap())
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let backup_root = std::path::Path::new(&artifact_path)
+        .ancestors()
+        .find(|path| path.join(".remote-staging").is_dir())
+        .expect("managed backup root");
+    for directory in [".remote-staging", ".recovery-work"] {
+        assert_eq!(
+            std::fs::read_dir(backup_root.join(directory))
+                .unwrap()
+                .count(),
+            0,
+            "{directory} cleaned after preflight"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancelled_recovery_waiter_keeps_admission_until_blocking_work_and_cleanup_finish() {
+    let app = TestApp::new().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let private_path = workspace.path().join("working");
+    std::fs::create_dir(&private_path).unwrap();
+    let worker_path = private_path.clone();
+    let pool = app.pool.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+    let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        panda_api::services::backups::run_recovery_operation(pool, async move {
+            tokio::task::spawn_blocking(move || {
+                std::fs::write(worker_path.join("database.dump"), b"bounded fixture").unwrap();
+                started_tx.send(()).unwrap();
+                finish_rx.recv().unwrap();
+                std::fs::remove_dir_all(worker_path).unwrap();
+            })
+            .await
+            .unwrap();
+            cleaned_tx.send(()).unwrap();
+            Ok::<_, panda_api::errors::AppError>(())
+        })
+        .await
+    });
+    started_rx.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(private_path.join("database.dump").exists());
+    assert!(
+        matches!(
+            panda_api::services::backups::acquire_recovery_mutation_lock(&app.pool).await,
+            Err(panda_api::errors::AppError::RecoveryConflict(_))
+        ),
+        "disconnected waiter must not admit overlapping recovery work"
+    );
+    finish_tx.send(()).unwrap();
+    cleaned_rx.await.unwrap();
+    assert!(!private_path.exists());
+    let admission = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Ok(lock) =
+                panda_api::services::backups::acquire_recovery_mutation_lock(&app.pool).await
+            {
+                break lock;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    admission.release().await;
+}
+
+#[tokio::test]
+async fn backup_creation_refuses_a_drifted_live_migration_ledger() {
+    let app = TestApp::new().await;
+    let email = "backup-ledger-drift-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    sqlx::query(
+        "UPDATE public._sqlx_migrations
+         SET checksum = decode(repeat('00', 48), 'hex')
+         WHERE version = 1",
+    )
+    .execute(&app.pool)
+    .await
+    .expect("introduce migration checksum drift");
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.body);
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(completed["recent_runs"][0]["status"], "failed");
+    assert_eq!(completed["recent_runs"][0]["phase"], "failed");
+    assert!(
+        completed["recent_runs"][0]["error_message"]
+            .as_str()
+            .is_some_and(|message| message.contains("migration ledger")),
+        "unexpected backup failure: {}",
+        completed["recent_runs"][0]["error_message"]
+    );
+}

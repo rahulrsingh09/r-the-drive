@@ -1,0 +1,83 @@
+import * as React from 'react';
+import { cn } from '../lib/utils';
+
+// ── Page shell ──────────────────────────────────────────────────────────────────
+
+export interface PageLayoutProps {
+  title: string;
+  /** Inline action rendered next to the title (e.g. a pencil edit button). */
+  titleAction?: React.ReactNode | undefined;
+  /** Position of titleAction relative to the title. */
+  titleActionPosition?: 'left' | 'right' | undefined;
+  /** Additional action rendered immediately after the title. */
+  titleActionAfter?: React.ReactNode | undefined;
+  subtitle?: React.ReactNode;
+  actions?: React.ReactNode | undefined;
+  children: React.ReactNode;
+  className?: string | undefined;
+}
+
+export function PageLayout({ title, titleAction, titleActionPosition = 'right', titleActionAfter, subtitle, actions, children, className }: PageLayoutProps) {
+  return (
+    <div data-page-layout className={cn('flex flex-col gap-6', className)}>
+      <div data-page-heading className="flex flex-wrap items-start justify-between gap-y-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {titleActionPosition === 'left' && titleAction}
+            <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
+            {titleActionPosition !== 'left' && titleAction}
+            {titleActionAfter}
+          </div>
+          {subtitle ? (
+            typeof subtitle === 'string'
+              ? <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>
+              : <div className="mt-0.5 max-w-full min-w-0">{subtitle}</div>
+          ) : null}
+        </div>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Stat card grid ────────────────────────────────────────────────────────────────
+
+export function StatCardGrid({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn('grid grid-cols-2 gap-4 md:grid-cols-4', className)}>
+      {children}
+    </div>
+  );
+}
+
+// ── Chart section ───────────────────────────────────────────────────────────────
+
+export interface ChartSectionProps {
+  title: string;
+  subtitle?: string;
+  actions?: React.ReactNode | undefined;
+  children: React.ReactNode;
+  className?: string | undefined;
+}
+
+export function ChartSection({ title, subtitle, actions, children, className }: ChartSectionProps) {
+  return (
+    <div className={cn('bg-bg-surface border border-border rounded-xl p-5', className)}>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h2 className="text-sm font-medium text-fg-secondary uppercase tracking-wider">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-xs text-fg-tertiary">{subtitle}</p>}
+        </div>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}

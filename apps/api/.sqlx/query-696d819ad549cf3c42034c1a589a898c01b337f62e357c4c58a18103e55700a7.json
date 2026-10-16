@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE panda.charge_sessions\n               SET geofence_id = COALESCE(geofence_id, $2),\n                   address_id  = COALESCE(address_id,  $3),\n                   is_home     = COALESCE(is_home,     $4)\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "696d819ad549cf3c42034c1a589a898c01b337f62e357c4c58a18103e55700a7"
+}

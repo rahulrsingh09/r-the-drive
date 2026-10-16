@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.refresh_tokens (token_hash, user_id, expires_at) VALUES ($1,$2,$3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a4d5c73d604c7127a5bf8af4fd31bd5d12f0d8caf713e25d4e41cbd1e070253a"
+}

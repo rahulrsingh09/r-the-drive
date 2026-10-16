@@ -1,0 +1,1006 @@
+//! One-off history rebuild for vehicle lifecycle facts.
+//!
+//! This script is intentionally not part of the normal ingestion loop.
+//! It replays historical telemetry so the durable upstream facts that Phantom
+//! Drain depends on can be rebuilt in one pass:
+//!   1. `vehicle_state_periods`
+//!   2. `charge_sessions`
+//!   3. `trips`
+//!   4. telemetry `trip_id` links
+//!
+//! Usage:
+//!   cargo run --bin rebuild_vehicle_history -- [--vehicle <uuid>]
+
+use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
+use panda_api::{
+    db::vehicles::get_vehicle_owner_id,
+    ingestion::trip_detector::{
+        compute_distance_odometer_or_gps, compute_trip_energy, CompletedTripData,
+        TripDetectorState, TripEvent,
+    },
+    ingestion::trip_signals::TripSignalFusion,
+    models::telemetry::{ChargerState, DriveMode, PowerState, TelemetryEvent},
+    services::{
+        charge_sessions::canonicalize_charge_sessions,
+        cost::recompute_charge_session_cost,
+        geofences::match_geofence,
+        trip_enrichment::{
+            enrich_trip_history_for_vehicle, resolve_trip_location,
+            MatchedLocation as EnrichedMatchedLocation,
+        },
+    },
+};
+use reqwest::Client;
+use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
+use tracing::{info, warn};
+use uuid::Uuid;
+
+const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
+
+#[derive(Debug, Clone)]
+struct Args {
+    vehicle_id: Option<Uuid>,
+}
+
+#[derive(Debug, FromRow)]
+struct ReplayTelemetryRow {
+    ts: DateTime<Utc>,
+    vehicle_id: Uuid,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    altitude_m: Option<f64>,
+    speed_mph: Option<f64>,
+    battery_level: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    distance_to_empty_mi: Option<f64>,
+    battery_limit: Option<f64>,
+    power_state: Option<String>,
+    charger_state: Option<String>,
+    charger_status: Option<String>,
+    time_to_end_of_charge_min: Option<i32>,
+    drive_mode: Option<String>,
+    gear_status: Option<String>,
+    cabin_temp_c: Option<f64>,
+    outside_temp_c: Option<f64>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+    heading_deg: Option<f64>,
+    odometer_miles: Option<f64>,
+    is_online: Option<bool>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+    let args = parse_args()?;
+    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await?;
+    let http_client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
+    rebuild_vehicle_history(&pool, &http_client, args).await?;
+    Ok(())
+}
+
+fn parse_args() -> Result<Args> {
+    let mut vehicle_id = None;
+    let mut iter = std::env::args().skip(1);
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--vehicle" => {
+                let raw = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--vehicle requires a UUID argument"))?;
+                vehicle_id = Some(raw.parse().context("invalid --vehicle UUID")?);
+            }
+            "--help" | "-h" => {
+                println!("Usage: cargo run --bin rebuild_vehicle_history -- [--vehicle <uuid>]");
+                std::process::exit(0);
+            }
+            other => return Err(anyhow!("unknown argument: {other}")),
+        }
+    }
+
+    Ok(Args { vehicle_id })
+}
+
+async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> Result<()> {
+    let vehicles = load_vehicle_scope(pool, args.vehicle_id).await?;
+    if vehicles.is_empty() {
+        info!("No vehicles found for rebuild");
+        return Ok(());
+    }
+
+    info!(
+        vehicle_count = vehicles.len(),
+        filtered = args.vehicle_id.is_some(),
+        "starting historical rebuild"
+    );
+
+    for vehicle_id in vehicles {
+        info!(vehicle_id = %vehicle_id, "rebuilding vehicle history");
+
+        clear_vehicle_history_for_vehicle(pool, vehicle_id).await?;
+        let state_periods = backfill_state_periods_for_vehicle(pool, vehicle_id).await?;
+        let charge_sessions = repair_charge_sessions_for_vehicle(pool, vehicle_id).await?;
+        let charge_canonicalization = canonicalize_charge_sessions(pool, Some(vehicle_id)).await?;
+        let charge_locations =
+            repair_charge_session_locations_for_vehicle(pool, vehicle_id).await?;
+        let charge_costs = repair_charge_session_costs_for_vehicle(pool, vehicle_id).await?;
+        let trips = replay_trips_for_vehicle(pool, vehicle_id, client).await?;
+        let trip_ids = backfill_trip_ids_for_vehicle(pool, vehicle_id).await?;
+        let enrichment = enrich_trip_history_for_vehicle(pool, client, vehicle_id).await?;
+
+        info!(
+            vehicle_id = %vehicle_id,
+            state_periods,
+            charge_sessions,
+            charge_clusters_merged = charge_canonicalization.clusters_merged,
+            charge_duplicates_deleted = charge_canonicalization.duplicate_rows_deleted,
+            charge_payload_reconciliations = charge_canonicalization.payload_reconciliations,
+            charge_locations,
+            charge_costs,
+            trips,
+            trip_ids,
+            trip_geofence_filled = enrichment.geofence_matches.filled,
+            trip_geofence_failed = enrichment.geofence_matches.failed,
+            trip_address_filled = enrichment.address_matches.filled,
+            trip_address_failed = enrichment.address_matches.failed,
+            trip_temp_filled = enrichment.outside_temps.filled,
+            trip_temp_failed = enrichment.outside_temps.failed,
+            "vehicle history rebuild complete"
+        );
+    }
+
+    info!("historical rebuild finished");
+    Ok(())
+}
+
+async fn clear_vehicle_history_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
+    sqlx::query("DELETE FROM panda.trips WHERE vehicle_id = $1")
+        .bind(vehicle_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+async fn load_vehicle_scope(pool: &PgPool, filter: Option<Uuid>) -> Result<Vec<Uuid>> {
+    if let Some(vehicle_id) = filter {
+        return Ok(vec![vehicle_id]);
+    }
+
+    let vehicle_ids =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM panda.vehicles ORDER BY created_at, id")
+            .fetch_all(pool)
+            .await?;
+
+    Ok(vehicle_ids)
+}
+
+async fn backfill_state_periods_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
+    sqlx::query("DELETE FROM panda.vehicle_state_periods WHERE vehicle_id = $1")
+        .bind(vehicle_id)
+        .execute(pool)
+        .await?;
+
+    let mut rows = sqlx::query_as::<_, StateRow>(
+        r#"
+        SELECT ts, power_state
+        FROM timeseries.telemetry
+        -- Partial rows without power state (a door or tire update) say
+        -- nothing about the vehicle state; counting them as unknown split
+        -- the timeline into seconds-long periods.
+        WHERE vehicle_id = $1 AND power_state IS NOT NULL
+        ORDER BY ts
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch(pool);
+
+    let Some(first) = rows.try_next().await? else {
+        return Ok(0);
+    };
+
+    let mut inserted = 0u64;
+    let mut current_state = normalize_state(first.power_state.as_deref());
+    let mut period_start = first.ts;
+    let mut prev_ts = first.ts;
+
+    while let Some(row) = rows.try_next().await? {
+        let state = normalize_state(row.power_state.as_deref());
+        let gap_secs = (row.ts - prev_ts).num_seconds();
+        let state_changed = state != current_state;
+        let large_gap = gap_secs > 600;
+
+        if state_changed || large_gap {
+            inserted +=
+                insert_state_period(pool, vehicle_id, &current_state, period_start, prev_ts)
+                    .await?;
+            period_start = row.ts;
+            current_state = state;
+        }
+        prev_ts = row.ts;
+    }
+
+    inserted +=
+        insert_state_period(pool, vehicle_id, &current_state, period_start, prev_ts).await?;
+    Ok(inserted)
+}
+
+#[derive(Debug, FromRow)]
+struct StateRow {
+    ts: DateTime<Utc>,
+    power_state: Option<String>,
+}
+
+fn normalize_state(power_state: Option<&str>) -> String {
+    match power_state.map(|state| state.trim().to_ascii_lowercase()) {
+        Some(state) if state == "drive" || state == "go" => "drive".to_string(),
+        Some(state) if state == "charging" => "charging".to_string(),
+        Some(state) if state == "ready" => "ready".to_string(),
+        Some(state) if state == "sleep" => "sleep".to_string(),
+        Some(state) if state == "offline" => "offline".to_string(),
+        Some(state) if state == "updating" => "updating".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+async fn insert_state_period(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    state: &str,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+) -> Result<u64> {
+    if ended_at < started_at {
+        return Ok(0);
+    }
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO panda.vehicle_state_periods
+            (vehicle_id, state, started_at, ended_at)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(vehicle_id)
+    .bind(state)
+    .bind(started_at)
+    .bind(ended_at)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
+    let repaired: i64 = sqlx::query_scalar(
+        r#"
+        WITH evidence AS (
+            SELECT
+                t.*,
+                LAG(t.ts) OVER (ORDER BY t.ts) AS prev_ts
+            FROM timeseries.telemetry t
+            WHERE t.vehicle_id = $1
+              AND (
+                  t.charger_state = 'charging'
+                  OR t.charger_status = 'chrgr_sts_connected_charging'
+                  OR COALESCE(t.time_to_end_of_charge_min, 0) > 0
+              )
+        ),
+        marked AS (
+            SELECT
+                *,
+                CASE
+                    WHEN prev_ts IS NULL OR ts - prev_ts > interval '2 hours' THEN 1
+                    ELSE 0
+                END AS new_segment
+            FROM evidence
+        ),
+        segmented AS (
+            SELECT
+                *,
+                SUM(new_segment) OVER (ORDER BY ts) AS segment_id
+            FROM marked
+        ),
+        windows AS (
+            SELECT
+                gen_random_uuid() AS id,
+                vehicle_id,
+                MIN(ts) AS started_at,
+                MAX(ts) AS ended_at,
+                (
+                    ARRAY_AGG(latitude ORDER BY ts) FILTER (
+                        WHERE latitude IS NOT NULL
+                          AND longitude IS NOT NULL
+                          AND NOT (latitude = 0 AND longitude = 0)
+                    )
+                )[1] AS location_lat,
+                (
+                    ARRAY_AGG(longitude ORDER BY ts) FILTER (
+                        WHERE latitude IS NOT NULL
+                          AND longitude IS NOT NULL
+                          AND NOT (latitude = 0 AND longitude = 0)
+                    )
+                )[1] AS location_lng,
+                (ARRAY_AGG(battery_level ORDER BY ts) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_start,
+                (ARRAY_AGG(battery_level ORDER BY ts DESC) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_end,
+                MAX(battery_limit) AS charge_limit,
+                AVG(battery_capacity_wh) FILTER (WHERE battery_capacity_wh IS NOT NULL) AS battery_capacity_wh,
+                MAX(ABS(power_kw)) FILTER (WHERE power_kw IS NOT NULL) AS max_charge_rate_kw,
+                EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts)))::int / 60 AS duration_minutes
+            FROM segmented
+            GROUP BY vehicle_id, segment_id
+        ),
+        candidates AS (
+            SELECT
+                *,
+                CASE
+                    WHEN soc_end > soc_start AND battery_capacity_wh > 0
+                    THEN (soc_end - soc_start) / 100.0 * battery_capacity_wh
+                END AS energy_added_wh
+            FROM windows
+            WHERE ended_at > started_at
+              AND duration_minutes >= 5
+              AND soc_end IS NOT NULL
+              AND soc_start IS NOT NULL
+              AND soc_end - soc_start >= 1.0
+        ),
+        matched_existing AS (
+            SELECT DISTINCT ON (c.id)
+                c.*,
+                cs.id AS existing_id
+            FROM candidates c
+            JOIN panda.charge_sessions cs
+              ON cs.vehicle_id = c.vehicle_id
+             AND cs.started_at <= c.ended_at
+             AND COALESCE(cs.ended_at, cs.started_at) >= c.started_at
+             AND COALESCE(cs.source, 'telemetry') <> 'rivian_api'
+            ORDER BY c.id,
+                     (cs.kwh_added IS NOT NULL) DESC,
+                     cs.started_at
+        ),
+        updated AS (
+            UPDATE panda.charge_sessions cs
+            SET
+                started_at = CASE
+                    WHEN cs.source = 'rivian_api' THEN cs.started_at
+                    ELSE matched_existing.started_at
+                END,
+                ended_at = CASE
+                    WHEN cs.source = 'rivian_api' THEN COALESCE(cs.ended_at, matched_existing.ended_at)
+                    ELSE matched_existing.ended_at
+                END,
+                source_location_lat = COALESCE(cs.source_location_lat, matched_existing.location_lat),
+                source_location_lng = COALESCE(cs.source_location_lng, matched_existing.location_lng),
+                location_lat = CASE WHEN cs.location_override_mode = 'automatic'
+                    THEN COALESCE(cs.location_lat, matched_existing.location_lat) ELSE cs.location_lat END,
+                location_lng = CASE WHEN cs.location_override_mode = 'automatic'
+                    THEN COALESCE(cs.location_lng, matched_existing.location_lng) ELSE cs.location_lng END,
+                soc_start = CASE
+                    WHEN cs.source = 'rivian_api' THEN COALESCE(cs.soc_start, matched_existing.soc_start)
+                    ELSE matched_existing.soc_start
+                END,
+                soc_end = CASE
+                    WHEN cs.source = 'rivian_api' THEN COALESCE(cs.soc_end, matched_existing.soc_end)
+                    ELSE matched_existing.soc_end
+                END,
+                charge_limit = COALESCE(cs.charge_limit, matched_existing.charge_limit),
+                duration_minutes = CASE
+                    WHEN cs.source = 'rivian_api' THEN COALESCE(
+                        cs.duration_minutes,
+                        EXTRACT(EPOCH FROM (COALESCE(cs.ended_at, matched_existing.ended_at) - cs.started_at))::int / 60,
+                        matched_existing.duration_minutes
+                    )
+                    ELSE matched_existing.duration_minutes
+                END,
+                kwh_added = CASE
+                    WHEN cs.source = 'rivian_api' AND cs.kwh_added IS NOT NULL THEN cs.kwh_added
+                    ELSE matched_existing.energy_added_wh / 1000.0
+                END,
+                energy_added_wh = CASE
+                    WHEN cs.source = 'rivian_api' AND COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) IS NOT NULL
+                    THEN COALESCE(cs.energy_added_wh, cs.kwh_added * 1000.0)
+                    ELSE matched_existing.energy_added_wh
+                END,
+                max_charge_rate_kw = COALESCE(cs.max_charge_rate_kw, matched_existing.max_charge_rate_kw),
+                avg_charge_rate_kw = CASE
+                    WHEN cs.source = 'rivian_api' AND cs.avg_charge_rate_kw IS NOT NULL THEN cs.avg_charge_rate_kw
+                    WHEN matched_existing.duration_minutes > 0
+                    THEN (
+                        CASE
+                            WHEN cs.source = 'rivian_api' AND cs.kwh_added IS NOT NULL THEN cs.kwh_added
+                            ELSE matched_existing.energy_added_wh / 1000.0
+                        END
+                    ) / (matched_existing.duration_minutes::float8 / 60.0)
+                END,
+                cost_method = COALESCE(cs.cost_method, 'telemetry_repair'),
+                source = COALESCE(cs.source, 'telemetry'),
+                data_confidence = 'telemetry',
+                charger_type = COALESCE(
+                    cs.charger_type,
+                    CASE
+                        WHEN matched_existing.max_charge_rate_kw < 12 THEN 'ac'
+                        WHEN matched_existing.max_charge_rate_kw < 50 THEN 'ac_l2'
+                        WHEN matched_existing.max_charge_rate_kw IS NOT NULL THEN 'dc'
+                        WHEN matched_existing.duration_minutes > 0
+                             AND matched_existing.energy_added_wh / 1000.0 / (matched_existing.duration_minutes::float8 / 60.0) < 12 THEN 'ac'
+                        WHEN matched_existing.duration_minutes > 0
+                             AND matched_existing.energy_added_wh / 1000.0 / (matched_existing.duration_minutes::float8 / 60.0) < 50 THEN 'ac_l2'
+                        WHEN matched_existing.duration_minutes > 0 THEN 'dc'
+                    END
+                )
+            FROM matched_existing
+            WHERE cs.id = matched_existing.existing_id
+              AND (
+                  matched_existing.started_at <> cs.started_at
+                  OR matched_existing.ended_at <> COALESCE(cs.ended_at, cs.started_at)
+                  OR (COALESCE(cs.source, '') <> 'rivian_api' AND cs.soc_start IS DISTINCT FROM matched_existing.soc_start)
+                  OR (COALESCE(cs.source, '') <> 'rivian_api' AND cs.soc_end IS DISTINCT FROM matched_existing.soc_end)
+                  OR (COALESCE(cs.source, '') <> 'rivian_api' AND cs.duration_minutes IS DISTINCT FROM matched_existing.duration_minutes)
+                  OR cs.soc_start IS NULL
+                  OR cs.soc_end IS NULL
+                  OR cs.kwh_added IS NULL
+                  OR cs.energy_added_wh IS NULL
+                  OR cs.duration_minutes IS NULL
+            )
+            RETURNING cs.id, cs.vehicle_id, cs.started_at, cs.ended_at
+        ),
+        inserted AS (
+            INSERT INTO panda.charge_sessions (
+                id, vehicle_id, started_at, ended_at,
+                location_lat, location_lng, source_location_lat, source_location_lng,
+                soc_start, soc_end, charge_limit, duration_minutes,
+                kwh_added, max_charge_rate_kw, cost_usd,
+                energy_added_wh, energy_used_wh,
+                avg_charge_rate_kw, peak_voltage,
+                cost_method, charger_type, source, data_confidence
+            )
+            SELECT
+                id, vehicle_id, started_at, ended_at,
+                location_lat, location_lng, location_lat, location_lng,
+                soc_start, soc_end, charge_limit, duration_minutes,
+                energy_added_wh / 1000.0, max_charge_rate_kw, NULL,
+                energy_added_wh, NULL,
+                CASE
+                    WHEN duration_minutes > 0 THEN energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0)
+                END,
+                NULL,
+                'telemetry_repair',
+                CASE
+                    WHEN max_charge_rate_kw < 12 THEN 'ac'
+                    WHEN max_charge_rate_kw < 50 THEN 'ac_l2'
+                    WHEN max_charge_rate_kw IS NOT NULL THEN 'dc'
+                    WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 12 THEN 'ac'
+                    WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 50 THEN 'ac_l2'
+                    WHEN duration_minutes > 0 THEN 'dc'
+                END,
+                'telemetry',
+                'telemetry'
+            FROM candidates
+            WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM matched_existing
+                  WHERE matched_existing.id = candidates.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM panda.charge_sessions cs
+                  WHERE cs.vehicle_id = candidates.vehicle_id
+                    AND cs.started_at <= candidates.ended_at
+                    AND COALESCE(cs.ended_at, cs.started_at) >= candidates.started_at
+                    AND COALESCE(cs.source, 'telemetry') <> 'rivian_api'
+              )
+            RETURNING id, vehicle_id, started_at, ended_at
+        ),
+        repaired AS (
+            SELECT * FROM inserted
+            UNION ALL
+            SELECT * FROM updated
+        ),
+        stamped AS (
+            UPDATE timeseries.telemetry t
+            SET charge_session_id = repaired.id
+            FROM repaired
+            WHERE t.vehicle_id = repaired.vehicle_id
+              AND t.ts >= repaired.started_at
+              AND t.ts <= repaired.ended_at
+              AND (
+                  t.charge_session_id IS NULL
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM panda.charge_sessions existing
+                      WHERE existing.id = t.charge_session_id
+                  )
+              )
+            RETURNING repaired.id
+        )
+        SELECT COUNT(DISTINCT id)::int8 AS repaired
+        FROM stamped
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(repaired as u64)
+}
+
+async fn repair_charge_session_locations_for_vehicle(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+) -> Result<u64> {
+    let sessions = sqlx::query_as::<_, ChargeLocationRow>(
+        r#"
+        SELECT id, vehicle_id, location_lat, location_lng
+        FROM panda.charge_sessions
+        WHERE vehicle_id = $1
+          AND geofence_id IS NULL
+          AND location_lat IS NOT NULL
+          AND location_lng IS NOT NULL
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut repaired = 0u64;
+
+    for session in sessions {
+        let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
+        let matched = match (owner_id, session.location_lat, session.location_lng) {
+            (Some(user_id), Some(lat), Some(lon)) => {
+                match_geofence(pool, user_id, lat, lon).await?
+            }
+            _ => None,
+        };
+
+        let Some(matched) = matched else {
+            continue;
+        };
+
+        let result = sqlx::query(
+            r#"
+            UPDATE panda.charge_sessions
+            SET geofence_id = COALESCE(geofence_id, $2),
+                address_id  = COALESCE(address_id,  $3),
+                is_home     = COALESCE(is_home,     $4)
+            WHERE id = $1
+            "#,
+        )
+        .bind(session.id)
+        .bind(matched.id)
+        .bind(matched.address_id)
+        .bind(matched.is_home)
+        .execute(pool)
+        .await?;
+
+        repaired += result.rows_affected();
+    }
+
+    Ok(repaired)
+}
+
+async fn repair_charge_session_costs_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
+    let session_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id
+        FROM panda.charge_sessions
+        WHERE vehicle_id = $1
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut repaired = 0u64;
+    for session_id in session_ids {
+        if recompute_charge_session_cost(pool, session_id)
+            .await
+            .is_ok()
+        {
+            repaired += 1;
+        }
+    }
+
+    Ok(repaired)
+}
+
+#[derive(Debug, FromRow)]
+struct ChargeLocationRow {
+    id: Uuid,
+    vehicle_id: Uuid,
+    location_lat: Option<f64>,
+    location_lng: Option<f64>,
+}
+
+async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Client) -> Result<u64> {
+    let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
+    let mut trip_det = TripDetectorState::new(vehicle_id);
+    let mut trip_signals = TripSignalFusion::default();
+    let mut rows = sqlx::query_as::<_, ReplayTelemetryRow>(
+        r#"
+        SELECT
+            ts, vehicle_id,
+            latitude, longitude, altitude_m, speed_mph,
+            battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+            power_state, charger_state, charger_status, time_to_end_of_charge_min,
+            drive_mode, gear_status, cabin_temp_c, outside_temp_c,
+            power_kw, regen_power_kw, heading_deg, odometer_miles, is_online
+        FROM timeseries.telemetry
+        WHERE vehicle_id = $1
+        ORDER BY ts
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch(pool);
+
+    let mut inserted = 0u64;
+    while let Some(row) = rows.try_next().await? {
+        let event = row_to_event(row);
+
+        let trip_sample = trip_signals
+            .fuse_from(&event, replay_power_is_change_only(&event))
+            .0;
+        if let TripEvent::TripEnded { trip } = trip_det.process(&trip_sample) {
+            let distance = compute_distance_odometer_or_gps(
+                trip.start_odometer_mi,
+                trip.end_odometer_mi,
+                &trip.points,
+            );
+            if distance < MIN_TRIP_DISTANCE_MILES {
+                continue;
+            }
+
+            let was_inserted =
+                persist_replayed_trip(pool, owner_id, &trip, distance, client).await?;
+            if was_inserted {
+                inserted += 1;
+            }
+        }
+    }
+
+    Ok(inserted)
+}
+
+fn row_to_event(row: ReplayTelemetryRow) -> TelemetryEvent {
+    let mut event = TelemetryEvent::empty(row.vehicle_id, row.ts);
+    event.latitude = row.latitude;
+    event.longitude = row.longitude;
+    event.altitude_m = row.altitude_m;
+    event.speed_mph = row.speed_mph;
+    event.battery_level = row.battery_level;
+    event.battery_capacity_wh = row.battery_capacity_wh;
+    event.distance_to_empty_mi = row.distance_to_empty_mi;
+    event.battery_limit = row.battery_limit;
+    event.power_state = row.power_state.as_deref().and_then(parse_power_state);
+    event.charger_state = row.charger_state.as_deref().and_then(parse_charger_state);
+    event.charger_status = row.charger_status;
+    event.time_to_end_of_charge_min = row.time_to_end_of_charge_min;
+    event.drive_mode = row.drive_mode.as_deref().and_then(parse_drive_mode);
+    event.gear_status = row.gear_status;
+    event.cabin_temp_c = row.cabin_temp_c;
+    event.outside_temp_c = row.outside_temp_c;
+    event.power_kw = row.power_kw;
+    event.regen_power_kw = row.regen_power_kw;
+    event.heading_deg = row.heading_deg;
+    event.odometer_miles = row.odometer_miles;
+    event.is_online = row.is_online;
+    event
+}
+
+/// Historical rows lack source provenance. Power-only rows match the typed
+/// Parallax power frame; richer telemetry uses periodic freshness. A legacy
+/// power-only frame remains indistinguishable, so this is an inference only.
+fn replay_power_is_change_only(event: &TelemetryEvent) -> bool {
+    event.power_state.is_some()
+        && event.latitude.is_none()
+        && event.longitude.is_none()
+        && event.altitude_m.is_none()
+        && event.speed_mph.is_none()
+        && event.battery_level.is_none()
+        && event.battery_capacity_wh.is_none()
+        && event.distance_to_empty_mi.is_none()
+        && event.battery_limit.is_none()
+        && event.charger_state.is_none()
+        && event.charger_status.is_none()
+        && event.time_to_end_of_charge_min.is_none()
+        && event.drive_mode.is_none()
+        && event.gear_status.is_none()
+        && event.cabin_temp_c.is_none()
+        && event.outside_temp_c.is_none()
+        && event.power_kw.is_none()
+        && event.regen_power_kw.is_none()
+        && event.heading_deg.is_none()
+        && event.odometer_miles.is_none()
+        && event.is_online.is_none()
+}
+
+#[cfg(test)]
+mod replay_power_tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn mixed_history_keeps_the_supplying_power_rows_policy() {
+        let at = Utc::now();
+        let mut fusion = TripSignalFusion::default();
+        let mut power = TelemetryEvent::empty(Uuid::nil(), at);
+        power.power_state = Some(PowerState::Go);
+        assert!(replay_power_is_change_only(&power));
+        fusion.fuse_from(&power, replay_power_is_change_only(&power));
+        let mut direct_speed = TelemetryEvent::empty(Uuid::nil(), at + Duration::seconds(30));
+        direct_speed.speed_mph = Some(0.0);
+        fusion.fuse_from(&direct_speed, replay_power_is_change_only(&direct_speed));
+        let later = TelemetryEvent::empty(Uuid::nil(), at + Duration::minutes(20));
+        assert_eq!(
+            fusion.fuse_from(&later, false).0.power_state,
+            Some(PowerState::Go)
+        );
+        power.ts = later.ts;
+        power.is_online = Some(true);
+        assert!(!replay_power_is_change_only(&power));
+        fusion.fuse_from(&power, replay_power_is_change_only(&power));
+        let after = TelemetryEvent::empty(Uuid::nil(), power.ts + Duration::minutes(3));
+        assert_eq!(fusion.fuse_from(&after, false).0.power_state, None);
+        power.ts = after.ts;
+        power.is_online = None;
+        fusion.fuse_from(&power, replay_power_is_change_only(&power));
+        let after = TelemetryEvent::empty(Uuid::nil(), power.ts + Duration::minutes(20));
+        assert_eq!(
+            fusion.fuse_from(&after, false).0.power_state,
+            Some(PowerState::Go)
+        );
+    }
+}
+
+fn parse_power_state(value: &str) -> Option<PowerState> {
+    value.parse().ok()
+}
+
+fn parse_charger_state(value: &str) -> Option<ChargerState> {
+    value.parse().ok()
+}
+
+fn parse_drive_mode(value: &str) -> Option<DriveMode> {
+    value.parse().ok()
+}
+
+async fn persist_replayed_trip(
+    pool: &PgPool,
+    owner_id: Option<Uuid>,
+    trip: &CompletedTripData,
+    distance: f64,
+    client: &Client,
+) -> Result<bool> {
+    let overlap: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT id
+        FROM panda.trips
+        WHERE vehicle_id = $1
+          AND started_at <= $3
+          AND ended_at >= $2
+        LIMIT 1
+        "#,
+    )
+    .bind(trip.vehicle_id)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(existing) = overlap {
+        warn!(
+            vehicle_id = %trip.vehicle_id,
+            trip_id = %trip.trip_id,
+            existing_trip_id = %existing,
+            started_at = %trip.started_at,
+            ended_at = %trip.ended_at,
+            "skipping overlapping existing trip during replay"
+        );
+        return Ok(false);
+    }
+
+    let duration = (trip.ended_at - trip.started_at).num_seconds() as i32;
+    let max_speed = trip
+        .points
+        .iter()
+        .map(|p| p.speed_mph)
+        .fold(0.0_f64, f64::max);
+    let avg_speed = if duration > 0 {
+        Some(distance / (duration as f64 / 3600.0))
+    } else {
+        None
+    };
+
+    let (energy_wh, energy_strategy, efficiency_wh_per_mi) = match compute_trip_energy(
+        trip.soc_start,
+        trip.soc_end,
+        trip.battery_capacity_wh,
+        trip.range_start_mi,
+        trip.range_end_mi,
+        distance,
+        None,
+    ) {
+        Some((wh, strat)) => {
+            let eff = if distance > 0.0 {
+                Some(wh / distance)
+            } else {
+                None
+            };
+            (Some(wh), Some(strat.to_string()), eff)
+        }
+        None => {
+            let eff = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
+                (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
+                    Some(((s0 - s1) / 100.0) * cap / distance)
+                }
+                _ => None,
+            };
+            (None, None, eff)
+        }
+    };
+
+    let start = trip.points.first();
+    let end = trip.points.last();
+    let outside_temp_c = trip.outside_temp_avg_c;
+
+    let start_match = match (owner_id, start) {
+        (Some(user_id), Some(point)) => {
+            resolve_trip_location(pool, client, user_id, point.lat, point.lng).await?
+        }
+        _ => EnrichedMatchedLocation::none(),
+    };
+    let end_match = match (owner_id, end) {
+        (Some(user_id), Some(point)) => {
+            resolve_trip_location(pool, client, user_id, point.lat, point.lng).await?
+        }
+        _ => EnrichedMatchedLocation::none(),
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO panda.trips
+           (id, vehicle_id, started_at, ended_at,
+            start_lat, start_lng, end_lat, end_lng,
+            distance_miles, duration_seconds,
+            soc_start, soc_end,
+            efficiency_wh_per_mile, max_speed_mph, avg_speed_mph, drive_mode,
+            start_odometer_mi, end_odometer_mi,
+            start_position_ts, end_position_ts,
+            start_geofence_id, end_geofence_id,
+            start_address_id, end_address_id,
+            range_start_mi, range_end_mi,
+            power_max_kw, power_min_kw,
+            elevation_gain_m, elevation_loss_m,
+            inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
+        "#,
+    )
+    .bind(trip.trip_id)
+    .bind(trip.vehicle_id)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
+    .bind(start.map(|p| p.lat))
+    .bind(start.map(|p| p.lng))
+    .bind(end.map(|p| p.lat))
+    .bind(end.map(|p| p.lng))
+    .bind(distance)
+    .bind(duration)
+    .bind(trip.soc_start)
+    .bind(trip.soc_end)
+    .bind(efficiency_wh_per_mi)
+    .bind(max_speed)
+    .bind(avg_speed)
+    .bind(trip.dominant_drive_mode.as_deref())
+    .bind(trip.start_odometer_mi)
+    .bind(trip.end_odometer_mi)
+    .bind(start.map(|p| p.ts))
+    .bind(end.map(|p| p.ts))
+    .bind(start_match.geofence_id)
+    .bind(end_match.geofence_id)
+    .bind(start_match.address_id)
+    .bind(end_match.address_id)
+    .bind(trip.range_start_mi)
+    .bind(trip.range_end_mi)
+    .bind(trip.power_max_kw)
+    .bind(trip.power_min_kw)
+    .bind(trip.elevation_gain_m)
+    .bind(trip.elevation_loss_m)
+    .bind(trip.inside_temp_avg_c)
+    .bind(outside_temp_c)
+    .bind(trip.regen_wh)
+    .bind(energy_wh)
+    .bind(energy_strategy.as_deref())
+    .execute(pool)
+    .await?;
+
+    if let Some(user_id) = owner_id {
+        sqlx::query(
+            r#"
+            INSERT INTO panda.trip_user_annotations
+               (trip_id, user_id, start_geofence_id, end_geofence_id, start_address_id, end_address_id, matched_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now())
+               ON CONFLICT (trip_id, user_id) DO UPDATE
+               SET start_geofence_id = EXCLUDED.start_geofence_id,
+                   end_geofence_id = EXCLUDED.end_geofence_id,
+                   start_address_id = EXCLUDED.start_address_id,
+                   end_address_id = EXCLUDED.end_address_id,
+                   matched_at = now(),
+                   updated_at = now()
+            "#,
+        )
+        .bind(trip.trip_id)
+        .bind(user_id)
+        .bind(start_match.geofence_id)
+        .bind(end_match.geofence_id)
+        .bind(start_match.address_id)
+        .bind(end_match.address_id)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(true)
+}
+
+async fn backfill_trip_ids_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
+    let trips = sqlx::query_as::<_, TripRangeRow>(
+        r#"
+        SELECT id, started_at, ended_at
+        FROM panda.trips
+        WHERE vehicle_id = $1
+          AND ended_at IS NOT NULL
+        ORDER BY started_at
+        "#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut stamped = 0u64;
+    for trip in trips {
+        let result = sqlx::query(
+            r#"
+        UPDATE timeseries.telemetry
+        SET trip_id = $1
+        WHERE vehicle_id = $2
+          AND ts >= $3
+          AND ts <= $4
+          AND (
+              trip_id IS NULL
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM panda.trips existing
+                  WHERE existing.id = timeseries.telemetry.trip_id
+              )
+          )
+        "#,
+        )
+        .bind(trip.id)
+        .bind(vehicle_id)
+        .bind(trip.started_at)
+        .bind(trip.ended_at)
+        .execute(pool)
+        .await?;
+
+        stamped += result.rows_affected();
+    }
+
+    Ok(stamped)
+}
+
+#[derive(Debug, FromRow)]
+struct TripRangeRow {
+    id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+}

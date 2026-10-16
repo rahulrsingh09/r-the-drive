@@ -1,0 +1,166 @@
+import type { SidebarsConfig } from '@docusaurus/plugin-content-docs';
+
+const sidebars: SidebarsConfig = {
+  overviewSidebar: [
+    'index',
+    {
+      type: 'category',
+      label: 'Product overview',
+      collapsed: false,
+      items: ['guides/features', 'roadmap'],
+    },
+    {
+      type: 'category',
+      label: 'Trust and privacy',
+      collapsed: false,
+      items: ['privacy', 'security'],
+    },
+  ],
+  gettingStartedSidebar: [
+    'guides/README',
+    {
+      type: 'category',
+      label: 'Prepare and install',
+      collapsed: false,
+      items: ['guides/prerequisites', 'guides/getting-started', 'guides/configuration'],
+    },
+    {
+      type: 'category',
+      label: 'Authentication',
+      collapsed: false,
+      items: ['guides/oidc-sso', 'guides/private-origin-gateway'],
+    },
+    {
+      type: 'category',
+      label: 'Host-specific installation',
+      collapsed: false,
+      items: ['guides/synology'],
+    },
+    {
+      type: 'category',
+      label: 'Connect and verify',
+      collapsed: false,
+      items: ['guides/rivian-account', 'guides/verify-installation'],
+    },
+  ],
+  usingPandaSidebar: [
+    'using-panda',
+    'guides/r-experience',
+    {
+      type: 'category',
+      label: 'Personalize your dashboard',
+      collapsed: false,
+      items: ['guides/dashboard-customization', 'guides/chart-customization', 'guides/themes'],
+    },
+    {
+      type: 'category',
+      label: 'Integrations',
+      collapsed: false,
+      items: ['guides/external-connections', 'guides/extended-vehicle-telemetry'],
+    },
+  ],
+  operationsSidebar: [
+    'operations',
+    {
+      type: 'category',
+      label: 'Deployment and recovery',
+      collapsed: false,
+      items: ['guides/deployment', 'guides/secure-deployment', 'guides/backup-and-restore'],
+    },
+    {
+      type: 'category',
+      label: 'Maintainer runbooks',
+      collapsed: false,
+      items: [
+        'runbooks/README',
+        'runbooks/secure-deployment',
+        'runbooks/key-custody',
+        'runbooks/private-fork-maintenance',
+        'runbooks/native-northflank-release',
+        'runbooks/private-history-backups',
+        'runbooks/local-northflank-controller',
+        'runbooks/kiroom-upstream-review',
+        'runbooks/backup-restore',
+        'runbooks/dev-harness',
+        'runbooks/dependency-maintenance',
+        'runbooks/release-images',
+        'runbooks/release-database-cutover',
+        'runbooks/vehicle-history-rebuild',
+        'runbooks/rivian-connection-renewal',
+        'runbooks/charge-payload-cleanup',
+        'runbooks/r2-ingestion-diagnostics',
+      ],
+    },
+  ],
+  developmentSidebar: [
+    'development',
+    {
+      type: 'category',
+      label: 'Contributor orientation',
+      collapsed: false,
+      items: ['contributing', 'architecture/overview'],
+    },
+    {
+      type: 'category',
+      label: 'Architecture',
+      collapsed: false,
+      items: [
+        'architecture/backend-data-flow',
+        'architecture/private-deployment',
+        'architecture/r-experience',
+        'architecture/unification-baseline',
+        'architecture/theming',
+        'architecture/frontend-error-observability',
+        'frontend/dashboard-architecture',
+        'frontend/chart-architecture',
+        'rivian-auth',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Implementation guidance',
+      collapsed: false,
+      items: [
+        'frontend/dashboard-authoring',
+        'frontend/chart-compatibility-testing',
+        'branding',
+        { type: 'link', label: 'Security implementation', href: '/docs/security/' },
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Governance and review',
+      collapsed: false,
+      items: [
+        'runbooks/documentation-maintenance',
+        'dependency-modernization-2026-07',
+        'dependency-review-2026-10-05',
+        'security-audit',
+        'decision-log',
+      ],
+    },
+  ],
+  referenceSidebar: [
+    'reference',
+    {
+      type: 'category',
+      label: 'Configuration',
+      collapsed: false,
+      items: ['environment-variables'],
+    },
+    {
+      type: 'category',
+      label: 'API and integrations',
+      collapsed: false,
+      items: ['api-access'],
+    },
+    {
+      type: 'category',
+      label: 'Data and dashboards',
+      collapsed: false,
+      items: ['metrics-reference', 'dashboard-data-map'],
+    },
+  ],
+};
+
+export default sidebars;

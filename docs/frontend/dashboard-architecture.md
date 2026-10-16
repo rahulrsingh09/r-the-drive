@@ -1,0 +1,306 @@
+# Dashboard Frontend Architecture
+
+## Purpose
+
+Panda dashboards will keep growing. The frontend needs one maintainable composition model instead of multiple route-specific implementations that each re-own layout, date range, edit state, and dashboard actions.
+
+This document defines the approved layering for dashboard work and the package boundaries that keep the system maintainable.
+
+## Design Goals
+
+- Keep one shared code path for default dashboards and user dashboards.
+- Keep routes thin.
+- Keep the dashboard renderer focused on layout, not page composition.
+- Keep widgets small and reusable.
+- Make non-grid page sections explicit instead of implicit slug-based hacks.
+
+Chart widgets use one shared host. Assigned hosts resolve the effective
+persisted chart catalog by dashboard slug and render the active definition
+through the trusted source registry; fixed and legacy hosts remain readable
+during migration. Favorites and dashboard-specific display settings continue
+to use the stable chart slug.
+
+## Current Anchors
+
+- Shared page shell: `apps/web/src/components/dashboard/DashboardPageShell.tsx`
+- Built-in dashboard wrapper: `apps/web/src/components/dashboard/DashboardPage.tsx`
+- User dashboard route: `apps/web/src/routes/d.$slug.tsx`
+- Dashboard renderer: `packages/dashboards/src/DashboardRenderer.tsx`
+- View grid: `packages/dashboards/src/DashboardGrid.tsx`
+- Shared widget chrome: `packages/dashboards/src/WidgetChrome.tsx`
+- Dashboard model helpers: `packages/dashboards/src/dashboardModel.ts`
+- Conditional visibility registry: `packages/dashboards/src/dashboardVisibility.ts`
+- Widget registry: `packages/dashboards/src/registry.tsx`
+- Dashboard defaults and persistence helpers: `packages/dashboards/src/api.ts`, `packages/dashboards/src/defaults/`
+
+## Canonical shared frontend ownership
+
+- `packages/ui` owns reusable primitives, tables, charts, tokens, and the
+  document-theme hook. Routes and widgets consume `useDocumentTheme` from
+  `@panda/ui/hooks`; do not duplicate theme/media-query listeners in
+  app-local code. `ThemeToggle` remains the shared control.
+- `packages/dashboards` owns dashboard framework, widget registry, grid editor,
+  and the responsive editor drawer. The drawer is a full-height right panel on
+  desktop and a bounded bottom panel on mobile; page code must not create a
+  competing route-local editor panel.
+- `packages/hooks` owns typed API hooks and cache contracts, including
+  `useBasemapConfig`. `TripMapChart` in `packages/ui` owns map rendering and
+  receives the authenticated same-origin basemap configuration and per-user map-style preference from its caller.
+  Browser map traffic must use Panda's `/v1/external/basemap/...` proxy;
+  direct browser-to-provider map requests are not a supported transport.
+  The MapLibre module worker is bundled as a web build asset and configured
+  before the first map is created. Production images must serve that emitted
+  worker asset alongside the application chunks.
+  OpenFreeMap vector styles and CARTO/custom raster styles use the same seam;
+  style swaps keep one MapLibre instance and restore route and active-point
+  overlays after `style.load`. Follow appearance tracks the page theme, named
+  styles stay pinned, and 3D is Liberty plus a camera treatment.
+  Map configuration failures and MapLibre resource failures remain distinct;
+  both are reported through the shared frontend diagnostics contract described
+  in [Frontend error observability](../architecture/frontend-error-observability.md).
+- `apps/web` owns route composition and page-specific integrations of these
+  seams. A trip-detail route and the Trips widget may compose the shared map,
+  but neither owns a second map client, theme source, or provider URL policy.
+
+## Approved Layering
+
+### 1. Route Layer
+
+Route files should do only the following:
+
+- declare path, params, and search state
+- mount the protected-route wrapper for authenticated dashboard pages
+- mount a shared dashboard shell or route-local page component
+- pass explicit page composition hooks such as hero panels or tabs
+
+Route files should not directly recreate dashboard scaffolding that already exists in the shared shell.
+
+### 2. Page Shell Layer
+
+`DashboardPageShell` is the shared page scaffold. It owns:
+
+- app layout and page layout
+- dashboard config fetch with fallback to bundled defaults
+- date range state
+- edit/view mode state through `useDashboardEditDraft`
+- dashboard-scoped local working config state
+- rendering of common actions around the dashboard
+- visible save-error feedback while edits remain open
+
+If a new dashboard page needs standard dashboard behavior, start here instead of creating a second scaffold.
+
+Authenticated route entrypoints own the auth boundary. They should mount the shared protected-route wrapper before any dashboard page component so protected hooks cannot fire during auth bootstrap or stale-session recovery.
+
+### 3. Page Composition Layer
+
+Page-specific sections that sit above or beside the grid belong in page composition, not in the renderer.
+
+Examples:
+
+- Overview hero panel
+- page-level tabs
+- detail summary strips
+- page-specific CTAs
+
+Use explicit composition slots such as `renderBeforeDashboard` or a page-local wrapper component. Do not add slug checks to the shell or renderer for page-specific UI.
+
+### 4. Dashboard Framework Layer
+
+`packages/dashboards` owns the reusable dashboard framework:
+
+- schema and validation
+- widget registry
+- dashboard model helpers for identity, ownership, layout patches, and view-only widget visibility
+- a typed visibility-rule registry that owns condition labels, preview values, and runtime resolution
+- view grid renderer
+- edit grid renderer
+- shared widget chrome and edit overlay
+- dashboard CRUD helpers
+- YAML import and export
+- bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
+
+Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and personal layout/widget settings remain untouched. Explicitly managed page-composition widgets are the narrow exception: startup may add a missing managed widget, mark a canonical legacy instance, or remove a specifically retired managed widget. Retirements may compact only unchanged canonical layouts, so custom widget positions remain user-owned. Personal same-slug dashboards continue to win normal route resolution.
+
+This package should stay framework-focused. It should not accumulate page-specific business rules.
+
+Conditional widgets use `WidgetInstance.visibility`. Rules are evaluated with AND semantics, and widgets without rules are always visible. The first registered condition is `vehicle-connection`, with `plugged` and `unplugged` values. Connected standby counts as plugged. Add future condition families to `dashboardVisibility.ts`; do not add slug, route, or widget-definition branches to the renderer.
+
+Conditional variants may intentionally share grid coordinates. Keep the always-visible content and each complete scenario compact before the next full-width section; hiding one scenario must not leave reserved blank rows in the other. The bundled Charging dashboard uses a six-row summary region in both states, followed immediately by its chart and sessions table.
+
+In view mode, `DashboardRenderer` resolves visibility from live status. In edit mode it owns a temporary, named scenario preview state, filters both the canvas and dashboard-wide data requirements to preview-visible widgets, and keeps the complete draft in `GridEditor`. The editor drawer presents the active scenario prominently, for example `Previewing: Vehicle plugged in`, and lets the user switch between registered condition values. Preview state never persists or enters the dashboard schema. Legacy `options.chargingConnectionVisibility` values are normalized to typed rules at API/import boundaries and are written in the typed form on the next save.
+
+### 5. Widget Layer
+
+Widgets belong in `packages/dashboards/src/widgets`.
+
+Each widget should:
+
+- represent one dashboard unit
+- declare the data it needs through `WidgetDef.dataRequirements` when it can use a dashboard-wide source or metric batch
+- render generic UI from `@panda/ui`
+- avoid coordinating unrelated page sections
+
+If multiple widgets need shared derived data, move that derivation to a hook or adapter instead of coupling the widgets together.
+
+#### Chart widget display settings
+
+The shared chart widget owns reusable chart display controls.
+
+- Fixed and assignment-driven catalogs are data providers for one shared chart frame; they must not fork picker, settings, measured plot, mobile viewer, or focus behavior. The persisted Overview slug `dashboard` resolves chart assignments through the runtime placement `overview`, but that mapping does not authorize Overview-specific chart chrome or rendering.
+- Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
+- Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
+- The shared settings panel groups display filtering, curve shaping, and supported axis ranges into collapsible sections. Display filtering and smoothing apply to every compatible curve in the active chart; a series may opt out only when its data semantics require it.
+- Treat dashboard edit mode as the only persistent write seam. In edit mode, widget-level settings changes should flow back through the dashboard shell's local config update path. In view mode, the same UI can preview changes locally, but those changes should not autosave.
+- Saved chart display settings remain part of the account-owned dashboard configuration; do not add browser-storage persistence for them.
+- Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. The favorite is stored in the authenticated account's database-backed preferences per dashboard/widget instance, so it survives browser changes and remains available when a managed catalog gains new chart definitions. `DashboardChartWidget` owns the preference interaction; the account preferences API owns persistence.
+- Keep the settings UI inside the shared chart widget and shared chart primitives. Do not recreate chart-settings popovers in route files or page components.
+- Rich time-series charts may expose manual `y` and `y2` ranges broadly, but `x` range controls are only valid when the chart owns its own non-dashboard domain.
+- When a chart follows the shared dashboard timeframe, the page shell remains the source of truth for the X domain. Do not expose per-widget time-range overrides that conflict with `DashboardPageShell`.
+
+Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx` as `CHART_BAR_STYLE`. Use the filled mark treatment for ordinary quantitative bars and preserve renderer-specific semantics for stacked, histogram, efficiency, and segmented pill views. Interactive bars must provide date/category and value details on hover; stacked views additionally require a legend and a full-bar hit target.
+
+Interval charts use the same filled-bar palette, opacity, radius, and full-bar
+hit target. The tire-pressure timeline places overlapping trip intervals into
+spatial lanes in a compact bottom band on the secondary `Trips` lane; the
+horizontal span remains the interval's actual start/end time, and lanes never
+add durations together. The band is capped at roughly 30% of the plot so the
+primary pressure trend remains legible. Each interval is a keyboard-activatable
+button with route details and opens the owning trip.
+
+Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/chartLabelLayout.ts`. Dense custom SVG categorical charts must keep every data mark and interaction target, then select only a collision-safe subset of axis and value labels using the shared chart font. Axis labels remain evenly distributed with first/last retention when space permits and 12 px minimum spacing; value labels prioritize larger values and use 6 px bounding-box padding. Recalculate from the currently visible domain so labels return after zoom. Recharts categorical/time axes use the centralized `preserveStartEnd` and 40 px minimum-gap defaults, with explicit exceptions only for specialized layouts such as the rotated Speed Histogram. uPlot time axes keep their bounded calendar-date split policy.
+
+#### Mobile chart viewer
+
+- `DashboardChartWidget` owns the mobile-only expand trigger and the portal-based fullscreen viewer for catalog-rendered dashboard charts. The viewer can switch only among that widget's configured `chartIds`; selection and exploration remain local view state and must not mutate the dashboard or URL.
+- `DashboardChartRenderer` accepts `presentation="embedded" | "mobile-viewer"`. It keeps data ownership unchanged while opting rich time/numeric charts into touch exploration. Browser fullscreen and orientation APIs are progressive enhancements; the fixed-viewport viewer and rotate prompt remain the reliable fallback.
+- `RichTimeSeriesChart` owns pinch zoom, horizontal pan, double-tap/reset, and data-domain clamping for the mobile-viewer presentation. Categorical renderers stay readable and tappable rather than inventing a continuous zoom model.
+
+### Managed page composition
+
+Some built-in widgets are layout-bearing anchors for page composition rather than
+user-configurable widget definitions. Their `managed` and `managedKey` fields
+identify the composition contract; the user can still move or resize the widget,
+but the editor does not expose controls to replace its content or remove it.
+Managed catalog charts derive their available chart definitions from the current
+page catalog instead of persisting a second chart-membership list in each user
+copy. Startup applies an additive, idempotent compatibility patch for existing
+personal copies so new fixed content appears without replacing saved layouts.
+
+### 6. Hooks and Data Layer
+
+`packages/hooks` owns dashboard-facing data access and lightweight normalization. `DashboardRenderer` owns the dashboard-wide coordination layer: it derives a sorted, deduplicated requirement manifest from visible widgets and supplies the result through `DashboardDataProvider`.
+
+Use hooks for:
+
+- endpoint access
+- response normalization
+- cache keys
+- page-level aggregate fetches that several widgets share
+- the typed `POST /v1/metrics/batch` request used by metric chips
+
+Widgets read provider data through selector adapters so a status update only re-renders chips that select the changed field. Outside a dashboard provider, adapters retain their direct-hook fallback for detail pages and integrations. Live status remains memory-only and fast-refreshing; bounded historical metric summaries may use the normal persisted cache while refreshing.
+
+The batch API combines dashboard-chip values with the complete retained series
+needed by visible sparklines. Dashboard requests use `density: "full"`, which
+returns raw trip/telemetry/session points without an automatic point cap; the
+legacy `compact` mode remains available to external callers that explicitly
+need a bounded response. Maps, tables, trip geometry, and trip-detail
+synchronized samples stay on their specialized endpoints. Chart widgets mount
+exactly one query source: the active picker selection. Offscreen charts, maps,
+and tables mount through an intersection boundary with a small preload margin,
+preserving their existing loading shapes and interaction contracts once visible.
+
+### High-density data rules
+
+Pages that render many trips or long telemetry histories must keep the browser work bounded:
+
+- Fetch one page-level aggregate for a map or coordinated detail view instead of one request per route or metric.
+- Persist compact route previews with the trip record; generate a preview from linked telemetry only when a legacy row is missing one.
+- Return complete retained dashboard history through typed chart/batch contracts; do not replace points with range-dependent averages or a display cap. Keep raw compatibility endpoints for integrations, but do not compose their untyped records in the page.
+- Dashboard line and area views may apply a user-selected display-only time filter (`Raw` through `7 days`). The filter preserves each retained timestamp and changes only rendered values; it never changes API density or chart spacing. They may independently persist `Curve smoothness` as `Straight`, `Gentle` (the default), or `Smooth`. The shared chart seam calculates PCHIP-style slopes from actual X/Y deltas, uses monotonic weighted harmonic means within rising or falling runs, and flattens reversals and plateaus. Each Hermite segment becomes Bezier controls at one-third and two-thirds of that segment's X span, so handles stay ordered; Gentle is the halfway blend from straight controls and Smooth uses the full shape-preserving controls. Duplicate or invalid X intervals fall back to straight geometry. Rich chart strokes, area upper edges, and sensor sparklines use this same helper. Paths break at null samples unless a chart opts into `connectGaps`; tooltips remain anchored to the original samples. Sensor bar sprites may use the display filter as an explicit bin: non-raw windows sum source values into fixed, non-overlapping periods. Other intentional bar/category aggregations remain unchanged.
+- For normalized vehicle history, prefer typed, allowlisted series with null-preserving sparse values. The Settings telemetry lanes contract may remain explicitly bucketed because it is a density inspector, not a dashboard chart.
+- Use canvas-backed charts for dense series. Shared uPlot charts may use a `cursorSyncKey` so synchronized cursors stay inside the chart layer instead of re-rendering the page on every pointer movement.
+- For intentionally sparse telemetry detail series, opt into `connectGaps`: line/area paths span null samples while tooltips carry the last finite reading until the next valid sample. Keep the opt-in local to views where that interpolation is semantically safe.
+- When an adaptive sample count is presented as a distribution, convert it with the server-reported sample interval and label the result as approximate time rather than raw sample count.
+- Mark dense query keys as non-persistent and keep a byte budget on the remaining local query cache.
+
+### 7. Reusable UI Layer
+
+`packages/ui` owns reusable primitives, charts, and tables.
+
+This package should not make page-specific API decisions. It should stay data-shape driven and reusable across dashboards.
+
+## Package Ownership
+
+| Concern | Owning package/path | Notes |
+|---|---|---|
+| Route params, search state, page wiring | `apps/web/src/routes` | thin wrappers only |
+| Shared dashboard page scaffold | `apps/web/src/components/dashboard` | owns shell behavior |
+| Dashboard schema, defaults, renderer, registry | `packages/dashboards/src` | framework layer |
+| Dashboard data fetching and normalization | `packages/hooks/src` | query layer |
+| Generic charts, tables, badges, primitives | `packages/ui/src` | reusable presentation layer |
+
+## Approved File Structure
+
+```text
+apps/web/src/components/dashboard/
+  DashboardPageShell.tsx      # shared scaffold
+  DashboardPage.tsx           # built-in dashboard wrapper
+
+apps/web/src/routes/
+  index.tsx                   # Overview route wrapper
+  battery.tsx                 # built-in route wrapper
+  charging.tsx                # built-in route wrapper
+  efficiency.tsx              # built-in route wrapper
+  trips.tsx                   # built-in route wrapper
+  d.$slug.tsx                 # user dashboard route wrapper
+
+packages/dashboards/src/
+  schema.ts                   # config schema
+  registry.tsx                # widget definitions
+  dashboardModel.ts           # identity, ownership, layout, and visibility helpers
+  dashboardVisibility.ts      # typed conditions, runtime resolution, compatibility migration
+  DashboardRenderer.tsx       # mode orchestration between view and edit grids
+  DashboardGrid.tsx           # view-mode CSS grid
+  GridEditor.tsx              # edit-mode React Grid Layout canvas
+  WidgetChrome.tsx            # shared widget frame and edit overlay
+  widgets/                    # widget modules
+  defaults/                   # bundled defaults
+  api.ts                      # dashboard CRUD helpers
+
+packages/hooks/src/
+  api.ts                      # HTTP wrappers
+  use*.ts                     # dashboard-facing hooks
+
+packages/ui/src/
+  charts/
+  tables/
+  primitives/
+```
+
+## Rules
+
+### Do
+
+- keep dashboard routes declarative
+- put shared edit/view/dashboard state in the shell
+- keep renderer layout-only
+- keep widget hover/edit chrome in `WidgetChrome`
+- keep layout mutation rules in `dashboardModel.ts`
+- add reusable conditional states through `dashboardVisibility.ts`
+- compose page extras explicitly
+- reuse `packages/ui` before creating page-local visuals
+- reuse `packages/hooks` before embedding fetch logic in route wrappers
+
+### Do Not
+
+- add `if (slug === ...)` branching inside the shared shell for page-only content
+- add direct page composition logic to `DashboardRenderer`
+- add dashboard- or route-specific conditional visibility branches
+- duplicate edit, clone, export, import, or lock handling in a second route scaffold
+- put page-specific API calls inside `packages/ui`
+- use widgets as a substitute for page-level orchestration when several widgets need shared context
+
+## Next Structural Step
+
+The current shell is the first stabilization step. If the number of built-in dashboards keeps growing, the next evolution should be a lightweight page-definition layer so routes declare metadata instead of assembling custom wrapper logic repeatedly.

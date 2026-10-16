@@ -1,0 +1,1372 @@
+import * as React from 'react';
+import uPlot from 'uplot';
+import { RotateCcw } from 'lucide-react';
+import type { AlignedData, Options, Series } from 'uplot';
+import 'uplot/dist/uPlot.min.css';
+import { cn } from '../lib/utils';
+import { ChartSkeleton } from '../primitives/Skeleton';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT, resolveChartColor } from './ChartProvider';
+import { formatNumber, formatSmartNumber } from '../lib/utils';
+import { formatAppDate, formatAppDateTime, formatAppTime } from '../lib/dateTime';
+import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
+import { DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, type CurveSmoothness } from './curveSmoothness';
+import { useDocumentPalette } from '../hooks/useDocumentPalette';
+import { useDocumentTheme } from '../hooks/useDocumentTheme';
+import { useThemeRevision } from '../lib/themeRuntime';
+import { attachChartScrubbing } from './attachChartScrubbing';
+
+const NATIVE_SPLINE_PATH = uPlot.paths.spline!();
+
+export interface RichSeries {
+  key: string;
+  label: string;
+  color?: string;
+  values: Array<number | null>;
+  mode?: 'line' | 'area' | 'bar' | 'scatter';
+  /** Optional per-series path interpolation. */
+  interpolation?: 'step';
+  /** Marker diameter for scatter series. */
+  pointSize?: number;
+  /** Stroke width for line and area series. */
+  strokeWidth?: number;
+  /** Dash pattern used to distinguish cycled colors in dense categorical charts. */
+  dash?: number[];
+  /** Include values in the hover tooltip without drawing a series or legend item. */
+  tooltipOnly?: boolean;
+  /** Draw the series without adding another legend item. */
+  showInLegend?: boolean;
+  /** Formats this series in the hover tooltip, independent of the chart axis unit. */
+  tooltipFormatter?: (value: number | null | undefined) => string;
+  /** Optional per-point context appended to this series' hover row. */
+  tooltipDetails?: Array<string | null | undefined>;
+  /** Which Y scale this series is drawn on. Default 'y' (left). Use 'y2' for a right axis. */
+  yScale?: 'y' | 'y2';
+  /** Keep cumulative or derived supporting series raw while filtering the primary line. */
+  filterable?: boolean;
+  /** Opt out supporting/derived line series from display curve shaping. */
+  smoothable?: boolean;
+  /** Stack bar values with other bar series carrying the same ID. */
+  stackId?: string;
+}
+
+export interface RichTimeInterval {
+  id: string;
+  start: string | number | Date;
+  end: string | number | Date;
+  label: string;
+  details?: string;
+  color?: string;
+}
+
+export interface RichReferenceLine {
+  value: number;
+  label?: string;
+  color?: string;
+}
+
+export interface PackedRichTimeInterval extends RichTimeInterval {
+  lane: number;
+}
+
+export interface RichTimeIntervalBandGeometry {
+  bandTop: number;
+  bandHeight: number;
+  laneTop: number;
+  laneHeight: number;
+  top: number;
+  height: number;
+  hitTop: number;
+  hitHeight: number;
+}
+
+/** Calculate the compact bottom lane used by interval overlays. */
+export function getRichTimeIntervalBandGeometry(
+  lane: number,
+  laneCount: number,
+  plotTop: number,
+  plotHeight: number,
+  bandRatio = 0.3,
+): RichTimeIntervalBandGeometry {
+  const safePlotHeight = Math.max(0, plotHeight);
+  const safeLaneCount = Math.max(1, laneCount);
+  const safeRatio = Math.min(0.45, Math.max(0.2, bandRatio));
+  const bandHeight = safePlotHeight * safeRatio;
+  const bandTop = plotTop + safePlotHeight - bandHeight;
+  const laneHeight = bandHeight / safeLaneCount;
+  const laneTop = bandTop + Math.min(Math.max(0, lane), safeLaneCount - 1) * laneHeight;
+  const height = Math.max(4, laneHeight * 0.72);
+  const top = laneTop + Math.max(0, (laneHeight - height) / 2);
+  const hitHeight = Math.max(44, laneHeight);
+  const hitTop = safePlotHeight < hitHeight
+    ? plotTop
+    : Math.min(
+        plotTop + safePlotHeight - hitHeight,
+        Math.max(plotTop, laneTop + (laneHeight - hitHeight) / 2),
+      );
+  return { bandTop, bandHeight, laneTop, laneHeight, top, height, hitTop, hitHeight };
+}
+
+/** Assign overlapping intervals to the smallest available horizontal lane. */
+export function packRichTimeIntervals(intervals: RichTimeInterval[]): PackedRichTimeInterval[] {
+  const laneEnds: number[] = [];
+  return [...intervals]
+    .map((interval, index) => ({ interval, index, start: toSeconds(interval.start), end: toSeconds(interval.end) }))
+    .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index)
+    .map(({ interval, start, end }) => {
+      const lane = laneEnds.findIndex((lastEnd) => lastEnd <= start);
+      const resolvedLane = lane === -1 ? laneEnds.length : lane;
+      laneEnds[resolvedLane] = end;
+      return { ...interval, lane: resolvedLane };
+    })
+    .sort((a, b) => toSeconds(a.start) - toSeconds(b.start) || a.lane - b.lane);
+}
+
+export interface RichTimeSeriesChartProps {
+  /** Stable production renderer identity for compatibility tests and diagnostics. */
+  rendererId?: string;
+  points: Array<{ ts: string | number | Date }>;
+  series: RichSeries[];
+  height?: number;
+  loading?: boolean;
+  emptyTitle?: string | undefined;
+  emptyDescription?: string | undefined;
+  /** Accessible/displayed titles for the chart axes. */
+  xAxisLabel?: string | undefined;
+  yAxisLabel?: string | undefined;
+  yRightAxisLabel?: string | undefined;
+  /** Display controls used by definition-driven charts. Omitted values preserve legacy behavior. */
+  showLegend?: boolean | undefined;
+  showGrid?: boolean | undefined;
+  showTooltip?: boolean | undefined;
+  showPoints?: boolean | undefined;
+  yUnit?: string | undefined;
+  /** Unit label for the right Y axis (only shown when any series has yScale='y2'). */
+  yRightUnit?: string | undefined;
+  className?: string | undefined;
+  mode?: 'line' | 'area' | 'bar' | 'scatter' | undefined;
+  xTime?: boolean;
+  xUnit?: string | undefined;
+  xValueFormatter?: ((value: number) => string) | undefined;
+  /** Secondary X axis shown at the top of the chart (same scale as primary X, different label format). */
+  xSecondaryFormatter?: ((value: number) => string) | undefined;
+  /** Optional formatter for primary Y-axis tick labels. Tooltip formatting remains controlled by yValueFormatter. */
+  yAxisValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
+  /** Optional formatter for secondary Y-axis tick labels. Tooltip formatting remains controlled by yValueFormatter. */
+  yRightAxisValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
+  yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
+  timeFilter?: TimeFilterWindow | undefined;
+  smoothness?: CurveSmoothness | undefined;
+  xRange?: [number, number] | undefined;
+  yRange?: [number, number] | undefined;
+  yRightRange?: [number, number] | undefined;
+  stepInterpolation?: boolean | undefined;
+  xSplits?: number[] | undefined;
+  /** Native uPlot cursor synchronization group for dense coordinated charts. */
+  cursorSyncKey?: string | undefined;
+  /** Shared sample selection; enables persistent inspection instead of drag-to-zoom. */
+  activeCursorIndex?: number | null | undefined;
+  /** Receives the aligned sample index without forcing the chart to re-render. */
+  onCursorIndexChange?: ((index: number | null) => void) | undefined;
+  /** Receives the currently rendered numeric Y-axis ranges for settings affordances. */
+  onResolvedAxisRanges?: ((ranges: { y?: [number, number]; y2?: [number, number] }) => void) | undefined;
+  /** Connect line/area paths across null samples and carry the last value in tooltips. */
+  connectGaps?: boolean | undefined;
+  /** Enables touch-first pan and pinch exploration for a dedicated mobile chart view. */
+  interactionMode?: 'standard' | 'touch-explore' | undefined;
+  /** Optional time-span marks rendered as accessible, clickable secondary-axis lane bars. */
+  intervals?: RichTimeInterval[] | undefined;
+  onIntervalClick?: ((interval: PackedRichTimeInterval) => void) | undefined;
+  /** Fraction of the plot reserved for interval lanes at the bottom. */
+  intervalBandRatio?: number | undefined;
+  /** Optional horizontal reference lines on the primary Y axis. */
+  referenceLines?: RichReferenceLine[] | undefined;
+}
+
+/** Build uPlot's aligned arrays from finite, ascending x values. */
+export function buildRichTimeSeriesAlignedData(
+  points: RichTimeSeriesChartProps['points'],
+  series: RichSeries[],
+  timeFilter: TimeFilterWindow = 'raw',
+  xTime = true,
+): AlignedData {
+  const entries = points
+    .map((point, index) => ({ index, x: xTime ? toSeconds(point.ts) : Number(point.ts) }))
+    .filter((entry) => Number.isFinite(entry.x))
+    .sort((a, b) => a.x - b.x || a.index - b.index);
+  const values = series.map((item) => {
+    const source = xTime && item.filterable !== false
+      ? filterTimeSeriesValues(points.map((point) => point.ts), item.values, timeFilter)
+      : item.values.map((value) => value ?? null);
+    return entries.map(({ index }) => source[index] ?? null);
+  });
+  return [entries.map((entry) => entry.x), ...values] as AlignedData;
+}
+
+export function clampExplorationRange(
+  proposed: [number, number],
+  bounds: [number, number],
+  minimumSpan: number,
+): [number, number] {
+  const [boundMin, boundMax] = bounds;
+  const maxSpan = boundMax - boundMin;
+  if (maxSpan <= 0) return bounds;
+
+  const span = Math.min(maxSpan, Math.max(minimumSpan, proposed[1] - proposed[0]));
+  let min = proposed[0];
+  let max = min + span;
+  if (min < boundMin) {
+    min = boundMin;
+    max = min + span;
+  }
+  if (max > boundMax) {
+    max = boundMax;
+    min = max - span;
+  }
+  return [min, max];
+}
+
+export function isZoomedXRange(current: [number, number], full: [number, number]) {
+  const tolerance = Math.max(1e-9, Math.abs(full[1] - full[0]) * 1e-6);
+  return Math.abs(current[0] - full[0]) > tolerance || Math.abs(current[1] - full[1]) > tolerance;
+}
+
+function attachTouchExploration(root: HTMLDivElement, chart: uPlot, bounds: [number, number]) {
+  const pointers = new Map<number, { x: number; y: number }>();
+  const minimumSpan = Math.max((bounds[1] - bounds[0]) / 500, Number.EPSILON);
+  let startRange: [number, number] = bounds;
+  let startPoint: { x: number; y: number } | null = null;
+  let pinch: { distance: number; centerX: number; range: [number, number] } | null = null;
+  let lastTapAt = 0;
+  const previousTouchAction = root.style.touchAction;
+  root.style.touchAction = 'none';
+
+  const currentRange = (): [number, number] => {
+    const scale = chart.scales.x;
+    return [scale?.min ?? bounds[0], scale?.max ?? bounds[1]];
+  };
+  const reset = () => chart.setScale('x', { min: bounds[0], max: bounds[1] });
+  const firstTwoPoints = () => Array.from(pointers.values()).slice(0, 2) as [{ x: number; y: number }, { x: number; y: number }];
+
+  const startPinch = () => {
+    if (pointers.size < 2) return;
+    const [left, right] = firstTwoPoints();
+    pinch = {
+      distance: Math.max(1, Math.hypot(right.x - left.x, right.y - left.y)),
+      centerX: (left.x + right.x) / 2,
+      range: currentRange(),
+    };
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') return;
+    const now = Date.now();
+    if (pointers.size === 0 && now - lastTapAt < 300) {
+      reset();
+      lastTapAt = 0;
+    } else if (pointers.size === 0) {
+      lastTapAt = now;
+    }
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    root.setPointerCapture?.(event.pointerId);
+    startRange = currentRange();
+    startPoint = { x: event.clientX, y: event.clientY };
+    startPinch();
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const rect = root.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    if (pointers.size >= 2) {
+      if (!pinch) startPinch();
+      if (!pinch) return;
+      const [left, right] = firstTwoPoints();
+      const distance = Math.max(1, Math.hypot(right.x - left.x, right.y - left.y));
+      const nextSpan = (pinch.range[1] - pinch.range[0]) * (pinch.distance / distance);
+      const focusRatio = Math.min(1, Math.max(0, (pinch.centerX - rect.left) / rect.width));
+      const focus = pinch.range[0] + (pinch.range[1] - pinch.range[0]) * focusRatio;
+      const nextRange = clampExplorationRange(
+        [focus - nextSpan * focusRatio, focus + nextSpan * (1 - focusRatio)],
+        bounds,
+        minimumSpan,
+      );
+      chart.setScale('x', { min: nextRange[0], max: nextRange[1] });
+      event.preventDefault();
+      return;
+    }
+
+    if (!startPoint) return;
+    const span = startRange[1] - startRange[0];
+    const delta = ((event.clientX - startPoint.x) / rect.width) * span;
+    const nextRange = clampExplorationRange([startRange[0] - delta, startRange[1] - delta], bounds, minimumSpan);
+    chart.setScale('x', { min: nextRange[0], max: nextRange[1] });
+    event.preventDefault();
+  };
+
+  const onPointerEnd = (event: PointerEvent) => {
+    pointers.delete(event.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 1) {
+      const [point] = pointers.values();
+      startPoint = point ?? null;
+      startRange = currentRange();
+    } else {
+      startPoint = null;
+    }
+  };
+
+  root.addEventListener('pointerdown', onPointerDown, { passive: false });
+  root.addEventListener('pointermove', onPointerMove, { passive: false });
+  root.addEventListener('pointerup', onPointerEnd);
+  root.addEventListener('pointercancel', onPointerEnd);
+  return () => {
+    root.style.touchAction = previousTouchAction;
+    root.removeEventListener('pointerdown', onPointerDown);
+    root.removeEventListener('pointermove', onPointerMove);
+    root.removeEventListener('pointerup', onPointerEnd);
+    root.removeEventListener('pointercancel', onPointerEnd);
+  };
+}
+
+function toSeconds(value: string | number | Date) {
+  if (typeof value === 'number') return value > 10_000_000_000 ? value / 1000 : value;
+  return Math.floor(new Date(value).getTime() / 1000);
+}
+
+function formatDateForSpan(seconds: number, spanSeconds: number) {
+  const d = new Date(seconds * 1000);
+  if (spanSeconds <= 24 * 3600) {
+    // Sub-24h: time only with minutes — e.g. "9:30 PM"
+    return formatAppTime(d);
+  }
+  if (spanSeconds <= 3 * 86400) {
+    // Sub-3d: date + time with minutes — e.g. "May 9, 9:30 PM"
+    return formatAppDateTime(d, { month: 'short', day: 'numeric' });
+  }
+  if (spanSeconds <= 90 * 86400) {
+    return formatAppDate(d, { month: 'short', day: 'numeric' });
+  }
+  return formatAppDate(d, { month: 'short', year: '2-digit' });
+}
+
+export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) {
+  const finiteValues = values
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.abs(value) < 1e-12 ? 0 : value)
+    .sort((a, b) => a - b);
+
+  if (finiteValues.length < 2) return 0;
+
+  let minStep = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < finiteValues.length; index += 1) {
+    const step = Math.abs(finiteValues[index]! - finiteValues[index - 1]!);
+    if (step > 1e-9 && step < minStep) {
+      minStep = step;
+    }
+  }
+
+  if (!Number.isFinite(minStep)) return 0;
+
+  let precision = 0;
+  let scaled = minStep;
+  while (precision < maxPrecision && Math.abs(scaled - Math.round(scaled)) > 1e-6) {
+    precision += 1;
+    scaled *= 10;
+  }
+
+  return precision;
+}
+
+/** Axis labels intentionally become calendar dates for multi-day views. */
+export function formatAxisDateForSpan(seconds: number, spanSeconds: number) {
+  if (spanSeconds <= 24 * 3600) return formatDateForSpan(seconds, spanSeconds);
+  const d = new Date(seconds * 1000);
+  if (spanSeconds <= 90 * 86400) return formatAppDate(d, { month: 'short', day: 'numeric', year: undefined });
+  return formatAppDate(d, { month: 'short', year: '2-digit', day: undefined });
+}
+
+/** Avoid repeated date labels from uPlot's hourly automatic splits. */
+export function getCalendarDateSplits(startSeconds: number, endSeconds: number, maximum = 7) {
+  if (endSeconds - startSeconds <= 24 * 3600) return undefined;
+  const spanDays = Math.ceil((endSeconds - startSeconds) / 86400);
+  const safeMaximum = Math.max(2, Math.floor(maximum));
+  const stepDays = Math.max(1, Math.ceil(spanDays / (safeMaximum - 1)));
+  const cursor = new Date(startSeconds * 1000);
+  cursor.setHours(0, 0, 0, 0);
+  if (cursor.getTime() / 1000 < startSeconds) cursor.setDate(cursor.getDate() + 1);
+  const splits: number[] = [];
+  while (cursor.getTime() / 1000 <= endSeconds) {
+    splits.push(cursor.getTime() / 1000);
+    cursor.setDate(cursor.getDate() + stepDays);
+  }
+  if (splits.length === 1 && safeMaximum >= 2 && endSeconds > splits[0]!) {
+    splits.push(endSeconds);
+  }
+  return splits.length ? splits : undefined;
+}
+
+export function formatAxisDateValuesForScale(
+  values: number[],
+  scaleMin: number | undefined,
+  scaleMax: number | undefined,
+  fallbackSpan: number
+) {
+  const visibleSpan =
+    scaleMin != null &&
+    scaleMax != null &&
+    Number.isFinite(scaleMin) &&
+    Number.isFinite(scaleMax) &&
+    scaleMax > scaleMin
+      ? scaleMax - scaleMin
+      : fallbackSpan;
+  return values.map((value) => formatAxisDateForSpan(value, visibleSpan));
+}
+
+/** Keep calendar labels readable as the plot narrows or gains a second Y axis. */
+export function getResponsiveCalendarTickMaximum(plotWidth: number) {
+  return Math.max(2, Math.min(7, Math.floor(plotWidth / 96)));
+}
+
+export function formatChartNumber(value: number | null | undefined, unit?: string, precision = 0) {
+  if (value == null || !Number.isFinite(value)) return '-';
+  const decimals = Math.max(0, precision);
+  const formatted = decimals > 0 ? formatNumber(value, decimals) : formatSmartNumber(value, 0);
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+/** Carry the most recent finite reading across missing samples for tooltip display. */
+export function carryForwardTooltipValues(values: Array<number | null | undefined>) {
+  let lastValue: number | null = null;
+  return values.map((value) => {
+    if (value != null && Number.isFinite(value)) {
+      lastValue = value;
+    }
+    return lastValue;
+  });
+}
+
+export function getExplicitScaleConfig(range?: [number, number], extra: Omit<uPlot.Scale, 'auto' | 'range'> = {}): uPlot.Scale {
+  return {
+    ...extra,
+    auto: !range,
+    ...(range ? { range: () => range } : {}),
+  };
+}
+
+/** uPlot takes bar radii as a fraction of bar width; keep the shared radius in pixels. */
+export function getUPlotBarRadius(maxBarPx: number): [number, number] {
+  return [Math.min(0.5, CHART_BAR_STYLE.radius / Math.max(1, maxBarPx)), 0];
+}
+
+function buildStackedBarPaths(
+  priorStackIndices: number[],
+  followingStackIndices: number[],
+  maxBarPx: number,
+): uPlot.Series.PathBuilder {
+  return (self, seriesIndex, idx0, idx1) => uPlot.orient(
+    self,
+    seriesIndex,
+    (series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim) => {
+      // RichTimeSeriesChart is an ordinary horizontal time/value chart. Keep a
+      // safe fallback for a future vertical series rather than drawing it wrong.
+      if (scaleX.ori !== 0) {
+        return uPlot.paths.bars!({
+          size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
+          radius: 0,
+        })(self, seriesIndex, idx0, idx1);
+      }
+
+      const xPositions = dataX.map((value) => Math.round(valToPosX(value, scaleX, xDim, xOff)));
+      let minimumSpacing = Number.POSITIVE_INFINITY;
+      for (let index = 1; index < xPositions.length; index += 1) {
+        const spacing = Math.abs(xPositions[index]! - xPositions[index - 1]!);
+        if (spacing > 0 && spacing < minimumSpacing) minimumSpacing = spacing;
+      }
+      const barWidth = Math.max(1, Math.min(maxBarPx, Number.isFinite(minimumSpacing) ? minimumSpacing * CHART_BAR_STYLE.slotRatio : maxBarPx));
+      const halfWidth = barWidth / 2;
+      const fill = new Path2D();
+
+      const stackBaseAt = (pointIndex: number) => priorStackIndices.reduce((total, priorIndex) => {
+        const value = (self.data[priorIndex] as Array<number | null | undefined>)[pointIndex];
+        return total + (value != null && Number.isFinite(value) ? value : 0);
+      }, 0);
+      const isTopOfStack = (pointIndex: number) => followingStackIndices.every((followingIndex) => {
+        const value = (self.data[followingIndex] as Array<number | null | undefined>)[pointIndex];
+        return value == null || !Number.isFinite(value);
+      });
+
+      for (let pointIndex = idx0; pointIndex <= idx1; pointIndex += 1) {
+        const value = dataY[pointIndex];
+        if (value == null || !Number.isFinite(value)) continue;
+
+        const base = stackBaseAt(pointIndex);
+        const left = xPositions[pointIndex]! - halfWidth;
+        const right = xPositions[pointIndex]! + halfWidth;
+        const yTop = Math.round(valToPosY(base + value, scaleY, yDim, yOff));
+        const yBottom = Math.round(valToPosY(base, scaleY, yDim, yOff));
+        const top = Math.min(yTop, yBottom);
+        const bottom = Math.max(yTop, yBottom);
+        const radius = isTopOfStack(pointIndex)
+          ? Math.min(CHART_BAR_STYLE.radius, halfWidth, (bottom - top) / 2)
+          : 0;
+
+        fill.moveTo(left, bottom);
+        fill.lineTo(left, top + radius);
+        if (radius > 0) fill.quadraticCurveTo(left, top, left + radius, top);
+        fill.lineTo(right - radius, top);
+        if (radius > 0) fill.quadraticCurveTo(right, top, right, top + radius);
+        fill.lineTo(right, bottom);
+        fill.closePath();
+      }
+
+      return { fill, stroke: null };
+    },
+  );
+}
+
+function estimateYLabelWidth(labels: string[]): number {
+  let maxLen = 4;
+  for (const label of labels) {
+    if (label.length > maxLen) maxLen = label.length;
+  }
+  return Math.min(maxLen * 7 + 16, 110);
+}
+
+export function buildRichTimeSeriesUPlotSeries(
+  items: RichSeries[],
+  {
+    mode = 'line',
+    barCount = 0,
+    hiddenKeys = new Set<string>(),
+    connectGaps = false,
+    stepInterpolation = false,
+    smoothness = DEFAULT_CURVE_SMOOTHNESS,
+    showPoints = false,
+    resolveColor,
+  }: {
+    mode?: RichTimeSeriesChartProps['mode'];
+    barCount?: number;
+    hiddenKeys?: ReadonlySet<string>;
+    connectGaps?: boolean;
+    stepInterpolation?: boolean;
+    smoothness?: CurveSmoothness;
+    showPoints?: boolean;
+    timeFilter?: TimeFilterWindow;
+    resolveColor?: (color: string) => string;
+  } = {},
+): Series[] {
+  return [
+    {},
+    ...items.map((item, index) => {
+      const color = (resolveColor ?? ((value: string) => value))(
+        item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald),
+      );
+      const seriesMode = item.mode ?? mode;
+      const hidden = hiddenKeys.has(item.key) || item.tooltipOnly === true;
+      const next: Series = {
+        label: item.label,
+        show: !hidden,
+        stroke: color,
+        scale: item.yScale ?? 'y',
+        width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : item.strokeWidth ?? 2,
+        points: {
+          show: seriesMode === 'scatter' || showPoints,
+          size: item.pointSize ?? 6,
+          stroke: color,
+          fill: color,
+        },
+      };
+      if (item.dash) next.dash = item.dash;
+      if (seriesMode === 'area') next.fill = `${color}22`;
+      if (connectGaps && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
+      if (seriesMode === 'bar') {
+        const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
+        next.fill = color;
+        const priorStackIndices = item.stackId
+          ? items.flatMap((candidate, candidateIndex) => (
+            candidateIndex < index && candidate.stackId === item.stackId && (candidate.mode ?? mode) === 'bar'
+              ? [candidateIndex + 1]
+              : []
+          ))
+          : [];
+        const followingStackIndices = item.stackId
+          ? items.flatMap((candidate, candidateIndex) => (
+            candidateIndex > index && candidate.stackId === item.stackId && (candidate.mode ?? mode) === 'bar'
+              ? [candidateIndex + 1]
+              : []
+          ))
+          : [];
+        const stackBaseAt = (self: uPlot, seriesIndex: number, pointIndex: number) => {
+          const ownValue = (self.data[seriesIndex] as Array<number | null | undefined>)[pointIndex];
+          if (ownValue == null || !Number.isFinite(ownValue)) return null;
+          return priorStackIndices.reduce((total, priorIndex) => {
+            const value = (self.data[priorIndex] as Array<number | null | undefined>)[pointIndex];
+            return total + (value != null && Number.isFinite(value) ? value : 0);
+          }, 0);
+        };
+        const barOptions: uPlot.Series.BarsPathBuilderOpts = {
+          size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
+          radius: item.stackId ? 0 : getUPlotBarRadius(maxBarPx),
+        };
+        if (item.stackId) {
+          barOptions.disp = {
+            y0: {
+              unit: 1,
+              values: (self, seriesIndex, idx0, idx1) => Array.from(
+                { length: idx1 - idx0 + 1 },
+                (_, offset) => stackBaseAt(self, seriesIndex, idx0 + offset),
+              ),
+            },
+            y1: {
+              unit: 1,
+              values: (self, seriesIndex, idx0, idx1) => Array.from(
+                { length: idx1 - idx0 + 1 },
+                (_, offset) => {
+                  const pointIndex = idx0 + offset;
+                  const base = stackBaseAt(self, seriesIndex, pointIndex);
+                  const value = (self.data[seriesIndex] as Array<number | null | undefined>)[pointIndex];
+                  return base == null || value == null || !Number.isFinite(value) ? null : base + value;
+                },
+              ),
+            },
+          };
+        }
+        next.paths = item.stackId
+          ? buildStackedBarPaths(priorStackIndices, followingStackIndices, maxBarPx)
+          : uPlot.paths.bars!(barOptions);
+      }
+      if (seriesMode === 'scatter') next.paths = () => null;
+      if ((item.interpolation === 'step' || stepInterpolation) && (seriesMode === 'line' || seriesMode === 'area')) {
+        next.paths = uPlot.paths.stepped!({ align: 1 });
+      } else if (
+        normalizeCurveSmoothness(smoothness) !== 'straight'
+        && item.smoothable !== false
+        && (seriesMode === 'line' || seriesMode === 'area')
+      ) {
+        next.paths = NATIVE_SPLINE_PATH;
+      }
+      return next;
+    }),
+  ];
+}
+
+export function RichTimeSeriesChart({
+  rendererId = 'rich-time-series',
+  points,
+  series,
+  height = 280,
+  loading = false,
+  emptyTitle = 'No chart data',
+  yUnit,
+  yRightUnit,
+  className,
+  mode = 'line',
+  xTime = true,
+  xUnit,
+  xValueFormatter,
+  xSecondaryFormatter,
+  yAxisValueFormatter,
+  yRightAxisValueFormatter,
+  yValueFormatter,
+  timeFilter = 'raw',
+  smoothness = DEFAULT_CURVE_SMOOTHNESS,
+  xRange,
+  yRange,
+  yRightRange,
+  stepInterpolation = false,
+  xSplits,
+  cursorSyncKey,
+  activeCursorIndex,
+  onCursorIndexChange,
+  onResolvedAxisRanges,
+  connectGaps = false,
+  interactionMode = 'standard',
+  intervals = [],
+  onIntervalClick,
+  intervalBandRatio = 0.3,
+  referenceLines = [],
+  emptyDescription,
+  xAxisLabel,
+  yAxisLabel,
+  yRightAxisLabel,
+  showLegend = true,
+  showGrid = true,
+  showTooltip = true,
+  showPoints = false,
+}: RichTimeSeriesChartProps) {
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const chartRef = React.useRef<uPlot | null>(null);
+  const legendRef = React.useRef<HTMLDivElement | null>(null);
+  const [legendHeight, setLegendHeight] = React.useState(34);
+  const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
+  const [intervalHover, setIntervalHover] = React.useState<string | null>(null);
+  const [overlay, setOverlay] = React.useState<{
+    bars: Array<PackedRichTimeInterval & { left: number; top: number; width: number; height: number; hitTop: number; hitHeight: number }>;
+    lines: Array<RichReferenceLine & { left: number; top: number; width: number }>;
+    intervalBand: { top: number; height: number } | null;
+  }>({ bars: [], lines: [], intervalBand: null });
+  const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
+  const [isZoomed, setIsZoomed] = React.useState(false);
+  const palette = useDocumentPalette();
+  const isDark = useDocumentTheme();
+  const themeRevision = useThemeRevision();
+
+  const seriesRef = React.useRef(series);
+  const yUnitRef = React.useRef(yUnit);
+  const yRightUnitRef = React.useRef(yRightUnit);
+  const yAxisValueFormatterRef = React.useRef(yAxisValueFormatter);
+  const yRightAxisValueFormatterRef = React.useRef(yRightAxisValueFormatter);
+  const yValueFormatterRef = React.useRef(yValueFormatter);
+  const xTimeRef = React.useRef(xTime);
+  const xUnitRef = React.useRef(xUnit);
+  const xValueFormatterRef = React.useRef(xValueFormatter);
+  const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
+  const onCursorIndexChangeRef = React.useRef(onCursorIndexChange);
+  const activeCursorIndexRef = React.useRef(activeCursorIndex);
+  const applyCursorSelectionRef = React.useRef<(() => void) | null>(null);
+  const controlledCursor = activeCursorIndex !== undefined;
+  const onResolvedAxisRangesRef = React.useRef(onResolvedAxisRanges);
+  const onIntervalClickRef = React.useRef(onIntervalClick);
+  const tooltipValuesRef = React.useRef<Array<Array<number | null>>>([]);
+  const tooltipDetailsRef = React.useRef<Array<Array<string | null | undefined>>>([]);
+  const yPrecisionRef = React.useRef(0);
+  const yRightPrecisionRef = React.useRef(0);
+  const alignedDataRef = React.useRef<AlignedData>([[], []]);
+  seriesRef.current = series;
+  yUnitRef.current = yUnit;
+  yRightUnitRef.current = yRightUnit;
+  yAxisValueFormatterRef.current = yAxisValueFormatter;
+  yRightAxisValueFormatterRef.current = yRightAxisValueFormatter;
+  yValueFormatterRef.current = yValueFormatter;
+  xTimeRef.current = xTime;
+  xUnitRef.current = xUnit;
+  xValueFormatterRef.current = xValueFormatter;
+  xSecondaryFormatterRef.current = xSecondaryFormatter;
+  onCursorIndexChangeRef.current = onCursorIndexChange;
+  activeCursorIndexRef.current = activeCursorIndex;
+  onResolvedAxisRangesRef.current = onResolvedAxisRanges;
+  onIntervalClickRef.current = onIntervalClick;
+
+  const packedIntervals = React.useMemo(() => packRichTimeIntervals(intervals), [intervals]);
+  const laneCount = packedIntervals.reduce((max, interval) => Math.max(max, interval.lane + 1), 0);
+
+  const alignedData = React.useMemo<AlignedData>(() => {
+    return buildRichTimeSeriesAlignedData(points, series, timeFilter, xTime);
+  }, [points, series, timeFilter, xTime]);
+  alignedDataRef.current = alignedData;
+  const tooltipValues = React.useMemo<Array<Array<number | null>>>(
+    () => alignedData.slice(1).map((values) => (
+      connectGaps
+        ? carryForwardTooltipValues(values as Array<number | null | undefined>)
+        : Array.from(values as Array<number | null | undefined>, (value) => value ?? null)
+    )),
+    [alignedData, connectGaps],
+  );
+  tooltipValuesRef.current = tooltipValues;
+  tooltipDetailsRef.current = series.map((item) => item.tooltipDetails ?? []);
+
+  const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
+  const legendSeries = series.filter((item) => !item.tooltipOnly && item.showInLegend !== false);
+  const legendVisible = showLegend && legendSeries.length > 0;
+  const chartHeight = Math.max(120, height - (legendVisible ? legendHeight : 0));
+
+  React.useEffect(() => {
+    const legend = legendRef.current;
+    if (!legend) return;
+    let frame = 0;
+    const measure = () => setLegendHeight(legend.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
+    observer.observe(legend);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [legendVisible, loading, hasData]);
+  const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
+
+  const structureKey = React.useMemo(
+    () =>
+      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${timeFilter}|${smoothness}|${stepInterpolation}|` +
+      `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
+      `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|${xAxisLabel ?? ''}|${yAxisLabel ?? ''}|${yRightAxisLabel ?? ''}|${showLegend ? '1' : '0'}|${showGrid ? '1' : '0'}|${showTooltip ? '1' : '0'}|${showPoints ? '1' : '0'}|` +
+      `${cursorSyncKey ?? ''}|${controlledCursor}|${connectGaps ? 'connect-gaps' : ''}|` +
+      `${interactionMode}|${intervalBandRatio}|` +
+      `${packedIntervals.map((item) => `${item.id}:${item.start}:${item.end}:${item.lane}`).join('|')}|` +
+      `${referenceLines.map((line) => `${line.value}:${line.color ?? ''}`).join('|')}|` +
+      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.strokeWidth ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
+      `|${hiddenKeySignature}|${isDark ? 'dark' : 'light'}|${palette}|${themeRevision}`,
+    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, xAxisLabel, yAxisLabel, yRightAxisLabel, showLegend, showGrid, showTooltip, showPoints, cursorSyncKey, controlledCursor, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines, isDark, palette, themeRevision],
+  );
+
+  React.useEffect(() => {
+    setHiddenKeys((current) => {
+      const validKeys = new Set(series.map((item) => item.key));
+      const next = new Set([...current].filter((key) => validKeys.has(key)));
+      return next.size === current.size ? current : next;
+    });
+  }, [series]);
+
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!root || loading || !hasData) return undefined;
+
+    const resolveColor = (value: string) => resolveChartColor(value, root);
+    const chartMuted = resolveColor(CHART_COLORS.muted);
+    const chartGrid = resolveColor(CHART_COLORS.grid);
+    const width = Math.max(1, root.clientWidth || 320);
+
+    const xValues = alignedDataRef.current[0] as number[];
+    const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
+    const usesCalendarDateSplits = xTime && !xSplits && xSpan > 24 * 3600;
+    const fullXRange: [number, number] = xRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
+
+    const hasRightDataAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
+
+    const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
+
+    const yScaleConfig: uPlot.Scale = yRange
+      ? getExplicitScaleConfig(yRange)
+      : isBarChart
+        ? { auto: true, range: (_u: uPlot, dmin: number, dmax: number) => [Math.min(0, dmin), Math.max(0, dmax)] as [number, number] }
+        : { auto: true };
+
+    const xScaleConfig = getExplicitScaleConfig(xRange, { time: xTime });
+
+    const rightYScaleConfig: uPlot.Scale | undefined = hasRightDataAxis
+      ? getExplicitScaleConfig(yRightRange)
+      : undefined;
+
+    const xAxisConfig: uPlot.Axis = {
+      stroke: chartMuted,
+      grid: showGrid ? { stroke: chartGrid, width: 1 } : { show: false },
+      font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      size: isBarChart ? 54 : 44,
+      gap: 6,
+      ...(xAxisLabel ? { label: xAxisLabel, labelSize: 24, labelGap: 4 } : {}),
+      ...(xSplits
+        ? { splits: () => xSplits }
+        : usesCalendarDateSplits
+          ? {
+              splits: (u, _axisIdx, scaleMin, scaleMax) =>
+                getCalendarDateSplits(
+                  scaleMin,
+                  scaleMax,
+                  getResponsiveCalendarTickMaximum(u.bbox.width / uPlot.pxRatio)
+                ) ?? [],
+            }
+        : {}),
+      values: (u, vals) => {
+        if (xValueFormatterRef.current) {
+          return vals.map((v) => xValueFormatterRef.current!(v));
+        }
+        if (xTimeRef.current) {
+          return formatAxisDateValuesForScale(
+            vals,
+            u.scales.x?.min,
+            u.scales.x?.max,
+            xSpan
+          );
+        }
+        return vals.map((v) => formatChartNumber(v, xUnitRef.current, 0));
+      },
+    };
+
+    const xSecondaryAxisConfig: uPlot.Axis | null = xSecondaryFormatterRef.current
+      ? {
+          scale: 'x', // share the primary X scale
+          side: 0,    // top
+          stroke: chartMuted,
+          grid: { show: false }, // avoid duplicate grid lines
+          font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+          size: 40,
+          gap: 6,
+          splits: (u, _axisIdx, scaleMin, scaleMax) => {
+            const count = getResponsiveCalendarTickMaximum(u.bbox.width / uPlot.pxRatio);
+            const step = (scaleMax - scaleMin) / (count - 1);
+            return Array.from({ length: count }, (_, i) => scaleMin + i * step);
+          },
+          values: (_u, vals) =>
+            vals.map((v) => xSecondaryFormatterRef.current!(v)),
+        }
+      : null;
+
+    const yAxisConfig: uPlot.Axis = {
+      stroke: chartMuted,
+      grid: showGrid ? { stroke: chartGrid, width: 1 } : { show: false },
+      font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      size: (_self, values) => {
+        if (!values || values.length === 0) return 50;
+        return estimateYLabelWidth(values as string[]);
+      },
+      gap: 8,
+      ...(yAxisLabel ? { label: yAxisLabel, labelSize: 24, labelGap: 4 } : {}),
+      values: (_u, vals) => {
+        const precision = getAdaptiveDecimalPrecision(vals);
+        yPrecisionRef.current = precision;
+        return vals.map((v) => {
+          if (yAxisValueFormatterRef.current) {
+            return yAxisValueFormatterRef.current(v, yUnitRef.current);
+          }
+          if (yValueFormatterRef.current) {
+            return yValueFormatterRef.current(v, yUnitRef.current);
+          }
+          return formatChartNumber(v, yUnitRef.current, precision);
+        });
+      },
+    };
+
+    // Right Y axis — only added when at least one series uses scale 'y2'.
+    const rightYAxisConfig: uPlot.Axis | null = hasRightDataAxis
+      ? {
+          scale: 'y2',
+          side: 1, // right
+          stroke: chartMuted,
+          grid: { show: false },
+          font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+          // uPlot supplies raw numeric splits here rather than our formatted
+          // labels, so reserve enough room for values such as "19,200 mi".
+          size: 86,
+          gap: 8,
+          ...(yRightAxisLabel ? { label: yRightAxisLabel, labelSize: 24, labelGap: 4 } : {}),
+          values: (_u, vals) => {
+            const precision = getAdaptiveDecimalPrecision(vals);
+            yRightPrecisionRef.current = precision;
+            return vals.map((v) => {
+              if (yRightAxisValueFormatterRef.current) {
+                return yRightAxisValueFormatterRef.current(v, yRightUnitRef.current);
+              }
+              if (yValueFormatterRef.current) {
+                return yValueFormatterRef.current(v, yRightUnitRef.current);
+              }
+              return formatChartNumber(v, yRightUnitRef.current, precision);
+            });
+          },
+        }
+      : null;
+
+    // When a secondary top axis is present we need extra top padding so its
+    // labels are not clipped; otherwise keep the default small gutter.
+    const topPadding = xSecondaryAxisConfig ? 44 : 10;
+
+    const allAxes: uPlot.Axis[] = [xAxisConfig, yAxisConfig];
+    if (xSecondaryAxisConfig) allAxes.push(xSecondaryAxisConfig);
+    if (rightYAxisConfig) allAxes.push(rightYAxisConfig);
+
+    const updateOverlay = () => {
+      const chart = chartRef.current;
+      if (!chart || !chart.bbox) return;
+      const plotLeft = chart.bbox.left;
+      const plotTop = chart.bbox.top;
+      const plotWidth = chart.bbox.width;
+      const plotHeight = chart.bbox.height;
+      const xPosition = (value: number) => plotLeft + chart.valToPos(value, 'x');
+      const primaryYPosition = (value: number) => plotTop + chart.valToPos(value, 'y');
+      const intervalBand = packedIntervals.length > 0
+        ? getRichTimeIntervalBandGeometry(0, laneCount, plotTop, plotHeight, intervalBandRatio)
+        : null;
+      const bars = packedIntervals.map((interval) => {
+        const left = xPosition(toSeconds(interval.start));
+        const right = xPosition(toSeconds(interval.end));
+        const geometry = getRichTimeIntervalBandGeometry(
+          interval.lane,
+          laneCount,
+          plotTop,
+          plotHeight,
+          intervalBandRatio,
+        );
+        return {
+          ...interval,
+          left: Math.min(left, right),
+          top: geometry.top,
+          width: Math.max(2, Math.abs(right - left)),
+          height: geometry.height,
+          hitTop: geometry.hitTop,
+          hitHeight: geometry.hitHeight,
+        };
+      });
+      const lines = referenceLines.map((line) => ({
+        ...line,
+        left: plotLeft,
+        top: primaryYPosition(line.value),
+        width: plotWidth,
+      }));
+      setOverlay({
+        bars,
+        lines,
+        intervalBand: intervalBand ? { top: intervalBand.bandTop, height: intervalBand.bandHeight } : null,
+      });
+    };
+
+    let applyingSelection = false;
+    const opts: Options = {
+      width,
+      height: chartHeight,
+      data: alignedDataRef.current,
+      // Keep a small left gutter so y-axis labels are not clipped at narrow widths.
+      // Right gutter grows when a right axis is present so its labels aren't clipped.
+      padding: [topPadding, hasRightDataAxis ? 4 : 24, 0, 10],
+      cursor: {
+        drag: { x: !controlledCursor && interactionMode !== 'touch-explore', y: false },
+        points: { size: 6 },
+        ...(controlledCursor ? { bind: {
+          mousemove: () => null, mouseleave: () => null,
+          mousedown: () => null, mouseup: () => null, dblclick: () => null,
+        } } : {}),
+        ...(cursorSyncKey && !controlledCursor ? { sync: { key: cursorSyncKey, scales: ['x', null] } } : {}),
+      },
+      legend: { show: false },
+      scales: {
+        x: xScaleConfig,
+        y: yScaleConfig,
+        ...(hasRightDataAxis && rightYScaleConfig ? { y2: rightYScaleConfig } : {}),
+      },
+      axes: allAxes,
+      series: buildRichTimeSeriesUPlotSeries(seriesRef.current, {
+        mode,
+        barCount: xValues.length,
+        hiddenKeys,
+        connectGaps,
+        stepInterpolation,
+        smoothness: normalizeCurveSmoothness(smoothness),
+        showPoints,
+        timeFilter,
+        resolveColor,
+      }),
+      hooks: {
+        setScale: [
+          (u, key) => {
+            if (key !== 'x') return;
+            const scale = u.scales.x;
+            if (scale?.min == null || scale.max == null) return;
+            const nextZoomed = isZoomedXRange([scale.min, scale.max], fullXRange);
+            setIsZoomed((current) => current === nextZoomed ? current : nextZoomed);
+            requestAnimationFrame(updateOverlay);
+          },
+        ],
+        setCursor: [
+          (u) => {
+            if (!showTooltip) {
+              setTooltip(null);
+              return;
+            }
+            const idx = u.cursor.idx;
+            if (idx == null || idx < 0) {
+              if (controlledCursor && !applyingSelection) return;
+              if (!applyingSelection) onCursorIndexChangeRef.current?.(null);
+              setTooltip(null);
+              return;
+            }
+            if (!controlledCursor && !applyingSelection) onCursorIndexChangeRef.current?.(idx);
+            const data = alignedDataRef.current;
+            const currentSeries = seriesRef.current;
+            const timestamp = data[0]?.[idx];
+            const rows = currentSeries
+              .map((item, seriesIndex) => {
+                if (hiddenKeys.has(item.key)) return null;
+                const value = tooltipValuesRef.current[seriesIndex]?.[idx] ?? null;
+                const detail = tooltipDetailsRef.current[seriesIndex]?.[idx];
+                const withDetail = (text: string) => detail ? `${text} (${detail})` : text;
+                if (item.tooltipFormatter) {
+                  return withDetail(`${item.label}: ${item.tooltipFormatter(value)}`);
+                }
+                // Use the right-axis unit for y2 series, primary unit for y series.
+                const unit = item.yScale === 'y2' ? yRightUnitRef.current : yUnitRef.current;
+                const precision = item.yScale === 'y2' ? yRightPrecisionRef.current : yPrecisionRef.current;
+                if (yValueFormatterRef.current) {
+                  return withDetail(`${item.label}: ${yValueFormatterRef.current(value, unit)}`);
+                }
+                return withDetail(`${item.label}: ${formatChartNumber(value, unit, precision)}`);
+              })
+              .filter((row): row is string => Boolean(row));
+
+            let tooltipHeader = '';
+            let tooltipSubHeader = '';
+            if (timestamp != null) {
+              if (xValueFormatterRef.current) {
+                tooltipHeader = xValueFormatterRef.current(timestamp as number);
+              } else if (xTimeRef.current) {
+                // Use actual data span so tooltip granularity matches axis labels.
+                const xs = u.data[0] as number[];
+                const span = xs.length > 1 ? xs[xs.length - 1]! - xs[0]! : 86400;
+                tooltipHeader = formatDateForSpan(timestamp as number, span);
+              } else {
+                tooltipHeader = formatChartNumber(timestamp as number, xUnitRef.current, 0);
+              }
+              if (xSecondaryFormatterRef.current) {
+                tooltipSubHeader = xSecondaryFormatterRef.current(timestamp as number);
+              }
+            }
+
+            const tooltipLineCount = rows.length + (tooltipHeader ? 1 : 0) + (tooltipSubHeader ? 1 : 0);
+            setTooltip({
+              left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
+              top: Math.max(12, Math.min((u.cursor.top ?? 0) + 12, u.height - tooltipLineCount * 18 - 16)),
+              text: [tooltipHeader, tooltipSubHeader, ...rows].filter(Boolean).join('\n'),
+            });
+          },
+        ],
+      },
+    };
+
+    chartRef.current = new uPlot(opts, alignedDataRef.current, root);
+    setIsZoomed(false);
+
+    const chart = chartRef.current;
+    applyCursorSelectionRef.current = () => {
+      if (!controlledCursor) return;
+      const index = activeCursorIndexRef.current;
+      const value = index == null ? undefined : alignedDataRef.current[0]?.[index];
+      applyingSelection = true;
+      try {
+        chart.setCursor(value == null
+          ? { left: -10, top: -10 }
+          : { left: chart.valToPos(value, 'x'), top: 12 });
+      } finally {
+        applyingSelection = false;
+      }
+    };
+    const rangeFromScale = (scale: uPlot.Scale | undefined): [number, number] | undefined => (
+      scale?.min != null && scale.max != null && Number.isFinite(scale.min) && Number.isFinite(scale.max)
+        ? [scale.min, scale.max]
+        : undefined
+    );
+    onResolvedAxisRangesRef.current?.({
+      ...(rangeFromScale(chart.scales.y) ? { y: rangeFromScale(chart.scales.y)! } : {}),
+      ...(rangeFromScale(chart.scales.y2) ? { y2: rangeFromScale(chart.scales.y2)! } : {}),
+    });
+    requestAnimationFrame(updateOverlay);
+    const touchCleanup = controlledCursor
+      ? attachChartScrubbing(chart, (index) => onCursorIndexChangeRef.current?.(index))
+      : interactionMode === 'touch-explore'
+      ? attachTouchExploration(root, chart, fullXRange)
+      : attachChartScrubbing(chart, () => {}, true);
+
+    let resizeFrame = 0;
+    const observer =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            cancelAnimationFrame(resizeFrame);
+            resizeFrame = requestAnimationFrame(() => {
+              chartRef.current?.setSize({ width: Math.max(1, root.clientWidth || 320), height: chartHeight });
+              applyCursorSelectionRef.current?.();
+              updateOverlay();
+            });
+          })
+        : null;
+    observer?.observe(root);
+
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(resizeFrame);
+      touchCleanup?.();
+      applyCursorSelectionRef.current = null;
+      chartRef.current?.destroy();
+      chartRef.current = null;
+      setTooltip(null);
+      setIntervalHover(null);
+      setOverlay({ bars: [], lines: [], intervalBand: null });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureKey, loading, hasData]);
+
+  React.useEffect(() => {
+    if (chartRef.current && !loading && hasData) {
+      chartRef.current.setData(alignedData);
+    }
+  }, [alignedData, loading, hasData]);
+
+  React.useEffect(() => {
+    applyCursorSelectionRef.current?.();
+  }, [activeCursorIndex, alignedData, structureKey, loading, hasData]);
+
+  if (loading) return <ChartSkeleton height={height} />;
+
+  if (!hasData) {
+    return (
+      <div
+        data-chart-renderer={rendererId}
+        className={cn(
+          'flex items-center justify-center rounded-lg border border-border bg-bg-elevated/50 text-sm text-fg-tertiary',
+          className,
+        )}
+        style={{ height }}
+      >
+        {emptyTitle}
+        {emptyDescription ? <span className="mt-1 block text-xs text-fg-tertiary">{emptyDescription}</span> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-chart-renderer={rendererId}
+      className={cn(
+        'relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-border',
+        interactionMode === 'touch-explore' ? 'bg-bg-surface shadow-xl' : 'bg-bg-elevated/40',
+        className,
+      )}
+      style={{ height }}
+    >
+      <div className="relative min-h-0 flex-1" style={{ height: chartHeight }}>
+        {overlay.bars.map((interval) => {
+          const isActive = intervalHover === interval.id;
+          const color = interval.color ?? CHART_COLORS.violet;
+          return (
+            <span
+              key={`interval-visual-${interval.id}`}
+              aria-hidden="true"
+              className="pointer-events-none absolute z-0 border"
+              style={{
+                left: interval.left,
+                top: interval.top,
+                width: interval.width,
+                height: interval.height,
+                borderColor: color,
+                borderRadius: CHART_BAR_STYLE.radius,
+                backgroundColor: color,
+                opacity: isActive ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity,
+              }}
+            />
+          );
+        })}
+        <div
+          ref={rootRef}
+          className="relative z-10 rich-uplot-chart h-full w-full"
+          data-chart-smoothness={smoothness}
+        />
+        {overlay.lines.map((line) => (
+          <div
+            key={`reference-${line.value}-${line.label ?? ''}`}
+            className="pointer-events-none absolute z-10 border-t border-dashed"
+            style={{
+              left: line.left,
+              top: line.top,
+              width: line.width,
+              borderColor: line.color ?? CHART_COLORS.muted,
+            }}
+            aria-hidden="true"
+          />
+        ))}
+        {overlay.lines.map((line) => line.label ? (
+          <span
+            key={`reference-label-${line.value}-${line.label}`}
+            className="pointer-events-none absolute z-10 -translate-y-full rounded-sm bg-bg-surface/80 px-1 text-[10px] text-fg-tertiary"
+            style={{ left: Math.max(8, line.left + line.width - 58), top: line.top - 2 }}
+          >
+            {line.label}
+          </span>
+        ) : null)}
+        {overlay.intervalBand && yRightUnit ? (
+          <span
+            className="pointer-events-none absolute right-2 z-10 rounded-sm bg-bg-surface/80 px-1 text-[10px] text-fg-tertiary"
+            style={{ top: overlay.intervalBand.top + 4 }}
+          >
+            {yRightUnit}
+          </span>
+        ) : null}
+        {overlay.bars.map((interval) => {
+          const isActive = intervalHover === interval.id;
+          return (
+            <button
+              key={interval.id}
+              type="button"
+              className={cn(
+                'absolute z-20 overflow-visible border-0 bg-transparent p-0 text-left transition-[filter,opacity,transform] focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-bg-surface',
+                isActive ? 'brightness-110' : 'hover:brightness-110',
+              )}
+              style={{
+                left: interval.left,
+                top: interval.hitTop,
+                width: interval.width,
+                height: interval.hitHeight,
+                minWidth: 12,
+              }}
+              aria-label={`${interval.label}${interval.details ? `: ${interval.details}` : ''}`}
+              title={`${interval.label}${interval.details ? ` — ${interval.details}` : ''}`}
+              onMouseEnter={() => setIntervalHover(interval.id)}
+              onMouseLeave={() => setIntervalHover(null)}
+              onFocus={() => setIntervalHover(interval.id)}
+              onBlur={() => setIntervalHover(null)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onIntervalClickRef.current?.(interval);
+              }}
+            >
+              <span className="sr-only">{interval.label}</span>
+            </button>
+          );
+        })}
+        {intervalHover ? (() => {
+          const active = overlay.bars.find((bar) => bar.id === intervalHover);
+          if (!active) return null;
+          return (
+            <div
+              className="pointer-events-none absolute z-30 max-w-[min(22rem,calc(100%-1rem))] whitespace-pre-wrap rounded-md border border-border-strong bg-bg-surface/95 px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
+              style={{ left: Math.min(active.left, Math.max(8, (rootRef.current?.clientWidth ?? 320) - 180)), top: Math.max(8, active.top - 48) }}
+            >
+              {active.label}{active.details ? `\n${active.details}` : ''}
+            </div>
+          );
+        })() : null}
+      </div>
+      {isZoomed ? (
+        <button
+          type="button"
+          onClick={() => {
+            const chart = chartRef.current;
+            const values = alignedDataRef.current[0] as number[];
+            if (!chart || values.length < 2) return;
+            chart.setScale('x', { min: xRange?.[0] ?? values[0]!, max: xRange?.[1] ?? values[values.length - 1]! });
+          }}
+          className="absolute right-3 top-3 z-20 flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center rounded-md border border-border bg-bg-surface/95 text-fg-secondary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          aria-label="Return to full chart view"
+          title="Return to full chart view"
+        >
+          <RotateCcw className="h-4 w-4" aria-hidden="true" />
+        </button>
+      ) : null}
+      {tooltip ? (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute z-30 whitespace-pre-wrap break-words rounded-md border border-border-strong bg-bg-surface px-2.5 py-1.5 text-xs leading-[1.5] text-fg shadow-xl"
+          style={{ left: tooltip.left, top: tooltip.top, maxWidth: `calc(100% - ${tooltip.left + 8}px)` }}
+        >
+          {tooltip.text}
+        </div>
+      ) : null}
+      {legendVisible ? (
+        <div ref={legendRef} className="flex min-h-[34px] max-h-[88px] shrink-0 flex-wrap items-center justify-center gap-x-3 overflow-y-auto border-t border-border/60 px-3 text-[11px] text-fg-tertiary">
+          {legendSeries.map((item, index) => {
+            const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
+            const isHidden = hiddenKeys.has(item.key);
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => {
+                  setHiddenKeys((current) => {
+                    const next = new Set(current);
+                    if (next.has(item.key)) next.delete(item.key);
+                    else next.add(item.key);
+                    return next;
+                  });
+                }}
+                className={cn(
+                  'flex min-h-11 sm:min-h-[32px] max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-bg',
+                  isHidden && 'opacity-45',
+                )}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}

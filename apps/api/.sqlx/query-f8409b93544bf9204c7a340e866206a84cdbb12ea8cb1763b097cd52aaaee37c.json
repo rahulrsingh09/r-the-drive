@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS charge_count,\n                SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS total_added_kwh,\n                SUM(GREATEST(COALESCE(kwh_added, energy_added_wh / 1000.0), COALESCE(energy_used_wh / 1000.0, 0))) AS total_used_kwh\n         FROM panda.charge_sessions\n         WHERE vehicle_id=$1 AND COALESCE(kwh_added, energy_added_wh / 1000.0) > 0.01",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "charge_count",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_added_kwh",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_used_kwh",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f8409b93544bf9204c7a340e866206a84cdbb12ea8cb1763b097cd52aaaee37c"
+}

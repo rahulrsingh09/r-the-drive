@@ -1,0 +1,218 @@
+# Contributing
+
+## Audience
+
+Human contributors, reviewers, and agents making code or documentation changes.
+
+## Source Of Truth
+
+This document is canonical for repo workflow and documentation expectations. Update it when review policy, required checks, or doc workflow changes.
+
+## Default Workflow
+
+1. Start from the canonical entrypoints:
+   `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/index.md`
+2. Change the shared seam before patching a route-local symptom.
+3. Verify close to the changed seam.
+4. Update docs in the same change when behavior, structure, or operational guidance changes.
+
+## Documentation Impact Classification
+
+Every non-trivial PR should declare one of:
+
+- `No doc impact`
+- `Internal doc update required`
+- `Documentation site update required`
+- `Both internal and user-facing docs required`
+
+If the classification is not `No doc impact`, the PR should either include the docs change or explicitly track doc debt.
+
+## Documentation Triggers
+
+Update docs when you change:
+
+- shared UI patterns, branding, tokens, spacing, icon rules, or page shell behavior
+- routes, endpoints, env vars, config knobs, migrations, or auth/backup behavior
+- dashboard architecture, widget authoring flow, or package boundaries
+- troubleshooting guidance or maintainer procedures
+
+## Review Process
+
+Every non-trivial change follows the same review path, whether it was written by a person, an AI assistant, or both:
+
+1. Trace the owning seam before editing. Shared dashboard, ingestion, auth, storage, and API behavior belongs at its shared boundary rather than in a route-local exception.
+2. Describe the behavior change, risks, documentation impact, and verification in the pull request.
+3. Run the smallest focused checks first, then the broader build or backend checks required by the touched seam.
+4. Have a human reviewer inspect the diff and the resulting behavior. Auth, Rivian credentials, vehicle controls, migrations, backups, infrastructure, and privacy-sensitive telemetry require explicit security and failure-mode review.
+5. Do not merge with unexplained failing checks, untracked documentation debt, or generated files in the commit.
+
+AI assistants may help with repository exploration, code, tests, documentation, or review preparation. They do not replace human ownership or approval. Never share secrets, tokens, private keys, production telemetry, or precise vehicle locations with an assistant. Use redacted or synthetic fixtures and record the human verification that supports the change.
+
+### Demo fixture workflow
+
+The checked-in demo profile is aggregate-only and versioned under `apps/api/fixtures/demo/`. A human may regenerate it with `export_demo_history_fixture`, selecting one reviewed development vehicle and a 14-day window. The exporter writes the sanitized fixture directly and must never create a raw intermediate file. Review the allowlisted JSON diff before accepting it; identifiers, absolute timestamps, addresses, coordinates, route geometry, raw payloads, and non-aggregate sensor values are prohibited.
+
+The API embeds the reviewed profile and owns all demo generation. Do not add parallel SQL seed scripts or make demo creation depend on web assets, external geocoding, weather providers, or a live Rivian session. Changes to fixture schema, public routes, model capability profiles, or density bounds require privacy review and the focused exporter/seeder tests.
+
+## CI Coverage
+
+### Local verification gates
+
+Install the repository hooks once in each checkout:
+
+```bash
+pnpm hooks:install
+```
+
+The hooks use a small local sanity gate by default on every branch. It checks
+repository whitespace and migration integrity only; it does not run the PR
+quality suite, start disposable services, build images, or query GitHub. Run
+the broader local checks explicitly when you want them:
+
+```bash
+pnpm verify:local
+```
+
+Run the full local parity gate explicitly when you want the disposable-stack
+and database-backed checks:
+
+```bash
+pnpm verify:ci
+```
+
+To make a specific commit or push run the full gate, set
+`PANDA_FULL_LOCAL_CI=1` for that command. In PowerShell:
+
+```powershell
+$env:PANDA_FULL_LOCAL_CI = '1'; git push origin dev
+```
+
+In POSIX shells:
+
+```bash
+PANDA_FULL_LOCAL_CI=1 git push origin dev
+```
+
+Use `pnpm pr:create -- --base dev --fill` to run the full gate before creating
+the first PR for a branch. After `dev` is pushed, the upstream GitOps flow
+deploys it to the production-dev server for full-stack testing; that remote
+validation remains separate from the local hook.
+
+`verify:local` runs the static, dependency, frontend, backend, documentation,
+contract, and unit-test checks without starting disposable services. The
+default Git hooks intentionally run only the small sanity gate described above.
+`verify:ci` starts isolated digest-pinned TimescaleDB and Redis containers,
+then adds SQLx migration/metadata checks, Clippy, database-backed tests, the
+ignored migration-ledger repair test, and workspace/documentation builds. The
+containers use the `panda-ci-local` Compose project and are removed when
+the command finishes.
+
+Set `SKIP_LOCAL_CI=1` only for an emergency bypass; the hook prints the
+bypass so it is visible in the terminal. Remove the hooks with
+`pnpm hooks:uninstall`.
+
+The local gate does not build the production container on every commit. Run
+`pnpm verify:image` after changing API, web, package, nginx, dependency-lock, or
+Dockerfile inputs; it builds the normal AMD64 release image locally with the
+same Dockerfile and production profile as GitHub. Use
+`pnpm verify:release-image -- --all-platforms` only for explicit ARM64
+qualification. The local gates do not replace GitHub-hosted security scans,
+real S3 backup drills, image publication/signing, or self-hosted release
+checkpoints. After the local gate passes, use `gh pr checks` or `gh run watch`
+to observe the authoritative remote result.
+
+### Migration and recovery contract
+
+Migration files under `apps/api/migrations/` are an immutable release
+catalog. They must be valid UTF-8 with LF line endings, use unique ordered
+`NNNN_description.sql` names, and be appended rather than edited after merge.
+The `pnpm verify:migration-integrity` check compares the working tree with the
+PR merge base and blocks modifications, deletions, renames, version reuse, and
+out-of-order additions. The current flattening is the one explicit cutover
+from the pre-release five-file catalog to the complete `0001_initial_schema.sql`
+baseline; it is not a reusable compatibility pattern.
+
+Recovery manifest v3 records the `panda-schema-v1` chain identifier, full
+ordered ledger, raw migration checksums, catalog digest, and versioned schema
+contract. Restore upgrades an exact ledger prefix normally; historical v3
+bookkeeping requires a candidate schema match to the immutable baseline before
+it can be normalized, and then performs all pending
+migrations in an isolated candidate. A drifted live ledger cannot create a
+backup. Existing databases are moved to the flattened baseline only by the
+explicit, verified adoption command described in the [release database
+cutover runbook](./runbooks/release-database-cutover.md); startup and restore
+must never repair migration bookkeeping automatically. Packages from the old
+five-migration chain are unsupported after cutover and require their matching
+rollback release.
+
+CI is organized into independently visible workflows so contributors can rerun
+the evidence closest to their change:
+
+The fast validation gate runs on pull requests targeting `dev` or `main`, not
+on every push to either protected branch. Candidate image builds are manual;
+run **Candidate image** from Actions with the desired source ref and platform
+when a dev or release-candidate image is needed. Versioned container images are
+published only by intentional release workflows: stable images from a
+validated `main` tag and pre-release images from an approved `dev` candidate.
+
+PRs run deterministic quality, typecheck, unit-test, SQLx, route-security, and
+source-scan checks. Coverage and Storybook run from the scheduled/manual
+frontend workflow. Browser E2E is manual-only; it is not a required
+PR gate. Runtime migration/health, populated-upgrade, commit-candidate, and
+full dependency/image security audits are scheduled/manual release evidence.
+Restore and vehicle-artwork contracts remain path-targeted PR checks, while
+fresh-install acceptance remains manual-only. Use the documented coverage and
+E2E commands when reproducing the longer-running checks locally.
+
+The runtime workflow proves fresh migration, idempotency, health, the exact
+commit-candidate contract, and the populated charge-identity upgrade. The populated gate
+creates its disposable database through migration 0006, seeds synthetic data,
+and proves health-first startup plus resumable, idempotent background completion.
+Release workflows repeat that gate against the promoted AMD64 digest. ARM64 is
+an explicit compatibility build rather than a release-default platform.
+
+| Area        | Current checks                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                               |
+| PR Frontend | Typecheck and repository test contract; coverage and Storybook are scheduled/manual                                                                    |
+| PR Backend  | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                                        |
+| Runtime     | Scheduled/manual fresh TimescaleDB migration, migration-ledger inspection, API health, populated upgrade, Compose validation, and candidate inspection |
+| PR Security | Route authorization inventory, Gitleaks, and Semgrep; dependency audits and Trivy run scheduled/manual                                                 |
+
+Dependency and secret failures are release blockers. High-risk Semgrep
+findings and fixable critical/high Trivy findings are also blocking. Unfixed
+base-image findings remain visible for review and base-digest refreshes. Any reviewed
+exception must be time-bounded, recorded in the PR, and linked to remediation;
+it must not be silently waived. CI provides repeatable evidence, not a security
+certification or a replacement for human review. Release and exposure decisions
+should also consult [`SECURITY.md`](../SECURITY.md), [`security.md`](./security.md),
+and [`security-audit.md`](./security-audit.md).
+
+## Review Expectations
+
+- Review shared UX against [`branding.md`](./branding.md), not only local page intent.
+- Review structural changes against [`architecture/overview.md`](./architecture/overview.md).
+- Reject docs that describe intended behavior which the code does not yet implement.
+- Prefer small, durable documents over ad hoc notes in PRs or chat.
+
+## Required Checks
+
+- Run `pnpm docs:check` when docs, env vars, routes, or publishing workflow changes.
+- Run `pnpm docs:build` when published navigation, links, rendering, search, or branding changes.
+- Run the focused tests closest to the changed seam.
+- Keep user-facing installation and operation docs in `docs/guides/`; do not maintain a separate hosted or generated documentation copy.
+
+## Doc Debt
+
+If docs cannot land immediately:
+
+- create a tracked follow-up in-repo
+- state exactly which docs are missing
+- avoid vague “update docs later” notes
+
+## Adjacent Docs
+
+- [`../AGENTS.md`](../AGENTS.md)
+- [`../CLAUDE.md`](../CLAUDE.md)
+- [`branding.md`](./branding.md)
+- [`runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md)

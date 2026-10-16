@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id,\n                t.distance_miles,\n                t.efficiency_wh_per_mile,\n                t.outside_temp_c AS avg_temp_c\n         FROM panda.trips t\n         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3\n           AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0\n           AND t.outside_temp_c IS NOT NULL\n         ORDER BY t.started_at DESC LIMIT 500",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "distance_miles",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "distance_miles"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "efficiency_wh_per_mile",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "efficiency_wh_per_mile"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_temp_c",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "outside_temp_c"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a89d4e048622d5b6a6486f3f10c54a9f726cb80df67d0241df24485e42f85ee0"
+}

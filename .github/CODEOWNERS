@@ -1,0 +1,10 @@
+# Configure the owning GitHub team before enabling branch protection.
+# Example: * @your-org/maintainers
+# Security boundaries requiring review:
+# /.github/
+# /apps/api/src/middleware/
+# /apps/api/src/private_deployment/
+# /apps/private-gateway/
+# /compose/
+# /config/security/
+# /scripts/native-release/

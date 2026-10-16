@@ -1,0 +1,106 @@
+name: PR Backend
+
+on:
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: '1.97.1'
+
+jobs:
+  backend:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Backend checks
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
+        env:
+          POSTGRES_DB: panda
+          POSTGRES_USER: panda
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U panda -d panda"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql://panda:devpassword@127.0.0.1:5432/panda
+      REDIS_URL: redis://localhost:6379
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Install PostgreSQL 18 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ca-certificates curl
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error \
+            --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: https://apt.postgresql.org/pub/repos/apt' \
+            "Suites: ${VERSION_CODENAME}-pgdg" \
+            "Architectures: $(dpkg --print-architecture)" \
+            'Components: main' \
+            'Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc' \
+            | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/18/bin:$PATH"
+          pg_dump --version
+          pg_restore --version
+      - name: Verify migration integrity
+        working-directory: .
+        run: node tools/migration-integrity.mjs --base-ref "$BASE_SHA"
+      - name: Verify repository whitespace
+        working-directory: .
+        run: git diff --check "$BASE_SHA"...HEAD
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt, llvm-tools-preview
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: apps/api
+          shared-key: panda-api
+          save-if: false
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Run migrations for SQLx metadata validation
+        run: cargo sqlx migrate run
+      - name: Check sqlx offline metadata
+        run: cargo sqlx prepare --check --workspace -- --all-targets --all-features
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all --all-features
+      - name: Test disposable migration ledger repair
+        run: >-
+          cargo test --lib db::migrations::tests::valid_public_ledger_removes_empty_legacy_ledger
+          -- --ignored --exact --test-threads=1

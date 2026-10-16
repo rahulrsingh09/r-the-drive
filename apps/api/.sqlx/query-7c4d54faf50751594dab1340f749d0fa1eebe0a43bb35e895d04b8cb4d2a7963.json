@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE panda.users SET role = 'user' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c4d54faf50751594dab1340f749d0fa1eebe0a43bb35e895d04b8cb4d2a7963"
+}

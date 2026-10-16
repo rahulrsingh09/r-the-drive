@@ -1,0 +1,97 @@
+services:
+  panda:
+    image: ${PANDA_IMAGE:?Set PANDA_IMAGE to the reviewed image digest, or panda:local with the source-build overlay}
+    restart: unless-stopped
+    env_file:
+      - ${PANDA_ENV_FILE:-../.env}
+    environment:
+      # LAN-only escape hatch for browser clients without HTTPS. Keep false unless
+      # the documented private-network requirements are intentionally met.
+      ALLOW_INSECURE_LAN_HTTP_AUTH: ${ALLOW_INSECURE_LAN_HTTP_AUTH:-false}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${PANDA_HOST_BIND_ADDRESS:-127.0.0.1}:${PANDA_ORIGIN_PORT:-8080}:8080"
+    user: "1001:1001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m
+    networks:
+      - internal
+      - proxy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    volumes:
+      - ${PANDA_BACKUPS_SOURCE:-${PANDA_DATA_DIR:-../data}/backups}:/backups
+      - ${PANDA_CACHE_SOURCE:-${PANDA_DATA_DIR:-../data}/cache}:/data/cache
+
+  timescaledb:
+    image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: panda
+      POSTGRES_USER: ${POSTGRES_USER:-panda}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATA: /db
+    volumes:
+      - ${PANDA_DB_SOURCE:-${PANDA_DATA_DIR:-../data}/db}:/db
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-panda} -d panda']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  redis:
+    image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+    restart: unless-stopped
+    command:
+      [
+        'redis-server',
+        '--requirepass',
+        '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}',
+        '--appendonly',
+        'yes',
+        '--maxmemory',
+        '${REDIS_MAXMEMORY:-192mb}',
+        '--maxmemory-policy',
+        'noeviction',
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    mem_limit: 256M
+    volumes:
+      - ${PANDA_REDIS_SOURCE:-${PANDA_DATA_DIR:-../data}/redis}:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  panda-db:
+  panda-redis:
+  panda-backups:
+  panda-cache:
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  proxy:
+    driver: bridge

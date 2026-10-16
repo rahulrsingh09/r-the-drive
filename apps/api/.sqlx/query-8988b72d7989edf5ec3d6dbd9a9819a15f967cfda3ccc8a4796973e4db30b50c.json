@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.charge_sessions (vehicle_id, started_at, ended_at, kwh_added, duration_minutes, cost_usd) VALUES ($1, now() - interval '1 day', now(), $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8988b72d7989edf5ec3d6dbd9a9819a15f967cfda3ccc8a4796973e4db30b50c"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.software_versions\n                       (vehicle_id, version, installed_at, observed_until)\n                       VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c439b83d7726b11c302e18f0120466c08bcb412c235a7c0cd58680e03c0b2c5"
+}

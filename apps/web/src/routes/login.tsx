@@ -1,0 +1,282 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
+import { z } from 'zod';
+import { rootRoute } from './__root';
+import { api, consumeExplicitLogoutIntent, useAuth } from '@panda/hooks';
+import { Button, Input } from '@panda/ui/primitives';
+import { RAuthBrand } from '../features/r-experience/RAuthBrand';
+import { Zap, Route, Battery } from 'lucide-react';
+import { normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
+import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../components/auth/PasswordRequirements';
+import { emitAuthError } from '../components/feedback/toast';
+
+export const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/login',
+  validateSearch: z.object({
+    redirect: z.string().optional(),
+    password_changed: z.literal('1').optional(),
+    error: z.enum(['oidc_cancelled', 'oidc_expired', 'oidc_denied', 'oidc_failed']).optional(),
+  }),
+  component: LoginPage,
+});
+
+export function LoginPage() {
+  const navigate = useNavigate();
+  const search = useSearch({ from: '/login' });
+  const {
+    login,
+    register,
+    isAuthenticated,
+    isBootstrapping,
+    resumeSession,
+  } = useAuth();
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
+  const shouldResumeSession = search.password_changed !== '1';
+  const resumeAttempted = useRef(false);
+  const autoSsoAttempted = useRef(false);
+  const explicitLogoutIntentConsumed = useRef(false);
+  const explicitLogoutIntent = useRef(false);
+  const resumePromise = useRef<Promise<boolean> | null>(null);
+  const redirectStarted = useRef(false);
+  const [restoringSession, setRestoringSession] = useState(false);
+  const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
+  const setupRequired = setup.data?.setup_required === true;
+  const setupProofRequired = setup.data?.setup_proof_required === true;
+  const setupProofAvailable = setup.data?.setup_proof_available === true;
+  const authConfig = useQuery({
+    queryKey: ['auth-config'],
+    queryFn: () => api.getAuthConfig(),
+    retry: false,
+    enabled: setup.isSuccess && !setupRequired,
+  });
+  const config = authConfig.data;
+  const ssoReady = !setupRequired && config?.oidc_enabled === true && config.oidc_ready === true;
+  const passwordEnabled = setupRequired || config?.password_login_enabled === true;
+
+  const startSso = React.useCallback(async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const result = await api.startOidc(redirectTarget ?? '/');
+      window.location.assign(result.authorization_url);
+    } catch {
+      const message = passwordEnabled
+        ? 'Single sign-on is temporarily unavailable. Use your password or contact an administrator.'
+        : 'Single sign-on is temporarily unavailable. Contact an administrator.';
+      setError(message);
+      emitAuthError('SSO sign-in failed', 'Single sign-on is temporarily unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  }, [passwordEnabled, redirectTarget]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const redirectToApp = () => {
+      if (cancelled || redirectStarted.current) return;
+      redirectStarted.current = true;
+      navigate({ to: (redirectTarget ?? '/') as never, replace: true });
+    };
+
+    if (!shouldResumeSession) return () => { cancelled = true; };
+
+    if (isAuthenticated) {
+      redirectToApp();
+      return;
+    }
+
+    // Keep this attempt local to the mounted login page. In particular, the
+    // ref prevents React StrictMode's development-only effect replay from
+    // issuing a second bootstrap request.
+    if (!resumeAttempted.current && !isBootstrapping) return () => { cancelled = true; };
+    if (!resumeAttempted.current) {
+      resumeAttempted.current = true;
+      resumePromise.current = resumeSession();
+    }
+    const pendingResume = resumePromise.current;
+    if (!pendingResume) return () => { cancelled = true; };
+    setRestoringSession(true);
+    void pendingResume
+      .then((resumed) => {
+        if (!cancelled && resumed) redirectToApp();
+      })
+      .finally(() => {
+        if (!cancelled) setRestoringSession(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [isAuthenticated, isBootstrapping, navigate, redirectTarget, resumeSession, shouldResumeSession]);
+
+  useEffect(() => {
+    if (!explicitLogoutIntentConsumed.current) {
+      explicitLogoutIntentConsumed.current = true;
+      explicitLogoutIntent.current = consumeExplicitLogoutIntent();
+    }
+    if (explicitLogoutIntent.current) return;
+    if (autoSsoAttempted.current || !config?.oidc_auto_login || !ssoReady ||
+        isAuthenticated || isBootstrapping || restoringSession || search.error || search.password_changed) return;
+    autoSsoAttempted.current = true;
+    void startSso();
+  }, [config?.oidc_auto_login, ssoReady, isAuthenticated, isBootstrapping, restoringSession, search.error, search.password_changed, startSso, consumeExplicitLogoutIntent]);
+
+  if (restoringSession) {
+    return (
+      <div className="min-h-screen bg-bg-page flex items-center justify-center px-4">
+        <p role="status" className="text-sm text-fg-secondary">Restoring your session…</p>
+      </div>
+    );
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const fields = new FormData(e.currentTarget);
+    const submittedEmail = String(fields.get('email') ?? '');
+    const submittedPassword = String(fields.get('password') ?? '');
+    const submittedSetupToken = String(fields.get('setupToken') ?? '');
+    setError('');
+    setLoading(true);
+    try {
+      if (setupRequired) {
+        if (setupProofRequired && !setupProofAvailable) {
+          setError(
+            'First-owner setup is not configured on this instance. Ask the administrator to set PANDA_SETUP_TOKEN and recreate the app without deleting the database.'
+          );
+          return;
+        }
+        await register(submittedEmail, submittedPassword, setupProofRequired ? submittedSetupToken : undefined);
+        navigate({ to: '/connect' });
+        return;
+      }
+      await login(submittedEmail, submittedPassword);
+      navigate({ to: (redirectTarget ?? '/') as never });
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      let message: string;
+      const code = (err as { code?: string }).code;
+      if (status === 401) {
+        message = 'Incorrect email or password. Please try again.';
+      } else if (status === 429) {
+        message = 'Too many sign-in attempts. Please wait a moment and try again.';
+      } else if (code === 'SETUP_PROOF_REQUIRED') {
+        message = 'Enter the instance setup token before creating the owner account.';
+      } else if ((err as { code?: string }).code === 'SETUP_PROOF_INVALID') {
+        message = 'The instance setup token is invalid. Check it and try again.';
+      } else if (status === 422) {
+        message = (err as { detail?: { message?: string } }).detail?.message
+          ?? 'Check the password requirements and try again.';
+      } else if (status != null && status >= 500) {
+        message = 'Something went wrong on our end. Please try again later.';
+      } else {
+        message = 'Unable to sign in. Please check your connection and try again.';
+      }
+      setError(message);
+      emitAuthError('Sign-in failed', message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-bg-page flex items-center justify-center px-4 relative overflow-hidden">
+      <div className="w-full max-w-sm relative z-10">
+        <RAuthBrand />
+
+        {/* Auth card */}
+        <div className="bg-bg-glass backdrop-blur-md border border-border rounded-2xl p-6 shadow-xl">
+          <p className="text-[11px] font-semibold text-fg-tertiary uppercase tracking-widest mb-5">
+            {setupRequired ? 'Set up R' : 'Sign in'}
+          </p>
+          {search.password_changed === '1' && (
+            <p role="status" className="mb-4 rounded-lg border border-status-positive/30 bg-status-positive/10 px-3 py-2 text-xs text-status-positive">
+              Password changed. Sign in with your new password.
+            </p>
+          )}
+          {search.error && (
+            <p role="alert" className="mb-4 rounded-lg border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+              {search.error === 'oidc_cancelled' || search.error === 'oidc_denied'
+                ? 'Single sign-on was cancelled or denied.'
+                : search.error === 'oidc_expired'
+                  ? 'This single sign-on attempt expired.'
+                  : 'Single sign-on could not be completed.'}{' '}
+              {passwordEnabled ? 'You can try again or use your password.' : 'You can try again or contact an administrator.'}
+            </p>
+          )}
+
+          {!setupRequired && !config && <p role="status" className="text-xs text-fg-secondary">Loading sign-in options…</p>}
+          {ssoReady && <Button type="button" size="lg" className="w-full" loading={loading} onClick={startSso}>{config?.button_label || 'Sign in with SSO'}</Button>}
+          {error && !passwordEnabled && <p role="alert" className="mt-4 text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">{error}</p>}
+          {ssoReady && passwordEnabled && <div className="my-1 flex items-center gap-3 text-[11px] text-fg-tertiary"><span className="h-px flex-1 bg-border" /><span>or</span><span className="h-px flex-1 bg-border" /></div>}
+          {passwordEnabled && <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <Input
+              label="Email"
+              name="email"
+              type="email"
+              placeholder="you@example.com"
+              required
+              autoComplete="email"
+            />
+            <Input
+              label="Password"
+              name="password"
+              type="password"
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+              minLength={setupRequired ? PASSWORD_MIN_LENGTH : undefined}
+              autoComplete={setupRequired ? 'new-password' : 'current-password'}
+            />
+            {setupRequired && setupProofRequired && setupProofAvailable && (
+              <Input
+                label="Instance setup token"
+                name="setupToken"
+                type="password"
+                hint="Use the one-time PANDA_SETUP_TOKEN configured for this instance."
+                autoComplete="off"
+                required
+              />
+            )}
+            {setupRequired && setupProofRequired && !setupProofAvailable && (
+              <p role="alert" className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
+                This production instance needs a setup token before the first owner can be created. Configure PANDA_SETUP_TOKEN, then recreate the app without deleting its database.
+              </p>
+            )}
+            {setupRequired && <PasswordRequirements password={password} />}
+            {error && (
+              <p role="alert" className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
+            <Button type="submit" loading={loading} size="lg" className="mt-1 w-full">
+              {setupRequired ? 'Create owner account' : 'Sign in'}
+            </Button>
+          </form>}
+          {!passwordEnabled && !ssoReady && config && <p role="status" className="text-xs text-fg-secondary">Sign-in is temporarily unavailable. Ask an administrator to restore an authentication method.</p>}
+          {!setupRequired && <p className="mt-5 pt-5 border-t border-border text-center text-xs text-fg-tertiary">Need access? Ask an administrator for an activation link.</p>}
+        </div>
+
+        {/* Feature callouts */}
+        <div className="mt-8 grid grid-cols-3 gap-3">
+          {[
+            { icon: Route, label: 'Trip analytics', sub: 'Every drive logged' },
+            { icon: Zap, label: 'Charge history', sub: 'Sessions & cost' },
+            { icon: Battery, label: 'Battery health', sub: 'SOC over time' },
+          ].map(({ icon: Icon, label, sub }) => (
+            <div key={label} className="text-center">
+              <div className="flex justify-center mb-1.5">
+                <Icon className="h-3.5 w-3.5 text-accent/70" />
+              </div>
+              <p className="text-[11px] font-medium text-fg-secondary">{label}</p>
+              <p className="text-[10px] text-fg-tertiary mt-0.5">{sub}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

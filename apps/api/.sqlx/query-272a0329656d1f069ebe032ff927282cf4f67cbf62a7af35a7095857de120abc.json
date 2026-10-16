@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, vehicle_id, location_lat, location_lng\n           FROM panda.charge_sessions\n           WHERE geofence_id IS NULL\n             AND location_lat IS NOT NULL\n             AND location_lng IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "vehicle_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "vehicle_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "location_lat",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "location_lat"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "location_lng",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "location_lng"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "272a0329656d1f069ebe032ff927282cf4f67cbf62a7af35a7095857de120abc"
+}

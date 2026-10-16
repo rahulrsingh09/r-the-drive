@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, started_at, ended_at, soc_start, soc_end,\n                  energy_added_wh, charger_type\n           FROM panda.charge_sessions\n           WHERE vehicle_id = $1\n           ORDER BY started_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "ended_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "soc_start",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "soc_start"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "soc_end",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "soc_end"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "energy_added_wh",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "energy_added_wh"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "charger_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "charger_type"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "b63ef2ead8e28525263e25f0357741d6fb7c9ab81440f43a5875a78729770c52"
+}

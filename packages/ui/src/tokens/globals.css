@@ -1,0 +1,609 @@
+
+:root, .dark, [data-theme='dark'] {
+  --rm-bg-page:        #0A0A0F;
+  --rm-bg-surface:     #12121A;
+  --rm-bg-elevated:    #1A1A24;
+  --rm-bg-glass:       rgba(26, 26, 36, 0.6);
+  --rm-bg-overlay:     rgba(0, 0, 0, 0.7);
+
+  --rm-text-primary:   #FAFAFA;
+  --rm-text-secondary: #A1A1A1;
+  --rm-text-tertiary:  #71717A;
+  --rm-text-disabled:  #52525B;
+  --rm-text-on-accent: #0A0A0F;
+
+  --rm-border-default: rgba(255, 255, 255, 0.08);
+  --rm-border-strong:  rgba(255, 255, 255, 0.15);
+  --rm-border-accent:  rgba(253, 131, 4, 0.3);
+  /* Semantic status */
+  --rm-status-positive: #10B981;
+  --rm-status-warning:  #F59E0B;
+  --rm-status-danger:   #F87171;
+  --rm-status-info:     #60A5FA;
+
+  --rm-charging-active: var(--rm-accent);
+  --rm-charging-done:    var(--rm-status-positive);
+  --rm-charging-limited: var(--rm-status-danger);
+  --rm-charging-ac:      var(--rm-status-info);
+  --rm-charging-dc:      #A78BFA;
+  --rm-charging-dcfc:    #C084FC;
+
+  /* Drive-mode badge palette */
+  --rm-dm-everyday:  #10B981;
+  --rm-dm-conserve:  #60A5FA;
+  --rm-dm-terrain:   #22D3EE;
+  --rm-dm-sand:      #FBBF24;
+  --rm-dm-rock:      #A78BFA;
+  --rm-dm-rally:     #E879F9;
+  --rm-dm-drift:     #FB7185;
+  --rm-dm-towing:    #FB923C;
+  --rm-dm-unknown:   var(--rm-text-tertiary);
+
+  --rm-glow-sm:        0 0 20px rgba(253, 131, 4, 0.15);
+  --rm-glow-md:        0 0 40px rgba(253, 131, 4, 0.20);
+  --rm-glow-lg:        0 0 60px rgba(253, 131, 4, 0.25);
+  --rm-glow-button:    0 0 20px rgba(253, 131, 4, 0.40);
+
+  --rm-accent:         #FD8304;
+  --rm-accent-hover:   #FDBA74;
+  --rm-accent-active:  #EA580C;
+  --rm-accent-muted:   rgba(253, 131, 4, 0.15);
+
+  --rm-shadow-sm:      0 1px 2px rgba(0, 0, 0, 0.3);
+  --rm-shadow-md:      0 4px 6px rgba(0, 0, 0, 0.3);
+  --rm-shadow-lg:      0 10px 15px rgba(0, 0, 0, 0.3);
+  --rm-shadow-xl:      0 20px 25px rgba(0, 0, 0, 0.4);
+
+  /* Chart internals */
+  --rm-chart-grid:       rgba(255, 255, 255, 0.06);
+  --rm-chart-hover-bg:   rgba(255, 255, 255, 0.02);
+  --rm-chart-accent:     #FD8304;
+  --rm-chart-success:    #10B981;
+  --rm-chart-warning:    #F59E0B;
+  --rm-chart-danger:     #F87171;
+  --rm-chart-muted:      #A1A1A1;
+  --rm-chart-amber:      #FD8304;
+  --rm-chart-yellow:     #FACC15;
+  --rm-chart-sky:        #60A5FA;
+  --rm-chart-emerald:    #10B981;
+  --rm-chart-violet:     #A78BFA;
+  --rm-chart-rose:       #F87171;
+  --rm-chart-teal:       #34D399;
+  --rm-chart-orange:     #FB923C;
+  --rm-chart-indigo:     #818CF8;
+  --rm-map-route-0:      #60A5FA;
+  --rm-map-route-1:      #34D399;
+  --rm-map-route-2:      #A78BFA;
+  --rm-map-route-3:      #F472B6;
+  --rm-map-route-4:      #F59E0B;
+  --rm-map-route-5:      #F87171;
+
+  --rm-value-halo:
+    -2px -2px 0 var(--rm-bg-surface),  0 -2px 0 var(--rm-bg-surface),  2px -2px 0 var(--rm-bg-surface),
+     2px  0   0 var(--rm-bg-surface),  2px  2px 0 var(--rm-bg-surface), 0    2px 0 var(--rm-bg-surface),
+    -2px  2px 0 var(--rm-bg-surface), -2px  0   0 var(--rm-bg-surface);
+}
+
+.light, [data-theme='light'] {
+  --rm-bg-page:        #FAFAF7;
+  --rm-bg-surface:     #FFFFFF;
+  --rm-bg-elevated:    #F4F4EE;
+  --rm-bg-glass:       rgba(255, 255, 255, 0.7);
+  --rm-bg-overlay:     rgba(20, 20, 24, 0.4);
+
+  --rm-text-primary:   #18181B;
+  --rm-text-secondary: #52525B;
+  --rm-text-tertiary:  #71717A;
+  --rm-text-disabled:  #A1A1A1;
+  --rm-text-on-accent: #FAFAFA;
+
+  --rm-border-default: rgba(20, 20, 24, 0.08);
+  --rm-border-strong:  rgba(20, 20, 24, 0.18);
+  --rm-border-accent:  rgba(253, 131, 4, 0.35);
+  /* Semantic status */
+  --rm-status-positive: #059669;
+  --rm-status-warning:  #D97706;
+  --rm-status-danger:   #EF4444;
+  --rm-status-info:     #3B82F6;
+
+  --rm-charging-active: var(--rm-accent);
+  --rm-charging-done:    var(--rm-status-positive);
+  --rm-charging-limited: var(--rm-status-danger);
+  --rm-charging-ac:      var(--rm-status-info);
+  --rm-charging-dc:      #A78BFA;
+  --rm-charging-dcfc:    #C084FC;
+
+  --rm-map-route-0: #38BDF8;
+  --rm-map-route-1: #34D399;
+  --rm-map-route-2: #A78BFA;
+  --rm-map-route-3: #F472B6;
+  --rm-map-route-4: #F59E0B;
+  --rm-map-route-5: #F87171;
+
+  --rm-glow-sm:        0 0 0 1px rgba(253, 131, 4, 0.10);
+  --rm-glow-md:        0 1px 2px rgba(253, 131, 4, 0.15);
+  --rm-glow-lg:        0 2px 8px rgba(253, 131, 4, 0.20);
+  --rm-glow-button:    0 4px 12px rgba(253, 131, 4, 0.25);
+
+  --rm-accent:         #FD8304;
+  --rm-accent-hover:   #EA580C;
+  --rm-accent-active:  #C2410C;
+  --rm-accent-muted:   rgba(253, 131, 4, 0.10);
+
+  --rm-shadow-sm:      0 1px 2px rgba(20, 20, 24, 0.06);
+  --rm-shadow-md:      0 2px 6px rgba(20, 20, 24, 0.08);
+  --rm-shadow-lg:      0 8px 20px rgba(20, 20, 24, 0.10);
+  --rm-shadow-xl:      0 16px 32px rgba(20, 20, 24, 0.12);
+
+  /* Chart internals */
+  --rm-chart-grid:       rgba(20, 20, 24, 0.08);
+  --rm-chart-hover-bg:   rgba(20, 20, 24, 0.03);
+  --rm-chart-accent:     #C96F08;
+  --rm-chart-success:    #047857;
+  --rm-chart-warning:    #B45309;
+  --rm-chart-danger:     #DC2626;
+  --rm-chart-muted:      #71717A;
+  --rm-chart-amber:      #C96F08;
+  --rm-chart-yellow:     #A16207;
+  --rm-chart-sky:        #2563EB;
+  --rm-chart-emerald:    #047857;
+  --rm-chart-violet:     #7C3AED;
+  --rm-chart-rose:       #DC2626;
+  --rm-chart-teal:       #047857;
+  --rm-chart-orange:     #C2410C;
+  --rm-chart-indigo:     #4F46E5;
+}
+
+/* RAD palette: the app-specific expression of RAD's warm gold, red, and teal
+ * visual language. Values are semantic so changing the account palette
+ * updates the entire application through this single layer. */
+.dark[data-rm-palette='rad'],
+[data-theme='dark'][data-rm-palette='rad'] {
+  --rm-bg-page:        #082529;
+  --rm-bg-surface:     #10363B;
+  --rm-bg-elevated:    #18464B;
+  --rm-bg-glass:       rgba(24, 70, 75, 0.68);
+  --rm-bg-overlay:     rgba(7, 13, 16, 0.74);
+
+  --rm-text-primary:   #FFFFFF;
+  --rm-text-secondary: #C4E3DF;
+  --rm-text-tertiary:  #9CBDB9;
+  --rm-text-disabled:  #658B88;
+  --rm-text-on-accent: #082529;
+
+  --rm-border-default: rgba(214, 239, 230, 0.10);
+  --rm-border-strong:  rgba(214, 239, 230, 0.19);
+  --rm-border-accent:  rgba(255, 176, 0, 0.36);
+  --rm-status-positive: #38E8A5;
+  --rm-status-warning:  #FFC43D;
+  --rm-status-danger:   #FF7054;
+  --rm-status-info:     #36CEFF;
+
+  --rm-charging-active: var(--rm-accent);
+  --rm-charging-done:   var(--rm-status-positive);
+  --rm-charging-limited: var(--rm-status-danger);
+  --rm-charging-ac:     var(--rm-status-info);
+  --rm-charging-dc:     #B59AFF;
+  --rm-charging-dcfc:   #F077DA;
+
+  --rm-dm-everyday:  #38E8A5;
+  --rm-dm-conserve:  #36CEFF;
+  --rm-dm-terrain:   #2AE0CB;
+  --rm-dm-sand:      #FFD34E;
+  --rm-dm-rock:      #B59AFF;
+  --rm-dm-rally:     #F077DA;
+  --rm-dm-drift:     #FF7054;
+  --rm-dm-towing:    #FF9850;
+  --rm-dm-unknown:   var(--rm-text-tertiary);
+
+  --rm-accent:       #FFB000;
+  --rm-accent-hover: #FFD34E;
+  --rm-accent-active: #F59A00;
+  --rm-accent-muted: rgba(255, 176, 0, 0.17);
+  --rm-glow-sm:      0 0 20px rgba(255, 176, 0, 0.16);
+  --rm-glow-md:      0 0 40px rgba(255, 176, 0, 0.21);
+  --rm-glow-lg:      0 0 60px rgba(255, 176, 0, 0.26);
+  --rm-glow-button:  0 0 20px rgba(255, 176, 0, 0.42);
+
+  --rm-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34);
+  --rm-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.34);
+  --rm-shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.34);
+  --rm-shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.44);
+
+  --rm-chart-grid: rgba(214, 239, 230, 0.09);
+  --rm-chart-hover-bg: rgba(214, 239, 230, 0.035);
+  --rm-chart-accent: #FFB000;
+  --rm-chart-success: #38E8A5;
+  --rm-chart-warning: #FFC43D;
+  --rm-chart-danger: #FF7054;
+  --rm-chart-muted: #9AA9AA;
+  --rm-chart-amber: #FFB000;
+  --rm-chart-yellow: #F4F36B;
+  --rm-chart-sky: #36CEFF;
+  --rm-chart-emerald: #38E8A5;
+  --rm-chart-violet: #B59AFF;
+  --rm-chart-rose: #FF7054;
+  --rm-chart-teal: #2AE0CB;
+  --rm-chart-orange: #FF9850;
+  --rm-chart-indigo: #839FFF;
+  --rm-map-route-0: #FF7054;
+  --rm-map-route-1: #36CEFF;
+  --rm-map-route-2: #FFD34E;
+  --rm-map-route-3: #B59AFF;
+  --rm-map-route-4: #38E8A5;
+  --rm-map-route-5: #F077DA;
+  --rm-series-01: #FFB000;
+  --rm-series-02: #FF7054;
+  --rm-series-03: #2AE0CB;
+  --rm-series-04: #36CEFF;
+  --rm-series-05: #B59AFF;
+  --rm-series-06: #FF9850;
+  --rm-series-07: #38E8A5;
+  --rm-series-08: #FF93A7;
+  --rm-series-09: #839FFF;
+  --rm-series-10: #F4F36B;
+  --rm-series-11: #7AE0FF;
+  --rm-series-12: #FFAFC7;
+  --rm-series-13: #8AE36C;
+  --rm-series-14: #DAA1FF;
+  --rm-series-15: #FFD34E;
+  --rm-series-16: #A6C7C2;
+  --rm-series-01-text: color-mix(in srgb, var(--rm-series-01) 50%, var(--rm-text-primary) 50%);
+  --rm-series-02-text: color-mix(in srgb, var(--rm-series-02) 50%, var(--rm-text-primary) 50%);
+  --rm-series-03-text: color-mix(in srgb, var(--rm-series-03) 50%, var(--rm-text-primary) 50%);
+  --rm-series-04-text: color-mix(in srgb, var(--rm-series-04) 50%, var(--rm-text-primary) 50%);
+  --rm-series-05-text: color-mix(in srgb, var(--rm-series-05) 50%, var(--rm-text-primary) 50%);
+  --rm-series-06-text: color-mix(in srgb, var(--rm-series-06) 50%, var(--rm-text-primary) 50%);
+  --rm-series-07-text: color-mix(in srgb, var(--rm-series-07) 50%, var(--rm-text-primary) 50%);
+  --rm-series-08-text: color-mix(in srgb, var(--rm-series-08) 50%, var(--rm-text-primary) 50%);
+  --rm-series-09-text: color-mix(in srgb, var(--rm-series-09) 50%, var(--rm-text-primary) 50%);
+  --rm-series-10-text: color-mix(in srgb, var(--rm-series-10) 50%, var(--rm-text-primary) 50%);
+  --rm-series-11-text: color-mix(in srgb, var(--rm-series-11) 50%, var(--rm-text-primary) 50%);
+  --rm-series-12-text: color-mix(in srgb, var(--rm-series-12) 50%, var(--rm-text-primary) 50%);
+  --rm-series-13-text: color-mix(in srgb, var(--rm-series-13) 50%, var(--rm-text-primary) 50%);
+  --rm-series-14-text: color-mix(in srgb, var(--rm-series-14) 50%, var(--rm-text-primary) 50%);
+  --rm-series-15-text: color-mix(in srgb, var(--rm-series-15) 50%, var(--rm-text-primary) 50%);
+  --rm-series-16-text: color-mix(in srgb, var(--rm-series-16) 50%, var(--rm-text-primary) 50%);
+}
+
+.light[data-rm-palette='rad'],
+[data-theme='light'][data-rm-palette='rad'] {
+  --rm-bg-page:        #FCFCFA;
+  --rm-bg-surface:     #FFFFFF;
+  --rm-bg-elevated:    #F8FAF9;
+  --rm-bg-glass:       rgba(255, 255, 255, 0.88);
+  --rm-bg-overlay:     rgba(18, 59, 67, 0.42);
+
+  --rm-text-primary:   #123B43;
+  --rm-text-secondary: #355F60;
+  --rm-text-tertiary:  #527278;
+  --rm-text-disabled:  #A0AEAE;
+  --rm-text-on-accent: #FFFFFF;
+
+  --rm-border-default: rgba(18, 59, 67, 0.10);
+  --rm-border-strong:  rgba(18, 59, 67, 0.18);
+  --rm-border-accent:  rgba(194, 65, 12, 0.34);
+  --rm-status-positive: #007A4B;
+  --rm-status-warning:  #9C5D00;
+  --rm-status-danger:   #D02D30;
+  --rm-status-info:     #007DA3;
+
+  --rm-charging-active: var(--rm-accent);
+  --rm-charging-done:   var(--rm-status-positive);
+  --rm-charging-limited: var(--rm-status-danger);
+  --rm-charging-ac:     var(--rm-status-info);
+  --rm-charging-dc:     #7945D8;
+  --rm-charging-dcfc:   #B02A91;
+
+  --rm-dm-everyday:  #007A4B;
+  --rm-dm-conserve:  #007DA3;
+  --rm-dm-terrain:   #007C73;
+  --rm-dm-sand:      #8D6A00;
+  --rm-dm-rock:      #7945D8;
+  --rm-dm-rally:     #B02A91;
+  --rm-dm-drift:     #D02D30;
+  --rm-dm-towing:    #B84D00;
+  --rm-dm-unknown:   var(--rm-text-tertiary);
+
+  --rm-accent:       #C2410C;
+  --rm-accent-hover: #A83B0F;
+  --rm-accent-active: #8E2E0A;
+  --rm-accent-muted: rgba(194, 65, 12, 0.14);
+  --rm-glow-sm:      0 0 0 1px rgba(194, 65, 12, 0.12);
+  --rm-glow-md:      0 1px 2px rgba(194, 65, 12, 0.16);
+  --rm-glow-lg:      0 2px 8px rgba(194, 65, 12, 0.21);
+  --rm-glow-button:  0 4px 12px rgba(194, 65, 12, 0.28);
+
+  --rm-shadow-sm: 0 1px 2px rgba(18, 59, 67, 0.07);
+  --rm-shadow-md: 0 2px 6px rgba(18, 59, 67, 0.09);
+  --rm-shadow-lg: 0 8px 20px rgba(18, 59, 67, 0.12);
+  --rm-shadow-xl: 0 16px 32px rgba(18, 59, 67, 0.14);
+
+  --rm-chart-grid: rgba(18, 59, 67, 0.10);
+  --rm-chart-hover-bg: rgba(18, 59, 67, 0.035);
+  --rm-chart-accent: #F26A2E;
+  --rm-chart-success: #007A4B;
+  --rm-chart-warning: #9C5D00;
+  --rm-chart-danger: #D02D30;
+  --rm-chart-muted: #527278;
+  --rm-chart-amber: #B87900;
+  --rm-chart-yellow: #697900;
+  --rm-chart-sky: #007DA3;
+  --rm-chart-emerald: #007A4B;
+  --rm-chart-violet: #7945D8;
+  --rm-chart-rose: #D02D30;
+  --rm-chart-teal: #007C73;
+  --rm-chart-orange: #DE571E;
+  --rm-chart-indigo: #435BD0;
+  --rm-map-route-0: #DE571E;
+  --rm-map-route-1: #007DA3;
+  --rm-map-route-2: #B87900;
+  --rm-map-route-3: #7945D8;
+  --rm-map-route-4: #007A4B;
+  --rm-map-route-5: #B02A91;
+  --rm-series-01: #FFB000;
+  --rm-series-02: #F26A2E;
+  --rm-series-03: #008F8C;
+  --rm-series-04: #435BD0;
+  --rm-series-05: #7945D8;
+  --rm-series-06: #B84D00;
+  --rm-series-07: #00A86B;
+  --rm-series-08: #B83461;
+  --rm-series-09: #007C73;
+  --rm-series-10: #697900;
+  --rm-series-11: #16769B;
+  --rm-series-12: #A74773;
+  --rm-series-13: #478100;
+  --rm-series-14: #9744B8;
+  --rm-series-15: #8D6A00;
+  --rm-series-16: #486A64;
+  --rm-series-01-text: color-mix(in srgb, var(--rm-series-01) 50%, var(--rm-text-primary) 50%);
+  --rm-series-02-text: color-mix(in srgb, var(--rm-series-02) 50%, var(--rm-text-primary) 50%);
+  --rm-series-03-text: color-mix(in srgb, var(--rm-series-03) 50%, var(--rm-text-primary) 50%);
+  --rm-series-04-text: color-mix(in srgb, var(--rm-series-04) 50%, var(--rm-text-primary) 50%);
+  --rm-series-05-text: color-mix(in srgb, var(--rm-series-05) 50%, var(--rm-text-primary) 50%);
+  --rm-series-06-text: color-mix(in srgb, var(--rm-series-06) 50%, var(--rm-text-primary) 50%);
+  --rm-series-07-text: color-mix(in srgb, var(--rm-series-07) 50%, var(--rm-text-primary) 50%);
+  --rm-series-08-text: color-mix(in srgb, var(--rm-series-08) 50%, var(--rm-text-primary) 50%);
+  --rm-series-09-text: color-mix(in srgb, var(--rm-series-09) 50%, var(--rm-text-primary) 50%);
+  --rm-series-10-text: color-mix(in srgb, var(--rm-series-10) 50%, var(--rm-text-primary) 50%);
+  --rm-series-11-text: color-mix(in srgb, var(--rm-series-11) 50%, var(--rm-text-primary) 50%);
+  --rm-series-12-text: color-mix(in srgb, var(--rm-series-12) 50%, var(--rm-text-primary) 50%);
+  --rm-series-13-text: color-mix(in srgb, var(--rm-series-13) 50%, var(--rm-text-primary) 50%);
+  --rm-series-14-text: color-mix(in srgb, var(--rm-series-14) 50%, var(--rm-text-primary) 50%);
+  --rm-series-15-text: color-mix(in srgb, var(--rm-series-15) 50%, var(--rm-text-primary) 50%);
+  --rm-series-16-text: color-mix(in srgb, var(--rm-series-16) 50%, var(--rm-text-primary) 50%);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
+  background-color: var(--rm-bg-page);
+  color: var(--rm-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  color: var(--rm-text-on-accent);
+  background-color: var(--rm-accent);
+}
+
+/*
+ * Browser password managers otherwise apply their own yellow/green autofill
+ * background. Keep typed, selected, and saved values on the active theme's
+ * input surface instead of letting browser chrome break the product palette.
+ */
+input,
+textarea {
+  caret-color: var(--rm-accent);
+}
+
+input::selection,
+textarea::selection {
+  color: var(--rm-text-primary);
+  background-color: var(--rm-accent-muted);
+}
+
+input:autofill,
+textarea:autofill,
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus {
+  color: var(--rm-text-primary);
+  -webkit-text-fill-color: var(--rm-text-primary);
+  caret-color: var(--rm-accent);
+  box-shadow: 0 0 0 1000px var(--rm-bg-elevated) inset;
+  -webkit-box-shadow: 0 0 0 1000px var(--rm-bg-elevated) inset;
+}
+
+.rm-accent-range {
+  width: 100%;
+  height: 0.375rem;
+  cursor: pointer;
+  appearance: none;
+  border-radius: 999px;
+  background: var(--rm-border-strong);
+  accent-color: var(--rm-accent);
+}
+
+.rm-accent-range::-webkit-slider-runnable-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.rm-accent-range::-webkit-slider-thumb {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: -0.25rem;
+  appearance: none;
+  border: 2px solid var(--rm-accent);
+  border-radius: 999px;
+  background: var(--rm-bg-surface);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.rm-accent-range::-moz-range-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.rm-accent-range::-moz-range-progress {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--rm-accent);
+}
+
+.rm-accent-range::-moz-range-thumb {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--rm-accent);
+  border-radius: 999px;
+  background: var(--rm-bg-surface);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+html.r-interface, body.r-experience, .r-palette-probe {
+  --rm-bg-page: #050606 !important;
+  --rm-bg-surface: #101212 !important;
+  --rm-bg-elevated: #1b1e1d !important;
+  --rm-bg-glass: var(--rm-bg-elevated) !important;
+  --rm-bg-overlay: #050606b8 !important;
+  --rm-text-primary: #eaece8 !important;
+  --rm-text-secondary: #969e97 !important;
+  --rm-text-tertiary: var(--rm-text-secondary) !important;
+  --rm-text-disabled: #727d77 !important;
+  --rm-value-halo: none !important;
+  --rm-text-on-accent: var(--rm-bg-page) !important;
+  --rm-border-default: #2b2f2e !important;
+  --rm-border-strong: #5b6260 !important;
+  --rm-border-accent: var(--rm-border-strong) !important;
+  --rm-accent: var(--rm-text-primary) !important;
+  --rm-accent-hover: #c6ccc7 !important;
+  --rm-accent-active: #adb3ae !important;
+  --rm-accent-muted: var(--rm-bg-elevated) !important;
+  --rm-control-accent: var(--rm-text-primary) !important;
+  --rm-control-on-accent: var(--rm-bg-page) !important;
+  --rm-control-focus-ring: var(--rm-text-primary) !important;
+  --rm-glow-sm: none !important;
+  --rm-glow-md: none !important;
+  --rm-glow-lg: none !important;
+  --rm-glow-button: none !important;
+  --r-signal: #bce177 !important;
+  --r-signal-ink: #131b0a !important;
+  --r-cove: #79b5aa !important;
+  --r-water: #8cbad0 !important;
+  --r-caliper: #ddcd74 !important;
+  --r-alert: #efaaa0 !important;
+  --rm-chart-accent: var(--r-signal) !important;
+  --rm-status-positive: var(--r-signal) !important;
+  --rm-status-warning: var(--r-caliper) !important;
+  --rm-status-danger: var(--r-alert) !important;
+  --rm-status-info: var(--r-water) !important;
+  --rm-chart-success: var(--r-cove) !important;
+  --rm-chart-warning: var(--r-caliper) !important;
+  --rm-chart-danger: var(--r-alert) !important;
+  --rm-chart-muted: var(--rm-text-secondary) !important;
+  --rm-chart-grid: var(--rm-border-default) !important;
+  --rm-chart-hover-bg: var(--rm-bg-elevated) !important;
+  --rm-chart-emerald: var(--r-cove) !important;
+  --rm-chart-teal: var(--r-cove) !important;
+  --rm-chart-sky: var(--r-water) !important;
+  --rm-chart-amber: var(--r-caliper) !important;
+  --rm-chart-yellow: var(--r-caliper) !important;
+  --rm-chart-orange: var(--r-caliper) !important;
+  --rm-chart-violet: #afaac9 !important;
+  --rm-chart-indigo: #90a1c6 !important;
+  --rm-chart-rose: #cbaaa8 !important;
+  --rm-series-01: var(--r-signal) !important;
+  --rm-series-02: var(--r-cove) !important;
+  --rm-series-03: var(--r-water) !important;
+  --rm-series-04: var(--r-caliper) !important;
+  --rm-series-05: var(--rm-chart-violet) !important;
+  --rm-series-06: var(--rm-chart-rose) !important;
+  --rm-series-07: #88c7b4 !important;
+  --rm-series-08: #c4cfa2 !important;
+  --rm-series-09: #92aeb4 !important;
+  --rm-series-10: #cbba91 !important;
+  --rm-series-11: #8dbaa0 !important;
+  --rm-series-12: #b8bccd !important;
+  --rm-series-13: #9cc4c2 !important;
+  --rm-series-14: #b2c394 !important;
+  --rm-series-15: #a0afc9 !important;
+  --rm-series-16: #cabba9 !important;
+  --rm-series-01-text: var(--rm-series-01) !important;
+  --rm-series-02-text: var(--rm-series-02) !important;
+  --rm-series-03-text: var(--rm-series-03) !important;
+  --rm-series-04-text: var(--rm-series-04) !important;
+  --rm-series-05-text: var(--rm-series-05) !important;
+  --rm-series-06-text: var(--rm-series-06) !important;
+  --rm-series-07-text: var(--rm-series-07) !important;
+  --rm-series-08-text: var(--rm-series-08) !important;
+  --rm-series-09-text: var(--rm-series-09) !important;
+  --rm-series-10-text: var(--rm-series-10) !important;
+  --rm-series-11-text: var(--rm-series-11) !important;
+  --rm-series-12-text: var(--rm-series-12) !important;
+  --rm-series-13-text: var(--rm-series-13) !important;
+  --rm-series-14-text: var(--rm-series-14) !important;
+  --rm-series-15-text: var(--rm-series-15) !important;
+  --rm-series-16-text: var(--rm-series-16) !important;
+  --rm-charging-active: var(--r-signal) !important;
+  --rm-charging-done: var(--r-cove) !important;
+  --rm-charging-limited: var(--r-caliper) !important;
+  --rm-charging-ac: var(--r-cove) !important;
+  --rm-charging-dc: var(--r-caliper) !important;
+  --rm-charging-dcfc: var(--r-caliper) !important;
+  --rm-dm-everyday: var(--r-cove) !important;
+  --rm-dm-conserve: var(--r-signal) !important;
+  --rm-dm-terrain: var(--rm-series-08) !important;
+  --rm-dm-sand: var(--r-caliper) !important;
+  --rm-dm-rock: var(--rm-series-09) !important;
+  --rm-dm-rally: var(--rm-chart-violet) !important;
+  --rm-dm-drift: var(--rm-chart-sky) !important;
+  --rm-dm-towing: var(--r-caliper) !important;
+  --rm-dm-unknown: var(--rm-text-secondary) !important;
+  --rm-map-route-0: var(--r-signal) !important;
+  --rm-map-route-1: var(--r-cove) !important;
+  --rm-map-route-2: var(--r-water) !important;
+  --rm-map-route-3: var(--r-caliper) !important;
+  --rm-map-route-4: var(--rm-chart-violet) !important;
+  --rm-map-route-5: var(--rm-chart-rose) !important;
+  --r-stage: #0c1917 !important;
+}
+html.r-interface.light, .light body.r-experience, .r-palette-probe.light {
+  --rm-bg-page: #f3f6f2 !important;
+  --rm-bg-surface: #ffffff !important;
+  --rm-bg-elevated: #e5ede7 !important;
+  --rm-text-primary: #0f1815 !important;
+  --rm-text-secondary: #48534d !important;
+  --rm-border-default: #b7c0bc !important;
+  --rm-border-strong: #7e8985 !important;
+  --rm-accent-hover: #273129 !important;
+  --rm-accent-active: #3b463d !important;
+  --r-signal: #2b4c24 !important;
+  --r-signal-ink: #eff3ee !important;
+  --r-cove: #326b60 !important;
+  --r-water: #356781 !important;
+  --r-caliper: #756013 !important;
+  --r-alert: #a73534 !important;
+  --rm-chart-violet: #65577f !important;
+  --rm-chart-indigo: #4b5d86 !important;
+  --rm-chart-rose: #845558 !important;
+  --rm-series-07: #33715d !important;
+  --rm-series-08: #566934 !important;
+  --rm-series-09: #476a74 !important;
+  --rm-series-10: #7b602f !important;
+  --rm-series-11: #426c50 !important;
+  --rm-series-12: #605f7c !important;
+  --rm-series-13: #397475 !important;
+  --rm-series-14: #586632 !important;
+  --rm-series-15: #4a6289 !important;
+  --rm-series-16: #78614a !important;
+  --r-stage: #e4eeea !important;
+}

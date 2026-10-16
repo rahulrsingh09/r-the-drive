@@ -1,0 +1,51 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  formatTireLabel,
+  getTireHealthTone,
+  normalizeTireWheels,
+  summarizeTireHealth,
+} from '@panda/ui/lib/vehicleTires';
+
+describe('vehicle tire helpers', () => {
+  it('matches the configured low-pressure health bands', () => {
+    expect(getTireHealthTone({ targetPsi: 48, psi: 46 })).toBe('success');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 44 })).toBe('warning');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 41 })).toBe('danger');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 51 })).toBe('success');
+  });
+
+  it('keeps invalid or missing sensors neutral and preserves fallback text', () => {
+    expect(getTireHealthTone({ targetPsi: 48, psi: null, status: 'invalid_sensor' })).toBe('neutral');
+    expect(getTireHealthTone({ targetPsi: 48, psi: null, status: null })).toBe('neutral');
+    expect(formatTireLabel(null, 'invalid_sensor')).toBe('Invalid Sensor');
+  });
+
+  it('uses status only when PSI is unavailable and aggregates mixed wheel tones', () => {
+    expect(getTireHealthTone({ targetPsi: 48, psi: null, status: 'low' })).toBe('warning');
+    const wheels = normalizeTireWheels(
+      { tire_fl_psi: 40, tire_fr_psi: 48, tire_rl_psi: null, tire_rr_psi: null },
+      { tire_rl_status: 'high', tire_rr_status: null }
+    );
+    expect(summarizeTireHealth(wheels, 48).tone).toBe('danger');
+    expect(summarizeTireHealth(normalizeTireWheels(null, null), 48).tone).toBe('neutral');
+    expect(
+      summarizeTireHealth(
+        normalizeTireWheels({ tire_fl_valid: false }, null),
+        48
+      ).hasInvalidSensor
+    ).toBe(true);
+  });
+
+  it('prefers numeric psi over wheel status when a real reading exists', () => {
+    expect(getTireHealthTone({ targetPsi: 48, psi: 46, status: 'warning' })).toBe('success');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 46, status: 'low' })).toBe('success');
+  });
+
+  it('uses the displayed rounded psi for health so matching visible values match colors', () => {
+    expect(getTireHealthTone({ targetPsi: 48, psi: 45.6 })).toBe('success');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 46.4 })).toBe('success');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 42.6 })).toBe('warning');
+    expect(getTireHealthTone({ targetPsi: 48, psi: 42.4 })).toBe('danger');
+  });
+});

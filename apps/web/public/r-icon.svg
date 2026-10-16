@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>:root{color-scheme:light dark}</style>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="Canvas" stroke="CanvasText" stroke-width="2"/>
+  <path d="M20 15h14c9 0 14 5 14 12 0 6-3 10-9 12l11 11H39L29 39h-1v11h-8V15Zm8 8v9h6c4 0 6-2 6-5s-2-4-6-4h-6Z" fill="CanvasText"/>
+</svg>

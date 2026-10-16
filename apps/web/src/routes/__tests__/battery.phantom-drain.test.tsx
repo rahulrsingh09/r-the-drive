@@ -1,0 +1,243 @@
+// The canonical dashboard controller is exercised independently of the R presentation.
+vi.mock('../../features/r-experience/RDashboardSurface', () => ({ RDashboardSurface: ({ children }: { children: React.ReactNode }) => children }));
+import React from 'react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const mockCollector = vi.hoisted(() => ({
+  running: true,
+}));
+
+vi.mock('@panda/ui/primitives', async () => {
+  const m = await import('../../test/mockPrimitives');
+  return m;
+});
+
+vi.mock('@panda/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@panda/hooks')>();
+  const period = {
+    period_start: '2026-05-01T08:00:00Z',
+    period_end: '2026-05-01T20:00:00Z',
+    duration_hours: 12,
+    sleep_share_pct: 0.92,
+    state_coverage_pct: 0.97,
+    soc_start: 68,
+    soc_end: 62,
+    soc_lost_pct: 6,
+    drain_pct_per_hour: 0.5,
+    range_start_mi: 270,
+    range_end_mi: 244,
+    range_lost_mi: 26,
+    range_lost_per_hour_mi: 2.2,
+    energy_drained_kwh: 4.8,
+    avg_power_w: 400,
+    has_reduced_range: false,
+    validation_status: 'validated',
+    validation_reason: null,
+    sample_count: 12,
+    start_sample_at: '2026-05-01T08:05:00Z',
+    end_sample_at: '2026-05-01T19:55:00Z',
+    movement_detected: false,
+    overlaps_trip: false,
+    overlaps_charge: false,
+  };
+
+  return {
+    ...actual,
+    useAuth: () => ({
+      defaultVehicleId: 'vehicle-1',
+      activeVehicleId: 'vehicle-1',
+      setActiveVehicleId: vi.fn(),
+    }),
+    useResolvedVehicleSelection: () => ({
+      authReady: true,
+      effectiveVehicleId: 'vehicle-1',
+      vehicleSelectionReady: true,
+      vehicles: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }],
+    }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }] }),
+    useMe: () => ({ data: { role: 'user' } }),
+    useVehicleHealth: () => ({
+      data: {
+        vehicle_id: 'vehicle-1',
+        extended_telemetry: {
+          collector: mockCollector.running ? { running: true } : { running: false },
+        },
+      },
+    }),
+    usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'vehicle-1', periods: [period] }, isLoading: false }),
+    useParkedEnergy: () => ({
+      data: {
+        vehicle_id: 'vehicle-1',
+        generated_at: '2026-05-01T20:00:00Z',
+        source: 'rivian_reported',
+        samples: [{
+          window: 'since_parked',
+          source_at: '2026-05-01T20:00:00Z',
+          received_at: new Date().toISOString(),
+          parked_started_at: '2026-05-01T08:00:00Z',
+          duration_minutes: 720,
+          total_kwh: 2.4,
+          vehicle_systems_kwh: 1.2,
+          outlets_kwh: 0,
+          climate_kwh: 0.8,
+          gear_guard_kwh: 0.4,
+          total_range_impact_km: 8,
+          vehicle_systems_range_impact_km: 4,
+          outlets_range_impact_km: 0,
+          climate_range_impact_km: 3,
+          gear_guard_range_impact_km: 1,
+        }],
+      },
+      isLoading: false,
+    }),
+  };
+});
+
+vi.mock('@panda/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: () => undefined,
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
+  SensorChipSummary: ({ title, value, secondary, dataAccent, valueColor }: { title: string; value: string; secondary?: string; dataAccent?: string; valueColor?: string }) => (
+    <div data-testid="sensor-chip-summary" data-accent={dataAccent} data-value-color={valueColor}>
+      <div>{title}</div>
+      <div>{value}</div>
+      {secondary ? <div>{secondary}</div> : null}
+    </div>
+  ),
+  DashboardChartWidget: ({ instance }: { instance: { options?: { chartId?: string; chartIds?: string[]; showPicker?: boolean } } }) => (
+    <div
+      data-testid="phantom-drain-chart-widget"
+      data-chart-id={instance.options?.chartId}
+      data-chart-ids={instance.options?.chartIds?.join('|')}
+      data-show-picker={String(instance.options?.showPicker)}
+    />
+  ),
+  DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
+  getDefaultBySlug: () => ({
+    schemaVersion: 2,
+    id: 'dashboard',
+    slug: 'battery',
+    name: 'Battery',
+    isDefault: true,
+    isLocked: false,
+    ownerId: null,
+    controls: { dateRange: true },
+    widgets: [],
+  }),
+  useDashboardBySlug: () => ({
+    data: {
+      schemaVersion: 2,
+      id: 'dashboard',
+      slug: 'battery',
+      name: 'Battery',
+      isDefault: true,
+      isLocked: false,
+      ownerId: null,
+      controls: { dateRange: true },
+      widgets: [],
+    },
+    isLoading: false,
+  }),
+  useDashboardById: () => ({ data: undefined, isLoading: false, isError: false }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({
+    getQueryData: vi.fn(),
+    refetchQueries: vi.fn(),
+    invalidateQueries: vi.fn(),
+  }),
+}));
+
+vi.mock('../../components/layout/AppLayout', () => ({
+  AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../../components/layout/AuthGuard', () => ({
+  AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../../components/layout/NoVehicleState', () => ({
+  NoVehicleState: () => <div>No vehicle</div>,
+}));
+
+vi.mock('../../lib/dates', () => ({
+  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
+  DEFAULT_PRESET: '30d',
+  presetToRange: () => ({ from: new Date('2026-05-01T00:00:00Z'), to: new Date('2026-05-31T23:59:59Z') }),
+  rangeToIso: () => ({ from: '2026-05-01T00:00:00Z', to: '2026-05-31T23:59:59Z' }),
+  getTimeframeRange: () => ({ from: new Date('2026-05-01T00:00:00Z'), to: new Date('2026-05-31T23:59:59Z') }),
+  timeframeToQuery: () => ({ from: '2026-05-01T00:00:00Z', to: '2026-05-31T23:59:59Z' }),
+  loadDashboardTimeframe: () => undefined,
+  saveDashboardTimeframe: vi.fn(),
+}));
+
+import { BatteryPhantomDrainPage } from '../../components/dashboard/BatteryPhantomDrainPage';
+
+afterEach(() => {
+  mockCollector.running = true;
+});
+
+describe('BatteryPhantomDrainPage', () => {
+  it('renders the shared chart above unified table controls', async () => {
+    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
+
+    const chart = screen.getByTestId('phantom-drain-chart-widget');
+    const tableSearch = screen.getByPlaceholderText('Search periods');
+    expect(chart).toHaveAttribute('data-chart-id', 'phantom-drain');
+    expect(chart).toHaveAttribute('data-show-picker', 'true');
+    expect(chart.compareDocumentPosition(tableSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('phantom-drain-periods-table')).not.toHaveClass('bg-bg-elevated');
+    expect(screen.getByText('Parked Energy')).toBeInTheDocument();
+    expect(screen.getByText('Rivian reported')).toBeInTheDocument();
+    expect(screen.getByText('Panda battery-change estimate')).toBeInTheDocument();
+    expect(screen.getByTestId('parked-energy-metrics')).toHaveClass('grid', 'grid-cols-3');
+
+    expect(screen.getByPlaceholderText('Search periods')).toBeInTheDocument();
+    expect(screen.getByText('Rows')).toBeInTheDocument();
+    expect(screen.getByText('Avg sleep')).toBeInTheDocument();
+    expect(screen.getByText('Max drain rate')).toBeInTheDocument();
+    expect(screen.getByText('Drain / h')).toBeInTheDocument();
+    expect(screen.getAllByTestId('sensor-chip-summary').map((card) => card.getAttribute('data-accent'))).toEqual([
+      'series-02',
+      'series-03',
+      'series-01',
+      'series-04',
+    ]);
+    expect(screen.getAllByTestId('sensor-chip-summary').map((card) => card.getAttribute('data-value-color'))).toEqual([
+      'data',
+      'data',
+      'data',
+      'data',
+    ]);
+
+    await waitFor(() => expect(
+      within(screen.getByRole('table')).getByText((content) => content.includes('68') && content.includes('62'))
+    ).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Search periods'), { target: { value: '999' } });
+    expect(await screen.findAllByText('No matching phantom drain periods')).toHaveLength(2);
+  });
+
+  it('hides the Parked Energy panel when the Parallax collector is not running', () => {
+    mockCollector.running = false;
+
+    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
+
+    expect(screen.queryByTestId('parked-energy-panel')).not.toBeInTheDocument();
+    expect(screen.getByText('Panda battery-change estimate')).toBeInTheDocument();
+  });
+});

@@ -1,0 +1,679 @@
+import React from 'react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const chargingMocks = vi.hoisted(() => ({
+  forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
+  model: 'R1S' as 'R1S' | 'R1T' | 'R2' | 'R2S' | 'unknown',
+  isDemo: false,
+  images: null as null | {
+    all: Array<{
+      placement: string;
+      design: string | null;
+      size: string | null;
+      resolution: string | null;
+      url: string;
+    }>;
+    side?: { light?: string | null; dark?: string | null } | null;
+  },
+  metricRequests: [] as Array<Array<{ metric: string }>>,
+  liveSession: null as null | {
+    soc_pct: number;
+    power_kw: number;
+    energy_kwh: number;
+    range_added_km: number;
+    time_remaining_min: number;
+    charger_type: string;
+    ts: string;
+  },
+}));
+
+vi.mock('@panda/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@panda/hooks')>();
+  return {
+    ...actual,
+    useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+    useResolvedVehicleSelection: () => ({
+      authReady: true,
+      effectiveVehicleId: 'vehicle-1',
+      vehicleSelectionReady: true,
+      vehicles: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images, is_demo: chargingMocks.isDemo }],
+    }),
+    useCurrentVehicleStatus: () => ({
+      data: {
+        vehicle_id: 'vehicle-1',
+        battery_level: 64,
+        range_miles: 188,
+        battery_limit: 75,
+        power_state: 'ready',
+        charger_state: chargingMocks.forcePluggedState,
+        charger_status:
+          chargingMocks.forcePluggedState === 'Charging'
+            ? 'chrgr_sts_connected_charging'
+            : chargingMocks.forcePluggedState === 'Connected'
+              ? 'chrgr_sts_connected_no_chrg'
+              : 'chrgr_sts_not_connected',
+        time_to_end_of_charge_min: chargingMocks.forcePluggedState === 'Charging' ? 95 : null,
+        speed_mph: 0,
+        latitude: null,
+        longitude: null,
+        is_online: true,
+        last_updated: '2026-05-12T12:00:00Z',
+      },
+    }),
+    useLiveSession: () => ({ data: chargingMocks.liveSession, isLoading: false }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images, is_demo: chargingMocks.isDemo }] }),
+    useMetricCatalog: () => ({ data: [] }),
+    useMetricBatch: (_vehicleId: string, metrics: Array<{ metric: string }>) => {
+      chargingMocks.metricRequests.push(metrics);
+      return { data: null, isFetching: false };
+    },
+    useMetricValue: () => ({ data: null }),
+    useMetricSeries: () => ({ data: [] }),
+    useBatteryHealth: () => ({ data: null, isLoading: false, isFetching: false }),
+    useEfficiencySummary: () => ({
+      data: {
+        avg: null,
+        p10: null,
+        p90: null,
+        total_miles: 0,
+      },
+      isLoading: false,
+      isFetching: false,
+    }),
+    useChargingSummary: () => ({
+      data: {
+        session_count: 6,
+        total_energy_kwh: 240,
+        total_cost_usd: 48,
+        home_kwh: 180,
+        away_kwh: 60,
+        ac_kwh: 120,
+        dc_kwh: 120,
+        charging_cycles: 4,
+        charging_efficiency_pct: 92.5,
+        max_charge_rate_kw: 164.2,
+        max_charge_limit_pct: 85,
+      },
+      isFetching: false,
+    }),
+  };
+});
+
+import { DashboardRenderer } from '@panda/dashboards';
+import type { DashboardConfig } from '@panda/dashboards';
+import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
+
+const baseConfig: DashboardConfig = {
+  schemaVersion: 2,
+  id: 'charging-connection-test',
+  slug: 'charging-connection-test',
+  name: 'Charging Connection Test',
+  isDefault: false,
+  isLocked: false,
+  ownerId: null,
+  controls: { dateRange: true },
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000013',
+      componentType: 'custom',
+      definitionId: 'charging.connection',
+      title: 'Charging Connection',
+      options: {},
+      layout: { x: 0, y: 0, w: 6, h: 6 },
+    },
+  ],
+};
+
+const swappedConfig: DashboardConfig = {
+  ...baseConfig,
+  slug: 'charging',
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000013',
+      componentType: 'custom',
+      definitionId: 'charging.connection',
+      title: 'Charging Connection',
+      options: { chargingConnectionVisibility: 'plugged' },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+    },
+    {
+      id: 'd4000004-0000-0000-0000-000000000004',
+      componentType: 'sensor',
+      definitionId: 'charging_avg_session',
+      title: 'Avg / Session',
+      options: { chargingConnectionVisibility: 'unplugged' },
+      layout: { x: 9, y: 2, w: 3, h: 2 },
+    },
+  ],
+};
+
+const mixRowConfig: DashboardConfig = {
+  ...baseConfig,
+  slug: 'charging',
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000013',
+      componentType: 'custom',
+      definitionId: 'charging.connection',
+      title: 'Charging Connection',
+      options: { chargingConnectionVisibility: 'plugged' },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+    },
+    {
+      id: 'd4000004-0000-0000-0000-000000000009',
+      componentType: 'sensor',
+      definitionId: 'charging_home_share',
+      title: 'Home Charging',
+      options: {},
+      layout: { x: 0, y: 4, w: 3, h: 2 },
+    },
+    {
+      id: 'd4000004-0000-0000-0000-000000000010',
+      componentType: 'sensor',
+      definitionId: 'charging_dc_share',
+      title: 'DC Fast Charging',
+      options: {},
+      layout: { x: 3, y: 4, w: 3, h: 2 },
+    },
+  ],
+};
+
+const vehicleImageFixtures = {
+  all: [
+    { placement: 'side', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/side-light.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/side-dark.webp' },
+    { placement: 'side-charging', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/side-charging-light.webp' },
+    { placement: 'side-charging', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/side-charging-dark.webp' },
+  ],
+  side: {
+    light: '/rivian/side-light.webp',
+    dark: '/rivian/side-dark.webp',
+  },
+};
+
+const vehicleImageUrlOnlyChargingFixtures = {
+  all: [
+    { placement: 'side', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/side-light.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/side-dark.webp' },
+    { placement: 'side', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/r1s_side-charging_light_large.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/r1s_side-charging_dark_large.webp' },
+  ],
+  side: {
+    light: '/rivian/side-light.webp',
+    dark: '/rivian/side-dark.webp',
+  },
+};
+
+const liveChargingConfig: DashboardConfig = {
+  ...baseConfig,
+  id: 'live-charging-test',
+  slug: 'live-charging-test',
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000014',
+      componentType: 'custom',
+      definitionId: 'overview.live.charging',
+      title: 'Live Charging',
+      options: {},
+      layout: { x: 0, y: 0, w: 8, h: 4 },
+    },
+  ],
+};
+
+const metricPreviewConfig: DashboardConfig = {
+  ...baseConfig,
+  slug: 'conditional-metrics',
+  widgets: [
+    {
+      id: '11111111-1111-4111-8111-111111111111',
+      componentType: 'sensor',
+      definitionId: 'total_miles',
+      title: 'Plugged miles',
+      visibility: [{ type: 'vehicle-connection', value: 'plugged' }],
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    },
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      componentType: 'sensor',
+      definitionId: 'battery_level',
+      title: 'Unplugged battery',
+      visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    },
+  ],
+};
+
+const demoR1TArtworkFixtures = {
+  all: [
+    { placement: 'side', design: 'light', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_light.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_dark.webp' },
+    { placement: 'side-charging', design: 'light', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side-charging_light.webp' },
+    { placement: 'side-charging', design: 'dark', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side-charging_dark.webp' },
+  ],
+  side: {
+    light: '/vehicle-images/fixtures/r1t/r1t_side_light.webp',
+    dark: '/vehicle-images/fixtures/r1t/r1t_side_dark.webp',
+  },
+};
+
+function render(ui: React.ReactElement) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
+describe('charging connection custom widget', () => {
+  beforeEach(() => {
+    chargingMocks.forcePluggedState = 'Disconnected';
+    chargingMocks.model = 'R1S';
+    chargingMocks.isDemo = false;
+    chargingMocks.images = null;
+    chargingMocks.metricRequests = [];
+    chargingMocks.liveSession = null;
+  });
+
+  it('identifies charger-status charging and reports missing live data explicitly', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+
+    render(
+      <DashboardRenderer
+        config={liveChargingConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getAllByText('Live Charging')).not.toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Live charging data unavailable; showing vehicle status where available.',
+    );
+    expect(screen.getByText('64%')).toBeInTheDocument();
+    expect(screen.getByText('1h 35m')).toBeInTheDocument();
+  });
+
+  it('renders live session values when the Redis-backed snapshot is available', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.liveSession = {
+      soc_pct: 67.7,
+      power_kw: 9.6,
+      energy_kwh: 12.34,
+      range_added_km: 42,
+      time_remaining_min: 95,
+      charger_type: 'wallbox',
+      ts: '2026-05-12T12:00:00Z',
+    };
+
+    render(
+      <DashboardRenderer
+        config={liveChargingConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByText('9.6 kW')).toBeInTheDocument();
+    expect(screen.getByText('12.34 kWh')).toBeInTheDocument();
+    expect(screen.getByText('WALLBOX')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('does not render until the vehicle is plugged in', () => {
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+  });
+
+  it('swaps to fallback charging stats when the connection chip is hidden', () => {
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+    expect(screen.getByTestId('sensor-chip')).toBeInTheDocument();
+    expect(screen.getByText('Avg / Session')).toBeInTheDocument();
+  });
+
+  it('swaps to the connection chip when the vehicle is plugged in', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.getByText('75%')).toBeInTheDocument();
+    expect(screen.queryByTestId('sensor-chip')).toBeNull();
+  });
+
+  it('previews both conditional layouts in edit mode without changing live vehicle state', async () => {
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Unplugged' }, { timeout: 5_000 })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
+    expect(screen.getByRole('complementary').querySelector('[data-dashboard-preview-state]')).toHaveAttribute(
+      'data-dashboard-preview-state',
+      'Unplugged',
+    );
+    expect(screen.getByTestId('sensor-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plugged in' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Plugged in' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('Previewing: Plugged in')).toBeInTheDocument();
+      expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+      expect(screen.queryByTestId('sensor-chip')).toBeNull();
+      expect(screen.getByTestId('charging-connection-chip').closest('[data-fixed-size="true"]')).not.toBeNull();
+    });
+  }, 15_000);
+
+  it('resets the transient scenario to live state when edit mode is reopened', async () => {
+    const firstRender = render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Plugged in' }));
+    expect(screen.getByText('Previewing: Plugged in')).toBeInTheDocument();
+    firstRender.unmount();
+
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Unplugged' }, { timeout: 5_000 })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
+  });
+
+
+  it('requests data only for widgets visible in the selected preview', async () => {
+    render(
+      <DashboardRenderer
+        config={metricPreviewConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(chargingMocks.metricRequests.at(-1)?.map((request) => request.metric)).toEqual(['battery_level']);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Plugged in' }));
+
+    await waitFor(() => {
+      expect(chargingMocks.metricRequests.at(-1)?.map((request) => request.metric)).toEqual(['total_miles']);
+    });
+  });
+
+  it('expands the home and DC mix chips when the connection chip is hidden', () => {
+    render(
+      <DashboardRenderer
+        config={mixRowConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+    expect(document.querySelector('[data-widget-definition="charging_home_share"]')).toHaveStyle({
+      gridColumn: '1 / span 6',
+    });
+    expect(document.querySelector('[data-widget-definition="charging_dc_share"]')).toHaveStyle({
+      gridColumn: '7 / span 6',
+    });
+  });
+
+  it('keeps the home and DC mix chips on the left when the connection chip is visible', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+
+    render(
+      <DashboardRenderer
+        config={mixRowConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(document.querySelector('[data-widget-definition="charging_home_share"]')).toHaveStyle({
+      gridColumn: '1 / span 3',
+    });
+    expect(document.querySelector('[data-widget-definition="charging_dc_share"]')).toHaveStyle({
+      gridColumn: '4 / span 3',
+    });
+  });
+
+  it('uses charging side art and disables the runner when connected but not charging', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByText('Standby')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    const summaryRows = screen.getByText('Status').closest('div.absolute');
+    expect(summaryRows).not.toBeNull();
+    expect(summaryRows).toHaveClass('left-3');
+    expect(summaryRows).not.toHaveClass('left-6');
+    const statusRow = screen.getByText('Status').closest('div.flex');
+    expect(statusRow).toHaveClass('bg-bg-elevated/90', 'backdrop-blur-sm');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/side-charging-light.webp',
+      '/rivian/side-charging-dark.webp',
+    ]);
+    expect(screen.queryByTestId('charging-battery-led-sweep')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('charging-battery-led-segment')).toHaveLength(20);
+  });
+
+  it('keeps the standard R1S crop when telemetry says the vehicle is charging', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.queryByText('Connected & charging')).not.toBeInTheDocument();
+    expect(screen.getByText('1h 35m')).toBeInTheDocument();
+    expect(screen.getByText('Charging')).toBeInTheDocument();
+    expect(screen.getByText('92.5%')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-crop-family', 'R1S');
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/side-charging-light.webp',
+      '/rivian/side-charging-dark.webp',
+    ]);
+    expect(screen.getAllByTestId('charging-side-image')[0]).toHaveStyle({
+      transform: 'translateX(-12%) scale(1.12)',
+      transformOrigin: 'left top',
+    });
+
+    const bar = screen.getByTestId('charging-battery-led-bar');
+    expect(bar).toHaveAccessibleName('Battery 64 percent');
+    expect(bar).toHaveStyle({ position: 'absolute', left: '0px', right: '0px', zIndex: '100' });
+    expect(screen.getByTestId('charging-battery-led-segments')).toHaveStyle({
+      gridTemplateColumns: 'repeat(20, calc((100% - 38px) / 20))',
+      gap: '2px',
+    });
+    const segments = screen.getAllByTestId('charging-battery-led-segment');
+    expect(segments).toHaveLength(20);
+    expect(segments.filter((segment) => segment.getAttribute('data-filled') === 'true')).toHaveLength(13);
+    expect(screen.getByTestId('charging-battery-led-sweep')).toHaveStyle({
+      left: '0px',
+      width: 'calc((100% - 38px) / 20)',
+    });
+  });
+
+  it('finds side-charging art even when Rivian metadata stores it as a side placement', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.images = vehicleImageUrlOnlyChargingFixtures;
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...baseConfig,
+          widgets: [{ ...baseConfig.widgets[0]!, options: {} }],
+        }}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    const images = screen.getAllByTestId('charging-side-image');
+    expect(images.map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/r1s_side-charging_light_large.webp',
+      '/rivian/r1s_side-charging_dark_large.webp',
+    ]);
+    expect(images.map((image) => image.getAttribute('data-image-mode'))).toEqual(['charging', 'charging']);
+  });
+
+  it('uses the stronger truck crop for R1T charging side art', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.model = 'R1T';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-crop-family', 'R1T');
+    expect(screen.getAllByTestId('charging-side-image')[0]).toHaveStyle({
+      transform: 'translate(-34%, 2%) scale(1.92)',
+      transformOrigin: 'left top',
+    });
+  });
+
+  it('uses the dedicated charging fallback for a demo R1T even when side artwork is available', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.model = 'R1T';
+    chargingMocks.isDemo = true;
+    chargingMocks.images = demoR1TArtworkFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-artwork-variant', 'demo-charging-fallback');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/vehicle-images/fallbacks/r1t/charging.webp',
+      '/vehicle-images/fallbacks/r1t/charging.webp',
+    ]);
+    for (const image of screen.getAllByTestId('charging-side-image')) {
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image).toHaveClass('h-full', 'w-full', 'max-w-none', 'object-contain', 'object-right');
+      expect(image.style.transform).toBe('translate(20px, 5px) scale(2.25)');
+      expect(image.style.transformOrigin).toBe('33% 95%');
+      expect(image).not.toHaveClass('w-[58%]', 'max-h-[82%]');
+    }
+  });
+
+  it('does not let demo-provided Rivian artwork replace the dedicated fallback', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.model = 'R1T';
+    chargingMocks.isDemo = true;
+    chargingMocks.images = {
+      all: [
+        { placement: 'side-charging', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/demo-side-charging-light.webp' },
+        { placement: 'side-charging', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/demo-side-charging-dark.webp' },
+      ],
+    };
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-artwork-variant', 'demo-charging-fallback');
+    for (const image of screen.getAllByTestId('charging-side-image')) {
+      expect(image).toHaveAttribute('data-image-mode', 'charging');
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image).toHaveAttribute('src', '/vehicle-images/fallbacks/r1t/charging.webp');
+      expect(image).toHaveStyle({ transform: 'translate(20px, 5px) scale(2.25)' });
+    }
+  });
+
+  it.each([
+    ['R1T', '/vehicle-images/fallbacks/r1t/charging.webp'],
+    ['R2', '/vehicle-images/fallbacks/r2s/charging.webp'],
+    ['R2S', '/vehicle-images/fallbacks/r2s/charging.webp'],
+  ] as const)('anchors the enlarged dedicated charging fallback for demo %s', (model, fallback) => {
+    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.model = model;
+    chargingMocks.isDemo = true;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    const chip = screen.getByTestId('charging-connection-chip');
+    expect(chip).toHaveAttribute('data-artwork-variant', 'demo-charging-fallback');
+    expect(chip).toHaveAttribute('data-fallback-image', fallback);
+    const images = screen.getAllByTestId('charging-side-image');
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image).toHaveClass('h-full', 'w-full', 'max-w-none', 'object-contain', 'object-right');
+      expect(image.style.transform).toBe('translate(20px, 5px) scale(2.25)');
+      expect(image.style.transformOrigin).toBe('33% 95%');
+      expect(image).not.toHaveClass('w-[58%]', 'max-h-[82%]');
+    }
+  });
+
+  it('does not expose a force-show switch in the custom widget editor', () => {
+    render(
+      <WidgetEditForm
+        widget={baseConfig.widgets[0]!}
+        onChange={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(screen.queryByRole('switch', { name: 'Force show charging connection' })).toBeNull();
+  });
+});

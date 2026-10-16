@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE panda.charge_sessions cs\n        SET soc_start = GREATEST(\n                0.0,\n                cs.soc_end - (cs.kwh_added / (v.battery_capacity_wh / 1000.0) * 100.0)\n            )\n        FROM panda.vehicles v\n        WHERE cs.vehicle_id = v.id\n          AND cs.source = 'rivian_api'\n          AND cs.kwh_added IS NOT NULL\n          AND cs.soc_end IS NOT NULL\n          AND v.battery_capacity_wh IS NOT NULL\n          AND v.battery_capacity_wh > 0\n          AND (\n              cs.soc_start IS NULL\n              OR ((cs.soc_end - cs.soc_start) / 100.0 * (v.battery_capacity_wh / 1000.0)) < cs.kwh_added * 0.6\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "46e9e9bd6e58287ece0798e99925f3a3a9daa038c82d835aed1d865e539accd9"
+}

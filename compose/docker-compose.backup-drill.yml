@@ -1,0 +1,4 @@
+services:
+  panda:
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'

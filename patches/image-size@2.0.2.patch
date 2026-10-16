@@ -1,0 +1,4 @@
+# Retired: pnpm now resolves the published image-size 2.0.4 release.
+# This file is no longer applied. It preserves the inherited Dockerfile COPY
+# source until the container owner removes that COPY and this file together.
+# See docs/runbooks/dependency-maintenance.md for advisory evidence.

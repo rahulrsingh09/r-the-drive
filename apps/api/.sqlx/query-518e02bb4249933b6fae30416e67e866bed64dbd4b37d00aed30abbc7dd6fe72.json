@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.vehicle_state_periods\n               (vehicle_id, state, started_at, ended_at)\n               VALUES ($1, $2, $3, $4)\n               ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "518e02bb4249933b6fae30416e67e866bed64dbd4b37d00aed30abbc7dd6fe72"
+}

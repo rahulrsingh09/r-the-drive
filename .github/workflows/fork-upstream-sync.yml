@@ -1,0 +1,137 @@
+name: Fork upstream review
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Upstream candidate source (dev is manual and may require ancestry review)
+        type: choice
+        options: [main, dev]
+        default: main
+        required: true
+  schedule:
+    - cron: '0 12 * * *'
+      timezone: America/Los_Angeles
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-upstream-review
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    if: >-
+      vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true' &&
+      github.repository == 'your-org/r-the-drive' &&
+      github.event.repository.private == false &&
+      github.ref == 'refs/heads/mainline'
+    permissions:
+      contents: read
+    environment: upstream-automation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      candidate: ${{ steps.sync.outputs.candidate }}
+      base: ${{ steps.sync.outputs.base }}
+      safe: ${{ steps.sync.outputs.safe }}
+      status: ${{ steps.sync.outputs.status }}
+    steps:
+      - name: Record workflow trigger
+        env:
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          print(json.dumps({
+              "event": os.environ["TRIGGER_EVENT"],
+              "schedule": os.environ["TRIGGER_SCHEDULE"] or None,
+          }, sort_keys=True))
+          PY
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.18.0'
+      - name: Prepare immutable candidate using trusted Git plumbing
+        id: sync
+        env:
+          FORK_SYNC_SSH_KEY: ${{ secrets.UPSTREAM_PUSH_KEY }}
+          FORK_SYNC_SOURCE: ${{ inputs.source || 'main' }}
+        run: |
+          git remote add upstream https://upstream.panda.invalid/repository.git
+          node scripts/fork-sync-runner.mjs
+      - name: Save bounded metadata for review
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: fork-sync-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fork-sync.json
+          retention-days: 1
+          if-no-files-found: warn
+
+  automate:
+    needs: propose
+    if: >-
+      vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true' &&
+      (github.event_name == 'schedule' || inputs.source == 'main') &&
+      (needs.propose.outputs.status == 'current' ||
+       (needs.propose.outputs.safe == 'true' && needs.propose.outputs.candidate != ''))
+    permissions:
+      contents: write
+      actions: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.18.0'
+      - name: Validate immutable candidate and advance only after genuine CI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FORK_SYNC_BASE: ${{ needs.propose.outputs.base }}
+          FORK_SYNC_CANDIDATE: ${{ needs.propose.outputs.candidate }}
+          FORK_SYNC_STATUS: ${{ needs.propose.outputs.status }}
+          FORK_SYNC_SOURCE: ${{ inputs.source || 'main' }}
+        run: |
+          git remote add upstream https://upstream.panda.invalid/repository.git
+          node scripts/fork-auto-promote.mjs
+
+  readiness:
+    needs: [propose, automate]
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true' && (always() && github.repository == 'your-org/r-the-drive' && github.event.repository.private == false)
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Report readiness for the exact candidate
+        env:
+          CANDIDATE: ${{ needs.propose.outputs.candidate }}
+          SYNC_STATUS: ${{ needs.propose.outputs.status }}
+          SYNC_RESULT: ${{ needs.propose.result }}
+          AUTOMATION_RESULT: ${{ needs.automate.result }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          ready = os.environ['SYNC_RESULT'] == 'success' and os.environ['AUTOMATION_RESULT'] == 'success'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Candidate readiness\n\n')
+              summary.write('```json\n' + json.dumps({
+                  'candidate': os.environ['CANDIDATE'],
+                  'sync': os.environ['SYNC_STATUS'] or os.environ['SYNC_RESULT'],
+                  'automation': os.environ['AUTOMATION_RESULT'],
+                  'needs_review': not ready,
+              }, indent=2) + '\n```\n')
+              summary.write('See the automation job for promotion and CI-dispatch results. '
+                            'Final deployment status belongs to the Northflank workflow.\n')
+          if os.environ['SYNC_RESULT'] != 'success' or os.environ['AUTOMATION_RESULT'] == 'failure':
+              raise SystemExit(1)
+          PY

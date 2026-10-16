@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cost_profile_id FROM panda.geofences WHERE id = $1 AND user_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cost_profile_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "geofences",
+            "name": "cost_profile_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "70ed5e1d0508ca37437d449b17b4ad08fe778a5c58cda454dd1146befc041d15"
+}

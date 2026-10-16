@@ -1,0 +1,53 @@
+name: Queue verified Northflank release
+
+on:
+  workflow_run:
+    workflows: [Fork validation]
+    types: [completed]
+    branches: [mainline]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful protected-branch Fork validation run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: panda-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true' &&
+      github.repository == 'your-org/r-the-drive' &&
+      github.event.repository.id == 0 &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+        github.event.workflow_run.head_branch == 'mainline' &&
+        github.event.workflow_run.head_repository.id == 0 &&
+        github.event.workflow_run.workflow_id == 0))
+    name: Queue exact commit after CI
+    environment: northflank-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.18.0'
+      - name: Validate protected-branch CI and queue Northflank workflow
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NORTHFLANK_RELEASE_WEBHOOK: ${{ secrets.NORTHFLANK_RELEASE_WEBHOOK }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ci_run_id }}
+        run: node scripts/fork-native-release.mjs

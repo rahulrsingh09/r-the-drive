@@ -1,0 +1,114 @@
+[package]
+license = "GPL-3.0-only"
+name    = "panda-api"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+
+[lib]
+name = "panda_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "panda-api"
+path = "src/main.rs"
+
+[[bin]]
+name = "panda-restore-agent"
+path = "src/bin/panda-restore-agent.rs"
+
+[dependencies]
+# Web framework
+axum            = { version = "0.8", features = ["macros", "ws"] }
+tower           = { version = "0.5", features = ["full"] }
+tower-http      = { version = "0.7", features = ["cors", "compression-gzip", "request-id", "trace", "limit", "set-header"] }
+tower_governor  = "0.8"
+governor        = "0.10.4"
+
+# Async runtime
+tokio           = { version = "1", features = ["full"] }
+tokio-util      = { version = "0.7", features = ["io"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+
+# Database
+sqlx            = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-native-tls", "uuid", "chrono", "json", "migrate"] }
+
+# Cache
+redis           = { version = "1", features = ["tokio-comp", "connection-manager"] }
+
+# HTTP client
+reqwest         = { version = "0.13", features = ["json", "native-tls", "query"] }
+aws-sdk-s3      = { version = "1.144.0", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio"] }
+
+# Serialization
+aws-smithy-http-client = { version = "1.4.0", features = ["rustls-aws-lc"] }
+aws-smithy-runtime-api = { version = "1.15.0", features = ["client", "http-1x"] }
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+prost           = "0.14"
+
+# Auth
+jsonwebtoken    = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+openidconnect   = "4"
+argon2          = "0.5"
+hmac            = "0.13"
+
+# Encryption
+age             = { version = "0.12", features = ["async"] }
+aws-lc-rs       = "1"
+pem             = "3"
+
+# Types
+uuid            = { version = "1", features = ["v4", "serde"] }
+chrono          = { version = "0.4", features = ["serde"] }
+chrono-tz       = "0.10"
+
+# Config
+envy            = "0.4"
+
+# Error handling
+thiserror       = "2"
+anyhow          = "1"
+
+# Observability
+tracing                   = "0.1"
+tracing-subscriber        = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+futures         = "0.3"
+base64          = "0.22"
+hex             = "0.4"
+rand            = "0.8"
+sha2            = "0.11"
+tar             = "0.4"
+flate2          = "1"
+fs2             = "0.4"
+cap-std         = "4.0.3"
+cap-fs-ext      = "4.0.3"
+ipnet           = "2"
+walkdir         = "2"
+http            = "1"
+url             = "2"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3.27"
+testcontainers          = "0.27"
+testcontainers-modules  = { version = "0.15", features = ["postgres"] }
+proptest                = "1"
+tokio                   = { version = "1", features = ["full", "test-util"] }
+axum-test               = "21"
+
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = true
+
+# Production containers favor a materially faster build while retaining
+# optimized code and ThinLTO. The ordinary release profile remains available
+# for explicit maximum-optimization builds outside the container pipeline.
+[profile.container]
+inherits      = "release"
+lto           = "thin"
+codegen-units = 8

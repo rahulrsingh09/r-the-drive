@@ -1,0 +1,128 @@
+import React from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { vi, describe, it, expect } from 'vitest';
+
+vi.mock('@panda/ui/primitives', async () => {
+  const m = await import('../../test/mockPrimitives');
+  return m;
+});
+
+vi.mock('@panda/ui/hooks', () => ({
+  useDocumentTheme: () => false,
+  useDocumentPalette: () => 'classic',
+}));
+
+const mockNavigate = vi.fn();
+const mockUpdateAssignments = vi.fn(async () => undefined);
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>();
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useParams: () => ({ tripId: 'trip-1' }),
+  };
+});
+
+vi.mock('@panda/ui/charts', () => ({
+  DEFAULT_CURVE_SMOOTHING: 0.2,
+  DEFAULT_CHART_TIME_FILTER: '15m',
+  DEFAULT_SPRITE_TIME_FILTER: '24h',
+  getChartColor: () => '#fff',
+  TripMapChart: () => <div data-testid="trip-map-chart" />,
+  RichTimeSeriesChart: () => <div data-testid="trip-drive-chart" />,
+  CHART_COLORS: {
+    accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff',
+  },
+  SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
+}));
+
+vi.mock('@panda/hooks', () => ({
+  useBasemapConfig: () => ({ data: undefined, isLoading: false }),
+  useUserPreferences: () => ({ data: { map_style: 'follow-theme' } }),
+  useAuth: () => ({ defaultVehicleId: null }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true, vehicles: [{ id: 'vehicle-1', membership_role: 'owner' }] }),
+  useUpdateTripTagAssignments: () => ({ isPending: false, mutateAsync: mockUpdateAssignments }),
+  useTripTags: () => ({ data: [{ id: 'school', name: 'school', color_token: 'accent' }], isLoading: false, isError: false, isSuccess: true, refetch: vi.fn() }),
+  useCreateTripTag: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useTripDetailData: () => ({
+    data: {
+      trip: {
+      id: 'trip-1',
+      vehicle_id: 'vehicle-1',
+      started_at: '2024-01-01T12:00:00Z',
+      ended_at: '2024-01-01T13:00:00Z',
+      distance_mi: 18.3,
+      energy_used_kwh: 6.5,
+      efficiency_wh_mi: 355,
+      max_speed_mph: 72,
+      drive_mode: 'everyday',
+      soc_start: 80,
+      soc_end: 68,
+      duration_seconds: 3600,
+      tags: [{ id: 'school', vehicle_id: 'vehicle-1', name: 'school', color_token: 'accent', created_by: 'user-1', created_at: '', updated_at: '' }],
+      },
+      sample_interval_seconds: 30,
+      samples: {
+        elapsed_s: [30], lat: [1], lng: [2], altitude_m: [10], speed_mph: [45], power_kw: [42], regen_power_kw: [0], battery_level: [80],
+        outside_temp_c: [12], cabin_temp_c: [20], driver_temp_c: [20], hvac_active: [true], tire_fl_psi: [48], tire_fr_psi: [47], tire_rl_psi: [49], tire_rr_psi: [49],
+      },
+    },
+  }),
+}));
+
+vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('@panda/ui/lib/utils', () => ({
+  formatMiles: (v: number) => `${v} mi`,
+  formatDuration: (v: number) => `${v} min`,
+  formatMph: (v: number) => `${v.toFixed(1)} mph`,
+  formatEfficiencyValue: (v: number) => `${v}`,
+  getEfficiencyUnitLabel: () => 'Wh/mi',
+  getUnitPreferences: () => ({ temperature_unit: 'celsius', pressure_unit: 'psi' }),
+  cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' '),
+}));
+
+import { TripDetailContent } from '../trips.$tripId';
+
+describe('Trip detail page', () => {
+  it('renders trip stat cards and synchronized sections', () => {
+    render(<TripDetailContent />);
+
+    expect(screen.getByText('Location unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Distance Driven')).toBeInTheDocument();
+    expect(screen.getByText('Avg. Effic. (Wh/mi)')).toBeInTheDocument();
+    expect(screen.getByText('Avg. Speed')).toBeInTheDocument();
+    expect(screen.getByText('Duration')).toBeInTheDocument();
+    expect(screen.getByText('Drive Chart')).toBeInTheDocument();
+    expect(screen.getByText('Speed Histogram')).toBeInTheDocument();
+    expect(screen.getByText('Temperature')).toBeInTheDocument();
+    expect(screen.getByText('Tire Pressure')).toBeInTheDocument();
+    expect(screen.getByTestId('trip-map-chart')).toBeInTheDocument();
+  });
+
+  it('navigates back to the trips page', () => {
+    render(<TripDetailContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to trips' }));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/trips' });
+  });
+
+  it('opens the shared tag editor and saves the selected tags', async () => {
+    render(<TripDetailContent />);
+
+    expect(screen.getByText('School')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show trip tags' }));
+    const tagInput = screen.getByRole('textbox', { name: 'Add tags to this trip' });
+    expect(tagInput).toBeInTheDocument();
+    expect(tagInput.parentElement).toHaveClass('rounded-lg', 'border', 'border-border', 'bg-bg-surface', 'px-2', 'py-1');
+    expect(tagInput.parentElement).toHaveClass('focus-within:border-accent', 'focus-within:ring-1');
+    expect(tagInput).toHaveClass('focus-visible:outline-none', 'focus-visible:outline-offset-0');
+    expect(screen.getByLabelText('Edit trip tags')).toHaveClass('w-full');
+    expect(screen.getByRole('button', { name: 'Clear trip tags' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(mockUpdateAssignments).toHaveBeenCalledWith({ trip_ids: ['trip-1'], tag_ids: ['school'], mode: 'replace' }));
+  });
+});

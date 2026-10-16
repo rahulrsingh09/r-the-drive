@@ -1,0 +1,230 @@
+name: Release image
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Calendar Version tag to publish
+        required: true
+        type: string
+      include_arm64:
+        description: Merge a prebuilt ARM64 candidate into this release
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: your-org
+
+jobs:
+  validate-tag:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Validate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+      include_arm64: ${{ steps.version.outputs.include_arm64 }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - id: version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+          INCLUDE_ARM64: ${{ inputs.include_arm64 || false }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          if [[ ! "$version" =~ ^[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+$ ]]; then
+            echo "Release tags must use YYYY.MM.PATCH; received $version" >&2
+            exit 1
+          fi
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "include_arm64=$INCLUDE_ARM64" >> "$GITHUB_OUTPUT"
+
+  promote-image:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Promote commit candidate
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.promote.outputs.digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-tag.outputs.source_sha }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: promote
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/panda
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate-tag.outputs.source_sha }}
+          INCLUDE_ARM64: ${{ needs.validate-tag.outputs.include_arm64 }}
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          # Stamp each tested candidate with the release version (one metadata
+          # layer; no rebuild) so the running app reports the real release.
+          stamp() {
+            local arch="$1" candidate="$2"
+            docker buildx imagetools inspect "$candidate" >/dev/null
+            docker buildx build --platform "linux/$arch" --provenance=false --push \
+              --build-arg "BASE_IMAGE=$candidate" \
+              --build-arg "PANDA_BUILD_VERSION=$VERSION" \
+              --tag "$IMAGE:release-$VERSION-$arch" - < compose/Dockerfile.release-stamp
+          }
+          stamp amd64 "$IMAGE:candidate-$SOURCE_SHA-amd64"
+          sources=("$IMAGE:release-$VERSION-amd64")
+          if [[ "$INCLUDE_ARM64" == "true" ]]; then
+            stamp arm64 "$IMAGE:candidate-$SOURCE_SHA-arm64"
+            sources+=("$IMAGE:release-$VERSION-arm64")
+          fi
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/release-image-metadata.json" \
+            --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" "${sources[@]}"
+          digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/release-image-metadata.json")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          platforms=linux/amd64
+          if [[ "$INCLUDE_ARM64" == "true" ]]; then platforms="$platforms, linux/arm64"; fi
+          echo "### Release promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Source commit: \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platforms: \`$platforms\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Promotion: $(( $(date +%s) - started ))s" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/panda
+          subject-digest: ${{ steps.promote.outputs.digest }}
+          push-to-registry: true
+
+  release-smoke:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Smoke test
+    needs: [validate-tag, promote-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-tag.outputs.source_sha }}
+      - name: Authenticate release smoke test to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Create ephemeral production environment
+        run: |
+          smoke_env="$RUNNER_TEMP/release-smoke.env"
+          cp compose/.env.example "$smoke_env"
+          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=release-smoke-password|' "$smoke_env"
+          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=release-smoke-redis-password|' "$smoke_env"
+          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://release-smoke.example.test|' "$smoke_env"
+          echo "PANDA_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
+          echo "RELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
+      - name: Exercise published image-only stack
+        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$RELEASE_SMOKE_ENV" --image-ref "${{ env.REGISTRY }}/${{ env.OWNER }}/panda@${{ needs.promote-image.outputs.digest }}"
+
+  populated-upgrade:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Populated upgrade (linux/amd64)
+    needs: [validate-tag, promote-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: panda
+          POSTGRES_PASSWORD: devpassword
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U panda -d postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      UPGRADE_DATABASE_URL: postgresql://panda:devpassword@127.0.0.1:5432/panda_upgrade_amd64
+      REDIS_URL: redis://127.0.0.1:6379
+      UPGRADE_IMAGE: ghcr.io/your-org/r-the-drive@${{ needs.promote-image.outputs.digest }}
+      UPGRADE_PLATFORM: linux/amd64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-tag.outputs.source_sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.18.0'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          workspaces: apps/api
+          shared-key: panda-api
+          save-if: false
+      - name: Install sqlx-cli
+        working-directory: apps/api
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+      - name: Verify populated upgrade on the release image
+        run: node scripts/verify-populated-upgrade.mjs
+
+  create-release:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Create release
+    needs: [validate-tag, promote-image, release-smoke, populated-upgrade]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-tag.outputs.source_sha }}
+      - name: Verify published image
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/panda@${{ needs.promote-image.outputs.digest }}"
+      - name: Create digest lock and GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          IMAGE_DIGEST: ${{ needs.promote-image.outputs.digest }}
+        run: |
+          echo "ghcr.io/your-org/r-the-drive@${IMAGE_DIGEST}" > images.lock
+          cp compose/docker-compose.yml docker-compose.yml
+          cp compose/.env.example example.env
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
+          fi

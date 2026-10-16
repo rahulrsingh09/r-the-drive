@@ -1,0 +1,177 @@
+// The canonical dashboard controller is exercised independently of the R presentation.
+vi.mock('../../features/r-experience/RDashboardSurface', () => ({ RDashboardSurface: ({ children }: { children: React.ReactNode }) => children }));
+import React from 'react';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@panda/ui/primitives', async () => {
+  const m = await import('../../test/mockPrimitives');
+  return m;
+});
+
+vi.mock('@panda/ui/hooks', () => ({
+  useDocumentTheme: () => false,
+}));
+
+const mockNavigate = vi.fn();
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>();
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useParams: () => ({ tripId: 'trip-1', sessionId: 'session-1' }),
+    useSearch: () => ({}),
+  };
+});
+
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return { ...actual, useQuery: () => ({ data: undefined }), useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+});
+
+vi.mock('@panda/ui/lib/utils', () => ({
+  formatKwh: (v: number) => `${v} kWh`,
+  formatDuration: (s: number) => `${s}s`,
+  formatCurrency: (v: number) => `$${v}`,
+  formatPercent: (v: number) => `${v}%`,
+  formatMiles: (v: number) => `${v} mi`,
+  formatEfficiency: (v: number) => `${v} Wh/mi`,
+  formatEfficiencyValue: (v: number) => `${v}`,
+  formatMph: (v: number) => `${v} mph`,
+  getEfficiencyUnitLabel: () => 'Wh/mi',
+  getUnitPreferences: () => ({ system: 'imperial', efficiencyDisplay: 'distance_per_energy' }),
+  getEfficiencyDisplay: () => 'distance_per_energy',
+  setEfficiencyDisplay: vi.fn(),
+  cn: (...args: unknown[]) => args.filter(Boolean).join(' '),
+}));
+
+vi.mock('@panda/ui/charts', () => ({
+  TripMapChart: () => <div data-testid="trip-map-chart" />,
+  RichTimeSeriesChart: () => <div data-testid="rich-time-series-chart" />,
+  CHART_COLORS: { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },
+  TripDriveChart: () => <div data-testid="trip-drive-chart" />,
+  SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
+  TripTemperatureChart: () => <div data-testid="trip-temperature-chart" />,
+  TripElevationChart: () => <div data-testid="trip-elevation-chart" />,
+  TripTirePressureChart: () => <div data-testid="trip-tire-pressure-chart" />,
+  ChargeCurveChart: () => <div data-testid="charge-curve-chart" />,
+}));
+
+vi.mock('@panda/ui/tables', () => ({
+  DataTable: () => <div data-testid="data-table" />,
+  chargingColumns: [],
+  tripColumns: [],
+}));
+
+vi.mock('@panda/hooks', () => ({
+  useBasemapConfig: () => ({ data: undefined, isLoading: false }),
+  useUserPreferences: () => ({ data: { units: {}, map_style: 'follow-theme' } }),
+  useAuth: () => ({ defaultVehicleId: null, accessToken: null }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: null, vehicleSelectionReady: true, vehicles: [] }),
+  useMe: () => ({ data: { role: 'user' } }),
+  useCurrentVehicleStatus: () => ({ data: null }),
+  useVehicles: () => ({ data: [] }),
+  useChargeSession: () => ({ data: undefined, isLoading: false }),
+  useChargeCurve: () => ({ data: undefined, isLoading: false }),
+  useSavedPlaces: () => ({ data: [], isLoading: false, isFetching: false, isError: false }),
+  useUpdateChargeSession: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useUpdateTripTagAssignments: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useTrip: () => ({ data: undefined, isLoading: false }),
+  useTripDetailData: () => ({ data: undefined, isLoading: false }),
+  useTripTrack: () => ({ data: undefined, isLoading: false }),
+  useTripDetailSeries: () => ({ data: undefined, isLoading: false }),
+  useTripPowerProfile: () => ({ data: undefined, isLoading: false }),
+}));
+
+vi.mock('../../components/layout/AppLayout', () => ({
+  AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../../components/layout/AuthGuard', () => ({
+  AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../../components/layout/NoVehicleState', () => ({
+  NoVehicleState: () => (
+    <div>
+      <p>No vehicle connected</p>
+      <button>Connect Rivian</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../lib/dates', () => ({
+  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
+  presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
+  rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  getTimeframeRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
+  timeframeToQuery: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  loadDashboardTimeframe: () => undefined,
+  saveDashboardTimeframe: vi.fn(),
+  DEFAULT_PRESET: '30d',
+}));
+
+const emptyConfig = {
+  schemaVersion: 1,
+  id: '00000000-0000-0000-0000-000000000001',
+  slug: 'dashboard',
+  name: 'Dashboard',
+  isDefault: true,
+  isLocked: true,
+  ownerId: null,
+  controls: { dateRange: true },
+  widgets: [],
+};
+
+vi.mock('@panda/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
+    dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null),
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
+  DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
+  useDashboardBySlug: () => ({ data: emptyConfig, isLoading: false }),
+  useDashboardById: () => ({ data: undefined, isLoading: false, isError: false }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
+  getDefaultBySlug: () => emptyConfig,
+  downloadDashboardYaml: vi.fn(),
+  importDashboardYaml: vi.fn(),
+}));
+
+import { DashboardPage } from '../../components/dashboard/DashboardPage';
+import { ChargeSessionContent } from '../charging.$sessionId';
+import { TripDetailContent } from '../trips.$tripId';
+
+describe('vehicle empty states', () => {
+  it.each([
+    ['Battery',    <DashboardPage navKey="battery" slug="battery" title="Battery" />],
+    ['Charging',   <DashboardPage navKey="charging" slug="charging" title="Charging" />],
+    ['Efficiency', <DashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />],
+    ['Trips',      <DashboardPage navKey="trips" slug="trips" title="Trips" />],
+  ])('renders connect state for %s when no default vehicle exists', (_name, view) => {
+    render(view);
+    expect(screen.getByText(/no vehicle/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect Rivian' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['ChargeSessionContent', <ChargeSessionContent />],
+    ['TripDetailContent', <TripDetailContent />],
+  ])('renders connect state for %s when no default vehicle exists', (_name, view) => {
+    render(view);
+    expect(screen.getByText(/no vehicle/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect Rivian' })).toBeInTheDocument();
+  });
+});

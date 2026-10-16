@@ -1,0 +1,28 @@
+{
+  "name": "@panda/hooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0"
+  },
+  "dependencies": {
+    "@panda/ui": "workspace:*",
+    "@panda/types": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@panda/config": "workspace:*",
+    "@types/react": "catalog:",
+    "react": "catalog:",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19"
+  }
+}

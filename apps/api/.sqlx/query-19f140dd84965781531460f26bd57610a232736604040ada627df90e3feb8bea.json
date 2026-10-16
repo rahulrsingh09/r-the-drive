@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.vehicle_memberships\n           (vehicle_id, user_id, role, is_default)\n           VALUES ($1, $2, 'owner', TRUE)\n           ON CONFLICT (vehicle_id, user_id) DO UPDATE\n           SET role = EXCLUDED.role,\n               is_default = EXCLUDED.is_default",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19f140dd84965781531460f26bd57610a232736604040ada627df90e3feb8bea"
+}

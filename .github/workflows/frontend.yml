@@ -1,0 +1,45 @@
+name: PR Frontend
+
+on:
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24.18.0'
+
+jobs:
+  validation:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm turbo typecheck
+      - name: Run repository test contract
+        run: pnpm test
+      - name: Enforce frontend coverage floor
+        if: github.event_name != 'pull_request'
+        run: pnpm test:coverage
+      - name: Build Storybook
+        if: github.event_name != 'pull_request'
+        run: pnpm turbo build-storybook
+      - name: Upload Storybook build
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: storybook-static
+          path: packages/ui/storybook-static
+          if-no-files-found: warn

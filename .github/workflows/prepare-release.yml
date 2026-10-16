@@ -1,0 +1,65 @@
+name: Release prep
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  packages: read
+
+concurrency:
+  group: prepare-calendar-release
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
+    name: Create tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact main candidate exists
+        env:
+          IMAGE: ghcr.io/your-org/r-the-drive
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          candidate="$IMAGE:candidate-${source_sha}-amd64"
+          docker buildx imagetools inspect "$candidate" >/dev/null
+          echo "Verified AMD64 candidate for main at $source_sha."
+
+      - name: Calculate and push the next Calendar Version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          month="$(date -u +%Y.%m)"
+          mapfile -t tags < <(git tag --list "${month}.*")
+          version="$(node scripts/next-release-version.mjs --month "$month" "${tags[@]}")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$version" -m "Release $version"
+          git push origin "$version"
+
+      - name: Dispatch release image workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh workflow run publish-release-images.yml --repo "$GITHUB_REPOSITORY" --ref "$VERSION" --field version="$VERSION"
+
+      - name: Report release tag
+        run: echo "Created Calendar Version ${{ steps.version.outputs.version }} from main."

@@ -1,0 +1,46 @@
+{
+  "name": "@panda/dashboards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./registry": "./src/registry.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0"
+  },
+  "dependencies": {
+    "@iconify/react": "catalog:",
+    "@panda/hooks": "workspace:*",
+    "@panda/types": "workspace:*",
+    "@panda/ui": "workspace:*",
+    "date-fns": "catalog:",
+    "lucide-react": "catalog:",
+    "react-grid-layout": "^2.2.3",
+    "react-icons": "catalog:",
+    "uuid": "^14.0.1",
+    "yaml": "^2.9.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@panda/config": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-table": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5",
+    "@tanstack/react-router": "^1",
+    "@tanstack/react-table": "^8",
+    "react": "^19",
+    "react-dom": "^19"
+  }
+}

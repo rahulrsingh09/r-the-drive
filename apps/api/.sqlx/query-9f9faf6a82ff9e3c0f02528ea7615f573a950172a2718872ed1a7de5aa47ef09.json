@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO panda.charge_sessions\n           (vehicle_id, started_at, ended_at, charger_type, soc_start, soc_end, duration_minutes, kwh_added)\n           VALUES ($1, $2, $3, 'dc', $4, $5, 24, 44.0)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9f9faf6a82ff9e3c0f02528ea7615f573a950172a2718872ed1a7de5aa47ef09"
+}

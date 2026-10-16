@@ -1,0 +1,16 @@
+{
+  "name": "@panda/private-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/worker.mjs src/backup-worker.mjs --bundle --format=esm --platform=browser --outdir=dist --out-extension:.js=.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "esbuild": "catalog:"
+  }
+}

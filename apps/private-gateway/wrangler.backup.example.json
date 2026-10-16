@@ -1,0 +1,13 @@
+{
+  "name": "panda-backup-vault",
+  "main": "src/backup-worker.mjs",
+  "compatibility_date": "2026-10-07",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "HISTORY_BACKUPS",
+      "id": "REPLACE_WITH_PRIVATE_BACKUP_NAMESPACE_ID"
+    }
+  ],
+  "observability": { "enabled": false }
+}

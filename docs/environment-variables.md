@@ -1,0 +1,222 @@
+---
+title: Environment variables
+description: Complete reference for Panda production, Compose, development, and frontend environment variables.
+slug: /reference/environment-variables/
+sidebar_label: Environment variables
+---
+
+# Environment variables
+
+Production requires `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `ALLOWED_ORIGINS`, an external application key bundle, and an explicitly selected image. Copy `compose/.env.example` to the repository-root `.env`; use `compose/.env.full.example` as the complete override template. The standard production service passes that root `.env` through its `env_file`, so supported optional values do not need matching entries in `compose/docker-compose.yml`.
+
+## Standard production values
+
+| Variable | Required | Default | Purpose |
+|---|---:|---|---|
+| `POSTGRES_PASSWORD` | Yes | None | Password shared by TimescaleDB and the app's generated internal connection URL. Any dotenv-safe value is URL-encoded by the app. |
+| `REDIS_PASSWORD` | Yes | None | Password shared by Redis and the app's generated internal connection URL. |
+| `ALLOWED_ORIGINS` | Yes | None in production | Comma-separated exact HTTPS browser origins. Paths, credentials, queries, fragments, and HTTP origins are rejected in production unless the explicit LAN-only exception below is enabled. |
+| `POSTGRES_USER` | No | `panda` | Database role used by production Compose. |
+| `DATABASE_URL` | No | Built from `POSTGRES_USER` and `POSTGRES_PASSWORD` | Complete PostgreSQL URL. Overrides the standard Compose-derived URL and is required for direct API runs without `POSTGRES_PASSWORD`. |
+| `REDIS_URL` | No | Built from `REDIS_PASSWORD` | Complete Redis URL using the Redis ACL `default` user. Overrides the standard Compose-derived URL and is required for direct API runs without `REDIS_PASSWORD`. |
+
+## Image and Compose values
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PANDA_IMAGE` | Required; no default | Complete reviewed `image@sha256:...` reference built from the tested source. Compose refuses an absent value; it does not validate the digest syntax. `panda:local` is for the source-build overlay only. Legacy IMAGE_TAG and PANDA_IMAGE_REGISTRY no longer select the image. |
+| `PANDA_ORIGIN_PORT` | `8080` | Host port mapped to the unified app container. Protect it with host firewall rules when using a remote gateway. |
+| `PANDA_HOST_BIND_ADDRESS` | `127.0.0.1` | Docker host-side address for the published origin port. Keep loopback for a host gateway; an explicit non-loopback override needs a private network boundary and firewall. This is separate from the internal API listener. |
+| `PANDA_BIND_ADDRESS` | `127.0.0.1` | Application listener address inside the container. It is not the Docker host publication address. |
+| `ALLOW_PUBLIC_ORIGIN_BIND` | `false` | Required, with the literal value `true`, before a non-loopback application `PANDA_BIND_ADDRESS` is accepted. This is an explicit exposure opt-in, not a substitute for the authenticated gateway and firewall. |
+| `ALLOW_INSECURE_LAN_HTTP_AUTH` | `false` | **LAN-only exception.** With the literal value `true`, permits non-Secure refresh cookies only when `ALLOW_PUBLIC_ORIGIN_BIND=true`, the API binds to an unspecified/private/loopback/link-local IP, and every `ALLOWED_ORIGINS` entry is an exact `http://` private/loopback/link-local IP literal. It rejects hostnames, public IPs, HTTPS/HTTP mixes, paths, and credentials. Browser credentials and telemetry can be intercepted; prefer HTTPS. |
+| `PANDA_ENV_FILE` | `../.env` relative to `compose/docker-compose.yml` | Alternate dotenv file injected into the app container. For a downloaded Synology project, set this to `.env` in the Container Manager project settings. |
+| `PANDA_DB_SOURCE` | `${PANDA_DATA_DIR:-../data}/db` | Database volume source. Set to `panda-db` for a Docker-managed volume on new installs. |
+| `PANDA_REDIS_SOURCE` | `${PANDA_DATA_DIR:-../data}/redis` | Redis volume source. Set to `panda-redis` for a Docker-managed volume on new installs. |
+| `PANDA_BACKUPS_SOURCE` | `${PANDA_DATA_DIR:-../data}/backups` | Backup artifact volume source. Set to `panda-backups` for a Docker-managed volume on new installs. |
+| `PANDA_CACHE_SOURCE` | `${PANDA_DATA_DIR:-../data}/cache` | Application cache volume source. Set to `panda-cache` for a Docker-managed volume on new installs. |
+
+## Application security and runtime
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JWT_SECRET` | Required externally in production | RSA private signing PEM (RS256, at least 2048 bits). Must match `JWT_PUBLIC_KEY`. |
+| `JWT_PUBLIC_KEY` | Required externally in production | RSA public verification PEM. Supply the complete RSA/AGE bundle. |
+| `AGE_ENCRYPTION_KEY` | Required externally in production | One age X25519 secret identity, preserved for the lifetime of the encrypted data. Replacement fails against the stored public identity binding. |
+| `JWT_SECRET_FILE` | Unset | UTF-8 file containing the private PEM, mutually exclusive with `JWT_SECRET`. |
+| `JWT_PUBLIC_KEY_FILE` | Unset | UTF-8 file containing the public PEM, mutually exclusive with `JWT_PUBLIC_KEY`. |
+| `AGE_ENCRYPTION_KEY_FILE` | Unset | UTF-8 file containing one age secret identity, mutually exclusive with `AGE_ENCRYPTION_KEY`. One-line key text with trailing whitespace is accepted; an age-keygen comment/header file is not. |
+| `PANDA_KEYS_SOURCE` | Unset | Host bundle directory for `compose/docker-compose.keys.yml`. The overlay mounts it read-only and supplies the three `_FILE` paths. Standard Compose alone does not mount key files. |
+| `PANDA_SETUP_TOKEN` | Unset | One-time first-owner proof for production registration. Mutually exclusive with `PANDA_SETUP_TOKEN_FILE`; must be at least 32 bytes. Known example placeholders are rejected. Keep this value out of shell history where possible. |
+| `PANDA_SETUP_TOKEN_FILE` | Unset | File containing the one-time first-owner proof. Mutually exclusive with `PANDA_SETUP_TOKEN`; one trailing line ending is accepted. Prefer a mounted secret file. |
+| `PANDA_ENV` | `production` | Only `production` and `development` are accepted (case-insensitive). Unknown/blank modes fail startup. Only explicit local development permits database key generation. |
+| `PORT` | `3001` | Internal API listener port. The unified production nginx expects `3001`. |
+| `RUST_LOG` | `panda_api=debug,tower_http=info` | Rust tracing filter. Structured `[panda][LEVEL]` key-value logs are written to stdout. |
+| `TZ` | UTC | Docker/container timezone used by nginx and other runtime processes. This does not control Panda’s user-facing application timezone, which is configured in Settings → Units. |
+| `COOKIE_INSECURE` | Unset; `true` in `compose/docker-compose.dev.yml` | Strict local-development-only boolean for non-Secure refresh cookies. `true` enables it in `PANDA_ENV=development`; `false` keeps cookies Secure; production rejects the variable when explicitly set. It is required when the local/test browser origin is plain HTTP, otherwise refresh after a page reload can appear as a logout. Use `ALLOW_INSECURE_LAN_HTTP_AUTH=true` only for the separately documented trusted-LAN production exception. |
+| `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/data/cache/panda/vehicle-images` in the production image | Persistent local artwork mirror. Standard Compose does not need to set it. |
+| `PANDA_DATA_DIR` | `../data` relative to `compose/docker-compose.yml` | Overrides the host directory used for PostgreSQL, Redis, backups, and cache data. Primarily useful for isolated verification stacks. |
+| `BACKUP_DRIVER` | `pg_dump` | Recovery-package database exporter. Other values are rejected for full recovery packages. |
+| `BACKUP_ARTIFACT_DIR` | `/backups` | Directory containing generated, imported, safety, and restore-job recovery artifacts. Keep it on persistent storage with capacity for the uploaded package plus a required safety backup. |
+| `BACKUP_POLL_INTERVAL_SECONDS` | `60` | Number of seconds between backup-scheduler checks. |
+| `RESTORE_AGENT_URL` | `http://127.0.0.1:3002` | Internal unified-container restore supervisor URL. Do not expose it as a public service. |
+| `RESTORE_AGENT_KEY_FILE` | `/backups/.restore-agent-key` | Internal capability key generated by the production supervisor as the application user. Keep it inside the persistent backup volume. |
+| `RECOVERY_MAX_UPLOAD_BYTES` | `17179869184` (16 GiB) | Largest accepted imported recovery package. |
+| `RECOVERY_MAX_EXPANDED_BYTES` | `68719476736` (64 GiB) | Largest permitted expanded recovery archive. |
+| `RECOVERY_MAX_MEMBER_BYTES` | `68719476736` (64 GiB) | Largest permitted individual archive member. Cannot exceed the expanded limit. |
+| `RECOVERY_MAX_MANIFEST_BYTES` | `1048576` (1 MiB) | Independent manifest JSON limit during validation and extraction. |
+| `RECOVERY_MAX_SETTINGS_BYTES` | `1048576` (1 MiB) | Independent backup-settings JSON limit. |
+| `RECOVERY_MAX_HISTORY_BYTES` | `16777216` (16 MiB) | Operational-history JSON limit; records are parsed and merged incrementally. |
+| `RECOVERY_MAX_MEMBERS` | `10000` | Maximum archive-member count. |
+| `RECOVERY_MAX_COMPRESSION_RATIO` | `200` | Maximum permitted expanded-to-compressed archive ratio. |
+| `RECOVERY_MIN_FREE_BYTES` | `2147483648` (2 GiB) | Minimum free artifact-volume space before import/write steps. Values below 2 GiB are rejected. |
+| `RECOVERY_UPLOAD_DEADLINE_SECONDS` | `1800` (30 min) | Deadline for receiving and validating an imported package. |
+| `RECOVERY_RESTORE_DEADLINE_SECONDS` | `14400` (4 hr) | Deadline for the restore supervisor's destructive swap operation. |
+| `S3_ENDPOINT` | Unset | Optional fallback endpoint when the saved S3 endpoint is empty. Custom endpoints use path-style addressing. |
+| `S3_ACCESS_KEY` | Unset | Optional fallback access key used only when a complete saved credential pair is unavailable. |
+| `S3_SECRET_KEY` | Unset | Optional fallback secret key paired with `S3_ACCESS_KEY`; never returned by the API or stored in recovery packages. |
+
+## Resource and outbound controls
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WS_MAX_PER_USER` | `8` | Concurrent live sockets per account. |
+| `WS_MAX_PER_VEHICLE` | `32` | Concurrent live sockets per vehicle. |
+| `WS_MAX_GLOBAL` | `128` | Concurrent live sockets per API process. Admission precedes Redis subscription allocation. |
+| `METRICS_MAX_PER_USER` | `4` | Concurrent metric/Grafana operations per account. |
+| `METRICS_MAX_GLOBAL` | `8` | Concurrent metric/Grafana operations per API process; maximum configurable value is 16 to retain database connection capacity. |
+| `METRICS_TIMEOUT_SECONDS` | `600` | Whole metric-operation deadline. Match upstream proxy timeouts when changing it. |
+| `BASEMAP_CACHE_MAX_BYTES` | `134217728` (128 MiB) | Shared basemap payload, metadata and index budget. Cache pressure produces misses, not global operational-key eviction. |
+| `BASEMAP_CACHE_TTL_SECONDS` | `604800` (7 days) | Lifetime of each cached basemap payload and response metadata. |
+| `REDIS_MAXMEMORY` | `192mb` | Production Compose Redis limit beneath its 256 MiB container limit. Uses `noeviction`; operational writes can fail if the remaining headroom is exhausted. |
+| `WEATHER_MAX_RESPONSE_BYTES` | `10485760` | Actual weather response-body byte limit. |
+| `RIVIAN_MAX_RESPONSE_BYTES` | `10485760` | Actual Rivian HTTP response-body byte limit. |
+| `GEOCODER_MAX_RESPONSE_BYTES` | `2097152` | Actual geocoder response-body byte limit. |
+| `OIDC_MAX_RESPONSE_BYTES` | `2097152` | Discovery, token and JWKS response-body byte limit. |
+| `OIDC_PRIVATE_NETWORK_ALLOWLIST` | Empty | Operator-owned comma-separated private CIDRs for HTTPS OIDC providers. Restores cannot populate this policy. |
+| `S3_PRIVATE_NETWORK_ALLOWLIST` | Empty | Operator-owned comma-separated private CIDRs for custom S3 endpoints. |
+| `S3_ALLOW_INSECURE_PRIVATE_HTTP` | `false` | Explicit trusted-LAN S3 HTTP exception; also requires matching private CIDRs. Public HTTP is always rejected. |
+| `S3_ALLOW_DEVELOPMENT_GARAGE` | `false` | Development-only exception for the exact operator-configured `S3_ENDPOINT` origin resolving exclusively to local/private addresses. The dev launcher and dev Compose enable it for Garage. Ignored in production. |
+| `DEV_HOST_BIND_ADDRESS` | `127.0.0.1` | Development Compose publication address for API, PostgreSQL, Redis and Garage ports. Override only for intentional network sharing. |
+
+Weather/geocoder private-network policy remains in **External Connections**.
+Every outbound connection validates all current DNS answers and pins those
+addresses while retaining the hostname for TLS/signing. Mixed public/private
+answers, metadata/link-local addresses and redirects are rejected. Environment
+HTTP proxies do not bypass this policy. Public providers use HTTPS; private
+exceptions must be explicit and limited to their intended CIDRs.
+
+## OIDC and authentication overrides
+
+Database-backed authentication settings under **Settings > Authentication**
+are the primary configuration path. Each value below overrides only the same
+field in the database when set; the settings response identifies the effective
+source. Secrets are write-only and never returned. OIDC and password login are
+independent switches. Both default to the safe local-login posture: OIDC off
+and password login on. Automatic SSO starts are off by default.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PANDA_OIDC_ENABLED` | Database/default `false` | Show and enable the OIDC SSO login flow. |
+| `PANDA_PASSWORD_LOGIN_ENABLED` | Database/default `true` | Keep the local password form and password endpoint available. Set `false` only after testing SSO and recording break-glass recovery. |
+| `PANDA_OIDC_AUTO_LOGIN` | Database/default `false` | Automatically start SSO from the login page when the provider is ready, regardless of the password-login setting. A failed or cancelled callback stays on the login page for a manual retry. |
+| `PANDA_OIDC_ISSUER_URL` | Database/unset | OIDC issuer URL used for discovery and token validation. The runtime requires an absolute HTTPS URL. |
+| `PANDA_OIDC_PUBLIC_BASE_URL` | Database/unset | Public HTTPS base URL used to derive the exact `/v1/auth/oidc/callback` redirect URI. |
+| `PANDA_OIDC_CLIENT_ID` | Database/unset | Confidential OIDC client identifier. |
+| `PANDA_OIDC_CLIENT_SECRET` | Database/unset | Client secret override. Mutually exclusive with `_FILE`; never returned by the API. |
+| `PANDA_OIDC_CLIENT_SECRET_FILE` | Unset | Optional overlay-only path to a mounted file containing the client secret. Mutually exclusive with the direct secret variable; the standard Compose file does not mount this path, so setting it without the overlay fails startup. The supplied OIDC secret Compose overlay sets it automatically. |
+| `PANDA_OIDC_CLIENT_SECRET_SOURCE` | Unset | Optional overlay-only host file consumed by `compose/docker-compose.oidc-secret.yml`. Compose also passes this non-secret path through the shared dotenv environment, but Panda does not read it; setting it without the overlay is inert. |
+| `PANDA_OIDC_BUTTON_LABEL` | `Sign in with SSO` | Text shown on the SSO button. |
+| `PANDA_OIDC_SCOPES` | `openid email profile` | Space-separated provider scopes. `openid` is mandatory; Panda rejects or hides an OIDC configuration that omits it. |
+| `PANDA_OIDC_TOKEN_AUTH_METHOD` | `auto` | Token endpoint authentication: `auto`, `client_secret_basic`, or `client_secret_post`. |
+| `PANDA_OIDC_AUTO_SIGNUP` | Database/default `false` | Permit a qualifying new OIDC identity to create a basic user. |
+| `PANDA_OIDC_AUTO_LINK_VERIFIED_EMAIL` | Database/default `false` | Permit a verified provider email to link to one matching existing account. With no domain or extra claim restriction, any verified email domain from this provider qualifies. |
+| `PANDA_OIDC_ALLOWED_EMAIL_DOMAINS` | Database/unset | Optional comma-separated, case-insensitive email domains allowed by auto-link/auto-signup policy. Unset accepts all verified email domains. |
+| `PANDA_OIDC_REQUIRED_CLAIM_NAME` | Database/unset | Optional exact claim name required for OIDC login. Must be set together with the claim value. |
+| `PANDA_OIDC_REQUIRED_CLAIM_VALUE` | Database/unset | Optional exact value for the required claim. Must be set together with the claim name. |
+
+The first-owner setup proof remains required for a new production installation.
+For recovery, remove malformed or stale OIDC overrides from the root `.env`,
+including any `PANDA_OIDC_CLIENT_SECRET_FILE` and
+`PANDA_OIDC_CLIENT_SECRET_SOURCE` values, then set
+`PANDA_PASSWORD_LOGIN_ENABLED=true` and
+`PANDA_OIDC_ENABLED=false`. Recreate only the app container without
+including the optional OIDC secret overlay: committed startup code parses OIDC
+environment values before the application can serve the recovery login. Repair
+and test the provider as a local super-user, remove the temporary overrides,
+and recreate only the app container again. See [OIDC single sign-on](./guides/oidc-sso.md).
+
+| `CHARGE_IDENTITY_BACKFILL_BATCH_SIZE` | `1000` | Historical charge payloads processed per transaction. Valid range: `100`-`10000`. |
+| `CHARGE_IDENTITY_BACKFILL_PAUSE_MS` | `100` | Delay between successful backfill batches. Valid range: `0`-`5000` milliseconds. |
+
+The charge identity backfill does not introduce a second container. After the
+schema expansion, the in-process worker uses the existing app runtime and
+persists resumable progress in PostgreSQL; `/health` only proves that the app
+is ready to serve, not that every populated vehicle has finished backfilling.
+
+The setup endpoint reports whether a proof is required and available, but never
+reveals its source or value. An unclaimed production installation without a
+configured proof remains healthy but refuses registration.
+
+Production never generates or persists application private keys in PostgreSQL.
+Missing, partial, empty, invalid, conflicting file/direct, or mismatched bundles
+fail startup. Existing DB-backed key rows also block external startup until the
+explicit [key-custody migration](./runbooks/key-custody.md) completes. Keep the
+same AGE identity across restarts and raw database restores; the database stores
+only its public recipient binding. Administrators can inspect the source through
+`GET /v1/admin/security/status`; logs disclose only the source category.
+Back up external keys separately from database/recovery storage. Recovery packages
+exclude installation keys and credentials; raw database dumps can retain both
+legacy keys and ciphertext. See the migration runbook before upgrading or restoring.
+
+## Rivian telemetry behavior
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RIVIAN_GRAPHQL_GATEWAY_URL` | Rivian production GraphQL gateway | Diagnostic upstream override. Normal installations should not set it. |
+| `RIVIAN_WS_RECONNECT_INITIAL_SECONDS` | `10` | Initial websocket reconnect delay. |
+| `RIVIAN_WS_RECONNECT_MAX_SECONDS` | `900` | Maximum websocket reconnect delay. |
+| `RIVIAN_RAW_EVENT_RETENTION_DAYS` | `7` | Raw telemetry retention window in days. |
+| `RIVIAN_PERSIST_RAW_EVENTS` | `true` | Persists raw Rivian events for diagnostics and repair. |
+| `RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY` | `true` | Avoids storing unchanged duplicate telemetry samples. |
+| `PARALLAX_ENABLED` | `true` | Runs the integrated in-process extended telemetry acquisition subsystem. Set `false` only for emergency rollback. |
+
+## API rate limits
+
+All values must be positive integers. Per-minute settings control sustained traffic; burst settings control short spikes.
+
+| Variable | Default |
+|---|---:|
+| `RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE` | `30` |
+| `RATE_LIMIT_AUTH_PUBLIC_BURST` | `10` |
+| `RATE_LIMIT_AUTH_METADATA_PER_MINUTE` | `1200` |
+| `RATE_LIMIT_AUTH_METADATA_BURST` | `120` |
+| `RATE_LIMIT_AUTH_READ_PER_MINUTE` | `900` |
+| `RATE_LIMIT_AUTH_READ_BURST` | `180` |
+| `RATE_LIMIT_AUTH_WRITE_PER_MINUTE` | `240` |
+| `RATE_LIMIT_AUTH_WRITE_BURST` | `60` |
+| `RATE_LIMIT_HEAVY_READ_PER_MINUTE` | `300` |
+| `RATE_LIMIT_HEAVY_READ_BURST` | `90` |
+
+## Development and frontend values
+
+These values do not change the standard production topology.
+
+| Variable | Default | Scope |
+|---|---|---|
+| `DEV_API_PORT` | Automatically selected near `3001` | Host-run API port for `pnpm dev:stack`. |
+| `DEV_WEB_PORT` | Automatically selected near `5173` | Vite development port. |
+| `DEV_POSTGRES_PORT` | Automatically selected near `5432` | Development TimescaleDB host port. |
+| `DEV_REDIS_PORT` | Automatically selected near `6379` | Development Redis host port. |
+| `DEV_GARAGE_PORT` | Automatically selected near `3900` | Development Garage S3 API port. |
+| `DEV_GARAGE_ADMIN_PORT` | Automatically selected near `3903` | Development Garage administration port. |
+| `DEV_WEB_ORIGINS` | Active Vite origin | Development CORS origins. |
+| `DEV_COMPOSE_PROJECT_NAME` | `panda` | Development Compose project name. The default shares the existing local development project; set a unique value for deliberate checkout isolation. |
+| `DEV_DATABASE_READY_TIMEOUT_SECONDS` | `600` | Maximum wait for TimescaleDB startup or crash recovery before `pnpm dev:stack` fails. Minimum `60`. |
+| `DEV_CARGO_BUILD_JOBS` | `4` on Windows; unused elsewhere | Maximum concurrent Cargo jobs while Windows `pnpm dev:stack` builds the API and restore supervisor. Set a positive integer to override. |
+| `COMPOSE_PROJECT_NAME` | `panda` | Optional general Compose project-name override used when `DEV_COMPOSE_PROJECT_NAME` is unset. Use a unique value for deliberate checkout isolation. |
+| `VITE_PANDA_API_BASE_URL` | Current browser origin in production | Preferred frontend API base URL override. |
+| `VITE_PANDA_DEV_API_KEY` | Unset | Development-only integration key used by supported local tooling. |
+| `VITE_PANDA_RUN_LIVE_CONTRACT` | `0` | Enables explicitly requested live frontend contract tests. |
+| `VITE_API_URL` | Unset | Legacy frontend API URL compatibility override. |
+| `VITE_WS_URL` | Unset | Legacy frontend websocket URL compatibility override. |

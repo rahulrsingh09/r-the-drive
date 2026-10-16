@@ -1,0 +1,1686 @@
+import type { ChargerType, DriveMode, VehicleMember } from './vehicle';
+import type { ThemePreferences } from './theme';
+
+export interface DateRange {
+  from: Date;
+  to: Date;
+}
+
+export interface TimeSeriesPoint {
+  ts: string;
+  value: number;
+}
+
+export type MetricValueKind =
+  'number' | 'percent' | 'distance' | 'energy' | 'temperature' | 'pressure' | 'speed';
+
+export interface MetricCatalogEntry {
+  id: string;
+  label: string;
+  unit: string | null;
+  kind: MetricValueKind;
+  source: 'summary' | 'telemetry' | 'trips' | 'charging' | 'battery';
+  supports_series: boolean;
+  default_aggregation: 'latest' | 'sum' | 'avg' | 'max';
+}
+
+export interface MetricValueResponse {
+  metric: string;
+  value: number | null;
+  unit: string | null;
+  label: string;
+  ts: string | null;
+}
+
+export interface MetricSeriesPoint {
+  ts: string;
+  value: number | null;
+}
+
+export interface MetricBatchMetricRequest {
+  metric: string;
+  include_latest?: boolean;
+  include_series?: boolean;
+}
+
+export interface MetricBatchRequest {
+  vehicle_id: string;
+  metrics: MetricBatchMetricRequest[];
+  from?: string | null;
+  to?: string | null;
+  lifetime?: boolean;
+  bucket?: string;
+  /** `full` returns every retained source point in the requested range. */
+  density?: 'compact' | 'full';
+  max_points?: number;
+  /** Canonical comma-separated shared trip-tag IDs for trip-derived metrics. */
+  tag_ids?: string;
+  tag_match?: 'all' | 'any';
+  untagged?: boolean;
+}
+
+export interface MetricBatchSeriesResponse {
+  metric: string;
+  points: MetricSeriesPoint[];
+}
+
+export interface MetricBatchResponse {
+  values: MetricValueResponse[];
+  series: MetricBatchSeriesResponse[];
+  bucket: string;
+  density: 'compact' | 'full';
+  /** Present only for compact responses; full responses are intentionally uncapped. */
+  max_points?: number;
+}
+
+export interface DataQualityResponse {
+  vehicle_id: string;
+  window_from: string;
+  window_to: string;
+  total_samples: number;
+  samples_with_location: number;
+  samples_with_battery: number;
+  samples_with_power_kw: number;
+  samples_with_odometer: number;
+  coverage_pct: number | null;
+  gap_count: number;
+}
+
+export interface PhantomDrainPoint {
+  date: string;
+  drain_pct: number;
+}
+
+export interface PhantomDrainPeriod {
+  period_start: string | null;
+  period_end: string | null;
+  duration_hours: number | null;
+  sleep_share_pct: number | null;
+  state_coverage_pct: number | null;
+  soc_start: number | null;
+  soc_end: number | null;
+  soc_lost_pct: number | null;
+  drain_pct_per_hour: number | null;
+  range_start_mi: number | null;
+  range_end_mi: number | null;
+  range_lost_mi: number | null;
+  range_lost_per_hour_mi: number | null;
+  energy_drained_kwh: number | null;
+  avg_power_w: number | null;
+  has_reduced_range: boolean | null;
+  validation_status: 'validated' | 'excluded';
+  validation_reason: string | null;
+  sample_count: number;
+  start_sample_at: string | null;
+  end_sample_at: string | null;
+  movement_detected: boolean;
+  overlaps_trip: boolean;
+  overlaps_charge: boolean;
+}
+
+export interface IdleDrainResponse {
+  vehicle_id: string;
+  periods: PhantomDrainPeriod[];
+}
+
+export type ParkedEnergyWindow = 'since_parked' | '8h' | '24h';
+
+export interface ParkedEnergySample {
+  window: ParkedEnergyWindow;
+  source_at: string;
+  received_at: string;
+  parked_started_at: string | null;
+  duration_minutes: number | null;
+  total_kwh: number | null;
+  vehicle_systems_kwh: number | null;
+  outlets_kwh: number | null;
+  climate_kwh: number | null;
+  gear_guard_kwh: number | null;
+  total_range_impact_km: number | null;
+  vehicle_systems_range_impact_km: number | null;
+  outlets_range_impact_km: number | null;
+  climate_range_impact_km: number | null;
+  gear_guard_range_impact_km: number | null;
+}
+
+export interface ParkedEnergyResponse {
+  vehicle_id: string;
+  generated_at: string;
+  source: 'rivian_reported';
+  samples: ParkedEnergySample[];
+}
+
+export interface Trip {
+  id: string;
+  vehicle_id: string;
+  started_at: string;
+  ended_at: string | null;
+  distance_mi: number;
+  duration_min: number;
+  energy_used_kwh: number | null;
+  efficiency_wh_mi: number | null;
+  max_speed_mph: number | null;
+  drive_mode: DriveMode | null;
+  soc_start: number | null;
+  soc_end: number | null;
+  start_lat?: number | null;
+  start_lng?: number | null;
+  end_lat?: number | null;
+  end_lng?: number | null;
+  start_address?: string | null;
+  end_address?: string | null;
+  start_place?: string | null;
+  end_place?: string | null;
+  outside_temp_c?: number | null;
+  outside_temp_source?: OutsideTemperatureSource | null;
+  /** Additive server field; older API versions return no tag collection. */
+  tags?: TripTag[];
+}
+
+export type TripTagColorToken = 'accent' | 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+
+export interface TripTag {
+  id: string;
+  vehicle_id: string;
+  name: string;
+  color_token: TripTagColorToken;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TripTagMatch = 'all' | 'any';
+
+export interface TripTagAssignmentRequest {
+  trip_ids: string[];
+  tag_ids: string[];
+  mode: 'add' | 'remove' | 'replace';
+}
+
+export interface TrackPoint {
+  ts: string;
+  lat: number;
+  lng: number;
+  speed_mph: number | null;
+  altitude_m: number | null;
+}
+
+export interface TripPowerPoint {
+  ts: string;
+  power_kw: number | null;
+  regen_power_kw: number | null;
+  speed_mph: number | null;
+  battery_level: number | null;
+  estimated_net_power_kw?: number | null;
+  power_source?: TripPowerSource;
+}
+
+export type TripPowerSource = 'direct' | 'estimated_soc' | 'unavailable';
+
+export interface TripPowerMetadata {
+  source: TripPowerSource;
+  sample_count: number;
+  median_interval_seconds: number | null;
+  p90_interval_seconds: number | null;
+  coverage_percent: number | null;
+}
+
+export interface TripDetailSeriesPoint {
+  ts: string;
+  speed_mph: number | null;
+  power_kw: number | null;
+  regen_power_kw: number | null;
+  battery_level: number | null;
+  outside_temp_c: number | null;
+  cabin_temp_c: number | null;
+  driver_temp_c: number | null;
+  hvac_active: boolean | null;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+  estimated_net_power_kw?: number | null;
+  power_source?: TripPowerSource;
+}
+
+export type TripRouteCoordinate = [lng: number, lat: number];
+
+export interface TripMapRoute {
+  trip_id: string;
+  coordinates: TripRouteCoordinate[];
+  tags: TripTag[];
+}
+
+export interface TripMapResponse {
+  vehicle_id: string;
+  from: string;
+  to: string;
+  total_trips: number;
+  missing_route_count: number;
+  routes: TripMapRoute[];
+}
+
+export interface TripDetailSamples {
+  elapsed_s: number[];
+  lat: Array<number | null>;
+  lng: Array<number | null>;
+  altitude_m: Array<number | null>;
+  speed_mph: Array<number | null>;
+  power_kw: Array<number | null>;
+  regen_power_kw: Array<number | null>;
+  estimated_net_power_kw?: Array<number | null>;
+  battery_level: Array<number | null>;
+  outside_temp_c: Array<number | null>;
+  cabin_temp_c: Array<number | null>;
+  driver_temp_c: Array<number | null>;
+  hvac_active: Array<boolean | null>;
+  tire_fl_psi: Array<number | null>;
+  tire_fr_psi: Array<number | null>;
+  tire_rl_psi: Array<number | null>;
+  tire_rr_psi: Array<number | null>;
+}
+
+export interface TripDetailResponse {
+  trip: Trip;
+  sample_interval_seconds: number;
+  samples: TripDetailSamples;
+  power?: TripPowerMetadata;
+  outside_temperature: OutsideTemperatureSeries;
+}
+
+export interface TirePressureTimelineSample {
+  ts: string;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+}
+
+export interface TirePressureTimelineTrip {
+  id: string;
+  vehicle_id: string;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number | null;
+  duration_min: number | null;
+  distance_miles: number | null;
+  start_place: string | null;
+  end_place: string | null;
+  start_address: string | null;
+  end_address: string | null;
+  tags: TripTag[];
+}
+
+export interface TirePressureTimelineResponse {
+  vehicle_id: string;
+  from: string;
+  to: string;
+  samples: TirePressureTimelineSample[];
+  trips: TirePressureTimelineTrip[];
+}
+
+export type OutsideTemperatureSource = 'vehicle' | 'open_meteo' | 'mixed' | 'unavailable';
+
+export interface OutsideTemperatureSample {
+  elapsed_s: number;
+  ts: string;
+  temperature_c: number;
+  source: 'vehicle' | 'open_meteo';
+}
+
+export interface OutsideTemperatureSeries {
+  source: OutsideTemperatureSource;
+  attribution: { name: string; url: string } | null;
+  samples: OutsideTemperatureSample[];
+}
+
+export type ExternalConnectionMode = 'remote' | 'custom' | 'disabled';
+export type WeatherLocationPrecision = 'approximate' | 'exact';
+export type BasemapProviderPreference = 'auto' | 'openfreemap' | 'carto';
+export type ResolvedBasemapProvider = 'openfreemap' | 'carto' | 'custom' | 'disabled';
+export type MapStylePreference = 'follow-theme' | 'positron' | 'bright' | 'liberty' | 'dark' | 'fiord' | '3d';
+
+export interface BasemapStyleDescriptor {
+  id: MapStylePreference;
+  label: string;
+  kind: 'raster' | 'style';
+  light_url: string;
+  dark_url: string;
+  perspective_3d: boolean;
+}
+
+export interface BasemapAttributionLink {
+  label: string;
+  url: string | null;
+}
+
+export interface BasemapConfigPayload {
+  enabled: boolean;
+  provider_preference: BasemapProviderPreference;
+  resolved_provider: ResolvedBasemapProvider;
+  revision: string;
+  styles: BasemapStyleDescriptor[];
+  attributions: BasemapAttributionLink[];
+}
+
+export interface ExternalConnectionCacheSummary {
+  entries: number;
+  bytes: number;
+  persistent: boolean;
+  purgeable: boolean;
+  description: string;
+}
+
+export interface ExternalConnectionRecord {
+  id: 'rivian_account' | 'open_meteo' | 'nominatim' | 'basemap' | 'iconify' | 's3_backup';
+  name: string;
+  purpose: string;
+  data_shared: string[];
+  disabled_effect: string;
+  execution: string;
+  privacy_url: string | null;
+  terms_url: string | null;
+  editable: boolean;
+  enabled: boolean;
+  mode: ExternalConnectionMode;
+  /** Omitted by older API servers; null for non-basemap connections. */
+  basemap_provider?: BasemapProviderPreference | null;
+  endpoint: string | null;
+  endpoint_is_private: boolean;
+  weather_precision: WeatherLocationPrecision | null;
+  forecast_url: string | null;
+  archive_url: string | null;
+  base_url: string | null;
+  light_url_template: string | null;
+  dark_url_template: string | null;
+  attribution: string | null;
+  attribution_url: string | null;
+  request_identifier: string | null;
+  custom_autocomplete: boolean;
+  allow_private_network: boolean;
+  has_api_key: boolean;
+  has_bearer_token: boolean;
+  updated_at: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  request_count_today: number;
+  last_test_at: string | null;
+  last_test_ok: boolean | null;
+  last_test_error: string | null;
+  credential_issued_at?: string | null;
+  expected_renewal_at?: string | null;
+  renewal_state?: import('./vehicle').RivianCredentialRenewalState | null;
+  observed_health?: string | null;
+  observed_error?: string | null;
+  cache: ExternalConnectionCacheSummary | null;
+}
+
+export interface ExternalConnectionsResponse {
+  can_manage: boolean;
+  connections: ExternalConnectionRecord[];
+}
+
+export interface UpdateExternalConnectionBody {
+  enabled: boolean;
+  mode: ExternalConnectionMode;
+  basemap_provider?: BasemapProviderPreference;
+  weather_precision?: WeatherLocationPrecision | null;
+  forecast_url?: string | null;
+  archive_url?: string | null;
+  base_url?: string | null;
+  light_url_template?: string | null;
+  dark_url_template?: string | null;
+  attribution?: string | null;
+  attribution_url?: string | null;
+  request_identifier?: string | null;
+  custom_autocomplete?: boolean;
+  allow_private_network?: boolean;
+  api_key?: string | null;
+  clear_api_key?: boolean;
+  bearer_token?: string | null;
+  clear_bearer_token?: boolean;
+}
+
+export interface TestExternalConnectionResponse {
+  ok: boolean;
+  tested_at: string;
+  checks: Array<{ label: string; ok: boolean; message: string }>;
+  preview_data_url: string | null;
+}
+
+export interface PurgeExternalConnectionCacheResponse {
+  purged_entries: number;
+  message: string;
+}
+
+export interface ChargeSession {
+  id: string;
+  vehicle_id: string;
+  started_at: string;
+  session_day_local?: string | null;
+  ended_at: string | null;
+  location_name: string | null;
+  charger_type: ChargerType | null;
+  energy_added_kwh: number | null;
+  duration_min: number | null;
+  soc_start: number | null;
+  soc_end: number | null;
+  peak_power_kw: number | null;
+  cost_usd: number | null;
+  cost_method?: string | null;
+  source?: string | null;
+  api_started_at?: string | null;
+  api_ended_at?: string | null;
+  data_confidence?: string | null;
+  telemetry_sample_count?: number;
+  network_vendor?: string | null;
+  range_added_km?: number | null;
+  is_free_session?: boolean | null;
+  is_rivian_network?: boolean | null;
+  rivian_paid_total?: number | null;
+  rivian_charger_type?: string | null;
+  currency_code?: string | null;
+  rivian_city?: string | null;
+  is_public?: boolean | null;
+  charger_id?: string | null;
+  live_current_price?: number | null;
+  live_current_currency?: string | null;
+  live_total_charged_kwh?: number | null;
+  live_range_added_km?: number | null;
+  live_power_kw?: number | null;
+  live_charge_rate_kph?: number | null;
+  live_soc_pct?: number | null;
+  live_time_elapsed_seconds?: number | null;
+  live_time_remaining_min?: number | null;
+  live_charger_state?: string | null;
+  live_charger_status?: string | null;
+  live_started_at?: string | null;
+  /** Effective coordinates after a user location correction. */
+  location_lat?: number | null;
+  location_lng?: number | null;
+  /** Immutable telemetry/API coordinates, retained when a location is overridden. */
+  source_location_lat?: number | null;
+  source_location_lng?: number | null;
+  location_override_mode?: 'automatic' | 'saved_place' | 'none' | null;
+  cost_override_mode?: 'automatic' | 'free' | 'manual' | null;
+  cost_override_usd?: number | null;
+}
+
+export interface ChargeSessionUpdate {
+  /** Backward-compatible saved place update. Null clears the effective location. */
+  place_id?: string | null;
+  location_mode?: 'automatic' | 'saved_place' | 'none';
+  cost_mode?: 'automatic' | 'free' | 'manual';
+  cost_usd?: number;
+}
+
+export interface ChargingNetworkPreference {
+  network_vendor: string;
+  cost_mode: 'automatic' | 'free';
+  session_count: number;
+}
+
+export interface ChargeCurvePoint {
+  minutes_elapsed?: number | null;
+  soc_pct: number;
+  power_kw: number;
+  sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
+  power_method?: 'recorded' | 'soc_delta' | string;
+}
+
+export interface ChargeCurveAnalysisPoint {
+  session_id: string;
+  minutes_elapsed: number | null;
+  soc_pct: number | null;
+  charge_rate_kw: number;
+  charger_type: ChargerType | null;
+  sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
+  power_method?: 'recorded' | 'soc_delta' | string;
+}
+
+export interface ChargingChartDailyPoint {
+  day_local: string;
+  day_start: string;
+  total_energy_kwh: number;
+  session_count: number;
+}
+
+export interface ChargingChartSessionPoint {
+  session_id: string;
+  day_local: string;
+  day_start: string;
+  started_at: string;
+  energy_added_kwh: number | null;
+  cost_usd: number | null;
+  charger_type: ChargerType | null;
+  location_name: string | null;
+}
+
+export interface ChargingChartSeries {
+  daily: ChargingChartDailyPoint[];
+  daily_sessions: ChargingChartSessionPoint[];
+}
+
+export interface StatsSummary {
+  total_miles: number;
+  total_trips: number;
+  total_energy_kwh: number;
+  avg_efficiency_wh_mi: number | null;
+  total_charge_sessions: number;
+  total_cost_usd: number | null;
+}
+
+export interface EfficiencyByMode {
+  drive_mode: string;
+  avg_efficiency: number;
+  p10_efficiency: number;
+  p90_efficiency: number;
+  trip_count: number;
+}
+
+export interface EfficiencySummary {
+  avg: number;
+  p10: number;
+  p90: number;
+  total_miles: number;
+  efficiency_miles: number;
+  coverage_percent: number;
+}
+
+export interface EfficiencyByTag {
+  tag_id: string | null;
+  tag_name: string;
+  trip_count: number;
+  total_miles: number;
+  efficiency_miles: number;
+  avg_efficiency_wh_mi: number | null;
+  /** Fraction of miles with an efficiency measurement, in the range 0–1. */
+  coverage: number;
+}
+
+export interface ChargingSummary {
+  total_energy_kwh: number;
+  total_cost_usd: number | null;
+  session_count: number;
+  home_kwh?: number;
+  away_kwh?: number;
+  unknown_location_kwh?: number;
+  ac_kwh?: number;
+  dc_kwh?: number;
+  charging_cycles?: number | null;
+  charging_efficiency_pct?: number | null;
+  total_energy_used_kwh?: number | null;
+  max_charge_limit_pct?: number | null;
+  max_charge_rate_kw?: number | null;
+  typed_session_count?: number;
+  known_cost_session_count?: number;
+  unknown_cost_session_count?: number;
+  free_session_count?: number;
+  total_range_added_km?: number | null;
+  rivian_paid_total_usd?: number | null;
+  network_breakdown?: Array<{
+    network_vendor: string | null;
+    session_count: number;
+    energy_kwh: number | null;
+    cost_usd: number | null;
+    free_sessions: number;
+  }>;
+  weekly: Array<{ week_start: string; energy_kwh: number; sessions: number }>;
+}
+
+export interface BatteryHealthSummary {
+  usable_now_kwh: number | null;
+  usable_new_kwh: number | null;
+  battery_health_pct: number | null;
+  estimated_degradation_pct: number | null;
+  charging_cycles: number | null;
+  charge_count: number;
+  total_energy_added_kwh: number | null;
+  total_energy_used_kwh: number | null;
+  charging_efficiency_pct: number | null;
+}
+
+export interface BatteryMileagePoint {
+  ts: string;
+  odometer_mi: number | null;
+  usable_kwh: number | null;
+  range_mi: number | null;
+  projected_max_range_mi: number | null;
+  degradation_pct: number | null;
+}
+
+export interface VehicleHealthTires {
+  ts: string;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+  tire_fl_status: string | null;
+  tire_fr_status: string | null;
+  tire_rl_status: string | null;
+  tire_rr_status: string | null;
+  tire_fl_valid: boolean | null;
+  tire_fr_valid: boolean | null;
+  tire_rl_valid: boolean | null;
+  tire_rr_valid: boolean | null;
+}
+
+export interface VehicleHealthClosures {
+  ts: string;
+  closure_frunk_closed: boolean | null;
+  closure_liftgate_closed: boolean | null;
+  closure_tailgate_closed: boolean | null;
+  door_front_left_closed: boolean | null;
+  door_front_right_closed: boolean | null;
+  door_rear_left_closed: boolean | null;
+  door_rear_right_closed: boolean | null;
+}
+
+export interface VehicleHealthSoftwareEntry {
+  version: string;
+  installed_at: string;
+  observed_until: string | null;
+}
+
+export interface VehicleHealthVehicle {
+  name: string | null;
+  model: string;
+  trim: string | null;
+  vin: string | null;
+}
+
+export interface VehicleHealthRuntime {
+  is_online: boolean | null;
+  last_event_at: string | null;
+  worker_health: string | null;
+  worker_health_msg: string | null;
+  auth_state: string | null;
+  auth_reason_code: string | null;
+  updated_at: string;
+}
+
+export interface VehicleHealthLatest {
+  ts: string;
+  twelve_volt_health: string | null;
+  hv_thermal_event: string | null;
+  ota_current_version: string | null;
+  ota_available_version: string | null;
+  ota_status: string | null;
+  ota_current_status: string | null;
+  is_online: boolean | null;
+}
+
+export interface VehicleHealth {
+  vehicle_id: string;
+  vehicle: VehicleHealthVehicle;
+  generated_at: string;
+  runtime: VehicleHealthRuntime | null;
+  latest: VehicleHealthLatest | null;
+  tires: VehicleHealthTires | null;
+  closures: VehicleHealthClosures | null;
+  current_software_version: string | null;
+  ota_release_notes_url: string | null;
+  software_history: VehicleHealthSoftwareEntry[];
+  thermal_events_30d: number;
+  extended_telemetry: {
+    collector: {
+      status:
+        | 'starting'
+        | 'connected'
+        | 'reconnecting'
+        | 'stale'
+        | 'disconnected'
+        | 'disabled'
+        | 'duplicate_owner'
+        | 'error';
+      running: boolean;
+      connected_at: string | null;
+      last_event_at: string | null;
+      last_error: string | null;
+      updated_at: string;
+    } | null;
+    parallax: {
+      status: string;
+      last_frame_at: string | null;
+      last_meaningful_frame_at: string | null;
+      reconnect_count: number;
+      decode_error_count: number;
+      empty_frame_count: number;
+      ambiguity_count: number;
+      last_error: string | null;
+    } | null;
+    legacy_charging_session: {
+      classification: 'not_observed' | 'null' | 'missing' | 'malformed' | 'all_null' | 'meaningful';
+      last_frame_at: string | null;
+      last_meaningful_frame_at: string | null;
+      null_count: number;
+      missing_count: number;
+      malformed_count: number;
+      all_null_count: number;
+      meaningful_count: number;
+    };
+    session_repair: {
+      repair_key: string;
+      reason: string;
+      created_at: string;
+    } | null;
+    network: {
+      source_at: string;
+      wifi_connected: boolean | null;
+      wifi_rssi_dbm: number | null;
+      wifi_link_speed_mbps: number | null;
+      wifi_frequency_mhz: number | null;
+      wifi_channel_width_mhz: number | null;
+      cellular_access_technology: string | null;
+      cellular_signal_dbm: number | null;
+    } | null;
+    efficiency: {
+      source_at: string;
+      reference_wh_per_km: number | null;
+      learned_wh_per_km: number | null;
+      mode_ranges_km: Record<string, number>;
+    } | null;
+    mass: {
+      source_at: string;
+      estimated_mass_kg: number;
+    } | null;
+    cold_weather: {
+      source_at: string;
+      available_soc_pct: number | null;
+      cold_limited_soc_pct: number | null;
+      cold_range_impact_km: number | null;
+    } | null;
+  };
+}
+
+export interface TouPeriod {
+  label: string;
+  start_minute: number;
+  end_minute: number;
+  rate: number;
+}
+
+export interface PlaceAddress {
+  id?: string | null;
+  display_name: string;
+  osm_id: number | null;
+  latitude: number;
+  longitude: number;
+  road: string | null;
+  city: string | null;
+  state: string | null;
+  postcode: string | null;
+  country: string | null;
+  raw: Record<string, unknown> | null;
+}
+
+export interface PlaceChargingProfile {
+  id: string;
+  name: string;
+  billing_type: 'flat' | 'tou' | 'per_kwh' | 'per_minute' | 'free';
+  rate: number;
+  session_fee: number;
+  currency: string;
+  timezone: string | null;
+  tou_periods: TouPeriod[];
+}
+
+export interface Place {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_m: number;
+  is_home: boolean;
+  is_work: boolean;
+  address: PlaceAddress | null;
+  charging: PlaceChargingProfile | null;
+}
+
+export interface PlaceSearchSuggestion extends PlaceAddress {}
+
+export interface PlaceChargingInput {
+  name?: string | null;
+  billing_type: 'per_kwh' | 'tou';
+  rate: number;
+  session_fee?: number | null;
+  currency?: string | null;
+  timezone?: string | null;
+  tou_periods?: TouPeriod[] | null;
+}
+
+export interface UpsertPlaceBody {
+  name: string;
+  radius_m?: number | null;
+  is_home?: boolean;
+  is_work?: boolean;
+  address: PlaceAddress;
+  charging?: PlaceChargingInput | null;
+}
+
+export type BackupFrequency = 'daily' | 'weekly' | 'monthly';
+
+export type BackupTargetType = 's3';
+
+export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
+
+export type BackupRunPhase =
+  | 'queued'
+  | 'preparing'
+  | 'dumping'
+  | 'snapshotting'
+  | 'packaging'
+  | 'validating'
+  | 'uploading'
+  | 'finalizing'
+  | 'completed'
+  | 'failed';
+
+export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore' | 'upload' | 'pre_restore';
+
+export type BackupArtifactStorageType = 'local' | 'uploaded' | 'safety' | 's3';
+
+export interface BackupArtifactManifest {
+  artifact_kind?: string;
+  format?: string;
+  package?: {
+    format?: string;
+    format_version?: number;
+    source?: {
+      app_version?: string;
+      database?: string;
+      timescale_version?: string | null;
+      migration_version?: number | null;
+    };
+    scope?: {
+      included?: string[];
+      redacted?: string[];
+      excluded?: string[];
+    };
+    components?: Record<string, unknown>;
+    restore?: Record<string, unknown>;
+  };
+  [key: string]: unknown;
+}
+
+export type BackupRestoreRequestStatus =
+  'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'canceled';
+
+export interface BackupSettings {
+  enabled: boolean;
+  frequency: BackupFrequency;
+  run_at: string;
+  timezone: string;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  retention_count: number;
+  local_enabled: boolean;
+  s3_enabled: boolean;
+  target_type: BackupTargetType;
+  endpoint: string;
+  region: string | null;
+  bucket: string;
+  prefix: string;
+  access_key: string | null;
+  has_secret_key: boolean;
+  updated_at: string | null;
+}
+
+export interface BackupRun {
+  id: string;
+  trigger: BackupRunTrigger;
+  status: BackupRunStatus;
+  phase: BackupRunPhase;
+  progress_percent: number;
+  artifact_key: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackupArtifact {
+  id: string;
+  run_id: string | null;
+  storage_type: BackupArtifactStorageType;
+  file_name: string;
+  storage_path: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  manifest: BackupArtifactManifest;
+  created_at: string;
+}
+
+export interface BackupRestoreRequest {
+  id: string;
+  artifact_id: string;
+  requested_by: string | null;
+  status: BackupRestoreRequestStatus;
+  confirmation_phrase: string;
+  notes: string | null;
+  error_message: string | null;
+  requested_at: string;
+  updated_at: string;
+}
+
+export interface BackupOverview {
+  settings: BackupSettings;
+  recent_runs: BackupRun[];
+  recent_runs_total: number;
+  recent_runs_page: number;
+  recent_runs_per_page: number;
+  artifacts: BackupArtifact[];
+  restore_requests: BackupRestoreRequest[];
+  latest_successful_run: BackupRun | null;
+  next_run_at: string | null;
+  runtime_readiness: {
+    pg_dump_available: boolean;
+    run_now_allowed: boolean;
+    restore_automation_available: boolean;
+    restore_automation_reason?: string | null;
+    reason: string | null;
+  };
+  s3_catalog_error: string | null;
+}
+
+export interface RunBackupResponse {
+  run: BackupRun;
+  artifacts: BackupArtifact[];
+}
+
+export interface CreateBackupRestoreRequestBody {
+  artifact_id: string;
+  confirmation_phrase: string;
+  notes?: string | null;
+}
+
+export type RestoreBlockingCode =
+  | 'unsupported_package_format'
+  | 'unsupported_migration_chain'
+  | 'source_ledger_invalid'
+  | 'target_migration_drift'
+  | 'newer_source_schema'
+  | 'unsupported_postgres_version'
+  | 'unsupported_timescale_version'
+  | 'migration_checksum_mismatch'
+  | 'schema_contract_mismatch';
+
+export interface RestoreDatabaseProfile {
+  postgres_major: number | null;
+  timescale_version: string | null;
+  migration_version: number;
+  migration_ledger: Array<{
+    version: number;
+    description: string;
+    checksum_sha384: string;
+  }>;
+  migration_ledger_successful: boolean;
+  migration_chain_id: string | null;
+  migration_catalog_digest: string | null;
+  schema_contract_version: string | null;
+  schema_fingerprint: string | null;
+}
+
+export interface RestorePlan {
+  plan_id: string;
+  engine_version: number;
+  package_checksum_sha256: string;
+  package_format: string;
+  compatible: boolean;
+  source: RestoreDatabaseProfile;
+  target: RestoreDatabaseProfile;
+  pending_migrations: number[];
+  transforms: Array<{
+    id: string;
+    from_migration: number;
+    to_migration: number;
+    transactional: boolean;
+  }>;
+  validation_checks: string[];
+  warnings: string[];
+  blocking_errors: Array<{ code: RestoreBlockingCode; message: string }>;
+  planned_at: string;
+}
+
+export interface RestorePreflightResponse {
+  plan: RestorePlan;
+}
+
+export interface StartBackupRestoreBody extends CreateBackupRestoreRequestBody {
+  plan_id: string;
+  package_checksum_sha256: string;
+}
+
+export type RestoreJobPhase =
+  | 'queued'
+  | 'validating_package'
+  | 'planning'
+  | 'preparing_candidate'
+  | 'applying_transforms'
+  | 'migrating_candidate'
+  | 'validating_candidate'
+  | 'safety_backup'
+  | 'stopping_application'
+  | 'merging_host_state'
+  | 'swapping_database'
+  | 'restoring_database'
+  | 'restoring_settings'
+  | 'restoring_artwork'
+  | 'starting_application'
+  | 'verifying_health'
+  | 'rolling_back'
+  | 'completed'
+  | 'failed';
+
+export interface RestoreJob {
+  id: string;
+  artifact_id: string;
+  phase: RestoreJobPhase;
+  progress_percent: number;
+  message: string;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  plan: RestorePlan | null;
+  validation_report: {
+    source_schema: RestoreSchemaContractReport;
+    target_schema: RestoreSchemaContractReport;
+    applied_transforms: RestorePlan['transforms'];
+    migrations_applied: number[];
+    foreign_keys_validated: boolean;
+  } | null;
+  retryable: boolean;
+  rollback_state: 'not_required' | 'available' | 'in_progress' | 'succeeded' | 'failed';
+}
+
+export interface RestoreSchemaContractReport {
+  contract_version: string;
+  schema_fingerprint: string;
+  required_relations_present: boolean;
+  missing_relations: string[];
+  telemetry_hypertable: boolean;
+  foreign_keys_validated: boolean;
+}
+
+export interface UploadBackupResponse {
+  artifact: BackupArtifact;
+}
+
+export interface StartRestoreResponse {
+  job: RestoreJob;
+  capability_token: string;
+}
+
+export interface UpdateBackupSettingsBody {
+  enabled: boolean;
+  frequency: BackupFrequency;
+  run_at: string;
+  timezone: string;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  retention_count: number;
+  local_enabled: boolean;
+  s3_enabled: boolean;
+  target_type: BackupTargetType;
+  endpoint: string;
+  region: string | null;
+  bucket: string;
+  prefix: string;
+  access_key: string | null;
+  secret_key?: string | null;
+  clear_secret_key?: boolean;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface ApiError {
+  code: string;
+  message: string;
+}
+
+export interface ConnectedRivianVehicle {
+  id: string;
+  name: string | null;
+  vin: string | null;
+  model: string | null;
+  model_year: number | null;
+}
+
+export interface ConnectResult {
+  status: 'connected' | 'otp_required';
+  requires_otp: boolean;
+  challenge_id: string | null;
+  vehicle_id: string | null;
+  vehicles: ConnectedRivianVehicle[];
+}
+
+export interface AddVehicleBody {
+  rivian_vehicle_id: string;
+  name?: string | null;
+  home_lat?: number | null;
+  home_lng?: number | null;
+  model?: string | null;
+  trim?: string | null;
+  vin?: string | null;
+}
+
+export interface AddVehicleResult {
+  vehicle_id: string;
+  vehicle_saved?: boolean;
+  telemetry_status?: 'starting' | 'delayed' | 'unchanged';
+  telemetry_error?: string | null;
+}
+
+export interface RefreshVehicleCredentialsResult {
+  ok: boolean;
+  vehicle_id: string;
+  vehicle_saved: boolean;
+  connection_status: 'connected' | 'connected_waiting_for_vehicle_data';
+  telemetry_status: 'connected' | 'waiting_for_vehicle_data' | 'delayed';
+  telemetry_error: string | null;
+}
+
+export interface CreateDemoVehicleResult {
+  ok: boolean;
+  vehicle_id: string;
+  created: boolean;
+  seeded: boolean;
+  refreshed: boolean;
+  seeded_at: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  counts: {
+    telemetry: number;
+    trips: number;
+    charges: number;
+    weather_samples: number;
+  } | null;
+}
+
+export interface CreateDemoVehicleBody {
+  model: 'R1T' | 'R1S' | 'R2';
+}
+
+/** The vehicle's most recent ingestion capture. Only one is kept per vehicle. */
+export interface VehicleIngestionCapture {
+  state: 'idle' | 'capturing' | 'stopped';
+  started_at: string | null;
+  /** When a running capture stops on its own. */
+  ends_at: string | null;
+  stopped_at: string | null;
+  stop_reason: 'user' | 'expired' | null;
+  event_count: number;
+  last_event_at: string | null;
+  truncated: boolean;
+}
+
+export interface AuthTokens {
+  access_token: string;
+  expires_in: number;
+  default_vehicle_id: string | null;
+}
+
+export interface AuthMeResponse {
+  user_id: string;
+  email: string;
+  role: UserRole;
+  default_vehicle_id: string | null;
+  password_configured: boolean;
+  oidc_linked: boolean;
+}
+
+export type SettingSource = 'default' | 'database' | 'environment';
+export interface EffectiveSetting<T> { value: T; source: SettingSource }
+export interface AuthenticationSettings {
+  oidc_enabled: EffectiveSetting<boolean>;
+  password_login_enabled: EffectiveSetting<boolean>;
+  oidc_auto_login: EffectiveSetting<boolean>;
+  issuer_url: EffectiveSetting<string | null>;
+  public_base_url: EffectiveSetting<string | null>;
+  client_id: EffectiveSetting<string | null>;
+  client_secret: { configured: boolean; source: SettingSource };
+  button_label: EffectiveSetting<string>;
+  scopes: EffectiveSetting<string>;
+  token_auth_method: EffectiveSetting<string>;
+  auto_signup: EffectiveSetting<boolean>;
+  auto_link_verified_email: EffectiveSetting<boolean>;
+  allowed_email_domains: EffectiveSetting<string[]>;
+  required_claim_name: EffectiveSetting<string | null>;
+  required_claim_value: EffectiveSetting<string | null>;
+  last_validation_at: string | null;
+  callback_url: string | null;
+}
+export type AuthenticationSettingsUpdate = Partial<{
+  oidc_enabled: boolean; password_login_enabled: boolean; oidc_auto_login: boolean;
+  issuer_url: string | null; public_base_url: string | null; client_id: string | null;
+  client_secret: string | null; button_label: string; scopes: string; token_auth_method: string;
+  auto_signup: boolean; auto_link_verified_email: boolean; allowed_email_domains: string[];
+  required_claim_name: string | null; required_claim_value: string | null;
+}>;
+export interface AuthConfigResponse { oidc_enabled: boolean; password_login_enabled: boolean; oidc_auto_login: boolean; oidc_ready: boolean; button_label: string }
+export interface OidcIdentityStatus { password_configured: boolean; oidc_linked: boolean; oidc_link_available?: boolean; password_setup_allowed?: boolean; oidc_link_allowed?: boolean; button_label?: string }
+
+export interface AuthSetupResponse {
+  setup_required: boolean;
+  setup_proof_required: boolean;
+  setup_proof_available: boolean;
+}
+
+export interface ChangePasswordBody {
+  current_password: string;
+  new_password: string;
+}
+
+export interface AccountInvitationPreview {
+  email: string;
+  expires_at: string;
+  auth_methods: InvitationAuthMethods;
+  password_available: boolean;
+  sso_available: boolean;
+  button_label: string;
+}
+
+export type InvitationAuthMethods = 'password' | 'sso' | 'both';
+
+export type UserRole = 'super_user' | 'admin' | 'user';
+
+export type UnitMode = 'imperial' | 'metric' | 'custom';
+export type DistanceUnit = 'miles' | 'kilometers';
+export type SpeedUnit = 'mph' | 'kmh';
+export type TemperatureUnit = 'fahrenheit' | 'celsius';
+export type PressureUnit = 'psi' | 'kpa';
+export type AltitudeUnit = 'feet' | 'meters';
+export type PlaceRadiusUnit = 'feet' | 'meters';
+export type EfficiencyDisplay = 'distance_per_energy' | 'energy_per_distance';
+
+export interface UnitPreferences {
+  mode: UnitMode;
+  distance_unit: DistanceUnit;
+  speed_unit: SpeedUnit;
+  temperature_unit: TemperatureUnit;
+  pressure_unit: PressureUnit;
+  altitude_unit: AltitudeUnit;
+  place_radius_unit: PlaceRadiusUnit;
+  efficiency_display: EfficiencyDisplay;
+}
+
+export interface UserPreferencesResponse {
+  units: UnitPreferences;
+  theme: ThemePreferences;
+  map_style: MapStylePreference;
+}
+
+export type DashboardChartFavorites = Record<string, string>;
+
+export interface AppTimezone {
+  timezone: string;
+}
+
+export interface AppVersionResponse {
+  version: string;
+}
+
+export type UpdateCheckFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly';
+
+export interface UpdateCheckSettings {
+  enabled: boolean;
+  frequency: UpdateCheckFrequency;
+}
+
+export type ApiAccessLevel = 'read' | 'view' | 'edit' | 'admin' | (string & {});
+export type ApiAccessLevelState = 'supported' | 'legacy_unmigrated' | 'unknown';
+
+export interface ApiKeyRecord {
+  id: string;
+  vehicle_id: string;
+  name: string;
+  access_level: ApiAccessLevel;
+  access_level_state?: ApiAccessLevelState;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreateApiKeyBody {
+  vehicle_id: string;
+  name: string;
+}
+
+export interface CreateApiKeyResult {
+  key: string;
+  record: ApiKeyRecord;
+}
+
+export interface AddVehicleMemberBody {
+  email: string;
+  role: 'owner' | 'manager' | 'viewer';
+}
+
+export interface UpdateVehicleMemberBody {
+  role: 'owner' | 'manager' | 'viewer';
+}
+
+export interface UpdateVehicleSettingsBody {
+  battery_capacity_kwh?: number;
+  battery_config?: string | null;
+  target_tire_pressure_psi?: number;
+}
+
+export interface VehicleMembersResponse {
+  members: VehicleMember[];
+}
+
+export interface VehicleInvite {
+  id: string;
+  vehicle_id: string;
+  invited_by: string;
+  invitee_email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface CreateVehicleInviteBody {
+  email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  expires_in_days?: number;
+}
+
+export interface AdminUserRecord {
+  id: string;
+  email: string;
+  role: UserRole;
+  is_disabled: boolean;
+  vehicle_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Minimal vehicle identity returned to administrators for membership assignment. */
+export interface AdminVehicleOption {
+  id: string;
+  display_name: string;
+  model: string;
+}
+
+export interface CreateAccountInvitationBody {
+  email: string;
+  vehicle_ids: string[];
+  auth_methods?: InvitationAuthMethods;
+  /** Legacy singular field retained for older clients. */
+  vehicle_id?: string | null;
+  expires_in_days?: number;
+}
+
+export interface AccountInvitation {
+  id: string;
+  invitee_email: string;
+  vehicle_id: string | null;
+  vehicle_name: string | null;
+  vehicle_ids: string[];
+  vehicle_names: string[];
+  auth_methods: InvitationAuthMethods;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface UpdateAdminUserBody {
+  email?: string;
+  role?: UserRole;
+  is_disabled?: boolean;
+}
+
+export interface AdminUserMembership {
+  vehicle_id: string;
+  role: 'owner' | 'manager' | 'viewer';
+  is_default: boolean;
+  created_at: string;
+  model: string;
+  display_name: string | null;
+}
+
+export interface AdminUserInvite {
+  id: string;
+  vehicle_id: string;
+  vehicle_name: string;
+  invitee_email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface AdminUserDetail {
+  user: AdminUserRecord;
+  memberships: AdminUserMembership[];
+  invites: AdminUserInvite[];
+}
+
+export interface ApiCatalog {
+  version: string;
+  authentication: string;
+  endpoints: Array<{
+    method: string;
+    path: string;
+    vehicle_scoped: boolean;
+    purpose: string;
+  }>;
+}
+
+export interface RawTelemetrySample {
+  ts: string;
+  latitude: number | null;
+  longitude: number | null;
+  altitude_m: number | null;
+  speed_mph: number | null;
+  battery_level: number | null;
+  battery_capacity_wh: number | null;
+  distance_to_empty_mi: number | null;
+  battery_limit: number | null;
+  power_state: string | null;
+  charger_state: string | null;
+  charger_status: string | null;
+  time_to_end_of_charge_min: number | null;
+  drive_mode: string | null;
+  gear_status: string | null;
+  cabin_temp_c: number | null;
+  driver_temp_c: number | null;
+  outside_temp_c: number | null;
+  hvac_active: boolean | null;
+  power_kw: number | null;
+  regen_power_kw: number | null;
+  heading_deg: number | null;
+  odometer_miles: number | null;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+  tire_fl_status: string | null;
+  tire_fr_status: string | null;
+  tire_rl_status: string | null;
+  tire_rr_status: string | null;
+  tire_fl_valid: boolean | null;
+  tire_fr_valid: boolean | null;
+  tire_rl_valid: boolean | null;
+  tire_rr_valid: boolean | null;
+  door_front_left_locked: boolean | null;
+  door_front_right_locked: boolean | null;
+  door_rear_left_locked: boolean | null;
+  door_rear_right_locked: boolean | null;
+  door_front_left_closed: boolean | null;
+  door_front_right_closed: boolean | null;
+  door_rear_left_closed: boolean | null;
+  door_rear_right_closed: boolean | null;
+  closure_frunk_closed: boolean | null;
+  closure_liftgate_closed: boolean | null;
+  closure_tailgate_closed: boolean | null;
+  ota_current_version: string | null;
+  ota_available_version: string | null;
+  ota_status: string | null;
+  ota_current_status: string | null;
+  hv_thermal_event: string | null;
+  twelve_volt_health: string | null;
+  is_online: boolean | null;
+}
+
+export interface RawTelemetryQuery {
+  from?: string;
+  to?: string;
+  page?: number;
+  per_page?: number;
+  search?: string;
+  fields?: string[];
+  populated_only?: boolean;
+}
+
+export interface RawTelemetryFieldCoverage {
+  field: keyof RawTelemetrySample | string;
+  sample_count: number;
+}
+
+export interface RawTelemetryResponse {
+  vehicle_id: string;
+  coverage: {
+    first_event_at: string | null;
+    last_event_at: string | null;
+    sample_count: number;
+    odometer_samples: number;
+    battery_samples: number;
+    range_samples: number;
+    outside_temp_samples: number;
+    power_samples: number;
+    regen_samples: number;
+    tire_pressure_samples: number;
+    lock_samples: number;
+    software_samples: number;
+  };
+  samples: RawTelemetrySample[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  page?: number;
+  per_page?: number;
+  selected_fields?: string[];
+  field_coverage?: RawTelemetryFieldCoverage[];
+}
+
+export type TelemetryLaneName =
+  'battery' | 'drive' | 'location' | 'climate' | 'charging' | 'health';
+
+export interface TelemetryLaneQuery {
+  from?: string;
+  to?: string;
+  lanes?: TelemetryLaneName[];
+  resolution?: 'auto' | '1m' | '5m' | '1h';
+  max_points?: number;
+}
+
+export interface TelemetryLane {
+  numeric: Record<string, Array<number | null>>;
+  coverage: Record<string, number>;
+  source: string;
+}
+
+export interface TelemetryLaneFrame {
+  vehicle_id: string;
+  window: {
+    from: string;
+    to: string;
+    resolution_seconds: number;
+    approximate: boolean;
+  };
+  spine: string[];
+  lanes: Record<TelemetryLaneName, TelemetryLane>;
+  truncated: boolean;
+}
+
+export interface RawEventQuery {
+  from?: string;
+  to?: string;
+  page?: number;
+  per_page?: number;
+  event_type?: string;
+  message_type?: string;
+}
+
+export interface RawEventSummary {
+  id: string;
+  received_at: string;
+  event_type: string;
+  message_type: string | null;
+  has_json: boolean;
+  has_payload: boolean;
+}
+
+export interface RawEventListResponse {
+  vehicle_id: string;
+  retention_days: number;
+  items: RawEventSummary[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface RawEventDetail extends RawEventSummary {
+  payload: unknown;
+  payload_format: 'json' | 'text' | 'empty';
+}
+
+export interface RivianStewardshipTotals {
+  ws_messages_received: number;
+  ws_heartbeats_received: number;
+  ws_payload_messages_received: number;
+  ws_control_messages_received: number;
+  ws_connections_opened: number;
+  ws_reconnects: number;
+  outbound_messages_sent: number;
+  outbound_graphql_requests: number;
+  telemetry_writes_persisted: number;
+  telemetry_writes_suppressed: number;
+  telemetry_suppressed_duplicate: number;
+  telemetry_suppressed_empty: number;
+  telemetry_suppressed_threshold: number;
+  collector_lock_skips: number;
+  raw_events_persisted: number;
+}
+
+export interface RivianStewardshipVehicle {
+  vehicle_id: string;
+  display_name: string;
+  worker_health: string | null;
+  last_seen_at: string | null;
+  last_payload_at: string | null;
+  last_persisted_at: string | null;
+  last_heartbeat_at: string | null;
+  ws_messages_received: number;
+  ws_heartbeats_received: number;
+  ws_payload_messages_received: number;
+  ws_reconnects: number;
+  telemetry_writes_persisted: number;
+  telemetry_writes_suppressed: number;
+  collector_lock_skips: number;
+}
+
+export interface RivianStewardshipResponse {
+  generated_at: string;
+  retention_days: number;
+  raw_event_persistence_enabled: boolean;
+  duplicate_suppression_enabled: boolean;
+  active_collectors: number;
+  raw_events_retained: number;
+  totals_24h: RivianStewardshipTotals;
+  vehicles: RivianStewardshipVehicle[];
+}

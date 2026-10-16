@@ -1,0 +1,166 @@
+import React from 'react';
+import { render as renderBase, screen, act } from '@testing-library/react';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { useVehicleStatus, useLiveStatusStore } from '@panda/hooks';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { StatusBar } from '@panda/ui/primitives';
+
+const render: typeof renderBase = (ui, options) => {
+  const client = new QueryClient();
+  return renderBase(<QueryClientProvider client={client}>{ui}</QueryClientProvider>, options);
+};
+
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  url: string;
+  protocols: string[];
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+
+  constructor(url: string, protocols: string[]) {
+    this.url = url;
+    this.protocols = protocols;
+    MockWebSocket.instances.push(this);
+  }
+
+  open() {
+    this.onopen?.(new Event('open'));
+  }
+
+  close() {
+    this.onclose?.({ code: 1006, reason: 'test' } as CloseEvent);
+  }
+
+  error() {
+    this.onerror?.(new Event('error'));
+  }
+
+  send() {}
+}
+
+function Probe({
+  vehicleId,
+  accessToken,
+}: {
+  vehicleId: string | null;
+  accessToken: string | null;
+}) {
+  const { connected, connectionState } = useVehicleStatus(vehicleId, accessToken);
+
+  return (
+    <div>
+      <span data-testid="connected">{String(connected)}</span>
+      <span data-testid="state">{connectionState}</span>
+    </div>
+  );
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  MockWebSocket.instances = [];
+  useLiveStatusStore.setState({ status: {}, connected: {} });
+  vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe('useVehicleStatus', () => {
+  it('reports online when the socket opens and fails after repeated disconnects', async () => {
+    render(<Probe vehicleId="vehicle-123" accessToken="token-123" />);
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0]?.protocols).toEqual(['bearer', 'bearer.token-123']);
+    expect(screen.getByTestId('state')).toHaveTextContent('connecting');
+
+    await act(async () => {
+      MockWebSocket.instances[0]?.open();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({ type: 'keepalive' }),
+      } as MessageEvent);
+    });
+
+    expect(screen.getByTestId('state')).toHaveTextContent('online');
+    expect(screen.getByTestId('connected')).toHaveTextContent('true');
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await act(async () => {
+        MockWebSocket.instances[MockWebSocket.instances.length - 1]?.close();
+        vi.runOnlyPendingTimers();
+      });
+
+      expect(MockWebSocket.instances).toHaveLength(attempt + 2);
+    }
+
+    await act(async () => {
+      MockWebSocket.instances[MockWebSocket.instances.length - 1]?.close();
+    });
+
+    expect(screen.getByTestId('state')).toHaveTextContent('failed');
+    expect(screen.getByTestId('connected')).toHaveTextContent('false');
+    expect(MockWebSocket.instances).toHaveLength(6);
+  });
+});
+
+describe('StatusBar', () => {
+  it('renders a reconnecting browser transport state', () => {
+    render(<StatusBar onlineState="connecting" />);
+
+    expect(screen.getByLabelText('Vehicle status: Reconnecting...')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting...')).toHaveClass('text-accent');
+  });
+
+  it('renders a failed connection state', () => {
+    render(<StatusBar onlineState="error" />);
+
+    expect(screen.getByLabelText('Vehicle status: Connection failed')).toBeInTheDocument();
+    expect(screen.getByText('Connection failed')).toBeInTheDocument();
+  });
+
+  it('keeps the battery indicator visible in compact mode', () => {
+    const { container } = render(<StatusBar onlineState="online" socPercent={68} compact />);
+
+    expect(screen.getByLabelText('Battery status: 68%')).toBeInTheDocument();
+    expect(screen.queryByText('68%')).not.toBeInTheDocument();
+    const batteryIcon = container.querySelector('[data-battery-icon="battery-full"]');
+    expect(batteryIcon).toBeInTheDocument();
+    expect(batteryIcon).toHaveClass('h-5', 'w-5');
+  });
+
+  it('renders an unhealthy upstream feed separately from a local connection failure', () => {
+    render(<StatusBar onlineState="unhealthy" socPercent={68} />);
+
+    expect(screen.getByLabelText('Vehicle status: Feed unhealthy')).toBeInTheDocument();
+    expect(screen.getByText('Feed unhealthy')).toHaveClass('text-status-danger');
+    expect(screen.queryByLabelText('Battery status: 68%')).not.toBeInTheDocument();
+  });
+
+  it('uses the low battery icon for low charge', () => {
+    const { container } = render(<StatusBar onlineState="online" socPercent={12} compact />);
+
+    expect(screen.getByLabelText('Battery status: 12%')).toBeInTheDocument();
+    const batteryIcon = container.querySelector('[data-battery-icon="battery-low"]');
+    expect(batteryIcon).toBeInTheDocument();
+    expect(batteryIcon).toHaveClass('h-5', 'w-5');
+  });
+
+  it.each(['online', 'offline', 'connecting', 'unhealthy', 'error'] as const)('uses the shared menu typography and 20px status icons for %s', (onlineState) => {
+    const { container } = render(<StatusBar onlineState={onlineState} size="menu" socPercent={68} />);
+    const status = container.querySelector('[aria-label^="Vehicle status:"]');
+    expect(status?.querySelector('svg')).toHaveClass('h-5', 'w-5');
+    expect(status?.querySelector('span')).toHaveClass('text-sm');
+    if (onlineState === 'online') {
+      expect(container.querySelector('[aria-label^="Battery status:"] svg')).toHaveClass('h-6', 'w-6');
+      expect(container.querySelector('[aria-label^="Battery status:"] span')).toHaveClass('text-sm', 'tabular-nums');
+    }
+  });
+});

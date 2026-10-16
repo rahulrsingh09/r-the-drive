@@ -1,0 +1,1781 @@
+use axum::{
+    body::Body,
+    extract::{DefaultBodyLimit, State},
+    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
+    routing::{delete, get, post, put},
+    Json, Router,
+};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono_tz::Tz;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sqlx::FromRow;
+use tokio::{
+    fs,
+    io::AsyncWriteExt,
+    time::{Duration as TokioDuration, Instant},
+};
+use tokio_util::io::ReaderStream;
+use uuid::Uuid;
+
+use crate::{
+    errors::AppError,
+    ingestion::session_store::encrypt_json,
+    middleware::auth::{AppState, AuthUser},
+    services::{
+        app_settings, backups as backup_service, restore_compatibility, restore_jobs, s3_backups,
+    },
+};
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/admin/backups", get(get_backup_overview))
+        .route("/admin/backups/settings", put(update_backup_settings))
+        .route("/admin/backups/run", post(run_backup_now))
+        .route("/admin/backups/s3/test", post(test_s3_connection))
+        .route(
+            "/admin/backups/imports/{artifact_id}",
+            delete(delete_uploaded_artifact),
+        )
+        .route("/admin/backups/restores", post(start_restore))
+        .route("/admin/backups/restores/preflight", post(preflight_restore))
+        .route(
+            "/admin/backups/artifacts/{artifact_id}/download",
+            get(download_backup_artifact),
+        )
+        .route(
+            "/admin/backups/restore-requests",
+            post(create_restore_request),
+        )
+}
+
+pub fn upload_router() -> Router<AppState> {
+    Router::new().route(
+        "/admin/backups/imports",
+        post(upload_backup_artifact).layer(DefaultBodyLimit::disable()),
+    )
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum BackupFrequency {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl BackupFrequency {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Daily => "daily",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+        }
+    }
+}
+
+impl TryFrom<&str> for BackupFrequency {
+    type Error = AppError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "daily" => Ok(Self::Daily),
+            "weekly" => Ok(Self::Weekly),
+            "monthly" => Ok(Self::Monthly),
+            _ => Err(AppError::Validation(
+                "frequency must be daily, weekly, or monthly".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum BackupTargetType {
+    S3,
+}
+
+impl BackupTargetType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::S3 => "s3",
+        }
+    }
+}
+
+impl TryFrom<&str> for BackupTargetType {
+    type Error = AppError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "s3" => Ok(Self::S3),
+            _ => Err(AppError::Validation("target_type must be s3".into())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum BackupRunStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
+impl TryFrom<&str> for BackupRunStatus {
+    type Error = AppError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            "canceled" => Ok(Self::Canceled),
+            _ => Err(AppError::Validation("backup run status is invalid".into())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum BackupRunTrigger {
+    Manual,
+    Scheduled,
+    Restore,
+    Upload,
+    PreRestore,
+}
+
+impl TryFrom<&str> for BackupRunTrigger {
+    type Error = AppError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "manual" => Ok(Self::Manual),
+            "scheduled" => Ok(Self::Scheduled),
+            "restore" => Ok(Self::Restore),
+            "upload" => Ok(Self::Upload),
+            "pre_restore" => Ok(Self::PreRestore),
+            _ => Err(AppError::Validation("backup run trigger is invalid".into())),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct BackupOverviewResponse {
+    settings: BackupSettingsResponse,
+    recent_runs: Vec<BackupRunResponse>,
+    recent_runs_total: i64,
+    recent_runs_page: i64,
+    recent_runs_per_page: i64,
+    artifacts: Vec<BackupArtifactResponse>,
+    restore_requests: Vec<BackupRestoreRequestResponse>,
+    latest_successful_run: Option<BackupRunResponse>,
+    next_run_at: Option<DateTime<Utc>>,
+    runtime_readiness: BackupRuntimeReadinessResponse,
+    s3_catalog_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRuntimeReadinessResponse {
+    pg_dump_available: bool,
+    run_now_allowed: bool,
+    restore_automation_available: bool,
+    restore_automation_reason: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupSettingsResponse {
+    enabled: bool,
+    frequency: BackupFrequency,
+    run_at: String,
+    timezone: String,
+    day_of_week: Option<i16>,
+    day_of_month: Option<i16>,
+    retention_count: i32,
+    local_enabled: bool,
+    s3_enabled: bool,
+    target_type: BackupTargetType,
+    endpoint: String,
+    region: Option<String>,
+    bucket: String,
+    prefix: String,
+    access_key: Option<String>,
+    has_secret_key: bool,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRunResponse {
+    id: Uuid,
+    trigger: BackupRunTrigger,
+    status: BackupRunStatus,
+    phase: String,
+    progress_percent: i16,
+    artifact_key: Option<String>,
+    started_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
+    error_message: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupArtifactResponse {
+    id: Uuid,
+    run_id: Option<Uuid>,
+    storage_type: String,
+    file_name: String,
+    storage_path: String,
+    size_bytes: i64,
+    checksum_sha256: String,
+    manifest: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRestoreRequestResponse {
+    id: Uuid,
+    artifact_id: Uuid,
+    requested_by: Option<Uuid>,
+    status: String,
+    confirmation_phrase: String,
+    notes: Option<String>,
+    error_message: Option<String>,
+    requested_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRunExecutionResponse {
+    run: BackupRunResponse,
+    artifacts: Vec<BackupArtifactResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateBackupSettingsBody {
+    enabled: bool,
+    frequency: BackupFrequency,
+    run_at: String,
+    timezone: String,
+    day_of_week: Option<i16>,
+    day_of_month: Option<i16>,
+    retention_count: i32,
+    local_enabled: bool,
+    s3_enabled: bool,
+    target_type: BackupTargetType,
+    endpoint: String,
+    region: Option<String>,
+    bucket: String,
+    prefix: String,
+    access_key: Option<String>,
+    secret_key: Option<String>,
+    clear_secret_key: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRestoreRequestBody {
+    artifact_id: Uuid,
+    confirmation_phrase: String,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StartRestoreBody {
+    artifact_id: Uuid,
+    confirmation_phrase: String,
+    notes: Option<String>,
+    plan_id: String,
+    package_checksum_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreflightRestoreBody {
+    artifact_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct RestorePreflightResponse {
+    plan: restore_compatibility::RestorePlan,
+}
+
+#[derive(Debug, Serialize)]
+struct UploadBackupResponse {
+    artifact: BackupArtifactResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct StartRestoreResponse {
+    job: restore_jobs::RestoreJobPublic,
+    capability_token: String,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupSettingsRow {
+    enabled: bool,
+    frequency: String,
+    run_at: NaiveTime,
+    day_of_week: Option<i16>,
+    day_of_month: Option<i16>,
+    retention_count: i32,
+    local_enabled: bool,
+    s3_enabled: bool,
+    target_type: String,
+    endpoint: String,
+    region: Option<String>,
+    bucket: String,
+    prefix: String,
+    access_key: Option<String>,
+    has_secret_key: bool,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupRunRow {
+    id: Uuid,
+    trigger: String,
+    status: String,
+    phase: String,
+    progress_percent: i16,
+    artifact_key: Option<String>,
+    started_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
+    error_message: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupArtifactRow {
+    id: Uuid,
+    run_id: Option<Uuid>,
+    storage_type: String,
+    file_name: String,
+    storage_path: String,
+    size_bytes: i64,
+    checksum_sha256: String,
+    manifest: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupRestoreRequestRow {
+    id: Uuid,
+    artifact_id: Uuid,
+    requested_by: Option<Uuid>,
+    status: String,
+    confirmation_phrase: String,
+    notes: Option<String>,
+    error_message: Option<String>,
+    requested_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+async fn get_backup_overview(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Query(query): axum::extract::Query<BackupOverviewQuery>,
+) -> Result<Json<BackupOverviewResponse>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
+
+    let settings = load_settings(&state).await?;
+    let recent_runs_page = query.page.unwrap_or(1).max(1);
+    let recent_runs_per_page = query.per_page.unwrap_or(10).clamp(1, 100);
+    let recent_runs_total = count_recent_runs(&state).await?;
+    let recent_runs = load_recent_runs(&state, recent_runs_page, recent_runs_per_page).await?;
+    let s3_catalog_error = match reconcile_s3_catalog(&state).await {
+        Ok(()) => None,
+        Err(error) => Some(error.to_string()),
+    };
+    let artifacts = load_artifacts(&state).await?;
+    let restore_requests = load_restore_requests(&state).await?;
+    let latest_successful_run = load_latest_successful_run(&state).await?;
+    let next_run_at = compute_next_run(&settings)?;
+    let readiness = backup_service::runtime_readiness(&state.config).await;
+    let restore_readiness = restore_jobs::agent_readiness(&state.config).await;
+
+    Ok(Json(BackupOverviewResponse {
+        settings,
+        recent_runs,
+        recent_runs_total,
+        recent_runs_page: recent_runs_page as i64,
+        recent_runs_per_page: recent_runs_per_page as i64,
+        artifacts,
+        restore_requests,
+        latest_successful_run,
+        next_run_at,
+        runtime_readiness: BackupRuntimeReadinessResponse {
+            pg_dump_available: readiness.pg_dump_available,
+            run_now_allowed: readiness.run_now_allowed,
+            restore_automation_available: restore_readiness.is_ok(),
+            restore_automation_reason: restore_readiness.err(),
+            reason: readiness.reason,
+        },
+        s3_catalog_error,
+    }))
+}
+
+async fn reconcile_s3_catalog(state: &AppState) -> Result<(), AppError> {
+    let Some(settings) = backup_service::configured_s3_settings(&state.pool, &state.config).await?
+    else {
+        return Ok(());
+    };
+    let rows = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        s3_backups::list(&settings),
+    )
+    .await
+    .map_err(|_| AppError::DependencyUnavailable("S3 catalog listing timed out".into()))?
+    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+    sqlx::query(
+        r#"
+        UPDATE panda.backup_artifacts
+        SET manifest = jsonb_set(manifest, '{restore_availability}', '"unavailable"'::jsonb, true)
+        WHERE storage_type = 's3'
+        "#,
+    )
+    .execute(&state.pool)
+    .await?;
+    for row in rows {
+        let storage_path = s3_backups::locator(&settings.bucket, &row.key);
+        let checksum = row.checksum_sha256.unwrap_or_default();
+        let manifest = serde_json::json!({
+            "artifact_kind": "recovery_package",
+            "format": row.metadata.get("panda-format").cloned().unwrap_or_else(|| "panda-recovery-v1".into()),
+            "storage_type": "s3",
+            "object_key": row.key,
+            "restore_availability": "available",
+        });
+        sqlx::query(
+            r#"INSERT INTO panda.backup_artifacts
+               (run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
+               VALUES (NULL, 's3', $1, $2, $3, $4, $5, $6)
+               ON CONFLICT (storage_path) WHERE storage_type = 's3'
+               DO UPDATE SET file_name = EXCLUDED.file_name, size_bytes = EXCLUDED.size_bytes,
+                             checksum_sha256 = EXCLUDED.checksum_sha256, manifest = EXCLUDED.manifest"#,
+        )
+        .bind(row.file_name).bind(storage_path).bind(row.size_bytes).bind(checksum).bind(manifest).bind(row.created_at)
+        .execute(&state.pool).await?;
+    }
+    Ok(())
+}
+
+async fn upload_backup_artifact(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+    backup_service::run_recovery_operation(state.pool.clone(), async move {
+        upload_backup_artifact_admitted(state, auth, headers, body).await
+    })
+    .await
+}
+
+async fn upload_backup_artifact_admitted(
+    state: AppState,
+    auth: AuthUser,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
+    let declared_size = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared_size.is_some_and(|size| size > state.config.recovery.max_upload_bytes) {
+        return Err(AppError::RecoveryTooLarge(
+            "Recovery package exceeds the configured upload limit.".into(),
+        ));
+    }
+    let original_name = headers
+        .get("x-panda-file-name")
+        .and_then(|value| value.to_str().ok())
+        .map(sanitize_upload_name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "external-backup.rma.tar.gz".into());
+    if !original_name.ends_with(".rma.tar.gz") {
+        return Err(AppError::Validation(
+            "Upload a Panda .rma.tar.gz recovery package.".into(),
+        ));
+    }
+    let run_id = Uuid::new_v4();
+    let root = std::path::Path::new(&state.config.backup_artifact_dir);
+    fs::create_dir_all(root).await?;
+    ensure_recovery_free_space(root, state.config.recovery.min_free_bytes)?;
+    let destination = crate::services::artifact_files::StagingFile::upload(root, run_id)?;
+    let final_path = destination.path.clone();
+    let final_name = destination.file_name().to_owned();
+    let upload_result = async {
+        sqlx::query(
+            "INSERT INTO panda.backup_runs (id, trigger, status, phase, progress_percent, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', 'queued', 0, $2, now(), now())",
+        )
+        .bind(run_id)
+        .bind(auth.user_id)
+        .execute(&state.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE panda.backup_runs SET phase = 'uploading', progress_percent = 10, updated_at = now() WHERE id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
+        .execute(&state.pool)
+        .await?;
+        let mut output = fs::File::from_std(destination.file.try_clone()?);
+        let mut stream = body.into_data_stream();
+        let deadline = Instant::now()
+            + TokioDuration::from_secs(state.config.recovery.upload_deadline_seconds);
+        let mut received = 0_u64;
+        while let Some(chunk) = tokio::time::timeout_at(deadline, futures::StreamExt::next(&mut stream)).await
+            .map_err(|_| AppError::RecoveryDeadline("Recovery upload exceeded the configured deadline.".into()))? {
+            if Instant::now() >= deadline {
+                return Err(AppError::RecoveryDeadline(
+                    "Recovery upload exceeded the configured deadline.".into(),
+                ));
+            }
+            let chunk = chunk.map_err(|error| {
+                AppError::Validation(format!("Backup upload was interrupted: {error}"))
+            })?;
+            received = received.checked_add(chunk.len() as u64).ok_or_else(|| {
+                AppError::RecoveryTooLarge("Recovery upload size overflowed.".into())
+            })?;
+            if received > state.config.recovery.max_upload_bytes {
+                return Err(AppError::RecoveryTooLarge(
+                    "Recovery package exceeds the configured upload limit.".into(),
+                ));
+            }
+            ensure_recovery_free_space(root, state.config.recovery.min_free_bytes.saturating_add(chunk.len() as u64))?;
+            output.write_all(&chunk).await?;
+        }
+        output.flush().await?;
+        drop(output);
+
+        sqlx::query(
+            "UPDATE panda.backup_runs SET phase = 'validating', progress_percent = 90, updated_at = now() WHERE id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
+        .execute(&state.pool)
+        .await?;
+        let mut opened = destination.file.try_clone()?;
+        std::io::Seek::seek(&mut opened, std::io::SeekFrom::Start(0))?;
+        let validated = backup_service::validate_open_recovery_package(opened, &state.config.recovery).await?;
+        destination.publish()?;
+        let storage_path = final_path.to_string_lossy().into_owned();
+        let manifest = serde_json::json!({
+            "artifact_kind": "recovery_package",
+            "format": validated.manifest.get("format").cloned().unwrap_or(serde_json::Value::Null),
+            "original_file_name": original_name,
+            "package": validated.manifest,
+        });
+        let artifact_id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO panda.backup_artifacts (
+                run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest
+            ) VALUES ($1, 'uploaded', $2, $3, $4, $5, $6)
+            RETURNING id
+            "#,
+        )
+        .bind(run_id)
+        .bind(&final_name)
+        .bind(&storage_path)
+        .bind(validated.size_bytes)
+        .bind(&validated.checksum_sha256)
+        .bind(manifest)
+        .fetch_one(&state.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE panda.backup_runs SET status = 'succeeded', phase = 'completed', progress_percent = 100, artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
+        .bind(&storage_path)
+        .execute(&state.pool)
+        .await?;
+        load_artifact_by_id(&state, artifact_id).await
+    }
+    .await;
+
+    let response = match upload_result {
+        Ok(artifact) => Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact }))),
+        Err(error) => {
+            let _ = crate::services::artifact_files::remove(root, &final_path);
+            let _ = sqlx::query(
+                "UPDATE panda.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1 AND status = 'running'",
+            )
+            .bind(run_id)
+            .bind(error.to_string())
+            .execute(&state.pool)
+            .await;
+            Err(error)
+        }
+    };
+    response
+}
+
+fn ensure_recovery_free_space(path: &std::path::Path, minimum: u64) -> Result<(), AppError> {
+    let available = fs2::available_space(path)?;
+    if available < minimum {
+        return Err(AppError::RecoveryInsufficientStorage(format!(
+            "Recovery storage needs at least {} GiB free before continuing.",
+            minimum / 1024 / 1024 / 1024
+        )));
+    }
+    Ok(())
+}
+
+async fn delete_uploaded_artifact(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(artifact_id): axum::extract::Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let artifact = load_artifact_by_id(&state, artifact_id).await?;
+    if artifact.storage_type != "uploaded" {
+        return Err(AppError::Validation(
+            "Only imported recovery packages can be deleted with this action.".into(),
+        ));
+    }
+    let active: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM panda.backup_restore_requests WHERE artifact_id = $1 AND status IN ('pending', 'approved', 'running') LIMIT 1",
+    )
+    .bind(artifact_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if active.is_some() {
+        return Err(AppError::Conflict(
+            "This package has an active restore job.".into(),
+        ));
+    }
+    crate::services::artifact_files::remove(
+        std::path::Path::new(&state.config.backup_artifact_dir),
+        std::path::Path::new(&artifact.storage_path),
+    )?;
+    sqlx::query("DELETE FROM panda.backup_runs WHERE id = $1")
+        .bind(artifact.run_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<StartRestoreBody>,
+) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+    backup_service::run_recovery_operation(state.pool.clone(), async move {
+        start_restore_admitted(state, auth, body).await
+    })
+    .await
+}
+
+async fn start_restore_admitted(
+    state: AppState,
+    auth: AuthUser,
+    body: StartRestoreBody,
+) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
+    if !restore_jobs::agent_is_ready(&state.config).await {
+        return Err(AppError::DependencyUnavailable(
+            "Automated restore is unavailable in this runtime; use scripts/restore-backup.mjs."
+                .into(),
+        ));
+    }
+    if body.confirmation_phrase.trim() != backup_service::RESTORE_CONFIRMATION_PHRASE {
+        return Err(AppError::Validation(format!(
+            "Type {} to request a restore",
+            backup_service::RESTORE_CONFIRMATION_PHRASE
+        )));
+    }
+    let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
+    let staged = materialize_artifact(&state, &artifact).await?;
+    let restore_path = staged.path.clone();
+    let prepared = async {
+        let validated = backup_service::validate_recovery_package_with_limits(
+            std::path::Path::new(&restore_path),
+            &state.config.recovery,
+        )
+        .await?;
+        let dump_inspection = restore_compatibility::inspect_recovery_dump(
+            std::path::Path::new(&restore_path),
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            &state.config.recovery,
+        )
+        .await?;
+        let plan = restore_compatibility::plan_restore(
+            &validated.manifest,
+            &validated.checksum_sha256,
+            &state.pool,
+            Some(&dump_inspection),
+        )
+        .await?;
+        if !plan.compatible {
+            return Err(AppError::Validation(
+                plan.blocking_errors
+                    .iter()
+                    .map(|error| error.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
+        if body.plan_id != plan.plan_id || body.package_checksum_sha256 != validated.checksum_sha256
+        {
+            return Err(AppError::Conflict(
+            "The recovery package or target schema changed after preflight. Run preflight again."
+                .into(),
+        ));
+        }
+        let request_id = backup_service::create_restore_request(
+            &state.pool,
+            body.artifact_id,
+            auth.user_id,
+            &body.confirmation_phrase,
+            body.notes,
+        )
+        .await?;
+        let (job, capability_token) = restore_jobs::create(
+            &state.config,
+            body.artifact_id,
+            restore_path.clone(),
+            request_id,
+            plan,
+        )
+        .await?;
+        Ok::<_, AppError>((job, capability_token, request_id))
+    }
+    .await;
+    let (job, capability_token, request_id) = prepared?;
+    let background_state = state.clone();
+    let job_id = job.id;
+    tokio::spawn(async move {
+        if let Err(error) = prepare_and_handoff_restore(background_state.clone(), job_id).await {
+            if let Ok(job) = restore_jobs::read(&background_state.config, job_id).await {
+                cleanup_remote_staging_path(&job.artifact_path).await;
+            }
+            let _ = restore_jobs::fail(&background_state.config, job_id, &error).await;
+            let _ = sqlx::query(
+                "UPDATE panda.backup_restore_requests SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
+            )
+            .bind(request_id)
+            .bind(error.to_string())
+            .execute(&background_state.pool)
+            .await;
+        }
+    });
+    // The durable job and its background worker now own the published path.
+    staged.retain();
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(StartRestoreResponse {
+            job: job.public(),
+            capability_token,
+        }),
+    ))
+}
+
+async fn preflight_restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<PreflightRestoreBody>,
+) -> Result<Json<RestorePreflightResponse>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    backup_service::run_recovery_operation(state.pool.clone(), async move {
+        preflight_restore_admitted(state, body).await
+    })
+    .await
+}
+
+async fn preflight_restore_admitted(
+    state: AppState,
+    body: PreflightRestoreBody,
+) -> Result<Json<RestorePreflightResponse>, AppError> {
+    let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
+    let staged = materialize_artifact(&state, &artifact).await?;
+    let restore_path = &staged.path;
+    let result = async {
+        let validated = backup_service::validate_recovery_package_with_limits(
+            std::path::Path::new(&restore_path),
+            &state.config.recovery,
+        )
+        .await?;
+        let dump_inspection = restore_compatibility::inspect_recovery_dump(
+            std::path::Path::new(&restore_path),
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            &state.config.recovery,
+        )
+        .await?;
+        let plan = restore_compatibility::plan_restore(
+            &validated.manifest,
+            &validated.checksum_sha256,
+            &state.pool,
+            Some(&dump_inspection),
+        )
+        .await?;
+        Ok::<_, AppError>(RestorePreflightResponse { plan })
+    }
+    .await;
+    result.map(Json)
+}
+
+async fn cleanup_remote_staging_path(path: &str) {
+    let path = std::path::Path::new(path);
+    if path
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some(".remote-staging")
+    {
+        let _ = fs::remove_file(path).await;
+    }
+}
+
+async fn prepare_and_handoff_restore(state: AppState, job_id: Uuid) -> Result<(), AppError> {
+    let mut job = restore_jobs::read(&state.config, job_id).await?;
+    job.phase = restore_jobs::RestorePhase::PreparingCandidate;
+    job.progress_percent = 15;
+    job.message = "Preparing isolated restore candidate while Panda remains available".into();
+    job.updated_at = Utc::now();
+    restore_jobs::write(&state.config, &job).await?;
+
+    sqlx::query(
+        "UPDATE panda.backup_restore_requests SET status = 'running', updated_at = now() WHERE id = $1",
+    )
+    .bind(job.restore_request_id)
+    .execute(&state.pool)
+    .await?;
+
+    backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
+
+    // The database restore replaces these operational tables. Keep their current
+    // contents beside the packages so the restarted API can merge the catalog,
+    // execution history, and this restore request back into the restored database.
+    job.catalog_snapshot = Some(restore_jobs::snapshot_catalog(&state.pool).await?);
+    job.updated_at = Utc::now();
+    restore_jobs::write(&state.config, &job).await?;
+
+    let key = fs::read_to_string(restore_jobs::agent_key_path(&state.config)).await?;
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/internal/jobs/{job_id}/execute",
+            state.config.restore_agent_url.trim_end_matches('/')
+        ))
+        .header("x-panda-agent-key", key.trim())
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::DependencyUnavailable(format!("Restore supervisor is unavailable: {error}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::DependencyUnavailable(format!(
+            "Restore supervisor rejected the job with status {}.",
+            response.status()
+        )));
+    }
+    Ok(())
+}
+
+fn sanitize_upload_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(180)
+        .collect()
+}
+
+async fn download_backup_artifact(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(artifact_id): axum::extract::Path<Uuid>,
+) -> Result<Response<Body>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let artifact = load_artifact_by_id(&state, artifact_id).await?;
+    let body = if artifact.storage_type == "s3" {
+        let (settings, key) = resolve_remote_artifact(&state, &artifact).await?;
+        let stream = s3_backups::download_stream(&settings, &key)
+            .await
+            .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+        Body::from_stream(ReaderStream::new(stream.into_async_read()))
+    } else {
+        let file = fs::File::from_std(crate::services::artifact_files::open(
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            std::path::Path::new(&artifact.storage_path),
+        )?);
+        Body::from_stream(ReaderStream::new(file))
+    };
+
+    let safe_name = artifact.file_name.replace('"', "_");
+    let mut response = Response::new(body);
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    let content_disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{safe_name}\""
+    ))
+    .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid download filename: {error}")))?;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, content_disposition);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn update_backup_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<UpdateBackupSettingsBody>,
+) -> Result<Json<BackupSettingsResponse>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let run_at = parse_run_time(&body.run_at)?;
+    let timezone = parse_timezone(&body.timezone)?;
+    validate_schedule(&body.frequency, body.day_of_week, body.day_of_month)?;
+    validate_target(
+        body.target_type,
+        body.local_enabled,
+        body.s3_enabled,
+        &body.endpoint,
+        &body.bucket,
+    )?;
+
+    let normalized_day_of_week = match body.frequency {
+        BackupFrequency::Weekly => body.day_of_week,
+        _ => None,
+    };
+    let normalized_day_of_month = match body.frequency {
+        BackupFrequency::Monthly => body.day_of_month,
+        _ => None,
+    };
+
+    let normalized_endpoint = body.endpoint.trim().to_string();
+    let normalized_region = body
+        .region
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let normalized_bucket = body.bucket.trim().to_string();
+    if body.s3_enabled {
+        crate::services::s3_transport::S3Policy::from_config(&state.config)?
+            .validate_endpoint(&body.endpoint)
+            .await?;
+    }
+    let normalized_prefix = normalize_prefix(&body.prefix)?;
+    let normalized_access_key = body
+        .access_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let clear_secret_key = body.clear_secret_key.unwrap_or(false);
+    let encrypted_secret = encrypt_secret(state.age_key.as_str(), body.secret_key.as_deref())?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO panda.backup_settings (
+            id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
+            retention_count, local_enabled, s3_enabled, target_type, endpoint, region, bucket, prefix,
+            access_key, secret_key_encrypted, updated_at, updated_by
+        )
+        VALUES (
+            TRUE, $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10, $11, $12, $13, $14,
+            $15, $16, now(), $17
+        )
+        ON CONFLICT (id) DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            frequency = EXCLUDED.frequency,
+            run_at = EXCLUDED.run_at,
+            timezone = EXCLUDED.timezone,
+            day_of_week = EXCLUDED.day_of_week,
+            day_of_month = EXCLUDED.day_of_month,
+            retention_count = EXCLUDED.retention_count,
+            local_enabled = EXCLUDED.local_enabled,
+            s3_enabled = EXCLUDED.s3_enabled,
+            target_type = EXCLUDED.target_type,
+            endpoint = EXCLUDED.endpoint,
+            region = EXCLUDED.region,
+            bucket = EXCLUDED.bucket,
+            prefix = EXCLUDED.prefix,
+            access_key = EXCLUDED.access_key,
+            secret_key_encrypted = CASE
+                WHEN $18 THEN NULL
+                WHEN $16 IS NOT NULL THEN $16
+                ELSE panda.backup_settings.secret_key_encrypted
+            END,
+            updated_at = now(),
+            updated_by = EXCLUDED.updated_by
+        "#,
+    )
+    .bind(body.enabled)
+    .bind(body.frequency.as_str())
+    .bind(run_at)
+    .bind(timezone.name())
+    .bind(normalized_day_of_week)
+    .bind(normalized_day_of_month)
+    .bind(body.retention_count)
+    .bind(body.local_enabled)
+    .bind(body.s3_enabled)
+    .bind(body.target_type.as_str())
+    .bind(normalized_endpoint)
+    .bind(normalized_region)
+    .bind(normalized_bucket)
+    .bind(normalized_prefix)
+    .bind(normalized_access_key)
+    .bind(encrypted_secret)
+    .bind(auth.user_id)
+    .bind(clear_secret_key)
+    .execute(&state.pool)
+    .await?;
+
+    app_settings::set_app_timezone(&state.pool, timezone).await?;
+
+    Ok(Json(load_settings(&state).await?))
+}
+
+struct MaterializedArtifact {
+    root: std::path::PathBuf,
+    staging_id: Uuid,
+    path: String,
+    retained: bool,
+}
+
+impl MaterializedArtifact {
+    fn retain(mut self) {
+        self.retained = true;
+    }
+}
+
+impl Drop for MaterializedArtifact {
+    fn drop(&mut self) {
+        if !self.retained {
+            let _ = crate::services::artifact_files::remove_staged(&self.root, self.staging_id);
+        }
+    }
+}
+
+async fn materialize_artifact(
+    state: &AppState,
+    artifact: &BackupArtifactResponse,
+) -> Result<MaterializedArtifact, AppError> {
+    // Both callers hold recovery admission through materialization, dump
+    // extraction/inspection and planning, so concurrent preflights cannot
+    // multiply the configured disk envelope.
+    let root = std::path::Path::new(&state.config.backup_artifact_dir);
+    let staging_id = Uuid::new_v4();
+    let path = if artifact.storage_type != "s3" {
+        let mut source = fs::File::from_std(crate::services::artifact_files::open(
+            root,
+            std::path::Path::new(&artifact.storage_path),
+        )?);
+        crate::services::artifact_files::stage_reader(
+            root,
+            staging_id,
+            &mut source,
+            &state.config.recovery,
+        )
+        .await?
+    } else {
+        let (settings, key) = resolve_remote_artifact(state, artifact).await?;
+        s3_backups::download(&settings, &key, root, staging_id, &state.config.recovery)
+            .await
+            .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?
+    };
+    let staged = MaterializedArtifact {
+        root: root.to_owned(),
+        staging_id,
+        path: path.to_string_lossy().into_owned(),
+        retained: false,
+    };
+    let validated =
+        backup_service::validate_recovery_package_with_limits(&path, &state.config.recovery)
+            .await?;
+    if !artifact.checksum_sha256.is_empty() && artifact.checksum_sha256 != validated.checksum_sha256
+    {
+        return Err(AppError::Validation(
+            "Recovery package checksum does not match its catalog metadata".into(),
+        ));
+    }
+    Ok(staged)
+}
+
+async fn resolve_remote_artifact(
+    state: &AppState,
+    artifact: &BackupArtifactResponse,
+) -> Result<(s3_backups::S3Settings, String), AppError> {
+    let settings = backup_service::configured_s3_settings(&state.pool, &state.config)
+        .await?
+        .ok_or_else(|| {
+            AppError::Validation(
+                "S3 credentials must be configured before accessing this package".into(),
+            )
+        })?;
+    let key = s3_backups::key_from_locator(&settings.bucket, &artifact.storage_path).ok_or_else(
+        || AppError::Validation("This backup belongs to a different S3 bucket".into()),
+    )?;
+    if !s3_backups::key_belongs_to_prefix(&settings.prefix, key) {
+        return Err(AppError::Validation(
+            "This backup is outside the configured S3 prefix".into(),
+        ));
+    }
+    Ok((settings, key.to_string()))
+}
+
+#[derive(Debug, Serialize)]
+struct TestS3Response {
+    ok: bool,
+    message: String,
+}
+
+async fn test_s3_connection(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<UpdateBackupSettingsBody>,
+) -> Result<Json<TestS3Response>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    validate_target(
+        body.target_type,
+        body.local_enabled,
+        true,
+        &body.endpoint,
+        &body.bucket,
+    )?;
+    crate::services::s3_transport::S3Policy::from_config(&state.config)?
+        .validate_endpoint(&body.endpoint)
+        .await?;
+    let existing = backup_service::configured_s3_settings(&state.pool, &state.config)
+        .await
+        .ok()
+        .flatten();
+    let secret_key = body
+        .secret_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .map(|settings| settings.secret_key.clone())
+        })
+        .ok_or_else(|| {
+            AppError::Validation("Enter or save an S3 secret key before testing".into())
+        })?;
+    let access_key = body
+        .access_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .map(|settings| settings.access_key.clone())
+        })
+        .ok_or_else(|| {
+            AppError::Validation("Enter or save an S3 access key before testing".into())
+        })?;
+    let settings = s3_backups::S3Settings {
+        endpoint: body.endpoint.trim().to_string(),
+        region: body
+            .region
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("us-east-1")
+            .to_string(),
+        bucket: body.bucket.trim().to_string(),
+        prefix: normalize_prefix(&body.prefix)?,
+        access_key,
+        secret_key,
+        policy: crate::services::s3_transport::S3Policy::from_config(&state.config)?,
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        s3_backups::test_connection(&settings),
+    )
+    .await
+    .map_err(|_| AppError::DependencyUnavailable("S3 connection test timed out".into()))?
+    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+    Ok(Json(TestS3Response {
+        ok: true,
+        message: "S3 list/write/read/delete checks passed".into(),
+    }))
+}
+
+async fn run_backup_now(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<BackupRunExecutionResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let run_id = backup_service::start_backup_now(
+        &state.pool,
+        &state.config,
+        Some(auth.user_id),
+        backup_service::BackupRunTrigger::Manual,
+    )
+    .await?;
+
+    let run = load_run_by_id(&state, run_id).await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(BackupRunExecutionResponse {
+            run,
+            artifacts: Vec::new(),
+        }),
+    ))
+}
+
+async fn create_restore_request(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateRestoreRequestBody>,
+) -> Result<(StatusCode, Json<BackupRestoreRequestResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let request_id = backup_service::create_restore_request(
+        &state.pool,
+        body.artifact_id,
+        auth.user_id,
+        &body.confirmation_phrase,
+        body.notes,
+    )
+    .await?;
+
+    let request = load_restore_request_by_id(&state, request_id).await?;
+    Ok((StatusCode::CREATED, Json(request)))
+}
+
+async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppError> {
+    let app_timezone = app_settings::load_app_timezone_name(&state.pool).await?;
+    let row = sqlx::query_as::<_, BackupSettingsRow>(
+        r#"
+        SELECT
+            enabled,
+            frequency,
+            run_at,
+            day_of_week,
+            day_of_month,
+            retention_count,
+            local_enabled,
+            s3_enabled,
+            target_type,
+            endpoint,
+            region,
+            bucket,
+            prefix,
+            access_key,
+            secret_key_encrypted IS NOT NULL AS has_secret_key,
+            updated_at
+        FROM panda.backup_settings
+        WHERE id = TRUE
+        "#,
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => map_settings_row(row, app_timezone),
+        None => Ok(default_settings(app_timezone)),
+    }
+}
+
+async fn count_recent_runs(state: &AppState) -> Result<i64, AppError> {
+    let total = sqlx::query_scalar("SELECT COUNT(*) FROM panda.backup_runs")
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(total)
+}
+
+async fn load_recent_runs(
+    state: &AppState,
+    page: u32,
+    per_page: u32,
+) -> Result<Vec<BackupRunResponse>, AppError> {
+    let limit = i64::from(per_page);
+    let offset = i64::from(page.saturating_sub(1)) * i64::from(per_page);
+    let rows = sqlx::query_as::<_, BackupRunRow>(
+        r#"
+        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        FROM panda.backup_runs
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await?;
+
+    rows.into_iter().map(map_run_row).collect()
+}
+
+async fn load_run_by_id(state: &AppState, run_id: Uuid) -> Result<BackupRunResponse, AppError> {
+    let row = sqlx::query_as::<_, BackupRunRow>(
+        r#"
+        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        FROM panda.backup_runs
+        WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => map_run_row(row),
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn load_artifacts(state: &AppState) -> Result<Vec<BackupArtifactResponse>, AppError> {
+    let rows = sqlx::query_as::<_, BackupArtifactRow>(
+        r#"
+        SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
+        FROM panda.backup_artifacts
+        ORDER BY created_at DESC
+        LIMIT 200
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows.into_iter().map(map_artifact_row).collect())
+}
+
+async fn load_artifact_by_id(
+    state: &AppState,
+    artifact_id: Uuid,
+) -> Result<BackupArtifactResponse, AppError> {
+    let row = sqlx::query_as::<_, BackupArtifactRow>(
+        r#"
+        SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
+        FROM panda.backup_artifacts
+        WHERE id = $1
+        "#,
+    )
+    .bind(artifact_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(map_artifact_row(row)),
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn load_restore_requests(
+    state: &AppState,
+) -> Result<Vec<BackupRestoreRequestResponse>, AppError> {
+    let rows = sqlx::query_as::<_, BackupRestoreRequestRow>(
+        r#"
+        SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
+        FROM panda.backup_restore_requests
+        ORDER BY requested_at DESC
+        LIMIT 10
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows.into_iter().map(map_restore_request_row).collect())
+}
+
+async fn load_restore_request_by_id(
+    state: &AppState,
+    request_id: Uuid,
+) -> Result<BackupRestoreRequestResponse, AppError> {
+    let row = sqlx::query_as::<_, BackupRestoreRequestRow>(
+        r#"
+        SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
+        FROM panda.backup_restore_requests
+        WHERE id = $1
+        "#,
+    )
+    .bind(request_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(map_restore_request_row(row)),
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn load_latest_successful_run(
+    state: &AppState,
+) -> Result<Option<BackupRunResponse>, AppError> {
+    let row = sqlx::query_as::<_, BackupRunRow>(
+        r#"
+        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        FROM panda.backup_runs
+        WHERE status = 'succeeded'
+        ORDER BY completed_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+
+    row.map(map_run_row).transpose()
+}
+
+fn map_settings_row(
+    row: BackupSettingsRow,
+    app_timezone: String,
+) -> Result<BackupSettingsResponse, AppError> {
+    Ok(BackupSettingsResponse {
+        enabled: row.enabled,
+        frequency: BackupFrequency::try_from(row.frequency.as_str())?,
+        run_at: row.run_at.format("%H:%M").to_string(),
+        timezone: app_timezone,
+        day_of_week: row.day_of_week,
+        day_of_month: row.day_of_month,
+        retention_count: row.retention_count,
+        local_enabled: row.local_enabled,
+        s3_enabled: row.s3_enabled,
+        target_type: BackupTargetType::try_from(row.target_type.as_str())?,
+        endpoint: row.endpoint,
+        region: row.region,
+        bucket: row.bucket,
+        prefix: row.prefix,
+        access_key: row.access_key,
+        has_secret_key: row.has_secret_key,
+        updated_at: Some(row.updated_at),
+    })
+}
+
+fn map_run_row(row: BackupRunRow) -> Result<BackupRunResponse, AppError> {
+    Ok(BackupRunResponse {
+        id: row.id,
+        trigger: BackupRunTrigger::try_from(row.trigger.as_str())?,
+        status: BackupRunStatus::try_from(row.status.as_str())?,
+        phase: row.phase,
+        progress_percent: row.progress_percent,
+        artifact_key: row.artifact_key,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        error_message: row.error_message,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+fn map_artifact_row(row: BackupArtifactRow) -> BackupArtifactResponse {
+    BackupArtifactResponse {
+        id: row.id,
+        run_id: row.run_id,
+        storage_type: row.storage_type,
+        file_name: row.file_name,
+        storage_path: row.storage_path,
+        size_bytes: row.size_bytes,
+        checksum_sha256: row.checksum_sha256,
+        manifest: row.manifest,
+        created_at: row.created_at,
+    }
+}
+
+fn map_restore_request_row(row: BackupRestoreRequestRow) -> BackupRestoreRequestResponse {
+    BackupRestoreRequestResponse {
+        id: row.id,
+        artifact_id: row.artifact_id,
+        requested_by: row.requested_by,
+        status: row.status,
+        confirmation_phrase: row.confirmation_phrase,
+        notes: row.notes,
+        error_message: row.error_message,
+        requested_at: row.requested_at,
+        updated_at: row.updated_at,
+    }
+}
+
+fn default_settings(timezone: String) -> BackupSettingsResponse {
+    BackupSettingsResponse {
+        enabled: false,
+        frequency: BackupFrequency::Weekly,
+        run_at: "03:00".into(),
+        timezone,
+        day_of_week: Some(0),
+        day_of_month: Some(1),
+        retention_count: 8,
+        local_enabled: true,
+        s3_enabled: false,
+        target_type: BackupTargetType::S3,
+        endpoint: String::new(),
+        region: None,
+        bucket: String::new(),
+        prefix: "panda".into(),
+        access_key: None,
+        has_secret_key: false,
+        updated_at: None,
+    }
+}
+
+fn parse_run_time(value: &str) -> Result<NaiveTime, AppError> {
+    NaiveTime::parse_from_str(value.trim(), "%H:%M")
+        .map_err(|_| AppError::Validation("run_at must use HH:MM 24-hour time".into()))
+}
+
+fn parse_timezone(value: &str) -> Result<Tz, AppError> {
+    value
+        .trim()
+        .parse::<Tz>()
+        .map_err(|_| AppError::Validation("timezone must be a valid IANA timezone".into()))
+}
+
+fn validate_schedule(
+    frequency: &BackupFrequency,
+    day_of_week: Option<i16>,
+    day_of_month: Option<i16>,
+) -> Result<(), AppError> {
+    match frequency {
+        BackupFrequency::Daily => Ok(()),
+        BackupFrequency::Weekly => match day_of_week {
+            Some(value) if (0..=6).contains(&value) => Ok(()),
+            _ => Err(AppError::Validation(
+                "weekly backups require day_of_week between 0 and 6".into(),
+            )),
+        },
+        BackupFrequency::Monthly => match day_of_month {
+            Some(value) if (1..=31).contains(&value) => Ok(()),
+            _ => Err(AppError::Validation(
+                "monthly backups require day_of_month between 1 and 31".into(),
+            )),
+        },
+    }
+}
+
+fn validate_target(
+    target_type: BackupTargetType,
+    local_enabled: bool,
+    s3_enabled: bool,
+    endpoint: &str,
+    bucket: &str,
+) -> Result<(), AppError> {
+    if target_type != BackupTargetType::S3 {
+        return Err(AppError::Validation("target_type must be s3".into()));
+    }
+    if !local_enabled && !s3_enabled {
+        return Err(AppError::Validation(
+            "Enable at least one backup destination".into(),
+        ));
+    }
+    if s3_enabled && bucket.trim().is_empty() {
+        return Err(AppError::Validation(
+            "bucket is required when S3 backups are enabled".into(),
+        ));
+    }
+    if s3_enabled && !endpoint.trim().is_empty() {
+        let parsed = url::Url::parse(endpoint.trim()).map_err(|_| {
+            AppError::Validation("S3 endpoint must be a valid HTTP or HTTPS URL".into())
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(AppError::Validation(
+                "S3 endpoint must use HTTP or HTTPS".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_prefix(value: &str) -> Result<String, AppError> {
+    let prefix = crate::services::artifact_files::validate_prefix(value)?;
+    Ok(if prefix.is_empty() {
+        "panda".into()
+    } else {
+        prefix
+    })
+}
+
+fn encrypt_secret(age_key: &str, secret_key: Option<&str>) -> Result<Option<Vec<u8>>, AppError> {
+    let Some(secret_key) = secret_key.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    let identity = age_key.parse::<age::x25519::Identity>().map_err(|_| {
+        AppError::Internal(anyhow::anyhow!("invalid age key for backup secret storage"))
+    })?;
+    let ciphertext = encrypt_json(&secret_key.to_string(), &identity)?;
+    Ok(Some(ciphertext))
+}
+
+fn compute_next_run(settings: &BackupSettingsResponse) -> Result<Option<DateTime<Utc>>, AppError> {
+    if !settings.enabled {
+        return Ok(None);
+    }
+
+    let timezone = parse_timezone(&settings.timezone)?;
+    let run_at = parse_run_time(&settings.run_at)?;
+    let now_local = Utc::now().with_timezone(&timezone);
+
+    let next_local = match settings.frequency {
+        BackupFrequency::Daily => next_daily_run(now_local, run_at),
+        BackupFrequency::Weekly => {
+            next_weekly_run(now_local, run_at, settings.day_of_week.unwrap_or(0))
+        }
+        BackupFrequency::Monthly => {
+            next_monthly_run(now_local, run_at, settings.day_of_month.unwrap_or(1))
+        }
+    };
+
+    Ok(Some(next_local.with_timezone(&Utc)))
+}
+
+fn next_daily_run(now_local: chrono::DateTime<Tz>, run_at: NaiveTime) -> chrono::DateTime<Tz> {
+    let candidate = combine_local(now_local.timezone(), now_local.date_naive(), run_at);
+    if candidate <= now_local {
+        combine_local(
+            now_local.timezone(),
+            now_local.date_naive() + Duration::days(1),
+            run_at,
+        )
+    } else {
+        candidate
+    }
+}
+
+fn next_weekly_run(
+    now_local: chrono::DateTime<Tz>,
+    run_at: NaiveTime,
+    day_of_week: i16,
+) -> chrono::DateTime<Tz> {
+    let current = now_local.weekday().num_days_from_sunday() as i16;
+    let mut days_until = (day_of_week - current + 7) % 7;
+    let mut candidate_date = now_local.date_naive() + Duration::days(i64::from(days_until));
+    let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
+
+    if candidate <= now_local {
+        days_until = 7;
+        candidate_date += Duration::days(i64::from(days_until));
+        candidate = combine_local(now_local.timezone(), candidate_date, run_at);
+    }
+
+    candidate
+}
+
+fn next_monthly_run(
+    now_local: chrono::DateTime<Tz>,
+    run_at: NaiveTime,
+    day_of_month: i16,
+) -> chrono::DateTime<Tz> {
+    let current_date = now_local.date_naive();
+    let current_month_day =
+        clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
+    let mut candidate_date =
+        NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
+            .unwrap_or(current_date);
+    let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
+
+    if candidate <= now_local {
+        let (year, month) = if current_date.month() == 12 {
+            (current_date.year() + 1, 1)
+        } else {
+            (current_date.year(), current_date.month() + 1)
+        };
+        let next_day = clamp_day_of_month(year, month, day_of_month);
+        candidate_date = NaiveDate::from_ymd_opt(year, month, next_day).unwrap_or(current_date);
+        candidate = combine_local(now_local.timezone(), candidate_date, run_at);
+    }
+
+    candidate
+}
+
+fn clamp_day_of_month(year: i32, month: u32, day_of_month: i16) -> u32 {
+    let max_day = days_in_month(year, month);
+    (day_of_month.max(1) as u32).min(max_day)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let first_of_next_month = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year, month, 1).expect("valid month"));
+    let last_of_current_month = first_of_next_month - Duration::days(1);
+    last_of_current_month.day()
+}
+
+fn combine_local(timezone: Tz, date: NaiveDate, time: NaiveTime) -> chrono::DateTime<Tz> {
+    let naive = NaiveDateTime::new(date, time);
+    match timezone.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(value) => value,
+        chrono::LocalResult::Ambiguous(first, second) => first.min(second),
+        chrono::LocalResult::None => timezone.from_utc_datetime(&naive),
+    }
+}
+
+async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
+    let role = sqlx::query_scalar!("SELECT role FROM panda.users WHERE id = $1", user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+    match role.as_deref() {
+        Some("admin") | Some("super_user") => Ok(()),
+        _ => Err(AppError::Forbidden),
+    }
+}
+#[derive(Debug, Deserialize)]
+struct BackupOverviewQuery {
+    page: Option<u32>,
+    per_page: Option<u32>,
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn materialized_preflight_cleans_published_files_unless_handed_to_a_durable_job() {
+        let root = tempfile::tempdir().unwrap();
+        let limits = crate::config::RecoveryConfig {
+            min_free_bytes: 0,
+            ..Default::default()
+        };
+        for retained in [false, true] {
+            let id = Uuid::new_v4();
+            let mut input: &[u8] = b"bounded published package";
+            let path =
+                crate::services::artifact_files::stage_reader(root.path(), id, &mut input, &limits)
+                    .await
+                    .unwrap();
+            let artifact = MaterializedArtifact {
+                root: root.path().to_owned(),
+                staging_id: id,
+                path: path.to_string_lossy().into_owned(),
+                retained: false,
+            };
+            if retained {
+                artifact.retain();
+            } else {
+                drop(artifact);
+            }
+            assert_eq!(path.exists(), retained);
+            if retained {
+                crate::services::artifact_files::remove_staged(root.path(), id).unwrap();
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(root.path().join(".remote-staging"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+}

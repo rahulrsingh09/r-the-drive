@@ -1,0 +1,940 @@
+//! Rivian authentication flow.
+
+use crate::ingestion::session_store::RivianTokenBundle;
+use crate::services::outbound_policy::{self, gateway_url};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+const APOLLO_CLIENT_NAME: &str = "com.rivian.ios.consumer-apollo-ios";
+const USER_AGENT: &str = "RivianApp/707 CFNetwork/1237 Darwin/20.4.0";
+
+#[derive(Debug, thiserror::Error)]
+pub enum RivianAuthError {
+    #[error("Invalid credentials")]
+    InvalidCredentials,
+    #[error("Invalid OTP")]
+    InvalidOtp,
+    #[error("Network error: {0}")]
+    Network(#[from] reqwest::Error),
+    #[error("Unexpected response: {0}")]
+    UnexpectedResponse(String),
+}
+
+impl From<outbound_policy::PolicyError> for RivianAuthError {
+    fn from(error: outbound_policy::PolicyError) -> Self {
+        Self::UnexpectedResponse(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RivianOtpChallenge {
+    pub email: String,
+    pub otp_token: String,
+    pub csrf_token: String,
+    pub app_session_token: String,
+}
+
+pub enum LoginResult {
+    Authenticated(RivianTokenBundle),
+    OtpRequired(RivianOtpChallenge),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RivianVehicleSummary {
+    pub id: String,
+    pub name: Option<String>,
+    pub vin: Option<String>,
+    pub model: Option<String>,
+    pub model_year: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RivianVehicleImage {
+    pub order_id: Option<String>,
+    pub vehicle_id: Option<String>,
+    pub url: String,
+    pub extension: Option<String>,
+    pub resolution: Option<String>,
+    pub size: Option<String>,
+    pub design: Option<String>,
+    pub placement: Option<String>,
+    pub overlays: serde_json::Value,
+    pub source: String,
+    pub vehicle_version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginResponse {
+    data: Option<LoginData>,
+    errors: Option<Vec<GqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginData {
+    login: Option<LoginPayload>,
+    #[serde(rename = "loginWithOTP")]
+    login_with_otp: Option<LoginPayload>,
+    #[serde(rename = "createCsrfToken")]
+    create_csrf_token: Option<CreateCsrfTokenPayload>,
+}
+
+// ── CSRF session refresh ─────────────────────────────────────────────────────
+
+/// Refresh the CSRF and app-session tokens while keeping the existing access,
+/// refresh, and user-session tokens unchanged.
+///
+/// This mirrors what the Home Assistant Rivian integration does on
+/// `RivianExpiredTokenError`: call `createCsrfToken` to obtain a fresh
+/// short-lived session, then retry the failing request.  The access token
+/// itself is long-lived; only the CSRF/app-session pair needs periodic renewal.
+/// If the access token is truly invalid, the retried request will fail with an
+/// unauthenticated error and the caller is responsible for marking `needs_reauth`.
+pub async fn rivian_refresh_csrf(
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<RivianTokenBundle, RivianAuthError> {
+    let session = create_csrf_session(client).await?;
+    Ok(RivianTokenBundle {
+        access_token: tokens.access_token.clone(),
+        refresh_token: tokens.refresh_token.clone(),
+        user_session_token: tokens.user_session_token.clone(),
+        app_session_token: session.app_session_token,
+        csrf_token: session.csrf_token,
+        created_at: tokens.created_at,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginPayload {
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    user_session_token: Option<String>,
+    otp_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlError {
+    message: String,
+    extensions: Option<GqlErrorExtensions>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlErrorExtensions {
+    code: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateCsrfTokenPayload {
+    csrf_token: String,
+    app_session_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserInfoResponse {
+    data: Option<UserInfoData>,
+    errors: Option<Vec<GqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserInfoData {
+    current_user: Option<CurrentUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentUser {
+    vehicles: Option<Vec<UserVehicle>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserVehicle {
+    id: String,
+    vin: Option<String>,
+    name: Option<String>,
+    vehicle: Option<UserVehicleDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserVehicleDetails {
+    model_year: Option<i32>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleImagesResponse {
+    data: Option<VehicleImagesData>,
+    errors: Option<Vec<GqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleImagesData {
+    get_vehicle_order_mobile_images: Option<Vec<VehicleMobileImage>>,
+    get_vehicle_mobile_images: Option<Vec<VehicleMobileImage>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleMobileImage {
+    order_id: Option<String>,
+    vehicle_id: Option<String>,
+    url: String,
+    extension: Option<String>,
+    resolution: Option<String>,
+    size: Option<String>,
+    design: Option<String>,
+    placement: Option<String>,
+    overlays: Option<serde_json::Value>,
+}
+
+struct CsrfSession {
+    csrf_token: String,
+    app_session_token: String,
+}
+
+pub async fn rivian_login(
+    client: &reqwest::Client,
+    email: &str,
+    password: &str,
+) -> Result<LoginResult, RivianAuthError> {
+    let session = create_csrf_session(client).await?;
+    let query = r#"
+      mutation Login($email: String!, $password: String!) {
+        login(email: $email, password: $password) {
+          __typename
+          ... on MobileLoginResponse {
+            accessToken
+            refreshToken
+            userSessionToken
+          }
+          ... on MobileMFALoginResponse {
+            otpToken
+          }
+        }
+      }
+    "#;
+
+    let resp = post_graphql(
+        client,
+        serde_json::json!({
+            "operationName": "Login",
+            "query": query,
+            "variables": { "email": email, "password": password }
+        }),
+        Some(&session),
+    )
+    .await?;
+
+    if let Some(errors) = resp.errors {
+        if !errors.is_empty() {
+            return Err(map_login_errors(errors));
+        }
+    }
+
+    let payload = resp
+        .data
+        .and_then(|d| d.login)
+        .ok_or_else(|| RivianAuthError::UnexpectedResponse("empty login payload".into()))?;
+
+    match payload.typename.as_deref() {
+        Some("MobileMFALoginResponse") => Ok(LoginResult::OtpRequired(RivianOtpChallenge {
+            email: email.to_string(),
+            otp_token: payload.otp_token.filter(|s| !s.is_empty()).ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse("missing otpToken in MFA response".into())
+            })?,
+            csrf_token: session.csrf_token,
+            app_session_token: session.app_session_token,
+        })),
+        _ => Ok(LoginResult::Authenticated(RivianTokenBundle {
+            access_token: payload
+                .access_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse(
+                        "missing accessToken in login response".into(),
+                    )
+                })?,
+            refresh_token: payload
+                .refresh_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse(
+                        "missing refreshToken in login response".into(),
+                    )
+                })?,
+            app_session_token: session.app_session_token,
+            user_session_token: payload
+                .user_session_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse(
+                        "missing userSessionToken in login response".into(),
+                    )
+                })?,
+            csrf_token: session.csrf_token,
+            created_at: chrono::Utc::now(),
+        })),
+    }
+}
+
+pub async fn rivian_login_otp(
+    client: &reqwest::Client,
+    challenge: &RivianOtpChallenge,
+    otp_code: &str,
+) -> Result<RivianTokenBundle, RivianAuthError> {
+    let session = CsrfSession {
+        csrf_token: challenge.csrf_token.clone(),
+        app_session_token: challenge.app_session_token.clone(),
+    };
+
+    let query = r#"
+      mutation LoginWithOTP($email: String!, $otpCode: String!, $otpToken: String!) {
+        loginWithOTP(email: $email, otpCode: $otpCode, otpToken: $otpToken) {
+          __typename
+          ... on MobileLoginResponse {
+            accessToken
+            refreshToken
+            userSessionToken
+          }
+        }
+      }
+    "#;
+
+    let resp = post_graphql(
+        client,
+        serde_json::json!({
+            "operationName": "LoginWithOTP",
+            "query": query,
+            "variables": {
+                "email": challenge.email,
+                "otpCode": otp_code,
+                "otpToken": challenge.otp_token
+            }
+        }),
+        Some(&session),
+    )
+    .await?;
+
+    if let Some(errors) = resp.errors {
+        if !errors.is_empty() {
+            return Err(map_otp_errors(errors));
+        }
+    }
+
+    let payload = resp
+        .data
+        .and_then(|d| d.login_with_otp)
+        .ok_or_else(|| RivianAuthError::UnexpectedResponse("empty OTP payload".into()))?;
+
+    Ok(RivianTokenBundle {
+        access_token: payload
+            .access_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse("missing accessToken in OTP response".into())
+            })?,
+        refresh_token: payload
+            .refresh_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse("missing refreshToken in OTP response".into())
+            })?,
+        app_session_token: challenge.app_session_token.clone(),
+        user_session_token: payload
+            .user_session_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse(
+                    "missing userSessionToken in OTP response".into(),
+                )
+            })?,
+        csrf_token: challenge.csrf_token.clone(),
+        created_at: chrono::Utc::now(),
+    })
+}
+
+pub async fn rivian_user_vehicles(
+    _client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<Vec<RivianVehicleSummary>, RivianAuthError> {
+    let query = r#"
+      query getUserInfo {
+        currentUser {
+          vehicles {
+            id
+            vin
+            name
+            vehicle {
+              modelYear
+              model
+            }
+          }
+        }
+      }
+    "#;
+
+    let body = serde_json::json!({
+        "operationName": "getUserInfo",
+        "query": query,
+        "variables": serde_json::Value::Null
+    });
+
+    let mut req = outbound_policy::rivian_post(&gateway_url()?)?
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+        .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
+        .header("A-Sess", &tokens.app_session_token)
+        .header("U-Sess", &tokens.user_session_token)
+        .json(&body);
+
+    if !tokens.csrf_token.is_empty() {
+        req = req.header("Csrf-Token", &tokens.csrf_token);
+    }
+    if !tokens.access_token.is_empty() {
+        req = req.bearer_auth(&tokens.access_token);
+    }
+
+    let response = req.send().await?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(RivianAuthError::InvalidCredentials);
+    }
+
+    let parsed = outbound_policy::read_json::<UserInfoResponse>(response).await?;
+    if let Some(errors) = parsed.errors {
+        if !errors.is_empty() {
+            return Err(RivianAuthError::UnexpectedResponse(format_gql_error(
+                &errors,
+            )));
+        }
+    }
+
+    let vehicles = parsed
+        .data
+        .and_then(|d| d.current_user)
+        .and_then(|u| u.vehicles)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| RivianVehicleSummary {
+            id: v.id,
+            name: v.name,
+            vin: v.vin,
+            model: v.vehicle.as_ref().and_then(|details| details.model.clone()),
+            model_year: v.vehicle.and_then(|details| details.model_year),
+        })
+        .collect();
+
+    Ok(vehicles)
+}
+
+pub async fn rivian_vehicle_images(
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<Vec<RivianVehicleImage>, RivianAuthError> {
+    outbound_policy::require_optional_traffic()?;
+    let query = r#"
+      query getVehicleImages($extension: String, $resolution: String, $versionForVehicle: String, $versionForPreOrder: String) {
+        getVehicleOrderMobileImages(resolution: $resolution, extension: $extension, version: $versionForPreOrder) {
+          ...image
+        }
+        getVehicleMobileImages(resolution: $resolution, extension: $extension, version: $versionForVehicle) {
+          ...image
+        }
+      }
+
+      fragment image on VehicleMobileImage {
+          orderId
+          vehicleId
+          url
+          extension
+          resolution
+          size
+          design
+          placement
+          overlays {
+            url
+            overlay
+            zIndex
+          }
+      }
+    "#;
+
+    let mut images = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut app_session_token = tokens.app_session_token.clone();
+    let mut refreshed_app_session = false;
+    // Matches home-assistant-rivian: cel art uses version 3, photo art uses version 2.
+    for (style, version) in [("photo", "2"), ("cel", "3")] {
+        let mut attempt = 0;
+        let status = loop {
+            let body = serde_json::json!({
+                "operationName": "getVehicleImages",
+                "query": query,
+                "variables": {
+                    "extension": serde_json::Value::Null,
+                    "resolution": "@3x",
+                    "versionForVehicle": version,
+                    "versionForPreOrder": version
+                }
+            });
+
+            let req = outbound_policy::rivian_post(&gateway_url()?)?
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+                .header("dc-cid", format!("m-android-{}", Uuid::new_v4()))
+                .header("A-Sess", &app_session_token)
+                .header("U-Sess", &tokens.user_session_token)
+                .json(&body);
+
+            let response = req.send().await?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(RivianAuthError::InvalidCredentials);
+            }
+            let status = outbound_policy::read_json::<VehicleImagesResponse>(response).await?;
+
+            if status
+                .errors
+                .as_ref()
+                .is_some_and(|errors| has_unauthenticated_error(errors))
+                && !refreshed_app_session
+                && attempt == 0
+            {
+                let session = create_csrf_session(client).await?;
+                app_session_token = session.app_session_token;
+                refreshed_app_session = true;
+                attempt += 1;
+                continue;
+            }
+
+            break status;
+        };
+
+        if let Some(errors) = status.errors {
+            if !errors.is_empty() {
+                tracing::warn!(
+                    image_style = style,
+                    vehicle_version = version,
+                    error = %format_gql_error(&errors),
+                    "rivian.vehicle_images.graphql_error"
+                );
+                continue;
+            }
+        }
+
+        if let Some(data) = status.data {
+            let order = data.get_vehicle_order_mobile_images.unwrap_or_default();
+            let vehicle = data.get_vehicle_mobile_images.unwrap_or_default();
+            for (source, entries) in [("order", order), ("vehicle", vehicle)] {
+                for image in entries {
+                    if !seen.insert(image.url.clone()) {
+                        continue;
+                    }
+                    images.push(RivianVehicleImage {
+                        order_id: image.order_id,
+                        vehicle_id: image.vehicle_id,
+                        url: image.url,
+                        extension: image.extension,
+                        resolution: image.resolution,
+                        size: image.size,
+                        design: image.design,
+                        placement: image.placement,
+                        overlays: image.overlays.unwrap_or_else(|| serde_json::json!([])),
+                        source: format!("{source}:{style}"),
+                        vehicle_version: version.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    tracing::info!(image_count = images.len(), "rivian.vehicle_images.fetched");
+    Ok(images)
+}
+
+async fn create_csrf_session(client: &reqwest::Client) -> Result<CsrfSession, RivianAuthError> {
+    let query = r#"
+      mutation CreateCSRFToken {
+        createCsrfToken {
+          __typename
+          csrfToken
+          appSessionToken
+        }
+      }
+    "#;
+
+    let resp = post_graphql(
+        client,
+        serde_json::json!({
+            "operationName": "CreateCSRFToken",
+            "query": query,
+            "variables": serde_json::Value::Null
+        }),
+        None,
+    )
+    .await?;
+
+    if let Some(errors) = resp.errors {
+        return Err(RivianAuthError::UnexpectedResponse(format_gql_error(
+            &errors,
+        )));
+    }
+
+    let payload = resp
+        .data
+        .and_then(|d| d.create_csrf_token)
+        .ok_or_else(|| RivianAuthError::UnexpectedResponse("empty CSRF payload".into()))?;
+
+    Ok(CsrfSession {
+        csrf_token: payload.csrf_token,
+        app_session_token: payload.app_session_token,
+    })
+}
+
+async fn post_graphql(
+    _client: &reqwest::Client,
+    body: serde_json::Value,
+    session: Option<&CsrfSession>,
+) -> Result<LoginResponse, RivianAuthError> {
+    let mut req = outbound_policy::rivian_post(&gateway_url()?)?
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+        .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
+        .json(&body);
+
+    if let Some(session) = session {
+        req = req
+            .header("Csrf-Token", &session.csrf_token)
+            .header("A-Sess", &session.app_session_token);
+    }
+
+    let response = req.send().await?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(RivianAuthError::InvalidCredentials);
+    }
+
+    Ok(outbound_policy::read_json::<LoginResponse>(response).await?)
+}
+
+fn map_login_errors(errors: Vec<GqlError>) -> RivianAuthError {
+    let msg = format_gql_error(&errors);
+    for error in &errors {
+        let low_msg = error.message.to_lowercase();
+        if low_msg.contains("invalid credentials")
+            || low_msg.contains("invalid email or password")
+            || low_msg.contains("incorrect email or password")
+            || low_msg.contains("invalid password")
+            || low_msg.contains("incorrect password")
+        {
+            return RivianAuthError::InvalidCredentials;
+        }
+        if let Some(ext) = &error.extensions {
+            if ext.reason.as_deref() == Some("BAD_CURRENT_PASSWORD") {
+                return RivianAuthError::InvalidCredentials;
+            }
+        }
+    }
+    RivianAuthError::UnexpectedResponse(msg)
+}
+
+fn map_otp_errors(errors: Vec<GqlError>) -> RivianAuthError {
+    for error in &errors {
+        if let Some(ext) = &error.extensions {
+            if matches!(
+                (ext.code.as_deref(), ext.reason.as_deref()),
+                (Some("BAD_USER_INPUT"), Some("INVALID_OTP"))
+                    | (Some("UNAUTHENTICATED"), Some("OTP_TOKEN_EXPIRED"))
+            ) {
+                return RivianAuthError::InvalidOtp;
+            }
+        }
+    }
+    RivianAuthError::UnexpectedResponse(format_gql_error(&errors))
+}
+
+fn has_unauthenticated_error(errors: &[GqlError]) -> bool {
+    errors.iter().any(|error| {
+        error
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.code.as_deref())
+            == Some("UNAUTHENTICATED")
+    })
+}
+
+fn format_gql_error(errors: &[GqlError]) -> String {
+    // Upstream error fields may echo credentials or other request inputs.
+    format!("Rivian GraphQL request failed ({} errors)", errors.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_errors_do_not_echo_request_secrets() {
+        let errors: Vec<GqlError> = serde_json::from_value(serde_json::json!([{
+            "message": "synthetic-secret-password",
+            "extensions": {
+                "code": "synthetic-secret-token",
+                "reason": "synthetic-secret-email"
+            }
+        }]))
+        .unwrap();
+        assert_eq!(
+            format_gql_error(&errors),
+            "Rivian GraphQL request failed (1 errors)"
+        );
+        assert!(!map_login_errors(errors)
+            .to_string()
+            .contains("synthetic-secret"));
+    }
+    use axum::{
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        routing::post,
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn classifies_only_explicit_login_credential_errors_as_invalid_credentials() {
+        let error = map_login_errors(vec![GqlError {
+            message: "Invalid email or password".into(),
+            extensions: None,
+        }]);
+
+        assert!(matches!(error, RivianAuthError::InvalidCredentials));
+    }
+
+    #[test]
+    fn does_not_misclassify_csrf_errors_as_bad_passwords() {
+        let error = map_login_errors(vec![GqlError {
+            message: "Invalid CSRF token".into(),
+            extensions: Some(GqlErrorExtensions {
+                code: Some("UNAUTHENTICATED".into()),
+                reason: None,
+            }),
+        }]);
+
+        assert!(matches!(error, RivianAuthError::UnexpectedResponse(_)));
+    }
+
+    #[derive(Debug, Clone)]
+    struct RecordedRequest {
+        operation_name: String,
+        headers: HeaderMap,
+        body: Value,
+    }
+
+    #[tokio::test]
+    async fn auth_transport_ignores_caller_redirect_policy() {
+        let sink = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}/stolen", sink.local_addr().unwrap());
+        let app =
+            Router::new().route(
+                "/graphql",
+                post(move || async move {
+                    (StatusCode::TEMPORARY_REDIRECT, [("location", destination)])
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/graphql", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        outbound_policy::with_mock_gateway(url, async {
+            let client = reqwest::Client::new();
+            let session = CsrfSession {
+                csrf_token: "synthetic-csrf".into(),
+                app_session_token: "synthetic-app".into(),
+            };
+            let result = post_graphql(&client, json!({
+                "operationName": "Login",
+                "variables": {"email": "synthetic@example.test", "password": "synthetic-password"},
+            }), Some(&session)).await;
+            assert!(matches!(
+                result,
+                Err(RivianAuthError::UnexpectedResponse(_))
+            ));
+        })
+        .await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), sink.accept())
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn login_and_otp_follow_current_rivian_graphql_shape() {
+        let recorded = Arc::new(Mutex::new(Vec::<RecordedRequest>::new()));
+        let app = Router::new()
+            .route("/api/gql/gateway/graphql", post(mock_rivian_gateway))
+            .with_state(recorded.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        outbound_policy::with_mock_gateway(
+            format!("http://{addr}/api/gql/gateway/graphql"),
+            assert_login_and_otp_requests(recorded),
+        )
+        .await;
+    }
+
+    async fn assert_login_and_otp_requests(recorded: Arc<Mutex<Vec<RecordedRequest>>>) {
+        let client = reqwest::Client::new();
+        let challenge = match rivian_login(&client, "driver@example.com", "secret")
+            .await
+            .unwrap()
+        {
+            LoginResult::OtpRequired(challenge) => challenge,
+            LoginResult::Authenticated(_) => panic!("expected MFA challenge"),
+        };
+
+        assert_eq!(challenge.email, "driver@example.com");
+        assert_eq!(challenge.otp_token, "otp-token");
+
+        let tokens = rivian_login_otp(&client, &challenge, "123456")
+            .await
+            .unwrap();
+        assert_eq!(tokens.access_token, "access-token");
+        assert_eq!(tokens.refresh_token, "refresh-token");
+        assert_eq!(tokens.user_session_token, "user-session-token");
+        assert_eq!(tokens.app_session_token, "app-session-token");
+        assert_eq!(tokens.csrf_token, "csrf-token");
+
+        let vehicles = rivian_user_vehicles(&client, &tokens).await.unwrap();
+        assert_eq!(
+            vehicles,
+            vec![RivianVehicleSummary {
+                id: "vehicle-123".into(),
+                name: Some("Compass Yellow".into()),
+                vin: Some("7FCTGAAL0NN000001".into()),
+                model: Some("R1T".into()),
+                model_year: Some(2022),
+            }]
+        );
+
+        let original_created_at = tokens.created_at;
+        let refreshed = rivian_refresh_csrf(&client, &tokens).await.unwrap();
+        assert_eq!(refreshed.created_at, original_created_at);
+        assert_eq!(refreshed.access_token, tokens.access_token);
+        assert_eq!(refreshed.refresh_token, tokens.refresh_token);
+        assert_eq!(refreshed.user_session_token, tokens.user_session_token);
+
+        let requests = recorded.lock().unwrap();
+        assert_eq!(requests.len(), 5);
+        assert_eq!(requests[0].operation_name, "CreateCSRFToken");
+        assert!(requests[0].headers.get("csrf-token").is_none());
+        assert!(requests[0].headers.get("a-sess").is_none());
+
+        assert_eq!(requests[1].operation_name, "Login");
+        assert_eq!(requests[1].headers["csrf-token"], "csrf-token");
+        assert_eq!(requests[1].headers["a-sess"], "app-session-token");
+        assert_eq!(
+            requests[1].headers["apollographql-client-name"],
+            APOLLO_CLIENT_NAME
+        );
+        assert_eq!(requests[1].body["variables"]["email"], "driver@example.com");
+        assert_eq!(requests[1].body["variables"]["password"], "secret");
+
+        assert_eq!(requests[2].operation_name, "LoginWithOTP");
+        assert_eq!(requests[2].headers["csrf-token"], "csrf-token");
+        assert_eq!(requests[2].headers["a-sess"], "app-session-token");
+        assert_eq!(requests[2].body["variables"]["email"], "driver@example.com");
+        assert_eq!(requests[2].body["variables"]["otpCode"], "123456");
+        assert_eq!(requests[2].body["variables"]["otpToken"], "otp-token");
+
+        assert_eq!(requests[3].operation_name, "getUserInfo");
+        assert_eq!(requests[3].headers["csrf-token"], "csrf-token");
+        assert_eq!(requests[3].headers["a-sess"], "app-session-token");
+        assert_eq!(requests[3].headers["u-sess"], "user-session-token");
+        assert_eq!(requests[3].headers["authorization"], "Bearer access-token");
+        assert_eq!(requests[4].operation_name, "CreateCSRFToken");
+    }
+
+    async fn mock_rivian_gateway(
+        State(recorded): State<Arc<Mutex<Vec<RecordedRequest>>>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        let operation_name = body["operationName"].as_str().unwrap_or("").to_string();
+        recorded.lock().unwrap().push(RecordedRequest {
+            operation_name: operation_name.clone(),
+            headers,
+            body,
+        });
+
+        let response = match operation_name.as_str() {
+            "CreateCSRFToken" => json!({
+                "data": {
+                    "createCsrfToken": {
+                        "__typename": "CreateCSRFTokenResponse",
+                        "csrfToken": "csrf-token",
+                        "appSessionToken": "app-session-token"
+                    }
+                }
+            }),
+            "Login" => json!({
+                "data": {
+                    "login": {
+                        "__typename": "MobileMFALoginResponse",
+                        "otpToken": "otp-token"
+                    }
+                }
+            }),
+            "LoginWithOTP" => json!({
+                "data": {
+                    "loginWithOTP": {
+                        "__typename": "MobileLoginResponse",
+                        "accessToken": "access-token",
+                        "refreshToken": "refresh-token",
+                        "userSessionToken": "user-session-token"
+                    }
+                }
+            }),
+            "getUserInfo" => json!({
+                "data": {
+                    "currentUser": {
+                        "vehicles": [{
+                            "id": "vehicle-123",
+                            "vin": "7FCTGAAL0NN000001",
+                            "name": "Compass Yellow",
+                            "vehicle": {
+                                "modelYear": 2022,
+                                "model": "R1T"
+                            }
+                        }]
+                    }
+                }
+            }),
+            _ => json!({
+                "errors": [{
+                    "message": "unexpected operation",
+                    "extensions": { "code": "BAD_REQUEST" }
+                }]
+            }),
+        };
+
+        (StatusCode::OK, Json(response))
+    }
+}

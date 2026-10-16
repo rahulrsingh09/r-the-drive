@@ -1,0 +1,12 @@
+{
+  "extends": "@panda/config/typescript/react.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vitest/globals", "@testing-library/jest-dom"],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts", "playwright.config.ts"],
+  "exclude": ["node_modules", "dist", "src/**/*.stories.tsx"]
+}

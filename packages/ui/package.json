@@ -1,0 +1,64 @@
+{
+  "name": "@panda/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tokens": "./src/tokens/index.ts",
+    "./tokens/globals.css": "./src/tokens/globals.css",
+    "./primitives": "./src/primitives/index.ts",
+    "./hooks": "./src/hooks/index.ts",
+    "./charts": "./src/charts/index.ts",
+    "./tables": "./src/tables/index.ts",
+    "./lib/driveMode": "./src/lib/driveMode.ts",
+    "./lib/tripPresentation": "./src/lib/tripPresentation.ts",
+    "./lib/theme": "./src/lib/theme.ts",
+    "./lib/utils": "./src/lib/utils.ts",
+    "./lib/dateTime": "./src/lib/dateTime.ts",
+    "./lib/vehicleStatus": "./src/lib/vehicleStatus.ts",
+    "./lib/vehicleTires": "./src/lib/vehicleTires.ts",
+    "./lib/brandAssets": "./src/lib/brandAssets.ts",
+    "./lib/color": "./src/lib/color.ts",
+    "./lib/clientDiagnostics": "./src/lib/clientDiagnostics.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
+    "test": "vitest run",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "dependencies": {
+    "@panda/themes": "workspace:*",
+    "@panda/types": "workspace:*",
+    "@tanstack/react-table": "catalog:",
+    "clsx": "^2.1.1",
+    "date-fns": "catalog:",
+    "lucide-react": "catalog:",
+    "maplibre-gl": "^6.4.1",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-icons": "catalog:",
+    "recharts": "^3.9.2",
+    "tailwind-merge": "^3.6.0",
+    "uplot": "^1.6.32"
+  },
+  "devDependencies": {
+    "@panda/config": "workspace:*",
+    "@storybook/addon-a11y": "catalog:",
+    "@storybook/react": "catalog:",
+    "@storybook/react-vite": "catalog:",
+    "jsdom": "catalog:",
+    "storybook": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "esbuild": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  }
+}

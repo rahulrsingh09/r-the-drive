@@ -1,0 +1,136 @@
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { describe, expect, it } from 'vitest';
+
+import { CurrentVehicleStatePanel } from '../components/dashboard/DashboardPage';
+import type { VehicleStatus } from '@panda/types';
+
+const images = {
+  all: [
+    { placement: 'overhead', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/overhead-light.webp' },
+  ],
+  overhead: {
+    light: '/rivian/overhead-light.webp',
+  },
+};
+
+function renderPanel(node: React.ReactNode) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+}
+
+describe('dashboard tire health', () => {
+  it('colors tire borders from the saved target pressure', () => {
+    renderPanel(
+      <CurrentVehicleStatePanel
+        images={images}
+        targetTirePressurePsi={48}
+        status={{
+          vehicle_id: 'vehicle-1',
+          battery_level: 80,
+          range_miles: 250,
+          power_state: 'ready',
+          charger_state: 'Disconnected',
+          speed_mph: 0,
+          latitude: null,
+          longitude: null,
+          is_online: true,
+          last_updated: '2026-06-03T12:00:00Z',
+          tire_fl_psi: 46,
+          tire_fr_psi: 44,
+          tire_rl_psi: 41,
+          tire_rr_psi: 51,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('46 psi')).toHaveClass('border-status-positive/70');
+    expect(screen.getByText('44 psi')).toHaveClass('border-status-warning/70');
+    expect(screen.getByText('41 psi')).toHaveClass('border-status-danger/70');
+    expect(screen.getByText('51 psi')).toHaveClass('border-status-positive/70');
+  });
+
+  it('keeps invalid sensors neutral', () => {
+    renderPanel(
+      <CurrentVehicleStatePanel
+        images={images}
+        targetTirePressurePsi={48}
+        status={{
+          vehicle_id: 'vehicle-1',
+          battery_level: 80,
+          range_miles: 250,
+          power_state: 'ready',
+          charger_state: 'Disconnected',
+          speed_mph: 0,
+          latitude: null,
+          longitude: null,
+          is_online: true,
+          last_updated: '2026-06-03T12:00:00Z',
+          tire_fl_psi: null,
+          tire_fl_status: 'invalid_sensor',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Invalid Sensor')).toHaveClass('border-border');
+  });
+
+  it('shows a threshold legend tooltip for tire health', async () => {
+    renderPanel(
+      <CurrentVehicleStatePanel
+        images={images}
+        targetTirePressurePsi={48}
+        status={{
+          vehicle_id: 'vehicle-1',
+          battery_level: 80,
+          range_miles: 250,
+          power_state: 'ready',
+          charger_state: 'Disconnected',
+          speed_mph: 0,
+          latitude: null,
+          longitude: null,
+          is_online: true,
+          last_updated: '2026-06-03T12:00:00Z',
+          tire_fl_psi: 46,
+        }}
+      />,
+    );
+
+    fireEvent.mouseEnter(screen.getByText('46 psi'));
+
+    expect(await screen.findByText('Tire Pressure Health')).toBeInTheDocument();
+    expect(screen.getByText('Target: 48 psi')).toBeInTheDocument();
+    expect(screen.getByText('46+ psi')).toBeInTheDocument();
+    expect(screen.getByText('43-45 psi')).toBeInTheDocument();
+    expect(screen.getByText('<=42 psi')).toBeInTheDocument();
+  });
+
+  it('pulls the rear gate lock in only for real R2 artwork', () => {
+    const status: VehicleStatus = {
+      vehicle_id: 'vehicle-1',
+      battery_level: 80,
+      range_miles: 250,
+      power_state: 'ready',
+      charger_state: 'Disconnected',
+      speed_mph: 0,
+      latitude: null,
+      longitude: null,
+      is_online: true,
+      last_updated: '2026-06-03T12:00:00Z',
+      closure_liftgate_locked: true,
+    };
+    const rearGate = () => screen.getByTitle('Rear gate lock').closest('[class*="left-["]');
+
+    const r2 = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" status={status} />);
+    expect(rearGate()?.className).toContain('left-[8.8%]');
+    r2.unmount();
+
+    const r1s = renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R1S" status={status} />);
+    expect(rearGate()?.className).toContain('left-[4%]');
+    r1s.unmount();
+
+    renderPanel(<CurrentVehicleStatePanel images={images} vehicleModel="R2" isDemoVehicle status={status} />);
+    expect(rearGate()?.className).toContain('left-[4%]');
+  });
+});

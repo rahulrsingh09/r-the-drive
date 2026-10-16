@@ -1,0 +1,96 @@
+name: PR Security
+
+on:
+  pull_request:
+    branches: [mainline]
+  push:
+    branches: [mainline]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24.18.0'
+  RUST_VERSION: '1.97.1'
+
+jobs:
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify API route security inventory
+        run: pnpm security:routes
+      - name: Verify dependency policy and parser regressions
+        run: |
+          pnpm deps:check
+          node --test scripts/check-dependency-audits.test.mjs scripts/image-size-security.test.mjs
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Cargo audit
+        working-directory: apps/api
+        shell: bash
+        run: |
+          audit_status=0
+          cargo audit --deny warnings --json > "$RUNNER_TEMP/cargo-audit.json" || audit_status=$?
+          cat "$RUNNER_TEMP/cargo-audit.json"
+          node ../../scripts/check-dependency-audits.mjs cargo "$RUNNER_TEMP/cargo-audit.json" "$audit_status"
+      - name: pnpm audit
+        shell: bash
+        run: |
+          audit_status=0
+          pnpm audit --json > "$RUNNER_TEMP/pnpm-audit.json" || audit_status=$?
+          cat "$RUNNER_TEMP/pnpm-audit.json"
+          node scripts/check-dependency-audits.mjs pnpm "$RUNNER_TEMP/pnpm-audit.json" "$audit_status"
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Semgrep SAST
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
+        with:
+          config: >-
+            p/rust
+            p/typescript
+            p/react
+            p/owasp-top-ten
+            config/security/semgrep-rules.yml
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      - name: Semgrep SAST (fork-safe)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
+        with:
+          config: >-
+            p/rust
+            p/typescript
+            p/react
+            p/owasp-top-ten
+            config/security/semgrep-rules.yml
+      - name: Build production image
+        run: docker build -f compose/Dockerfile -t panda:${{ github.sha }} .
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: panda:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'

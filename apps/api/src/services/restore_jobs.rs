@@ -1,0 +1,629 @@
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Utc};
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use sqlx::PgPool;
+use tokio::fs;
+use uuid::Uuid;
+
+use crate::{
+    config::Config,
+    errors::AppError,
+    services::restore_compatibility::{CandidatePreparationReport, RestorePlan},
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RestorePhase {
+    Queued,
+    ValidatingPackage,
+    Planning,
+    PreparingCandidate,
+    ApplyingTransforms,
+    MigratingCandidate,
+    ValidatingCandidate,
+    SafetyBackup,
+    StoppingApplication,
+    MergingHostState,
+    SwappingDatabase,
+    RestoringDatabase,
+    RestoringSettings,
+    RestoringArtwork,
+    StartingApplication,
+    VerifyingHealth,
+    RollingBack,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RollbackState {
+    #[default]
+    NotRequired,
+    Available,
+    InProgress,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreJob {
+    pub id: Uuid,
+    pub artifact_id: Uuid,
+    pub artifact_path: String,
+    pub safety_artifact_path: Option<String>,
+    #[serde(default)]
+    pub safety_run_id: Option<Uuid>,
+    #[serde(default)]
+    pub safety_artifact_id: Option<Uuid>,
+    pub restore_request_id: Uuid,
+    pub phase: RestorePhase,
+    pub progress_percent: u8,
+    pub message: String,
+    pub error_message: Option<String>,
+    pub capability_sha256: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub reconciled_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub automatic_retry_count: u8,
+    #[serde(default)]
+    pub catalog_snapshot: Option<BackupCatalogSnapshot>,
+    #[serde(default)]
+    pub plan: Option<RestorePlan>,
+    #[serde(default)]
+    pub validation_report: Option<CandidatePreparationReport>,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default)]
+    pub rollback_state: RollbackState,
+    #[serde(default)]
+    pub candidate_database: Option<String>,
+    #[serde(default)]
+    pub previous_database: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BackupCatalogSnapshot {
+    pub runs: Vec<BackupRunSnapshot>,
+    pub artifacts: Vec<BackupArtifactSnapshot>,
+    pub restore_requests: Vec<BackupRestoreRequestSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupRunSnapshot {
+    pub id: Uuid,
+    pub trigger: String,
+    pub status: String,
+    #[serde(default)]
+    pub phase: String,
+    #[serde(default)]
+    pub progress_percent: i16,
+    pub artifact_key: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupArtifactSnapshot {
+    pub id: Uuid,
+    pub run_id: Option<Uuid>,
+    pub storage_type: String,
+    pub file_name: String,
+    pub storage_path: String,
+    pub size_bytes: i64,
+    pub checksum_sha256: String,
+    pub manifest: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupRestoreRequestSnapshot {
+    pub id: Uuid,
+    pub artifact_id: Uuid,
+    pub status: String,
+    pub confirmation_phrase: String,
+    pub notes: Option<String>,
+    pub error_message: Option<String>,
+    pub requested_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RestoreJobPublic {
+    pub id: Uuid,
+    pub artifact_id: Uuid,
+    pub phase: RestorePhase,
+    pub progress_percent: u8,
+    pub message: String,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub plan: Option<RestorePlan>,
+    pub validation_report: Option<CandidatePreparationReport>,
+    pub retryable: bool,
+    pub rollback_state: RollbackState,
+}
+
+impl RestoreJob {
+    pub fn public(&self) -> RestoreJobPublic {
+        RestoreJobPublic {
+            id: self.id,
+            artifact_id: self.artifact_id,
+            phase: self.phase.clone(),
+            progress_percent: self.progress_percent,
+            message: self.message.clone(),
+            error_message: self.error_message.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            plan: self.plan.clone(),
+            validation_report: self.validation_report.clone(),
+            retryable: self.retryable,
+            rollback_state: self.rollback_state.clone(),
+        }
+    }
+}
+
+pub async fn create(
+    config: &Config,
+    artifact_id: Uuid,
+    artifact_path: String,
+    restore_request_id: Uuid,
+    plan: RestorePlan,
+) -> Result<(RestoreJob, String), AppError> {
+    let mut token_bytes = [0_u8; 32];
+    rand::thread_rng().fill_bytes(&mut token_bytes);
+    let token = hex::encode(token_bytes);
+    let now = Utc::now();
+    let job = RestoreJob {
+        id: Uuid::new_v4(),
+        artifact_id,
+        artifact_path,
+        safety_artifact_path: None,
+        safety_run_id: None,
+        safety_artifact_id: None,
+        restore_request_id,
+        phase: RestorePhase::Queued,
+        progress_percent: 5,
+        message: "Restore queued".into(),
+        error_message: None,
+        capability_sha256: token_hash(&token),
+        created_at: now,
+        updated_at: now,
+        reconciled_at: None,
+        automatic_retry_count: 0,
+        catalog_snapshot: None,
+        plan: Some(plan),
+        validation_report: None,
+        retryable: true,
+        rollback_state: RollbackState::NotRequired,
+        candidate_database: None,
+        previous_database: None,
+    };
+    write(config, &job).await?;
+    Ok((job, token))
+}
+
+pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, AppError> {
+    let runs = sqlx::query_as::<_, (Uuid, String, String, String, i16, Option<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
+        "SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at FROM panda.backup_runs ORDER BY created_at",
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| BackupRunSnapshot {
+        id: row.0,
+        trigger: row.1,
+        status: row.2,
+        phase: row.3,
+        progress_percent: row.4,
+        artifact_key: row.5,
+        started_at: row.6,
+        completed_at: row.7,
+        error_message: row.8,
+        created_at: row.9,
+        updated_at: row.10,
+    })
+    .collect();
+    let artifacts = sqlx::query_as::<_, (Uuid, Option<Uuid>, String, String, String, i64, String, Value, DateTime<Utc>)>(
+        "SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at FROM panda.backup_artifacts ORDER BY created_at",
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| BackupArtifactSnapshot { id: row.0, run_id: row.1, storage_type: row.2, file_name: row.3, storage_path: row.4, size_bytes: row.5, checksum_sha256: row.6, manifest: row.7, created_at: row.8 })
+    .collect();
+    let restore_requests = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
+        "SELECT id, artifact_id, status, confirmation_phrase, notes, error_message, requested_at, updated_at FROM panda.backup_restore_requests ORDER BY requested_at",
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| BackupRestoreRequestSnapshot { id: row.0, artifact_id: row.1, status: row.2, confirmation_phrase: row.3, notes: row.4, error_message: row.5, requested_at: row.6, updated_at: row.7 })
+    .collect();
+    Ok(BackupCatalogSnapshot {
+        runs,
+        artifacts,
+        restore_requests,
+    })
+}
+
+pub async fn read(config: &Config, id: Uuid) -> Result<RestoreJob, AppError> {
+    let bytes = fs::read(job_path(config, id))
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Io(error),
+        })?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid restore job record: {error}")))
+}
+
+pub async fn write(config: &Config, job: &RestoreJob) -> Result<(), AppError> {
+    let directory = jobs_dir(config);
+    fs::create_dir_all(&directory).await?;
+    let path = job_path(config, job.id);
+    let temporary = directory.join(format!(".{}.tmp", job.id));
+    let bytes = serde_json::to_vec_pretty(job)
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    fs::write(&temporary, bytes).await?;
+    fs::rename(&temporary, &path).await?;
+    Ok(())
+}
+
+pub async fn update(
+    config: &Config,
+    id: Uuid,
+    phase: RestorePhase,
+    progress_percent: u8,
+    message: impl Into<String>,
+) -> Result<RestoreJob, AppError> {
+    let mut job = read(config, id).await?;
+    job.phase = phase;
+    job.progress_percent = progress_percent.min(100);
+    job.message = message.into();
+    job.updated_at = Utc::now();
+    write(config, &job).await?;
+    Ok(job)
+}
+
+pub async fn fail(config: &Config, id: Uuid, error: impl ToString) -> Result<(), AppError> {
+    let mut job = read(config, id).await?;
+    let message = error.to_string();
+    job.phase = RestorePhase::Failed;
+    job.progress_percent = job.progress_percent.min(99);
+    job.message = "Restore failed".into();
+    job.error_message = Some(message);
+    job.updated_at = Utc::now();
+    write(config, &job).await
+}
+
+pub fn token_matches(job: &RestoreJob, token: &str) -> bool {
+    constant_time_equal(
+        job.capability_sha256.as_bytes(),
+        token_hash(token).as_bytes(),
+    )
+}
+
+/// Compare authentication material without allowing an early mismatch to
+/// reveal how many leading bytes were correct. Length is folded into the
+/// accumulator so malformed tokens do not get a shorter comparison path.
+pub fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = u8::from(left.len() != right.len());
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        difference |= left_byte ^ right_byte;
+    }
+    difference == 0
+}
+
+pub fn agent_key_path(config: &Config) -> PathBuf {
+    PathBuf::from(&config.restore_agent_key_file)
+}
+
+pub async fn agent_readiness(config: &Config) -> Result<(), String> {
+    let key = fs::read_to_string(agent_key_path(config))
+        .await
+        .map_err(|error| format!("restore supervisor key is unavailable: {error}"))?;
+    if key.trim().is_empty() {
+        return Err("restore supervisor key is empty".into());
+    }
+
+    let health_url = format!("{}/health", config.restore_agent_url.trim_end_matches('/'));
+    reqwest::Client::new()
+        .get(health_url)
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|error| format!("restore supervisor is not reachable: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("restore supervisor health check failed: {error}"))?;
+    Ok(())
+}
+
+pub async fn agent_is_ready(config: &Config) -> bool {
+    agent_readiness(config).await.is_ok()
+}
+
+pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<(), AppError> {
+    let directory = jobs_dir(config);
+    if !fs::try_exists(&directory).await.unwrap_or(false) {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(&directory).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match fs::read(entry.path()).await {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let mut job: RestoreJob = match serde_json::from_slice(&bytes) {
+            Ok(job) => job,
+            Err(_) => continue,
+        };
+        if !matches!(job.phase, RestorePhase::Completed | RestorePhase::Failed)
+            || job.reconciled_at.is_some()
+        {
+            continue;
+        }
+
+        if let Some(snapshot) = &job.catalog_snapshot {
+            merge_catalog_snapshot(pool, snapshot).await?;
+        }
+
+        if job.catalog_snapshot.is_none() {
+            let imported = crate::services::backups::validate_recovery_package_with_limits(
+                Path::new(&job.artifact_path),
+                &config.recovery,
+            )
+            .await?;
+            insert_reconciled_artifact(
+                pool,
+                job.id,
+                job.artifact_id,
+                "restore",
+                "uploaded",
+                &job.artifact_path,
+                imported,
+            )
+            .await?;
+        }
+        if let (Some(run_id), Some(artifact_id), Some(path)) = (
+            job.safety_run_id,
+            job.safety_artifact_id,
+            job.safety_artifact_path.as_deref(),
+        ) {
+            let safety = crate::services::backups::validate_recovery_package_with_limits(
+                Path::new(path),
+                &config.recovery,
+            )
+            .await?;
+            insert_reconciled_artifact(
+                pool,
+                run_id,
+                artifact_id,
+                "pre_restore",
+                "safety",
+                path,
+                safety,
+            )
+            .await?;
+        }
+        let final_status = if job.phase == RestorePhase::Completed {
+            "completed"
+        } else {
+            "failed"
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO panda.backup_restore_requests (
+                id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
+            ) VALUES ($1, $2, NULL, $3, 'RESTORE', 'Automated in-app restore', $4, $5, now())
+            ON CONFLICT (id) DO UPDATE SET
+                status = EXCLUDED.status, error_message = EXCLUDED.error_message, updated_at = now()
+            "#,
+        )
+        .bind(job.restore_request_id)
+        .bind(job.artifact_id)
+        .bind(final_status)
+        .bind(&job.error_message)
+        .bind(job.created_at)
+        .execute(pool)
+        .await?;
+        job.reconciled_at = Some(Utc::now());
+        write(config, &job).await?;
+    }
+    Ok(())
+}
+
+pub async fn merge_catalog_snapshot(
+    pool: &PgPool,
+    snapshot: &BackupCatalogSnapshot,
+) -> Result<(), AppError> {
+    for run in &snapshot.runs {
+        let (phase, progress_percent) = normalized_backup_run_progress(run);
+        sqlx::query(r#"
+            INSERT INTO panda.backup_runs (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (id) DO UPDATE SET trigger = EXCLUDED.trigger, status = EXCLUDED.status,
+                phase = EXCLUDED.phase, progress_percent = EXCLUDED.progress_percent,
+                artifact_key = EXCLUDED.artifact_key, started_at = EXCLUDED.started_at,
+                completed_at = EXCLUDED.completed_at, error_message = EXCLUDED.error_message,
+                created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
+        "#).bind(run.id).bind(&run.trigger).bind(&run.status).bind(phase)
+            .bind(progress_percent).bind(&run.artifact_key).bind(run.started_at)
+            .bind(run.completed_at).bind(&run.error_message).bind(run.created_at)
+            .bind(run.updated_at).execute(pool).await?;
+    }
+    for artifact in &snapshot.artifacts {
+        let mut tx = pool.begin().await?;
+        // The target catalog is merged last. Preserve older history/FKs but
+        // never let an imported ID claim the unique operational S3 locator.
+        if artifact.storage_type == "s3" {
+            sqlx::query("UPDATE panda.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest)='object' THEN manifest ELSE '{}'::jsonb END || jsonb_build_object('historical_storage_path',storage_path,'restore_availability','unavailable'), storage_path = 'unavailable:' || id::text WHERE storage_type='s3' AND storage_path=$1 AND id<>$2")
+                .bind(&artifact.storage_path).bind(artifact.id).execute(&mut *tx).await?;
+        }
+        sqlx::query(r#"
+            INSERT INTO panda.backup_artifacts (id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (id) DO UPDATE SET run_id = EXCLUDED.run_id, storage_type = EXCLUDED.storage_type,
+                file_name = EXCLUDED.file_name, storage_path = EXCLUDED.storage_path,
+                size_bytes = EXCLUDED.size_bytes, checksum_sha256 = EXCLUDED.checksum_sha256,
+                manifest = EXCLUDED.manifest, created_at = EXCLUDED.created_at
+        "#).bind(artifact.id).bind(artifact.run_id).bind(&artifact.storage_type)
+            .bind(&artifact.file_name).bind(&artifact.storage_path).bind(artifact.size_bytes)
+            .bind(&artifact.checksum_sha256).bind(&artifact.manifest).bind(artifact.created_at)
+            .execute(&mut *tx).await?;
+        tx.commit().await?;
+    }
+    for request in &snapshot.restore_requests {
+        sqlx::query(r#"
+            INSERT INTO panda.backup_restore_requests (id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at)
+            VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (id) DO UPDATE SET artifact_id = EXCLUDED.artifact_id, status = EXCLUDED.status,
+                confirmation_phrase = EXCLUDED.confirmation_phrase, notes = EXCLUDED.notes,
+                error_message = EXCLUDED.error_message, requested_at = EXCLUDED.requested_at,
+                updated_at = EXCLUDED.updated_at
+        "#).bind(request.id).bind(request.artifact_id).bind(&request.status)
+            .bind(&request.confirmation_phrase).bind(&request.notes).bind(&request.error_message)
+            .bind(request.requested_at).bind(request.updated_at).execute(pool).await?;
+    }
+    Ok(())
+}
+
+fn normalized_backup_run_progress(run: &BackupRunSnapshot) -> (&str, i16) {
+    if !run.phase.is_empty() {
+        return (run.phase.as_str(), run.progress_percent.clamp(0, 100));
+    }
+
+    match run.status.as_str() {
+        "succeeded" => ("completed", 100),
+        "failed" | "canceled" => ("failed", run.progress_percent.clamp(0, 99)),
+        _ => ("queued", run.progress_percent.clamp(0, 99)),
+    }
+}
+
+pub fn mark_source_artifact_availability(
+    source: &mut BackupCatalogSnapshot,
+    target: Option<&BackupCatalogSnapshot>,
+) {
+    let _ = target; // Source claims never authorize access. Verified target rows merge last.
+    for artifact in &mut source.artifacts {
+        if !artifact.manifest.is_object() {
+            artifact.manifest = serde_json::json!({});
+        }
+        artifact.manifest.as_object_mut().unwrap().insert(
+            "restore_availability".into(),
+            Value::String("unavailable".into()),
+        );
+    }
+}
+
+pub fn start_reconciler(pool: PgPool, config: Config) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            if let Err(error) = reconcile_completed_jobs(&pool, &config).await {
+                tracing::error!(error = ?error, "restore job journal reconciliation failed");
+            }
+        }
+    })
+}
+
+async fn insert_reconciled_artifact(
+    pool: &PgPool,
+    run_id: Uuid,
+    artifact_id: Uuid,
+    trigger: &str,
+    storage_type: &str,
+    path: &str,
+    validated: crate::services::backups::ValidatedRecoveryPackage,
+) -> Result<(), AppError> {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("recovery-package.rma.tar.gz");
+    let package_format = validated
+        .manifest
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO panda.backup_runs (
+            id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, created_at, updated_at
+        ) VALUES ($1, $2, 'succeeded', 'completed', 100, NULL, $3, now(), now(), now(), now())
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(run_id)
+    .bind(trigger)
+    .bind(path)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO panda.backup_artifacts (
+            id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(artifact_id)
+    .bind(run_id)
+    .bind(storage_type)
+    .bind(file_name)
+    .bind(path)
+    .bind(validated.size_bytes)
+    .bind(validated.checksum_sha256)
+    .bind(serde_json::json!({
+        "artifact_kind": "recovery_package",
+        "format": package_format,
+        "package": validated.manifest,
+    }))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub fn jobs_dir(config: &Config) -> PathBuf {
+    Path::new(&config.backup_artifact_dir).join(".restore-jobs")
+}
+
+fn job_path(config: &Config, id: Uuid) -> PathBuf {
+    jobs_dir(config).join(format!("{id}.json"))
+}
+
+fn token_hash(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_equal;
+
+    #[test]
+    fn constant_time_equal_requires_matching_bytes_and_length() {
+        assert!(constant_time_equal(b"restore-token", b"restore-token"));
+        assert!(!constant_time_equal(b"restore-token", b"restore-tokeN"));
+        assert!(!constant_time_equal(
+            b"restore-token",
+            b"restore-token-extra"
+        ));
+        assert!(!constant_time_equal(b"", b"x"));
+    }
+}

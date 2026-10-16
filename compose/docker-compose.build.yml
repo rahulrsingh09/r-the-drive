@@ -1,0 +1,6 @@
+services:
+  panda:
+    image: panda:local
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile

@@ -1,0 +1,160 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, user_id, name, billing_type, rate, session_fee, currency,\n                  timezone, tou_periods,\n                  effective_from, effective_to, created_at\n           FROM panda.cost_profiles WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "billing_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "billing_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "rate",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "rate"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "session_fee",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "session_fee"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "timezone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "timezone"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "tou_periods",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "tou_periods"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "effective_to"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "cost_profiles",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "116f526602e3fa0244a830409a37f4e24eb110edd757a4c44126e1b1271d1d8e"
+}

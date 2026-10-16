@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM panda.software_versions WHERE vehicle_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b822751ea2463d095ce0f4a5b742b4de54998713d0956a2153f47705cfc68051"
+}

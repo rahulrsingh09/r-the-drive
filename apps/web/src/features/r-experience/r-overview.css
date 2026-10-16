@@ -1,0 +1,116 @@
+.r-overview { display: grid; grid-template-columns: minmax(0,1fr) minmax(310px,.43fr); gap: 56px; align-items: start; }
+.r-vehicle-stage { min-width: 0; background: var(--rm-bg-page); }
+.r-scene-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.r-scene-heading h1 { font-size: clamp(44px,4vw,58px); line-height: 1; font-weight: 450; letter-spacing: -2px; margin: 0; overflow-wrap: anywhere; }
+.r-scene-heading p { font-size: 12px; color: var(--rm-text-secondary); margin: 12px 0 0; }
+.r-scene-heading small { font-size: 11px; color: var(--rm-text-secondary); }
+.r-car-status { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; font-size: 12px; color: var(--rm-text-secondary); flex-shrink: 0; }
+.r-car-status span,.r-car-foot a { display: inline-flex; align-items: center; gap: 6px; }
+.r-car-status svg,.r-car-foot svg { width: 14px; height: 14px; }
+.r-scene-controls { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; }
+.r-car-tabs { position: relative; display: flex; padding: 4px; border-radius: 99px; background: var(--rm-bg-surface); width: min(270px,60%); flex-shrink: 0; }
+.r-car-tabs button { z-index: 1; position: relative; min-height: 40px; flex: 1; font-size: 12px; color: var(--rm-text-secondary); }
+.r-car-tabs button[aria-pressed="true"] { color: var(--rm-bg-page); }
+.r-car-tab-marker { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px)/3); border-radius: 99px; background: var(--rm-text-primary); transition: transform 220ms cubic-bezier(.22,1,.36,1); }
+.r-instrument-strip { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-top: 16px; max-width: 560px; }
+.r-car-readings { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 0; animation: r-arrive 180ms ease; }
+.r-car-readings > div,.r-efficiency-card { min-width: 0; background: var(--rm-bg-surface); border-radius: 12px; padding: 16px; min-height: 116px; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; }
+.r-car-readings dt,.r-card-top { font-size: 12px; color: var(--rm-text-secondary); }
+.r-car-readings dd,.r-efficiency-card strong { margin: auto 0 0; font-size: 30px; font-weight: 450; line-height: 1.1; letter-spacing: -1px; white-space: nowrap; }
+.r-car-readings dd { display: flex; flex-direction: column; gap: 5px; font-variant-numeric: tabular-nums; }
+.r-car-readings .r-reading-unit { font-size: 11px; font-weight: 400; letter-spacing: 0; color: var(--rm-text-secondary); }
+.r-efficiency-card > div { margin-top: auto; }
+.r-scene-actions { min-width: 0; }
+.r-car-readings small { font-size: 10px; color: var(--rm-text-secondary); }
+.r-tires > div { min-height: 78px; padding: 12px; }
+.r-tires dd { font-size: 21px; }
+.r-efficiency-card:hover { background: var(--rm-bg-elevated); }
+.r-efficiency-card strong { color: var(--r-signal); display: block; }
+.r-efficiency-card small,.r-metric-unit { font-size: 10px; color: var(--rm-text-secondary); }
+.r-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.r-card-top svg { width: 15px; height: 15px; }
+.r-orbit { position: relative; margin: 8px -24px 0; }
+.r-orbit-stage { position: relative; width: 100%; height: clamp(310px,42dvh,440px); overflow: clip; touch-action: pan-y pinch-zoom; user-select: none; cursor: grab; }
+.r-orbit-stage::before { content: ""; position: absolute; inset: 8% 0; background: radial-gradient(ellipse at 50% 58%,var(--rm-bg-elevated),transparent 70%); pointer-events: none; }
+.r-orbit-stage:active { cursor: grabbing; }
+.r-orbit-stage img,.r-orbit-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; scale: 1.1; pointer-events: none; }
+.r-orbit-hidden { visibility: hidden; }
+.r-orbit-poster { animation: r-car-arrive 850ms cubic-bezier(.22,1,.36,1); }
+.r-orbit-controls { display: flex; gap: 4px; align-items: center; justify-content: flex-end; font-size: 11px; color: var(--rm-text-secondary); margin: -32px 24px 0; position: relative; }
+.r-orbit-controls span { margin-right: auto; }
+.r-orbit-controls button { display: grid; place-items: center; min-width: 44px; height: 44px; border-radius: 50%; }
+.r-orbit-controls button:hover { background: var(--rm-bg-elevated); }
+.r-orbit-controls svg { width: 16px; height: 16px; }
+.r-static-car { width: 100%; height: clamp(310px,42dvh,440px); display: grid; place-items: center; }
+.r-static-car img { max-height: 100%; width: 100%; object-fit: contain; }
+.r-car-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; color: var(--rm-text-secondary); margin-top: 8px; }
+.r-car-foot a { min-height: 36px; }
+.r-reading-note { font-size: 11px; line-height: 1.6; color: var(--rm-text-secondary); margin-top: 4px; }
+.r-reading-note button,.r-empty button { text-decoration: underline; }
+.r-activity-rail { min-width: 0; padding-top: 8px; }
+.r-distance-card { display: flex; flex-direction: column; gap: 24px; padding-bottom: 24px; }
+.r-distance-card span { font-size: 14px; color: var(--rm-text-secondary); }
+.r-distance-card strong { display: block; font-size: clamp(32px,3.8vw,50px); font-weight: 450; letter-spacing: -2px; margin-top: 12px; white-space: nowrap; }
+.r-distance-card small { display: block; font-size: 11px; color: var(--rm-text-secondary); line-height: 1.6; margin-top: 8px; }
+.r-distance-card .r-period-distance strong { font-size: 22px; letter-spacing: -.5px; margin-top: 0; }
+.r-recent { margin-top: 12px; }
+.r-last-charge { margin-top: 24px; }
+.r-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.r-section-heading h2 { font-size: 20px; font-weight: 500; letter-spacing: -.5px; }
+.r-section-heading a,.r-dashboard-link { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 12px; }
+.r-section-heading svg,.r-dashboard-link svg { width: 16px; height: 16px; }
+.r-trip-list,.r-charge-summary { border-top: 1px solid var(--rm-border-default); }
+.r-trip-row { display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 10px; padding: 18px 0; border-bottom: 1px solid var(--rm-border-default); transition: background-color 160ms ease; }
+.r-trip-row:hover,.r-charge-summary:hover { background: var(--rm-bg-surface); }
+.r-route-tile { width: 36px; height: 40px; display: grid; place-items: center; }
+.r-route-tile svg { width: 26px; height: 28px; color: var(--rm-text-secondary); }
+.r-trip-description { min-width: 0; }
+.r-trip-description strong { display: block; font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-trip-row small,.r-charge-summary small { display: block; font-size: 10px; color: var(--rm-text-secondary); margin-top: 6px; }
+.r-trip-value { text-align: right; font-size: 14px; white-space: nowrap; }
+.r-trip-row > svg { display: none; }
+.r-charge-summary { display: grid; grid-template-columns: 24px 1fr auto 16px; align-items: center; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--rm-border-default); font-size: 13px; }
+.r-charge-summary strong { font-weight: 500; }
+.r-charge-summary > svg { width: 18px; height: 18px; }
+.r-last-charge .r-section-heading h2 { font-size: 15px; }
+.r-empty { padding: 20px 0; color: var(--rm-text-secondary); font-size: 13px; border-top: 1px solid var(--rm-border-default); }
+.r-dashboard-link { margin-top: 24px; color: var(--rm-text-secondary); }
+@keyframes r-car-arrive { from { transform: translateX(-12px) scale(.97); opacity: .5; } to { transform: none; opacity: 1; } }
+@media(max-width:1100px) and (min-width:901px) { .r-overview { gap: 28px; grid-template-columns: minmax(0,1fr) 300px; } .r-car-readings > div,.r-efficiency-card { padding: 12px; } .r-car-readings dd { font-size: 27px; } }
+@media(max-width:900px) {
+  .r-overview { grid-template-columns: minmax(0,1fr); gap: 32px; }
+  .r-scene-heading { align-items: flex-start; gap: 12px; }
+  .r-scene-heading > div:first-child { min-width: 0; }
+  .r-scene-heading h1 { font-size: clamp(28px,8vw,36px); line-height: 1.1; letter-spacing: -1px; }
+  .r-scene-heading p { margin-top: 10px; }
+  .r-car-status { font-size: 11px; gap: 8px; padding-top: 5px; max-width: 108px; text-align: right; }
+  .r-scene-controls { margin-top: 14px; gap: 10px; flex-wrap: wrap; }
+  .r-scene-actions { order: -1; width: 100%; }
+  .r-scene-actions [data-dashboard-actions] { display: flex; flex-wrap: nowrap; justify-content: flex-start; width: 100%; gap: 8px; }
+  .r-scene-actions [aria-label="Select vehicle"] { min-width: 0; width: 100%; }
+  .r-scene-actions [data-dashboard-actions] > :has([aria-label="Select vehicle"]) { min-width: 0; flex: 1; }
+  .r-scene-actions [data-dashboard-actions] > :last-child { margin-left: auto; }
+  .r-scene-actions [data-dashboard-actions] button { min-height: 44px; }
+  .r-scene-actions [aria-label^="Toggle efficiency units"] { width: 44px; }
+  .r-car-tabs { width: 100%; }
+  .r-car-tabs button { font-size: 12px; min-height: 40px; }
+  .r-instrument-strip { gap: 8px; margin-top: 12px; max-width: none; }
+  .r-car-readings { gap: 8px; }
+  .r-car-readings > div,.r-efficiency-card { min-height: 112px; padding: 12px 10px; border-radius: 12px; gap: 6px; justify-content: flex-start; }
+  .r-car-readings dd,.r-efficiency-card > div { margin-top: 6px; }
+  .r-car-readings dt,.r-card-top { font-size: 11px; }
+  .r-car-readings dd,.r-efficiency-card strong { font-size: clamp(21px,6.2vw,26px); }
+  .r-car-readings > div:first-child dd { font-size: clamp(17px,5vw,24px); }
+  .r-car-readings small,.r-efficiency-card small,.r-metric-unit { font-size: 11px; }
+  .r-tires > div { min-height: 78px; }
+  .r-tires dd { font-size: 19px; }
+  .r-orbit { margin-inline: -20px; }
+  .r-orbit-stage,.r-static-car { height: clamp(170px,28svh,280px); }
+  .r-orbit-controls { margin-inline: 20px; font-size: 10px; }
+  .r-car-foot { font-size: 11px; }
+  .r-distance-card { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 0; border-block: 1px solid var(--rm-border-default); }
+  .r-distance-card strong { font-size: clamp(28px,8vw,38px); letter-spacing: -1px; }
+  .r-distance-card .r-period-distance strong { font-size: 19px; }
+  .r-recent { margin-top: 24px; }
+  .r-trip-description strong { font-size: 14px; }
+}

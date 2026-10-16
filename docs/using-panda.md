@@ -1,0 +1,29 @@
+---
+title: Using R:The Drive
+description: Customize dashboards and control the optional services an installation uses.
+slug: /using-panda/
+sidebar_label: Using R:The Drive
+pagination_prev: null
+pagination_next: guides/dashboard-customization
+---
+
+# Using R:The Drive
+
+Use this section after the installation is healthy and receiving vehicle data. It explains the product surfaces owners and everyday users are most likely to change.
+
+## Common tasks
+
+| Goal | Start here |
+|---|---|
+| Understand built-in dashboards and personal copies | [Dashboard customization](./guides/dashboard-customization.md) |
+| Edit layouts, widgets, and conditional previews | [Dashboard customization](./guides/dashboard-customization.md) |
+| Choose Classic/RAD or build a private theme | [Appearance and custom themes](./guides/themes.md) |
+| Review weather, map, geocoding, or proxy access | [External connections](./guides/external-connections.md) |
+| Explore development-only Rivian-reported parked energy and extended readings | [Extended Vehicle Telemetry](./guides/extended-vehicle-telemetry.md) |
+| Minimize optional external requests | [External connections](./guides/external-connections.md) and [Privacy](./privacy.md) |
+
+## Where to go next
+
+- Installation, remote access, updates, backups, and troubleshooting belong in [Operations](./operations.md).
+- API keys, metrics, and dashboard data contracts belong in [Reference](./reference.md).
+- Widget implementation and shared dashboard architecture belong in [Development](./development.md).

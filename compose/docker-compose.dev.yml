@@ -1,0 +1,107 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
+    environment:
+      POSTGRES_DB: panda
+      POSTGRES_USER: panda
+      POSTGRES_PASSWORD: devpassword
+    ports:
+      - '${DEV_HOST_BIND_ADDRESS:-127.0.0.1}:${DEV_POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - timescaledb_data_pg18:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U panda']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+  redis:
+    image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '${REDIS_MAXMEMORY:-192mb}', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - redis_data:/data
+    ports:
+      - '${DEV_HOST_BIND_ADDRESS:-127.0.0.1}:${DEV_REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  garage:
+    image: dxflrs/garage:v2.3.0@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690
+    command: ['/garage', '-c', '/config/garage.toml', 'server']
+    ports:
+      - '${DEV_HOST_BIND_ADDRESS:-127.0.0.1}:${DEV_GARAGE_PORT:-3900}:3900'
+      - '${DEV_HOST_BIND_ADDRESS:-127.0.0.1}:${DEV_GARAGE_ADMIN_PORT:-3903}:3903'
+    volumes:
+      - ./garage.toml:/config/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    healthcheck:
+      test: ['CMD', '/garage', '-c', '/config/garage.toml', 'status']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    ports:
+      - '${DEV_HOST_BIND_ADDRESS:-127.0.0.1}:${DEV_API_PORT:-3001}:3001'
+    environment:
+      DATABASE_URL: postgresql://panda:devpassword@timescaledb:5432/panda
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://garage:3900
+      S3_ALLOW_DEVELOPMENT_GARAGE: 'true'
+      S3_ACCESS_KEY: GKdeadbeef0000000000000000000000
+      S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
+      PORT: ${DEV_API_PORT:-3001}
+      ALLOWED_ORIGINS: ${DEV_WEB_ORIGINS:-http://localhost:5173}
+      # This stack is served over HTTP. Omit Secure so the browser can resend
+      # the refresh cookie after a page reload instead of forcing a new login.
+      COOKIE_INSECURE: 'true'
+      PANDA_ENV: development
+      RUST_LOG: panda_api=info,tower_http=info
+      VEHICLE_IMAGE_CACHE_DIR: /data/vehicle-image-cache
+      BACKUP_ARTIFACT_DIR: /backups
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - vehicle_image_cache_dev:/data/vehicle-image-cache
+      - backup_artifacts_dev:/backups
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+volumes:
+  timescaledb_data_pg18:
+  redis_data:
+  garage_meta:
+  garage_data:
+  vehicle_image_cache_dev:
+  backup_artifacts_dev:
