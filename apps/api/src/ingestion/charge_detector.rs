@@ -4,6 +4,7 @@
 
 use crate::models::telemetry::{ChargerState, TelemetryEvent};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::location::valid_location_pair;
@@ -21,26 +22,36 @@ const AC_L2_MAX_KW: f64 = 50.0;
 /// without letting runaway readings through.
 const PLAUSIBLE_MAX_CHARGE_KW: f64 = 300.0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletedChargeSession {
     pub session_id: Uuid,
     pub vehicle_id: Uuid,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
+    #[serde(with = "optional_float_bits")]
     pub location_lat: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     pub location_lng: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     pub soc_start: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     pub soc_end: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     pub charge_limit: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     pub battery_capacity_wh: Option<f64>,
 
     /// Energy drawn from the grid (integrated from |power_kw| × Δt).
+    #[serde(with = "optional_float_bits")]
     pub energy_used_wh: Option<f64>,
     /// Energy delivered to the pack: (soc_end - soc_start) × battery_capacity.
+    #[serde(with = "optional_float_bits")]
     pub energy_added_wh: Option<f64>,
     /// Peak AC/DC power recorded during the session.
+    #[serde(with = "optional_float_bits")]
     pub peak_charge_kw: Option<f64>,
     /// Average charge rate = energy_used_kwh / duration_hours.
+    #[serde(with = "optional_float_bits")]
     pub avg_charge_rate_kw: Option<f64>,
     /// Classified charger type: "ac", "ac_l2", or "dc".
     pub charger_type: Option<String>,
@@ -62,17 +73,22 @@ pub struct ActiveChargeSessionSnapshot {
     pub peak_charge_kw: f64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChargeDetectorState {
     vehicle_id: Uuid,
     battery: ChargeBatteryReadings,
     phase: ChargePhase,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChargeBatteryReadings {
+    #[serde(with = "optional_float_bits")]
     soc: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     limit: Option<f64>,
+    #[serde(with = "optional_float_bits")]
     capacity_wh: Option<f64>,
 }
 
@@ -96,27 +112,33 @@ impl ChargeBatteryReadings {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 enum ChargePhase {
     #[default]
     Idle,
     Active(ActiveCharge),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActiveCharge {
     id: Uuid,
     started_at: DateTime<Utc>,
+    #[serde(with = "location_bits")]
     location: (Option<f64>, Option<f64>),
+    #[serde(with = "optional_float_bits")]
     start_soc: Option<f64>,
     last_activity: DateTime<Utc>,
     grid: ChargeGridEnergy,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChargeGridEnergy {
     last_sample_at: Option<DateTime<Utc>>,
+    #[serde(with = "float_bits")]
     watt_hours: f64,
+    #[serde(with = "float_bits")]
     peak_kw: f64,
 }
 
@@ -214,6 +236,30 @@ impl ChargeDetectorState {
             ChargePhase::Idle => None,
             ChargePhase::Active(session) => Some(session.id),
         }
+    }
+
+    pub(crate) fn vehicle_id(&self) -> Uuid {
+        self.vehicle_id
+    }
+
+    pub(crate) fn active_snapshot(&self) -> Option<ActiveChargeSessionSnapshot> {
+        let ChargePhase::Active(active) = &self.phase else {
+            return None;
+        };
+        Some(ActiveChargeSessionSnapshot {
+            session_id: active.id,
+            started_at: active.started_at,
+            location_lat: active.location.0,
+            location_lng: active.location.1,
+            soc_start: active.start_soc,
+            last_soc: self.battery.soc,
+            charge_limit: self.battery.limit,
+            battery_capacity_wh: self.battery.capacity_wh,
+            last_charge_ts: active.last_activity,
+            last_power_ts: active.grid.last_sample_at,
+            energy_used_wh: active.grid.watt_hours,
+            peak_charge_kw: active.grid.peak_kw,
+        })
     }
 
     pub fn process(&mut self, event: &TelemetryEvent) -> ChargeEvent {
@@ -322,6 +368,48 @@ impl ActiveCharge {
             avg_charge_rate_kw,
             charger_type: peak_charge_kw.or(avg_charge_rate_kw).map(classify_charger),
         }
+    }
+}
+
+// Integer bit patterns keep checkpoint floats exact through JSONB round trips.
+mod optional_float_bits {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub(super) fn serialize<S: Serializer>(
+        value: &Option<f64>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.map(f64::to_bits).serialize(serializer)
+    }
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<f64>, D::Error> {
+        Ok(Option::<u64>::deserialize(deserializer)?.map(f64::from_bits))
+    }
+}
+
+mod float_bits {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub(super) fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(value.to_bits())
+    }
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        Ok(f64::from_bits(u64::deserialize(deserializer)?))
+    }
+}
+
+mod location_bits {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub(super) fn serialize<S: Serializer>(
+        value: &(Option<f64>, Option<f64>),
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        (value.0.map(f64::to_bits), value.1.map(f64::to_bits)).serialize(serializer)
+    }
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<(Option<f64>, Option<f64>), D::Error> {
+        let (lat, lng) = <(Option<u64>, Option<u64>)>::deserialize(deserializer)?;
+        Ok((lat.map(f64::from_bits), lng.map(f64::from_bits)))
     }
 }
 
@@ -1048,5 +1136,74 @@ mod tests {
         assert_eq!(session.soc_start, Some(40.0));
         assert_eq!(session.soc_end, Some(60.0));
         assert!(session.energy_used_wh.unwrap_or_default() >= 18_000.0);
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn complete_detector_and_completion_float_bits_survive_json_serialization() {
+        let vehicle = Uuid::from_u128(120);
+        let at = DateTime::parse_from_rfc3339("2026-10-16T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut state = ChargeDetectorState::new(vehicle);
+        let mut metadata = TelemetryEvent::empty(vehicle, at);
+        metadata.battery_level = Some(f64::from_bits(0x7ff8_0000_0000_0042));
+        metadata.battery_limit = Some(f64::INFINITY);
+        metadata.battery_capacity_wh = Some(f64::NEG_INFINITY);
+        state.process(&metadata);
+        let roundtrip = |state: &ChargeDetectorState| -> ChargeDetectorState {
+            serde_json::from_slice(&serde_json::to_vec(state).unwrap()).unwrap()
+        };
+        let restored = roundtrip(&state);
+        assert_eq!(
+            restored.battery.soc.unwrap().to_bits(),
+            metadata.battery_level.unwrap().to_bits()
+        );
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        let mut start = TelemetryEvent::empty(vehicle, at);
+        start.charger_state = Some(ChargerState::Charging);
+        start.battery_level = Some(10.0);
+        start.battery_capacity_wh = Some(f64::INFINITY);
+        state.process(&start);
+        for (millis, power) in [
+            (1, 12.123456789012345),
+            (500, 13.123456789012345),
+            (300, 100.0),
+            (900, f64::NAN),
+            (1000, 12.87654321098765),
+        ] {
+            let mut event =
+                TelemetryEvent::empty(vehicle, at + chrono::Duration::milliseconds(millis));
+            event.power_kw = Some(power);
+            state.process(&event);
+        }
+        let mut restored = roundtrip(&state);
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        let mut end = TelemetryEvent::empty(vehicle, at + chrono::Duration::seconds(3));
+        end.charger_state = Some(ChargerState::Done);
+        end.battery_level = Some(20.0);
+        let ChargeEvent::SessionEnded(expected) = state.process(&end) else {
+            panic!("completion")
+        };
+        let ChargeEvent::SessionEnded(actual) = restored.process(&end) else {
+            panic!("restored completion")
+        };
+        assert_eq!(actual.energy_added_wh, Some(f64::INFINITY));
+        let restored: CompletedChargeSession =
+            serde_json::from_slice(&serde_json::to_vec(&actual).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(expected).unwrap(),
+            serde_json::to_value(restored).unwrap()
+        );
     }
 }
