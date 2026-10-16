@@ -362,24 +362,15 @@ async fn find_session_by_external_alias(
 
     let matched = sqlx::query_as::<_, MatchRow>(
         r#"
-        SELECT DISTINCT ON (cs.id)
-            cs.id,
-            cs.source
+        SELECT cs.id, cs.source
         FROM panda.charge_sessions cs
-        LEFT JOIN panda.charge_session_external_aliases alias
-          ON alias.charge_session_id = cs.id
         WHERE cs.vehicle_id = $1
-          AND (
-              cs.rivian_session_id = ANY($2)
-              OR alias.external_id = ANY($2)
-          )
-        ORDER BY cs.id,
-                 CASE COALESCE(cs.source, '')
-                     WHEN 'telemetry+rivian_api' THEN 4
-                     WHEN 'telemetry' THEN 3
-                     WHEN 'rivian_api' THEN 1
-                     ELSE 2
-                 END DESC
+          AND (cs.rivian_session_id = ANY($2) OR EXISTS (
+              SELECT 1 FROM panda.charge_session_external_aliases alias
+              WHERE alias.charge_session_id = cs.id AND alias.external_id = ANY($2)
+          ))
+        ORDER BY cs.id
+        LIMIT 1
         "#,
     )
     .bind(vehicle_id)
@@ -402,22 +393,17 @@ async fn find_session_by_grouping_key(
 
     let matched = sqlx::query_as::<_, MatchRow>(
         r#"
-        SELECT DISTINCT ON (cs.id)
-            cs.id,
-            cs.source
+        SELECT cs.id, cs.source
         FROM panda.charge_sessions cs
-        JOIN panda.charge_session_external_aliases alias
-          ON alias.charge_session_id = cs.id
         WHERE cs.vehicle_id = $1
-          AND alias.transaction_id_grouping_key = $2
+          AND EXISTS (
+              SELECT 1 FROM panda.charge_session_external_aliases alias
+              WHERE alias.charge_session_id = cs.id
+                AND alias.transaction_id_grouping_key = $2
+          )
         ORDER BY cs.id,
-                 CASE COALESCE(cs.source, '')
-                     WHEN 'telemetry+rivian_api' THEN 4
-                     WHEN 'telemetry' THEN 3
-                     WHEN 'rivian_api' THEN 1
-                     ELSE 2
-                 END DESC,
-                 ABS(EXTRACT(EPOCH FROM (cs.started_at - COALESCE($3, cs.started_at)))) ASC
+                 ABS(EXTRACT(EPOCH FROM (cs.started_at - COALESCE($3, cs.started_at))))
+        LIMIT 1
         "#,
     )
     .bind(vehicle_id)
@@ -483,43 +469,30 @@ async fn find_time_window_session(
 
     let matched = sqlx::query_as::<_, MatchRow>(
         r#"
-        WITH ranked AS (
-            SELECT
-                cs.id,
-                cs.source,
-                ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) AS delta_secs,
-                ROW_NUMBER() OVER (
-                    ORDER BY
-                        CASE COALESCE(cs.source, '')
-                            WHEN 'telemetry+rivian_api' THEN 4
-                            WHEN 'telemetry' THEN 3
-                            WHEN 'rivian_api' THEN 1
-                            ELSE 2
-                        END DESC,
-                        ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) ASC,
-                        cs.started_at ASC,
-                        cs.id ASC
-                ) AS rn,
-                LEAD(ABS(EXTRACT(EPOCH FROM (cs.started_at - $4)))) OVER (
-                    ORDER BY
-                        CASE COALESCE(cs.source, '')
-                            WHEN 'telemetry+rivian_api' THEN 4
-                            WHEN 'telemetry' THEN 3
-                            WHEN 'rivian_api' THEN 1
-                            ELSE 2
-                        END DESC,
-                        ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) ASC,
-                        cs.started_at ASC,
-                        cs.id ASC
-                ) AS next_delta_secs
+        WITH candidates AS MATERIALIZED (
+            SELECT cs.id, cs.source, cs.started_at,
+                   CASE COALESCE(cs.source, '')
+                       WHEN 'telemetry+rivian_api' THEN 4
+                       WHEN 'telemetry' THEN 3
+                       WHEN 'rivian_api' THEN 1
+                       ELSE 2
+                   END AS priority,
+                   ABS(EXTRACT(EPOCH FROM (cs.started_at - $4))) AS delta_secs
             FROM panda.charge_sessions cs
-            WHERE cs.vehicle_id = $1
-              AND cs.started_at BETWEEN $2 AND $3
+            WHERE cs.vehicle_id = $1 AND cs.started_at BETWEEN $2 AND $3
+            ORDER BY priority DESC, delta_secs, cs.started_at, cs.id
+            LIMIT 2
+        ), first_candidate AS (
+            SELECT * FROM candidates
+            ORDER BY priority DESC, delta_secs, started_at, id LIMIT 1
+        ), second_candidate AS (
+            SELECT delta_secs FROM candidates
+            ORDER BY priority DESC, delta_secs, started_at, id OFFSET 1 LIMIT 1
         )
-        SELECT id, source
-        FROM ranked
-        WHERE rn = 1
-          AND (next_delta_secs IS NULL OR (next_delta_secs - delta_secs) >= 900)
+        SELECT first_candidate.id, first_candidate.source
+        FROM first_candidate LEFT JOIN second_candidate ON true
+        WHERE second_candidate.delta_secs IS NULL
+           OR second_candidate.delta_secs - first_candidate.delta_secs >= 900
         "#,
     )
     .bind(vehicle_id)
@@ -545,94 +518,84 @@ async fn update_session_from_summary(
 
     sqlx::query(
         r#"
-        UPDATE panda.charge_sessions
-        SET
-            api_started_at = CASE
-                WHEN $2::timestamptz IS NULL THEN api_started_at
-                WHEN api_started_at IS NULL THEN $2
-                ELSE LEAST(api_started_at, $2)
-            END,
-            api_ended_at = CASE
-                WHEN $3::timestamptz IS NULL THEN api_ended_at
-                WHEN api_ended_at IS NULL THEN $3
-                ELSE GREATEST(api_ended_at, $3)
-            END,
-            ended_at = CASE
-                WHEN COALESCE(source, '') = 'rivian_api' THEN COALESCE(ended_at, $3)
-                ELSE ended_at
-            END,
-            kwh_added = COALESCE(kwh_added, $4),
-            network_vendor = COALESCE(network_vendor, $5),
-            range_added_km = COALESCE(range_added_km, $6),
-            is_free_session = COALESCE(is_free_session, $7),
-            is_rivian_network = COALESCE(is_rivian_network, $8),
-            rivian_paid_total = COALESCE(rivian_paid_total, $9),
-            is_home = CASE WHEN location_override_mode = 'automatic'
-                THEN COALESCE(is_home, $10) ELSE is_home END,
-            duration_minutes = COALESCE(
-                duration_minutes,
-                CASE
+        WITH locked AS MATERIALIZED (
+            SELECT * FROM panda.charge_sessions WHERE id = $1 FOR UPDATE
+        ), proposed AS MATERIALIZED (
+            SELECT id,
+                LEAST(api_started_at, $2::timestamptz) AS api_started_at,
+                GREATEST(api_ended_at, $3::timestamptz) AS api_ended_at,
+                CASE WHEN COALESCE(source, '') = 'rivian_api'
+                    THEN COALESCE(ended_at, $3) ELSE ended_at END AS ended_at,
+                COALESCE(kwh_added, $4) AS kwh_added,
+                COALESCE(network_vendor, $5) AS network_vendor,
+                COALESCE(range_added_km, $6) AS range_added_km,
+                COALESCE(is_free_session, $7) AS is_free_session,
+                COALESCE(is_rivian_network, $8) AS is_rivian_network,
+                COALESCE(rivian_paid_total, $9) AS rivian_paid_total,
+                CASE WHEN location_override_mode = 'automatic'
+                    THEN COALESCE(is_home, $10) ELSE is_home END AS is_home,
+                COALESCE(duration_minutes, CASE
                     WHEN COALESCE(source, '') = 'rivian_api'
-                         AND $3::timestamptz IS NOT NULL
-                         AND $2::timestamptz IS NOT NULL
+                        AND $3::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL
                     THEN EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz))::int / 60
-                END
-            ),
-            charger_type = COALESCE(
-                charger_type,
-                $11,
-                CASE
+                END) AS duration_minutes,
+                COALESCE(charger_type, $11, CASE
                     WHEN $10 = true THEN 'ac'
                     WHEN lower(COALESCE($5, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-                END
-            ),
-            source = $12,
-            data_confidence = $13,
-            rivian_charger_type = COALESCE(rivian_charger_type, $14),
-            currency_code = COALESCE(currency_code, $15),
-            rivian_city = COALESCE(rivian_city, $16),
-            rivian_vehicle_id = COALESCE(rivian_vehicle_id, $17),
-            rivian_vehicle_name = COALESCE(rivian_vehicle_name, $18),
-            is_public = COALESCE(is_public, $19),
-            rivian_meta = COALESCE(rivian_meta, $20)
-        WHERE id = $1
-          AND (
-              api_started_at IS DISTINCT FROM CASE
-                  WHEN $2::timestamptz IS NULL THEN api_started_at
-                  WHEN api_started_at IS NULL THEN $2
-                  ELSE LEAST(api_started_at, $2)
-              END
-              OR api_ended_at IS DISTINCT FROM CASE
-                  WHEN $3::timestamptz IS NULL THEN api_ended_at
-                  WHEN api_ended_at IS NULL THEN $3
-                  ELSE GREATEST(api_ended_at, $3)
-              END
-              OR ended_at IS DISTINCT FROM CASE
-                  WHEN COALESCE(source, '') = 'rivian_api' THEN COALESCE(ended_at, $3)
-                  ELSE ended_at
-              END
-              OR source IS DISTINCT FROM $12
-              OR data_confidence IS DISTINCT FROM $13
-              OR (rivian_meta IS NULL AND $20 IS NOT NULL)
-              OR (kwh_added IS NULL AND $4 IS NOT NULL)
-              OR (network_vendor IS NULL AND $5 IS NOT NULL)
-              OR (range_added_km IS NULL AND $6 IS NOT NULL)
-              OR (is_free_session IS NULL AND $7 IS NOT NULL)
-              OR (is_rivian_network IS NULL AND $8 IS NOT NULL)
-              OR (rivian_paid_total IS NULL AND $9 IS NOT NULL)
-              OR (location_override_mode = 'automatic' AND is_home IS NULL AND $10 IS NOT NULL)
-              OR (duration_minutes IS NULL AND COALESCE(source, '') = 'rivian_api'
-                  AND $2::timestamptz IS NOT NULL AND $3::timestamptz IS NOT NULL)
-              OR (charger_type IS NULL AND COALESCE($11, CASE
-                  WHEN $10 = true THEN 'ac'
-                  WHEN lower(COALESCE($5, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-              END) IS NOT NULL)
-              OR (rivian_charger_type IS NULL AND $14 IS NOT NULL)
-              OR (currency_code IS NULL AND $15 IS NOT NULL)
-              OR (rivian_city IS NULL AND $16 IS NOT NULL)
-              OR (rivian_vehicle_id IS NULL AND $17 IS NOT NULL)
-              OR (rivian_vehicle_name IS NULL AND $18 IS NOT NULL)
-              OR (is_public IS NULL AND $19 IS NOT NULL)
+                END) AS charger_type,
+                $12 AS source,
+                $13 AS data_confidence,
+                COALESCE(rivian_charger_type, $14) AS rivian_charger_type,
+                COALESCE(currency_code, $15) AS currency_code,
+                COALESCE(rivian_city, $16) AS rivian_city,
+                COALESCE(rivian_vehicle_id, $17) AS rivian_vehicle_id,
+                COALESCE(rivian_vehicle_name, $18) AS rivian_vehicle_name,
+                COALESCE(is_public, $19) AS is_public,
+                COALESCE(rivian_meta, $20) AS rivian_meta
+            FROM locked
+        )
+        UPDATE panda.charge_sessions AS current
+        SET
+            api_started_at = proposed.api_started_at,
+            api_ended_at = proposed.api_ended_at,
+            ended_at = proposed.ended_at,
+            kwh_added = proposed.kwh_added,
+            network_vendor = proposed.network_vendor,
+            range_added_km = proposed.range_added_km,
+            is_free_session = proposed.is_free_session,
+            is_rivian_network = proposed.is_rivian_network,
+            rivian_paid_total = proposed.rivian_paid_total,
+            is_home = proposed.is_home,
+            duration_minutes = proposed.duration_minutes,
+            charger_type = proposed.charger_type,
+            source = proposed.source,
+            data_confidence = proposed.data_confidence,
+            rivian_charger_type = proposed.rivian_charger_type,
+            currency_code = proposed.currency_code,
+            rivian_city = proposed.rivian_city,
+            rivian_vehicle_id = proposed.rivian_vehicle_id,
+            rivian_vehicle_name = proposed.rivian_vehicle_name,
+            is_public = proposed.is_public,
+            rivian_meta = proposed.rivian_meta
+        FROM locked JOIN proposed ON proposed.id = locked.id
+        WHERE current.id = locked.id
+          AND ROW(
+              locked.api_started_at, locked.api_ended_at, locked.ended_at,
+              locked.kwh_added, locked.network_vendor, locked.range_added_km,
+              locked.is_free_session, locked.is_rivian_network, locked.rivian_paid_total,
+              locked.is_home, locked.duration_minutes, locked.charger_type,
+              locked.source, locked.data_confidence, locked.rivian_charger_type,
+              locked.currency_code, locked.rivian_city, locked.rivian_vehicle_id,
+              locked.rivian_vehicle_name, locked.is_public, locked.rivian_meta
+          )
+              IS DISTINCT FROM ROW(
+              proposed.api_started_at, proposed.api_ended_at, proposed.ended_at,
+              proposed.kwh_added, proposed.network_vendor, proposed.range_added_km,
+              proposed.is_free_session, proposed.is_rivian_network, proposed.rivian_paid_total,
+              proposed.is_home, proposed.duration_minutes, proposed.charger_type,
+              proposed.source, proposed.data_confidence, proposed.rivian_charger_type,
+              proposed.currency_code, proposed.rivian_city, proposed.rivian_vehicle_id,
+              proposed.rivian_vehicle_name, proposed.is_public, proposed.rivian_meta
           )
         "#,
     )

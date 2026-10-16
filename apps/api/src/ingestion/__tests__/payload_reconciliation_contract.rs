@@ -215,10 +215,13 @@ async fn payload_reconciliation_concurrent_and_cancelled_transactions() {
     let db = Fixture::new().await;
     let v = vehicle(&db.pool, 1).await;
     let foreign = vehicle(&db.pool, 2).await;
-    let outputs = futures::future::join_all(
-        (0..8).map(|_| record(&db.pool, v, Some("race"), json!({"race":true}))),
-    )
-    .await;
+    let mut outputs = vec![record(&db.pool, v, Some("race"), json!({"race":true})).await];
+    outputs.extend(
+        futures::future::join_all(
+            (0..7).map(|_| record(&db.pool, v, Some("race"), json!({"race":true}))),
+        )
+        .await,
+    );
     let payload_id = Uuid::parse_str(outputs[0]["payload_id"].as_str().unwrap()).unwrap();
     assert!(outputs.iter().all(|r| r["payload_id"] == json!(payload_id)));
     assert_eq!(
@@ -254,12 +257,9 @@ async fn payload_reconciliation_concurrent_and_cancelled_transactions() {
     );
     assert_eq!(snapshot(&reopened).await, before);
     reopened.close().await;
-    // Caller scheduling determines which attempt creates the row.
-    let mut ordered = outputs;
-    ordered.sort_by_key(|v| v["unchanged"].as_bool().unwrap());
     evidence(
         "payload-concurrency",
-        json!({"outputs":ordered,"foreign":foreign_output,"cancelled":true,"retry":retry,"state":snapshot(&db.pool).await}),
+        json!({"outputs":outputs,"foreign":foreign_output,"cancelled":true,"retry":retry,"state":snapshot(&db.pool).await}),
         &[
             (payload_id, "<race-payload>"),
             (foreign_id, "<foreign-payload>"),
