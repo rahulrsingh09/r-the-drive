@@ -2358,9 +2358,9 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "parallax/contract_tests.rs"]
+#[path = "parallax/__tests__/contract_tests.rs"]
 mod contract_tests;
 
 #[cfg(test)]
-#[path = "parallax/persistence_tests.rs"]
+#[path = "parallax/__tests__/persistence_tests.rs"]
 mod persistence_tests;

@@ -46,6 +46,8 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Follow telemetry persistence, checkpoints, and restart limits | [Durable collection](./architecture/rewrite-durable-collector.md) |
 | Maintain backup admission, compatibility, and restore journals | [Recovery operations](./architecture/rewrite-recovery-operations.md) |
 | Understand charging price selection and time-of-use calculations | [Charging costs](./architecture/rewrite-cost-engine.md) |
+| Follow companion telemetry decoding, persistence and forwarding | [Companion telemetry](./architecture/rewrite-parallax-core.md) |
+| Maintain chart validation and catalog reconciliation | [Chart contracts](./architecture/rewrite-chart-contracts.md) |
 | Trace frontend request, map, and render failures | [Frontend error observability](./architecture/frontend-error-observability.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
 | Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |

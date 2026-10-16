@@ -120,6 +120,8 @@ const sidebars: SidebarsConfig = {
         'architecture/rewrite-durable-collector',
         'architecture/rewrite-recovery-operations',
         'architecture/rewrite-cost-engine',
+        'architecture/rewrite-parallax-core',
+        'architecture/rewrite-chart-contracts',
         'architecture/unification-baseline',
         'architecture/theming',
         'architecture/frontend-error-observability',

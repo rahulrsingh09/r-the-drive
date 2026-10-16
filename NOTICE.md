@@ -23,6 +23,9 @@ Backup admission, compatibility checks and restore journals use bounded
 validation, atomic journal publication and transactional catalog updates,
 with cancellation cleanup corrections. Charging price selection and interval
 pricing are also replaced while preserving their characterized outputs.
+Companion telemetry processing, chart validation and catalog reconciliation
+have new internal stages. Browser schema initialization avoids dynamic code
+under the existing Content Security Policy.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
