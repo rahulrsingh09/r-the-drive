@@ -257,7 +257,7 @@ async fn residual_charge_materialization_and_completed_merge_rows() {
 
 #[tokio::test]
 #[ignore = "requires explicit isolated synthetic TimescaleDB and Redis"]
-async fn residual_software_failure_advances_local_cache_before_restart() {
+async fn residual_software_failure_retries_before_and_after_restart() {
     let db = CollectorFixture::new().await;
     let mut harness = PipelineHarness::new(&db, true).await;
     let mut event = db.event(0);
@@ -281,7 +281,10 @@ async fn residual_software_failure_advances_local_cache_before_restart() {
     .unwrap();
     assert_eq!(
         before,
-        vec![("synthetic-v1".into(), Some(db.at + Duration::seconds(60)))]
+        vec![
+            ("synthetic-v1".into(), Some(db.at + Duration::seconds(120))),
+            ("synthetic-v2".into(), None)
+        ]
     );
     drop(harness);
     let mut restarted = PipelineHarness::new(&db, true).await;
@@ -298,14 +301,14 @@ async fn residual_software_failure_advances_local_cache_before_restart() {
 
 #[tokio::test]
 #[ignore = "requires explicit isolated synthetic TimescaleDB"]
-async fn residual_counter_flush_failure_discards_batch_but_legacy_counts_retry() {
+async fn residual_counter_and_legacy_flush_failures_retain_batches() {
     let db = CollectorFixture::new().await;
     let mut counters = CounterBatch::new(db.vehicle_id);
     counters.increment("telemetry_writes_persisted");
     counters.increment("untrusted_column");
     db.pool.execute("ALTER TABLE panda.rivian_stewardship_counters ADD CONSTRAINT residual_reject_count CHECK(false) NOT VALID").await.unwrap();
     counters.flush(&db.pool).await;
-    assert!(counters.counts.is_empty());
+    assert_eq!(counters.counts.get("telemetry_writes_persisted"), Some(&1));
     db.pool
         .execute(
             "ALTER TABLE panda.rivian_stewardship_counters DROP CONSTRAINT residual_reject_count",
@@ -318,7 +321,7 @@ async fn residual_counter_flush_failure_discards_batch_but_legacy_counts_retry()
             .fetch_one(&db.pool)
             .await
             .unwrap(),
-        0
+        1
     );
     let mut counts = [1, 2, 3, 4, 5];
     db.pool.execute("ALTER TABLE panda.parallax_collector_state ADD CONSTRAINT residual_reject_legacy CHECK(false) NOT VALID").await.unwrap();
@@ -431,13 +434,14 @@ async fn residual_retention_floor_partial_failure_and_session_lock() {
     cleanup_raw_events(&pool, 0).await;
     let count: (i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM panda.rivian_ws_raw_events),(SELECT count(*) FROM panda.rivian_parallax_events)").fetch_one(&db.pool).await.unwrap();
     assert_eq!(count, (1, 1));
-    let available: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(0x726d5241::bigint)")
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+    let available: bool =
+        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(0x726d5241::bigint)")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert!(
-        !available,
-        "baseline pool rotation leaks the retention session lock"
+        available,
+        "retention lock must be released despite pool rotation"
     );
     pool.close().await;
     db.finish().await;

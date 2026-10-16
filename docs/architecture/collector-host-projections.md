@@ -25,3 +25,17 @@ Live legacy charging frames cannot create a canonical session. Meaningful live d
 Synthetic tests capture complete trip and charge rows, pending completion acknowledgements, weather jobs, sparse and late frames, nonfinite metadata, live cache expiry and SQL failures. A frozen characterization SQL query independently checks the new legacy reconstruction reducer. Paused-clock tests exercise the actual acquisition selector, restart limits, channel closure and cancellation. Existing detector, source, checkpoint, suppression, state-period and restricted-history tests remain in place.
 
 These tests use disposable PostgreSQL/TimescaleDB and Redis resources. They do not use vehicle credentials, contact a live vehicle provider, or deploy an application.
+
+## Failure and restart behavior
+
+Software version rotation reads the open rows, plans the transition, and closes/inserts them in one transaction under a separate per-vehicle transaction lock. The process cache advances only after commit. A read, close or insert failure leaves both the prior history and retry state intact. Equal-version retries and worker restart do not insert an additional open row. The existing arrival-order policy remains: a late version observation can close a period using an earlier event timestamp; this change does not reinterpret historical timestamps.
+
+A stewardship batch clears only after a successful SQL write. A rejected SQL write retains the batch for retry; a confirmed successful flush clears it. Counter dates are the database's current day at flush time, preserving the existing behavior across midnight and session time zones. These counters remain in-memory operational metrics: process termination while SQL is unavailable can still lose an unflushed batch. An ambiguous commit acknowledgement can also cause a counter batch to be counted twice on retry. These metrics do not use the trip/charge outbox.
+
+Raw retention uses one transaction and a nonblocking transaction advisory lock. Each raw table has its own savepoint, so a rejected delete does not prevent maintenance of the other table. Cancellation rolls back the in-flight transaction and releases its lock. Retention has a one-day minimum; a value that cannot fit the database parameter type skips cleanup instead of overflowing into a negative window. An old process can still hold a leaked session lock from the previous implementation; closing that process or its pool releases it. The new writer touches only the two raw-event tables. Existing protected-history denials stay in force.
+
+Detector peak power is stored in the charge-rate field. The detector does not supply voltage, so its completion projection leaves existing voltage intact and stores no invented voltage for a new row. This does not rewrite old stored values. Optional annotation or cost failure does not roll back an already committed charge completion; retry keeps the same session identity and annotation key.
+
+Shutdown while waiting for a socket restart follows the normal flush/join/unlock path. Abrupt task cancellation still relies on RAII task abortion and closing the detached collector connection. Graceful cleanup and in-memory counters are distinct from the durable checkpoint guarantees.
+
+There is no new migration or checkpoint format in these stages. The existing durable-charge upgrade/downgrade constraints still apply. Provider calls, authentication policy, the R UI and deployment defaults are unchanged. Validation here does not enable or perform deployment.

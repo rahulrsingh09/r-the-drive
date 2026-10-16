@@ -658,6 +658,7 @@ pub async fn run_vehicle_worker(
             }
             Signal::EmptyParallax => continue,
             Signal::SilentSocket => {
+                tracing::warn!(vehicle_id=%vehicle_id,timeout_seconds=WS_WATCHDOG_TIMEOUT.as_secs(),"worker watchdog detected a silent Rivian WS stream; restarting websocket collector");
                 upsert_health(&pool,vehicle_id,false,"stale",
                     "No Rivian WS messages received within the watchdog window; restarting websocket collector",None,Some("rivian_ws_silent")).await;
                 host.replace(&spawn_ws_loop, false).await;
@@ -668,8 +669,11 @@ pub async fn run_vehicle_worker(
                     Ok(()) => {
                         tracing::warn!(%vehicle_id,"WS task exited cleanly; restarting websocket collector")
                     }
+                    Err(error) if error.is_panic() => {
+                        tracing::error!(vehicle_id=%vehicle_id,"WS task panicked; restarting websocket collector")
+                    }
                     Err(error) => {
-                        tracing::warn!(%vehicle_id,%error,"WS task exited with error; restarting websocket collector")
+                        tracing::warn!(vehicle_id=%vehicle_id,err=%error,"WS task exited with error; restarting websocket collector")
                     }
                 }
                 upsert_health(
@@ -683,7 +687,7 @@ pub async fn run_vehicle_worker(
                 )
                 .await;
                 if !host.wait_for_restart(&mut worker_shutdown).await {
-                    return;
+                    break;
                 }
                 host.replace(&spawn_ws_loop, true).await;
                 continue;

@@ -76,7 +76,7 @@ impl AcquisitionHost {
                 })),
                 None=>Signal::EmptyParallax,
             },
-            result=&mut self.socket=>{self.socket_finished=true;Signal::SocketExited(result)},
+            result=&mut self.socket,if !self.socket_finished=>{self.socket_finished=true;Signal::SocketExited(result)},
         }
     }
     pub(super) async fn wait_for_restart(
@@ -189,5 +189,34 @@ mod tests {
         host.stop(&mut parallax, &mut companions).await;
         assert_eq!(start.elapsed(), Wait::from_secs(5));
         assert!(parallax.is_none() && companions.is_empty());
+    }
+    #[tokio::test(start_paused = true)]
+    async fn exited_socket_can_cancel_backoff_and_join_cleanup_without_repolling() {
+        let task = WorkerTask(tokio::spawn(async {
+            panic!("synthetic acquisition panic");
+        }));
+        let mut host = AcquisitionHost::new(task, Instant::now()).await;
+        let (stop, mut shutdown) = broadcast::channel(1);
+        let (_socket, mut socket_rx) = mpsc::channel(256);
+        let (_parallax, mut parallax_rx) = mpsc::channel(256);
+        loop {
+            match host
+                .next(&mut shutdown, &mut socket_rx, &mut parallax_rx, false)
+                .await
+            {
+                Signal::SocketExited(result) => {
+                    assert!(result.unwrap_err().is_panic());
+                    break;
+                }
+                Signal::RetryCompletions => {}
+                _ => panic!("unexpected selector outcome"),
+            }
+        }
+        stop.send(()).unwrap();
+        assert!(!host.wait_for_restart(&mut shutdown).await);
+        let mut companions = tokio::task::JoinSet::new();
+        companions.spawn(std::future::pending::<()>());
+        host.stop(&mut None, &mut companions).await;
+        assert!(companions.is_empty());
     }
 }

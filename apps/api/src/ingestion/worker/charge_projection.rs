@@ -374,7 +374,7 @@ pub(super) async fn persist_charge_session_record(
         .bind(session.energy_added_wh)
         .bind(session.energy_used_wh)
         .bind(session.avg_charge_rate_kw)
-        .bind(session.peak_charge_kw)
+        .bind(Option::<f64>::None)
         .bind(location_match.geofence_id)
         .bind(location_match.address_id)
         .bind(Option::<Uuid>::None)

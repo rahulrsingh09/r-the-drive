@@ -963,3 +963,7 @@ mod telemetry_workflows;
 mod residual_workflows;
 
 mod legacy_charge_reference;
+
+mod reliability_regressions;
+
+mod residual_boundaries;

@@ -63,8 +63,12 @@ impl CounterBatch {
         if self.counts.is_empty() {
             return;
         }
-        let _ = self.write(pool).await;
-        self.counts.clear();
+        match self.write(pool).await {
+            Ok(()) => self.counts.clear(),
+            Err(error) => {
+                tracing::debug!(vehicle_id=%self.vehicle_id,%error,"stewardship flush failed; batch retained")
+            }
+        }
     }
     async fn write(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
         let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
@@ -184,34 +188,38 @@ pub(super) async fn persist_raw_event(
 }
 
 pub(super) async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
-    // Use a non-blocking advisory lock (id 0x726d_5241 = "rmRA") so that
-    // concurrent workers skip the DELETE rather than pile up on the same rows.
-    let got_lock: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(0x726d5241::bigint)")
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
-    if !got_lock {
+    let Ok(days) = i32::try_from(retention_days.max(1)) else {
+        tracing::warn!(
+            retention_days,
+            "raw retention window cannot be represented; cleanup skipped"
+        );
         return;
+    };
+    if let Err(error) = purge_raw_window(pool, days).await {
+        tracing::debug!(%error,"raw retention transaction failed");
     }
+}
 
-    let _ = sqlx::query(
-        "DELETE FROM panda.rivian_ws_raw_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
-    )
-    .bind(retention_days.max(1) as i32)
-    .execute(pool)
-    .await;
-
-    let _ = sqlx::query(
-        "DELETE FROM panda.rivian_parallax_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
-    )
-    .bind(retention_days.max(1) as i32)
-    .execute(pool)
-    .await;
-
-    // Release the session-level lock immediately so other workers can take it next cycle.
-    let _ = sqlx::query("SELECT pg_advisory_unlock(0x726d5241::bigint)")
-        .execute(pool)
-        .await;
+async fn purge_raw_window(pool: &PgPool, days: i32) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(0x726d5241::bigint)")
+        .fetch_one(&mut *tx)
+        .await?;
+    if !locked {
+        return Ok(());
+    }
+    for statement in [
+        "DELETE FROM panda.rivian_ws_raw_events WHERE received_at < now()-($1::int*interval '1 day')",
+        "DELETE FROM panda.rivian_parallax_events WHERE received_at < now()-($1::int*interval '1 day')",
+    ] {
+        sqlx::query("SAVEPOINT raw_retention_table").execute(&mut *tx).await?;
+        if let Err(error)=sqlx::query(statement).bind(days).execute(&mut *tx).await {
+            sqlx::query("ROLLBACK TO SAVEPOINT raw_retention_table").execute(&mut *tx).await?;
+            tracing::debug!(%error,"raw retention table skipped after write failure");
+        }
+        sqlx::query("RELEASE SAVEPOINT raw_retention_table").execute(&mut *tx).await?;
+    }
+    tx.commit().await
 }
 
 pub(super) async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {

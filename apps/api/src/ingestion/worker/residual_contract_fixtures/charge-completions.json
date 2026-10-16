@@ -60,7 +60,7 @@
       "parallax_time_remaining_minutes": null,
       "parallax_total_charged_kwh": null,
       "parallax_total_energy_observed_at": null,
-      "peak_voltage": 150,
+      "peak_voltage": null,
       "range_added_km": null,
       "rivian_charger_type": null,
       "rivian_city": null,
