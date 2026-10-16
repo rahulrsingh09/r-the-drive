@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import { StrictMode, useLayoutEffect } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { DashboardConfig } from '@panda/dashboards';
 import {
@@ -323,6 +324,68 @@ describe('dashboard edit draft contracts', () => {
     expect({ saved, draft, refreshed }).toEqual(originals);
   });
 
+  it.each(['uncontrolled', 'controlled'] as const)(
+    'follows saved refreshes without inventing changes in a pristine %s draft',
+    (mode) => {
+      const saved = dashboard();
+      const refreshed = dashboard({
+        name: 'Updated battery',
+        widgets: saved.widgets.map(widget => ({
+          ...widget,
+          layout: { ...widget.layout, y: 4 },
+        })),
+      });
+      const args = {
+        slug: saved.slug,
+        controlledEditMode: mode === 'controlled' ? true : undefined,
+      };
+      const { result, rerender } = renderDraft({ ...args, savedConfig: saved });
+      if (mode === 'uncontrolled') act(() => result.current.enterEdit());
+      expect(result.current.isDirty).toBe(false);
+
+      rerender({ ...args, savedConfig: refreshed });
+
+      expect(result.current.activeConfig).toEqual(refreshed);
+      expect(result.current.localConfig).toEqual(refreshed);
+      expect(result.current.isEditMode).toBe(true);
+      expect(result.current.isDirty).toBe(false);
+      expect(saved.name).toBe('Battery');
+      expect(saved.widgets[0]?.layout.y).toBe(0);
+    },
+  );
+
+  it('follows a refresh after local edits have been reverted', () => {
+    const saved = dashboard();
+    const refreshed = dashboard({ name: 'Server revision' });
+    const { result, rerender } = renderDraft({ savedConfig: saved, slug: saved.slug });
+    act(() => result.current.enterEdit());
+    act(() => result.current.setLocalConfig(dashboard({ name: 'Temporary title' })));
+    expect(result.current.isDirty).toBe(true);
+    act(() => result.current.setLocalConfig(structuredClone(saved)));
+    expect(result.current.isDirty).toBe(false);
+
+    rerender({ savedConfig: refreshed, slug: refreshed.slug });
+
+    expect(result.current.activeConfig).toEqual(refreshed);
+    expect(result.current.isDirty).toBe(false);
+  });
+
+  it('keeps an explicitly cleared draft empty when saved data refreshes', () => {
+    const saved = dashboard();
+    const refreshed = dashboard({ name: 'Updated battery' });
+    const { result, rerender } = renderDraft({ savedConfig: saved, slug: saved.slug });
+    act(() => result.current.enterEdit());
+    act(() => result.current.setLocalConfig(null));
+
+    rerender({ savedConfig: refreshed, slug: refreshed.slug });
+
+    expect(result.current.localConfig).toBeNull();
+    expect(result.current.activeConfig).toEqual(refreshed);
+    expect(result.current.isDirty).toBe(false);
+    act(() => result.current.enterEdit());
+    expect(result.current.localConfig).toEqual(refreshed);
+  });
+
   it('becomes clean when refreshed saved data matches the existing draft', () => {
     const saved = dashboard();
     const draft = dashboard({ name: 'Saved title' });
@@ -335,6 +398,70 @@ describe('dashboard edit draft contracts', () => {
 
     expect(result.current.activeConfig).toEqual(draft);
     expect(result.current.isEditMode).toBe(true);
+    expect(result.current.isDirty).toBe(false);
+
+    const refreshed = dashboard({ name: 'Later server update' });
+    rerender({ savedConfig: refreshed, slug: refreshed.slug });
+    expect(result.current.activeConfig).toEqual(refreshed);
+    expect(result.current.isDirty).toBe(false);
+  });
+
+  it('applies queued functional edits and error updates to the latest session state', () => {
+    const saved = dashboard();
+    const { result } = renderDraft({ savedConfig: saved, slug: saved.slug });
+    act(() => result.current.enterEdit());
+    act(() => {
+      result.current.setLocalConfig(current => current && ({ ...current, name: 'New title' }));
+      result.current.setLocalConfig(current => current && ({
+        ...current,
+        description: `${current.name} details`,
+      }));
+      result.current.setSaveError('Save failed');
+      result.current.setSaveError(error => `${error}; retry`);
+    });
+    expect(result.current.localConfig).toMatchObject({
+      name: 'New title',
+      description: 'New title details',
+    });
+    expect(result.current.saveError).toBe('Save failed; retry');
+    expect(result.current.isDirty).toBe(true);
+  });
+
+  it('accepts equivalent saved objects recreated during each render without resetting edits', () => {
+    const saved = dashboard();
+    const { result, rerender } = renderHook(() => useDashboardEditDraft({
+      savedConfig: structuredClone(saved),
+      slug: saved.slug,
+    }), { wrapper: StrictMode });
+    act(() => result.current.enterEdit());
+    expect(result.current.isDirty).toBe(false);
+    act(() => result.current.setLocalConfig(dashboard({ name: 'Local title' })));
+
+    rerender();
+
+    expect(result.current.activeConfig?.name).toBe('Local title');
+    expect(result.current.isDirty).toBe(true);
+  });
+
+  it('never commits the previous dashboard draft to children after an identity switch', () => {
+    const saved = dashboard();
+    const next = dashboard({ id: '10000000-0000-4000-8000-000000000002', name: 'Second copy' });
+    const commits: Array<string | undefined> = [];
+    const { result, rerender } = renderHook((props: UseDashboardEditDraftArgs) => {
+      const draft = useDashboardEditDraft(props);
+      useLayoutEffect(() => { commits.push(draft.activeConfig?.id); });
+      return draft;
+    }, {
+      initialProps: { savedConfig: saved, slug: saved.slug, controlledEditMode: true },
+      wrapper: StrictMode,
+    });
+    act(() => result.current.setLocalConfig(dashboard({ name: 'Unsaved title' })));
+    commits.length = 0;
+
+    rerender({ savedConfig: next, slug: next.slug, controlledEditMode: true });
+
+    expect(commits.length).toBeGreaterThan(0);
+    expect(commits.every(id => id === next.id)).toBe(true);
     expect(result.current.isDirty).toBe(false);
   });
 });

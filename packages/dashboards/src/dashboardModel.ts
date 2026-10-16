@@ -30,11 +30,11 @@ export function getDashboardOwnership(config: DashboardConfig): DashboardOwnersh
 }
 
 export function isSystemDefaultDashboard(config: DashboardConfig) {
-  return config.isDefault && !config.ownerId;
+  return config.isDefault && getDashboardOwnership(config) === 'system-default';
 }
 
 export function isUserOwnedDashboard(config: DashboardConfig) {
-  return Boolean(config.ownerId);
+  return getDashboardOwnership(config) === 'user-owned';
 }
 
 export function findOwnedDashboardBySlug(
@@ -93,62 +93,49 @@ export function applyWidgetLayout(
   widgets: WidgetInstance[],
   layout: readonly DashboardLayoutPatch[],
 ): WidgetInstance[] {
-  const map = new Map(layout.map((item) => [item.i, item]));
-  let changed = false;
-
-  const next = widgets.map((widget) => {
-    const item = map.get(widget.id);
-    if (!item) return widget;
-
-    const candidate = sanitizeWidgetInstance({
+  // Grid callbacks may omit hidden widgets and may contain repeated IDs.
+  // Only the last patch for an ID applies; the saved widget order never changes.
+  const patches = new Map(layout.map(patch => [patch.i, patch]));
+  let result = widgets;
+  for (const [index, widget] of widgets.entries()) {
+    const patch = patches.get(widget.id);
+    if (!patch) continue;
+    const updated = sanitizeWidgetInstance({
       ...widget,
-      layout: sanitizeWidgetLayout({ x: item.x, y: item.y, w: item.w, h: item.h }),
+      layout: sanitizeWidgetLayout({ x: patch.x, y: patch.y, w: patch.w, h: patch.h }),
     });
-
-    if (layoutsEqual(candidate.layout, widget.layout)) return widget;
-    changed = true;
-    return candidate;
-  });
-
-  return changed ? next : widgets;
+    if (layoutsEqual(updated.layout, widget.layout)) continue;
+    if (result === widgets) result = widgets.slice();
+    result[index] = updated;
+  }
+  return result;
 }
+
+const UNPLUGGED_MIX_COLUMNS: Readonly<Record<string, number>> = {
+  'charging:home_share': 0,
+  'sensor:charging_home_share': 0,
+  'charging:dc_share': 6,
+  'sensor:charging_dc_share': 6,
+};
 
 export function resolveDashboardViewWidgets(
   widgets: readonly WidgetInstance[],
   state: DashboardVisibilityState,
 ): WidgetInstance[] {
-  const visibleWidgets = widgets.filter((widget) => isWidgetVisible(widget, state));
-
-  return expandUnpluggedChargingMixRow(
-    visibleWidgets,
-    state['vehicle-connection'] === 'plugged',
-  );
-}
-
-function expandUnpluggedChargingMixRow(
-  widgets: readonly WidgetInstance[],
-  pluggedIn: boolean,
-): WidgetInstance[] {
-  if (pluggedIn) return [...widgets];
-
-  return widgets.map((widget) => {
-    if (isChargingMixSensor(widget, 'home')) {
-      return { ...widget, layout: { ...widget.layout, x: 0, w: 6 } };
+  const result: WidgetInstance[] = [];
+  const unplugged = state['vehicle-connection'] === 'unplugged';
+  for (const widget of widgets) {
+    if (!isWidgetVisible(widget, state)) continue;
+    const column = unplugged
+      ? UNPLUGGED_MIX_COLUMNS[`${widget.componentType}:${widget.definitionId}`]
+      : undefined;
+    if (column === undefined || (widget.layout.x === column && widget.layout.w === 6)) {
+      result.push(widget);
+    } else {
+      result.push({ ...widget, layout: { ...widget.layout, x: column, w: 6 } });
     }
-    if (isChargingMixSensor(widget, 'dc')) {
-      return { ...widget, layout: { ...widget.layout, x: 6, w: 6 } };
-    }
-    return widget;
-  });
-}
-
-function isChargingMixSensor(widget: WidgetInstance, mix: 'home' | 'dc') {
-  const oldDefinitionId = mix === 'home' ? 'home_share' : 'dc_share';
-  const sensorDefinitionId = mix === 'home' ? 'charging_home_share' : 'charging_dc_share';
-  return (
-    (widget.componentType === 'charging' && widget.definitionId === oldDefinitionId) ||
-    (widget.componentType === 'sensor' && widget.definitionId === sensorDefinitionId)
-  );
+  }
+  return result;
 }
 
 function layoutsEqual(a: WidgetLayout, b: WidgetLayout) {

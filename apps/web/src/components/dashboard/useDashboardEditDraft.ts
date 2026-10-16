@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useReducer, useState, type Dispatch, type SetStateAction } from 'react';
 import { dashboardKey, type DashboardConfig } from '@panda/dashboards';
+import { createDashboardEditSession, dashboardEditSessionReducer } from './dashboardEditSession';
 
 export interface UseDashboardEditDraftArgs {
   savedConfig: DashboardConfig | undefined;
@@ -16,74 +17,56 @@ export function useDashboardEditDraft({
 }: UseDashboardEditDraftArgs) {
   const [internalEditMode, setInternalEditMode] = useState(false);
   const isEditMode = controlledEditMode ?? internalEditMode;
-  const [localConfig, setLocalConfigState] = useState<DashboardConfig | null>(() =>
-    isEditMode ? savedConfig ?? null : null,
+  const key = dashboardKey(savedConfig, slug);
+  const [session, dispatch] = useReducer(
+    dashboardEditSessionReducer,
+    { key, saved: savedConfig, editing: isEditMode },
+    createDashboardEditSession,
   );
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const previousEditModeRef = useRef(isEditMode);
-  const previousDashboardKeyRef = useRef(dashboardKey(savedConfig, slug));
 
-  const setLocalConfig = useCallback<React.Dispatch<React.SetStateAction<DashboardConfig | null>>>(
-    (next) => {
-      setSaveError(null);
-      setLocalConfigState(next);
-    },
+  // Reconcile before React commits children, so a new dashboard cannot commit
+  // the previous dashboard's draft while waiting for an effect to run.
+  // Equivalent fresh objects must not cause a render loop for inline callers.
+  const savedChanged = session.input.saved !== savedConfig
+    && JSON.stringify(session.input.saved) !== JSON.stringify(savedConfig);
+  if (session.input.key !== key
+    || session.input.editing !== isEditMode
+    || savedChanged) {
+    dispatch({ type: 'observe', input: { key, saved: savedConfig, editing: isEditMode } });
+  }
+
+  const setLocalConfig = useCallback<Dispatch<SetStateAction<DashboardConfig | null>>>(
+    update => dispatch({ type: 'edit', update }),
+    [],
+  );
+  const setSaveError = useCallback<Dispatch<SetStateAction<string | null>>>(
+    update => dispatch({ type: 'error', update }),
     [],
   );
 
-  const activeConfig = localConfig ?? savedConfig;
-
-  const setEditMode = useCallback((next: boolean) => {
-    if (onEditModeChange) {
-      onEditModeChange(next);
-      return;
-    }
-    setInternalEditMode(next);
+  const requestEditMode = useCallback((next: boolean) => {
+    if (onEditModeChange) onEditModeChange(next);
+    else setInternalEditMode(next);
   }, [onEditModeChange]);
 
   const enterEdit = useCallback(() => {
-    setSaveError(null);
-    setLocalConfigState(savedConfig ?? null);
-    setEditMode(true);
-  }, [savedConfig, setEditMode]);
+    dispatch({ type: 'enter' });
+    requestEditMode(true);
+  }, [requestEditMode]);
 
   const exitEdit = useCallback(() => {
-    setSaveError(null);
-    setLocalConfigState(null);
-    setEditMode(false);
-  }, [setEditMode]);
+    dispatch({ type: 'exit' });
+    requestEditMode(false);
+  }, [requestEditMode]);
 
-  useEffect(() => {
-    const wasEditMode = previousEditModeRef.current;
-    const currentDashboardKey = dashboardKey(savedConfig, slug);
-    const dashboardChanged = currentDashboardKey !== previousDashboardKeyRef.current;
-
-    if (isEditMode && (!wasEditMode || dashboardChanged)) {
-      setSaveError(null);
-      setLocalConfigState(savedConfig ?? null);
-    }
-
-    if (!isEditMode && (wasEditMode || dashboardChanged)) {
-      setSaveError(null);
-      setLocalConfigState(null);
-    }
-
-    previousEditModeRef.current = isEditMode;
-    previousDashboardKeyRef.current = currentDashboardKey;
-  }, [isEditMode, savedConfig, slug]);
-
-  const isDirty = useMemo(() => {
-    if (!isEditMode || !localConfig || !savedConfig) return false;
-    return JSON.stringify(localConfig) !== JSON.stringify(savedConfig);
-  }, [isEditMode, localConfig, savedConfig]);
-
+  const localConfig = session.draft.config;
   return {
-    activeConfig,
+    activeConfig: localConfig ?? savedConfig,
     localConfig,
     setLocalConfig,
     isEditMode,
-    isDirty,
-    saveError,
+    isDirty: isEditMode && session.draft.kind === 'dirty',
+    saveError: session.error,
     setSaveError,
     enterEdit,
     exitEdit,

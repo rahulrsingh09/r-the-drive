@@ -66,19 +66,30 @@ export function getDashboardVisibilityOptionLabel(
 export function isVehiclePluggedIn(status: VehicleStatus | null | undefined) {
   // A Rivian can remain connected while in standby without continuously
   // refreshing charger_state, so connection is semantic rather than timestamp-based.
-  const state = status?.charger_state?.toLowerCase();
-  if (state && !['unknown', 'disconnected'].includes(state)) return true;
-  return Boolean(status?.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
+  if (!status) return false;
+  switch (status.charger_state?.toLowerCase()) {
+    case undefined:
+    case '':
+    case 'unknown':
+    case 'disconnected':
+      return Boolean(status.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
+    default:
+      return true;
+  }
+}
+
+function legacyConnectionRule(widget: WidgetInstance): DashboardVisibilityRule | undefined {
+  const value = widget.options?.['chargingConnectionVisibility'];
+  if (value === 'plugged' || value === 'unplugged') return { type: 'vehicle-connection', value };
+  return undefined;
 }
 
 export function getWidgetVisibilityRules(widget: WidgetInstance): DashboardVisibilityRule[] {
+  // A nonempty typed list is authoritative. Empty lists still support older
+  // saved/imported v2 configurations until the normalization boundary migrates them.
   if (widget.visibility?.length) return widget.visibility;
-
-  // Compatibility for saved/imported v2 configs that predate typed rules.
-  const legacy = widget.options?.['chargingConnectionVisibility'];
-  return legacy === 'plugged' || legacy === 'unplugged'
-    ? [{ type: 'vehicle-connection', value: legacy }]
-    : [];
+  const legacy = legacyConnectionRule(widget);
+  return legacy ? [legacy] : [];
 }
 
 export function hasDashboardVisibilityRules(widgets: readonly WidgetInstance[]) {
@@ -88,9 +99,11 @@ export function hasDashboardVisibilityRules(widgets: readonly WidgetInstance[]) 
 export function getDashboardVisibilityRuleTypes(
   widgets: readonly WidgetInstance[],
 ): DashboardVisibilityRuleType[] {
-  return [...new Set(
-    widgets.flatMap((widget) => getWidgetVisibilityRules(widget).map((rule) => rule.type)),
-  )];
+  const types = new Set<DashboardVisibilityRuleType>();
+  for (const widget of widgets) {
+    for (const rule of getWidgetVisibilityRules(widget)) types.add(rule.type);
+  }
+  return Array.from(types);
 }
 
 export function isWidgetVisible(
@@ -104,32 +117,21 @@ export function setVehicleConnectionVisibility(
   widget: WidgetInstance,
   value: VehicleConnectionVisibilityValue | null,
 ): WidgetInstance {
-  const remaining = getWidgetVisibilityRules(widget).filter((rule) => rule.type !== 'vehicle-connection');
-  const visibility = value
-    ? [...remaining, { type: 'vehicle-connection' as const, value }]
-    : remaining;
-
-  if (visibility.length === 0) {
-    const next = { ...widget };
-    delete next.visibility;
-    return next;
-  }
-
-  return { ...widget, visibility };
+  const visibility = getWidgetVisibilityRules(widget)
+    .filter(rule => rule.type !== 'vehicle-connection');
+  if (value !== null) visibility.push({ type: 'vehicle-connection', value });
+  const result: WidgetInstance = { ...widget, visibility };
+  if (visibility.length === 0) delete result.visibility;
+  return result;
 }
 
 export function migrateLegacyWidgetVisibility(widget: WidgetInstance): WidgetInstance {
-  const legacy = widget.options?.['chargingConnectionVisibility'];
-  if (legacy !== 'plugged' && legacy !== 'unplugged') return widget;
-
-  const options = { ...(widget.options ?? {}) };
+  if (!legacyConnectionRule(widget)) return widget;
+  const options = { ...widget.options };
   delete options['chargingConnectionVisibility'];
-  const migrated = widget.visibility?.length
-    ? widget
-    : setVehicleConnectionVisibility(widget, legacy);
-
   return {
-    ...migrated,
-    ...(Object.keys(options).length > 0 ? { options } : { options: {} }),
+    ...widget,
+    visibility: getWidgetVisibilityRules(widget),
+    options,
   };
 }
