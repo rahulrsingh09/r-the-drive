@@ -131,6 +131,10 @@ impl ChargeGridEnergy {
             return;
         }
         if let Some(previous) = self.last_sample_at {
+            // A late reading must not rewind the next integration interval.
+            if at < previous {
+                return;
+            }
             let hours = (at - previous).num_milliseconds() as f64 / 3_600_000.0;
             self.watt_hours += kw * 1_000.0 * hours;
         }
@@ -783,6 +787,65 @@ mod tests {
         assert_eq!(second_session.vehicle_id, Uuid::from_u128(2));
         assert_eq!(second_session.soc_start, Some(60.0));
         assert_ne!(first_session.session_id, second_session.session_id);
+    }
+
+    #[test]
+    fn charge_core_out_of_order_power_cannot_subtract_energy_or_rewind_clock() {
+        for (at, expected_peak) in [
+            (charge_core_at(30), 12.0),
+            (charge_core_at(60) - Duration::nanoseconds(1), 12.0),
+            (charge_core_at(60), 24.0),
+        ] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(60);
+            sample.power_kw = Some(12.0);
+            detector.process(&sample);
+            sample.ts = at;
+            sample.power_kw = Some(24.0);
+            detector.process(&sample);
+            sample.ts = charge_core_at(120);
+            sample.power_kw = Some(12.0);
+            sample.charger_state = Some(ChargerState::Done);
+            let ChargeEvent::SessionEnded(session) = detector.process(&sample) else {
+                panic!("expected completion");
+            };
+            assert_eq!(session.energy_used_wh, Some(400.0));
+            assert_eq!(session.peak_charge_kw, Some(expected_peak));
+        }
+    }
+
+    #[test]
+    fn charge_core_restart_rejects_power_older_than_snapshot_clock() {
+        let session_id = Uuid::from_u128(20);
+        let mut detector = ChargeDetectorState::from_snapshot(
+            Uuid::from_u128(1),
+            ActiveChargeSessionSnapshot {
+                session_id,
+                started_at: charge_core_at(0),
+                location_lat: None,
+                location_lng: None,
+                soc_start: None,
+                last_soc: None,
+                charge_limit: None,
+                battery_capacity_wh: None,
+                last_charge_ts: charge_core_at(60),
+                last_power_ts: Some(charge_core_at(60)),
+                energy_used_wh: 200.0,
+                peak_charge_kw: 12.0,
+            },
+        );
+        let mut late = charge_core_sample(30);
+        late.power_kw = Some(24.0);
+        detector.process(&late);
+        let mut end = charge_core_sample(120);
+        end.power_kw = Some(12.0);
+        end.charger_state = Some(ChargerState::Done);
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completion");
+        };
+        assert_eq!(session.session_id, session_id);
+        assert_eq!(session.energy_used_wh, Some(400.0));
+        assert_eq!(session.peak_charge_kw, Some(12.0));
     }
 
     fn event(
