@@ -566,6 +566,7 @@ export class RequestTransport {
         code === 'NETWORK_ERROR' ||
         code === 'INCOMPLETE_RESPONSE' ||
         code === 'INVALID_RESPONSE' ||
+        failure?.status === 429 ||
         (failure?.status != null && failure.status >= 500)
       ) {
         if (request.reportErrors !== false && failure) {

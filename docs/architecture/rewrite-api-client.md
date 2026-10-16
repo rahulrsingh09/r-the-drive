@@ -67,6 +67,9 @@ Endpoint conversion failures use `INVALID_RESPONSE`. Malformed HTTP error
 envelopes retain their status and request ID with safe code/message defaults.
 Malformed renewal responses preserve the current session rather than announcing
 an authentication failure. A successful renewal publishes tokens once.
+Throttled renewal also preserves the session and returns the original 429 and
+retry metadata. The renewal class cooldown prevents another network renewal
+until its deadline; rejected renewal responses (401/403) still expire the session.
 
 Rate-limit classes, header precedence, the five-second default cooldown, toast
 events, and auth-expired event deduplication are preserved. There is no automatic
@@ -102,7 +105,7 @@ Specialized transports retain separate contracts:
 - Protected artwork keeps its existing path restriction and normal session
   transport. Download decoders retain bytes and filename fallbacks.
 
-Session coordination, outbound policy, security modules, schemas, persisted
+Cross-tab locking, outbound policy, security modules, schemas, persisted
 data, endpoint paths, and remote providers are outside this rewrite.
 
 ## Verification

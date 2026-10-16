@@ -294,13 +294,69 @@ describe('session coordination and bounded retries', () => {
     }
   );
 
-  it('clears rejected sessions and deduplicates auth-expired events', async () => {
+  it('preserves the session and cooldown metadata when automatic renewal is throttled', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const changed = vi.fn();
+    const expired = vi.fn();
+    client.onAuthChange(changed);
+    window.addEventListener('panda:auth-expired', expired);
+    try {
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(denied())
+        .mockResolvedValueOnce(
+          json({ error: { code: 'RATE_LIMITED', message: 'Wait' } }, 429, {
+            'retry-after': '2',
+            'x-panda-ratelimit-class': 'auth_public',
+            'x-panda-ratelimit-source': 'api',
+          })
+        )
+        .mockResolvedValueOnce(denied())
+        .mockResolvedValueOnce(json({ id: 'same-account' }))
+        .mockResolvedValueOnce(json(tokens));
+      await expect(client.vehicleStatus('a')).rejects.toMatchObject({
+        status: 429,
+        code: 'RATE_LIMITED',
+        detail: {
+          path: '/v1/auth/refresh',
+          rateLimitSource: 'api',
+          rateLimitClass: 'auth_public',
+          retryAfterSeconds: 2,
+        },
+      });
+      await expect(client.vehicleStatus('b')).rejects.toMatchObject({
+        status: 429,
+        code: 'RATE_LIMITED',
+        detail: { rateLimitSource: 'client-cooldown', retryAfterSeconds: 2 },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(changed).not.toHaveBeenCalled();
+      expect(expired).not.toHaveBeenCalled();
+      await client.me();
+      expect(new Headers(fetchMock.mock.calls[3]?.[1]?.headers).get('Authorization')).toBe(
+        'Bearer synthetic-old'
+      );
+      vi.advanceTimersByTime(2000);
+      expect(await client.refresh()).toEqual(tokens);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(changed).toHaveBeenCalledExactlyOnceWith(tokens);
+    } finally {
+      window.removeEventListener('panda:auth-expired', expired);
+    }
+  });
+
+  it.each([401, 403])('clears renewal %s and deduplicates auth-expired events', async (status) => {
     const changed = vi.fn();
     const events = vi.fn();
     client.onAuthChange(changed);
     window.addEventListener('panda:auth-expired', events);
     try {
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => denied());
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) =>
+        String(url).endsWith('/auth/refresh')
+          ? json({ error: { code: 'UNAUTHORIZED', message: 'Rejected session' } }, status)
+          : denied()
+      );
       const results = await Promise.allSettled([
         client.vehicleStatus('a'),
         client.vehicleStatus('b'),
