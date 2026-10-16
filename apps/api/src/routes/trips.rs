@@ -1279,3 +1279,7 @@ mod tests {
 #[cfg(test)]
 #[path = "__tests__/trip_queries/contracts.rs"]
 mod query_contracts;
+
+#[cfg(test)]
+#[path = "__tests__/derived_trip_series.rs"]
+mod derived_series_tests;

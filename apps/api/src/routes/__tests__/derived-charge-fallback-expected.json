@@ -1,0 +1,7592 @@
+[
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [],
+    "offsets": [],
+    "result": [],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "8000000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4049000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 50.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff0000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      999
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "40347ef130a94196"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "40347ef130a94196"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "4034fde26152832c"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4034fde26152832c"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.49586776859504
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.49586776859504
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.99173553719008
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.99173553719008
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "40347ef130a94196"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "40347ef130a94196"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "4034fde26152832c"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "4034fde26152832c"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.49586776859504
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.49586776859504
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.99173553719008
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.99173553719008
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "40347ef130a94196"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "40347ef130a94196"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "4034fde26152832c"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "4034fde26152832c"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.49586776859504
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.49586776859504
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.99173553719008
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.99173553719008
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "4053e043b3d5af9a"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4053e043b3d5af9a"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "4053c08767ab5f35"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4053c08767ab5f35"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.50413223140495
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.50413223140495
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.00826446280992
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.00826446280992
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "4053e043b3d5af9a"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4053e043b3d5af9a"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "4053c08767ab5f35"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "4053c08767ab5f35"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.50413223140495
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.50413223140495
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.00826446280992
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.00826446280992
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "4053e043b3d5af9a"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4053e043b3d5af9a"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "4053c08767ab5f35"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "4053c08767ab5f35"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.50413223140495
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.50413223140495
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.00826446280992
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 79.00826446280992
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "c0105d1745d1745d"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c0105d1745d1745d"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "c009745d1745d174"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "c009745d1745d174"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "405a400000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -4.090909090909091
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -4.090909090909091
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -3.1818181818181817
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -3.1818181818181817
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "c0105d1745d1745d"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c0105d1745d1745d"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "c009745d1745d174"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "c009745d1745d174"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "405a400000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -4.090909090909091
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -4.090909090909091
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -3.1818181818181817
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -3.1818181818181817
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "c0105d1745d1745d"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c0105d1745d1745d"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "c009745d1745d174"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "c009745d1745d174"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "405a400000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -4.090909090909091
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -4.090909090909091
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -3.1818181818181817
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -3.1818181818181817
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "4036000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "7ff8000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "7ff0000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "4036000000000001",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      -1001,
+      -1,
+      0,
+      999,
+      1001,
+      120001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": null,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 22.000000000000004,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "c014000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "c014000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "c014000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3f91111111111111",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      1000,
+      1000,
+      1000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      120001,
+      60000,
+      -1001
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "4034000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "4054000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "4034000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "4034000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 80.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 20.0
+      }
+    ],
+    "soc_end": "4034000000000000",
+    "soc_start": "4054000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "0000000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "0000000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 0.0
+      }
+    ],
+    "soc_end": "8000000000000000",
+    "soc_start": "8000000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "405a400000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "405a400000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "405a400000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "405a400000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "c014000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "405a400000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "405a400000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": -5.0
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 105.0
+      }
+    ],
+    "soc_end": "405a400000000000",
+    "soc_start": "c014000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7ff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7ff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "4054000000000000",
+    "soc_start": "7ff8000000000000"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "7fefffffffffffff"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "7fefffffffffffff"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": 1.7976931348623157e+308
+      }
+    ],
+    "soc_end": "7fefffffffffffff",
+    "soc_start": "7fefffffffffffff"
+  },
+  {
+    "cap": "8000000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "4036000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "cap": "7ff0000000000000",
+    "float_bits": [
+      [
+        "0000000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "8000000000000000",
+        "fff8000000000000"
+      ],
+      [
+        "3ff0000000000000",
+        "0000000000000000",
+        "fff8000000000000"
+      ]
+    ],
+    "offsets": [
+      0,
+      120000,
+      60000
+    ],
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "rivian",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      },
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": null,
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "parallax",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "soc": null
+      }
+    ],
+    "soc_end": "7ff0000000000000",
+    "soc_start": "fff0000000000000"
+  },
+  {
+    "bits": "0000000000000000",
+    "power": null,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "8000000000000000",
+    "power": "8000000000000000",
+    "result": [
+      {
+        "charge_rate_kw": -0.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "0000000000000000",
+    "power": "0000000000000000",
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "4035ffffffffffff",
+    "power": "4035ffffffffffff",
+    "result": [
+      {
+        "charge_rate_kw": 21.999999999999996,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "4036000000000000",
+    "power": "4036000000000000",
+    "result": [
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "4036000000000000",
+    "power": "4036000000000001",
+    "result": [
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "7ff8000000000000",
+    "power": "7ff8000000000000",
+    "result": [
+      {
+        "charge_rate_kw": null,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "0000000000000000",
+    "power": "fff0000000000000",
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "bits": "4036000000000000",
+    "power": "7ff0000000000000",
+    "result": [
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": " DCFC ",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "soc": 50.0
+      }
+    ]
+  }
+]

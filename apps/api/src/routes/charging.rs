@@ -1256,3 +1256,7 @@ async fn load_curve_analysis_samples(
 #[cfg(test)]
 #[path = "__tests__/charging_workflow.rs"]
 mod workflow_contract_tests;
+
+#[cfg(test)]
+#[path = "__tests__/derived_charge_series.rs"]
+mod derived_series_tests;

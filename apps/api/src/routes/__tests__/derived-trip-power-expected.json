@@ -1,0 +1,7509 @@
+[
+  {
+    "case": "empty",
+    "duration": 0,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": []
+  },
+  {
+    "case": "capacity None",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(39.999999)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4043fffff79c8430",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(40.0)",
+    "duration": 60,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:30Z",
+        "last": "4028000000000000",
+        "net_power_bits": "4028000000000000",
+        "net_power_kw": 12.0,
+        "start": "4028000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 50.0,
+      "median_interval_seconds": 30.0,
+      "p90_interval_seconds": 30.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "403e000000000000",
+      "403e000000000000",
+      "4049000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(250.0)",
+    "duration": 60,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:30Z",
+        "last": "4052c00000000000",
+        "net_power_bits": "4052c00000000000",
+        "net_power_kw": 75.0,
+        "start": "4052c00000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 50.0,
+      "median_interval_seconds": 30.0,
+      "p90_interval_seconds": 30.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "403e000000000000",
+      "403e000000000000",
+      "4049000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(250.000001)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f40000218def4",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(39999.999999)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "40e387fffffde721",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(40000.0)",
+    "duration": 60,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:30Z",
+        "last": "4028000000000000",
+        "net_power_bits": "4028000000000000",
+        "net_power_kw": 12.0,
+        "start": "4028000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 50.0,
+      "median_interval_seconds": 30.0,
+      "p90_interval_seconds": 30.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "403e000000000000",
+      "403e000000000000",
+      "4049000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "40e3880000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(250000.0)",
+    "duration": 60,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:30Z",
+        "last": "4052c00000000000",
+        "net_power_bits": "4052c00000000000",
+        "net_power_kw": 75.0,
+        "start": "4052c00000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 50.0,
+      "median_interval_seconds": 30.0,
+      "p90_interval_seconds": 30.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "403e000000000000",
+      "403e000000000000",
+      "4049000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "410e848000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(250000.000001)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "410e848000008638",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(NaN)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "7ff8000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(inf)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "7ff0000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "capacity Some(-inf)",
+    "duration": 60,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "fff0000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f00000000000",
+        "ts": "1970-01-01T00:00:30Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval -1 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval -1 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval -1 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval -1 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval -1 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval -1 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval -1 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval -1 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval -1 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval -1 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval -1 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval -1 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1969-12-31T23:59:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 0 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 0 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 0 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 0 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 0 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 0 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 0 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 0 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 0 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 0 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 0 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 0 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 1999 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 1999 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 1999 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 1999 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 1999 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 1999 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 1999 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 1999 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 1999 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 1999 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 1999 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 1999 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:01.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2000 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2000 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2000 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:02Z",
+        "last": "c06c200000000000",
+        "net_power_bits": "c06c200000000000",
+        "net_power_kw": -225.0,
+        "start": "c06c200000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 0.6666666666666667,
+      "median_interval_seconds": 2.0,
+      "p90_interval_seconds": 2.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4000000000000000",
+      "4000000000000000",
+      "3fe5555555555556"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2000 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2000 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:02Z",
+        "last": "c06c200000000002",
+        "net_power_bits": "c06c200000000002",
+        "net_power_kw": -225.00000000000006,
+        "start": "c06c200000000002",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 0.6666666666666667,
+      "median_interval_seconds": 2.0,
+      "p90_interval_seconds": 2.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4000000000000000",
+      "4000000000000000",
+      "3fe5555555555556"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2000 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2000 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2000 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2000 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2000 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2000 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2000 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2001 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2001 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2001 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:02.001Z",
+        "last": "c06c1c66dc4e4bff",
+        "net_power_bits": "c06c1c66dc4e4bff",
+        "net_power_kw": -224.88755622188907,
+        "start": "c06c1c66dc4e4bff",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 0.6669999999999999,
+      "median_interval_seconds": 2.001,
+      "p90_interval_seconds": 2.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4000020c49ba5e35",
+      "4000020c49ba5e35",
+      "3fe55810624dd2f1"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2001 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2001 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:02.001Z",
+        "last": "c06c1c66dc4e4c01",
+        "net_power_bits": "c06c1c66dc4e4c01",
+        "net_power_kw": -224.88755622188913,
+        "start": "c06c1c66dc4e4c01",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 0.6669999999999999,
+      "median_interval_seconds": 2.001,
+      "p90_interval_seconds": 2.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4000020c49ba5e35",
+      "4000020c49ba5e35",
+      "3fe55810624dd2f1"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2001 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2001 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2001 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2001 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2001 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 2001 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 2001 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:02.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 5999 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 5999 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 5999 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:05.999Z",
+        "last": "c052c0ccd58a2291",
+        "net_power_bits": "c052c0ccd58a2291",
+        "net_power_kw": -75.01250208368062,
+        "start": "c052c0ccd58a2291",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 1.9996666666666667,
+      "median_interval_seconds": 5.999,
+      "p90_interval_seconds": 5.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4017fef9db22d0e5",
+      "4017fef9db22d0e5",
+      "3ffffea27983c132"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 5999 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 5999 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:05.999Z",
+        "last": "c052c0ccd58a2292",
+        "net_power_bits": "c052c0ccd58a2292",
+        "net_power_kw": -75.01250208368063,
+        "start": "c052c0ccd58a2292",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 1.9996666666666667,
+      "median_interval_seconds": 5.999,
+      "p90_interval_seconds": 5.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4017fef9db22d0e5",
+      "4017fef9db22d0e5",
+      "3ffffea27983c132"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 5999 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 5999 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 5999 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 5999 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 5999 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 5999 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 5999 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:05.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6000 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6000 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6000 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06Z",
+        "last": "c052c00000000000",
+        "net_power_bits": "c052c00000000000",
+        "net_power_kw": -75.0,
+        "start": "c052c00000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 6.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "4018000000000000",
+      "4000000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6000 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6000 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06Z",
+        "last": "c052c00000000001",
+        "net_power_bits": "c052c00000000001",
+        "net_power_kw": -75.00000000000001,
+        "start": "c052c00000000001",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 6.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "4018000000000000",
+      "4000000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6000 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6000 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06Z",
+        "last": "c087700000000000",
+        "net_power_bits": "c087700000000000",
+        "net_power_kw": -750.0,
+        "start": "c087700000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 6.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "4018000000000000",
+      "4000000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6000 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06Z",
+        "last": "4087700000000000",
+        "net_power_bits": "4087700000000000",
+        "net_power_kw": 750.0,
+        "start": "4087700000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 6.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "4018000000000000",
+      "4000000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6000 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6000 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6000 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06Z",
+        "last": "c087700000000000",
+        "net_power_bits": "c087700000000000",
+        "net_power_kw": -750.0,
+        "start": "c087700000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 6.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "4018000000000000",
+      "4000000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6000 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06Z",
+        "last": "c087700000000000",
+        "net_power_bits": "c087700000000000",
+        "net_power_kw": -750.0,
+        "start": "c087700000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 6.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "4018000000000000",
+      "4000000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:06Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6001 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6001 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6001 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06.001Z",
+        "last": "c052bf333befca13",
+        "net_power_bits": "c052bf333befca13",
+        "net_power_kw": -74.98750208298615,
+        "start": "c052bf333befca13",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0003333333333333,
+      "median_interval_seconds": 6.001,
+      "p90_interval_seconds": 6.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018010624dd2f1b",
+      "4018010624dd2f1b",
+      "400000aec33e1f67"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6001 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6001 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06.001Z",
+        "last": "c052bf333befca14",
+        "net_power_bits": "c052bf333befca14",
+        "net_power_kw": -74.98750208298617,
+        "start": "c052bf333befca14",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0003333333333333,
+      "median_interval_seconds": 6.001,
+      "p90_interval_seconds": 6.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018010624dd2f1b",
+      "4018010624dd2f1b",
+      "400000aec33e1f67"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6001 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6001 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06.001Z",
+        "last": "c0876f000aebbc99",
+        "net_power_bits": "c0876f000aebbc99",
+        "net_power_kw": -749.8750208298617,
+        "start": "c0876f000aebbc99",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0003333333333333,
+      "median_interval_seconds": 6.001,
+      "p90_interval_seconds": 6.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018010624dd2f1b",
+      "4018010624dd2f1b",
+      "400000aec33e1f67"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6001 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06.001Z",
+        "last": "40876f000aebbc99",
+        "net_power_bits": "40876f000aebbc99",
+        "net_power_kw": 749.8750208298617,
+        "start": "40876f000aebbc99",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0003333333333333,
+      "median_interval_seconds": 6.001,
+      "p90_interval_seconds": 6.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018010624dd2f1b",
+      "4018010624dd2f1b",
+      "400000aec33e1f67"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6001 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6001 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 6001 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06.001Z",
+        "last": "c0876f000aebbc99",
+        "net_power_bits": "c0876f000aebbc99",
+        "net_power_kw": -749.8750208298617,
+        "start": "c0876f000aebbc99",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0003333333333333,
+      "median_interval_seconds": 6.001,
+      "p90_interval_seconds": 6.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018010624dd2f1b",
+      "4018010624dd2f1b",
+      "400000aec33e1f67"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 6001 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:06.001Z",
+        "last": "c0876f000aebbc99",
+        "net_power_bits": "c0876f000aebbc99",
+        "net_power_kw": -749.8750208298617,
+        "start": "c0876f000aebbc99",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.0003333333333333,
+      "median_interval_seconds": 6.001,
+      "p90_interval_seconds": 6.001,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018010624dd2f1b",
+      "4018010624dd2f1b",
+      "400000aec33e1f67"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:00:06.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 299999 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 299999 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 299999 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:04:59.999Z",
+        "last": "bff800053e2e876d",
+        "net_power_bits": "bff800053e2e876d",
+        "net_power_kw": -1.5000050000166667,
+        "start": "bff800053e2e876d",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 99.99966666666667,
+      "median_interval_seconds": 299.999,
+      "p90_interval_seconds": 299.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072bffbe76c8b44",
+      "4072bffbe76c8b44",
+      "4058fffa89e60f05"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 299999 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 299999 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:04:59.999Z",
+        "last": "bff800053e2e876e",
+        "net_power_bits": "bff800053e2e876e",
+        "net_power_kw": -1.500005000016667,
+        "start": "bff800053e2e876e",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 99.99966666666667,
+      "median_interval_seconds": 299.999,
+      "p90_interval_seconds": 299.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072bffbe76c8b44",
+      "4072bffbe76c8b44",
+      "4058fffa89e60f05"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 299999 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 299999 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:04:59.999Z",
+        "last": "c02e00068dba2948",
+        "net_power_bits": "c02e00068dba2948",
+        "net_power_kw": -15.000050000166667,
+        "start": "c02e00068dba2948",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 99.99966666666667,
+      "median_interval_seconds": 299.999,
+      "p90_interval_seconds": 299.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072bffbe76c8b44",
+      "4072bffbe76c8b44",
+      "4058fffa89e60f05"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 299999 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:04:59.999Z",
+        "last": "402e00068dba2948",
+        "net_power_bits": "402e00068dba2948",
+        "net_power_kw": 15.000050000166667,
+        "start": "402e00068dba2948",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 99.99966666666667,
+      "median_interval_seconds": 299.999,
+      "p90_interval_seconds": 299.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072bffbe76c8b44",
+      "4072bffbe76c8b44",
+      "4058fffa89e60f05"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 299999 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 299999 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 299999 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:04:59.999Z",
+        "last": "c02e00068dba2948",
+        "net_power_bits": "c02e00068dba2948",
+        "net_power_kw": -15.000050000166667,
+        "start": "c02e00068dba2948",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 99.99966666666667,
+      "median_interval_seconds": 299.999,
+      "p90_interval_seconds": 299.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072bffbe76c8b44",
+      "4072bffbe76c8b44",
+      "4058fffa89e60f05"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 299999 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:04:59.999Z",
+        "last": "c02e00068dba2948",
+        "net_power_bits": "c02e00068dba2948",
+        "net_power_kw": -15.000050000166667,
+        "start": "c02e00068dba2948",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 99.99966666666667,
+      "median_interval_seconds": 299.999,
+      "p90_interval_seconds": 299.999,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072bffbe76c8b44",
+      "4072bffbe76c8b44",
+      "4058fffa89e60f05"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:04:59.999Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300000 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300000 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300000 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:05:00Z",
+        "last": "bff8000000000000",
+        "net_power_bits": "bff8000000000000",
+        "net_power_kw": -1.5,
+        "start": "bff8000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 300.0,
+      "p90_interval_seconds": 300.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072c00000000000",
+      "4072c00000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300000 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300000 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:05:00Z",
+        "last": "bff8000000000002",
+        "net_power_bits": "bff8000000000002",
+        "net_power_kw": -1.5000000000000004,
+        "start": "bff8000000000002",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 300.0,
+      "p90_interval_seconds": 300.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072c00000000000",
+      "4072c00000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300000 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300000 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:05:00Z",
+        "last": "c02e000000000000",
+        "net_power_bits": "c02e000000000000",
+        "net_power_kw": -15.0,
+        "start": "c02e000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 300.0,
+      "p90_interval_seconds": 300.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072c00000000000",
+      "4072c00000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300000 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:05:00Z",
+        "last": "402e000000000000",
+        "net_power_bits": "402e000000000000",
+        "net_power_kw": 15.0,
+        "start": "402e000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 300.0,
+      "p90_interval_seconds": 300.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072c00000000000",
+      "4072c00000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300000 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300000 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300000 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:05:00Z",
+        "last": "c02e000000000000",
+        "net_power_bits": "c02e000000000000",
+        "net_power_kw": -15.0,
+        "start": "c02e000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 300.0,
+      "p90_interval_seconds": 300.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072c00000000000",
+      "4072c00000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300000 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:05:00Z",
+        "last": "c02e000000000000",
+        "net_power_bits": "c02e000000000000",
+        "net_power_kw": -15.0,
+        "start": "c02e000000000000",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 300.0,
+      "p90_interval_seconds": 300.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4072c00000000000",
+      "4072c00000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:05:00Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300001 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa9999999999999",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300001 delta 3fa9999999999999",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300001 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999a",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300001 delta 3fa999999999999a",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300001 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fa999999999999b",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300001 delta 3fa999999999999b",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fdccccccccccccd",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300001 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300001 delta 3fe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300001 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000001",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300001 delta 3fe0000000000001",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "bca0000000000000",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "exact regen interval 300001 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "interval 300001 delta bfe0000000000000",
+    "duration": 300,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "3fe0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3ff0000000000000",
+        "ts": "1970-01-01T00:05:00.001Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration -2147483648",
+    "duration": -2147483648,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration -2147483648",
+    "duration": -2147483648,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration -1",
+    "duration": -1,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration -1",
+    "duration": -1,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration 0",
+    "duration": 0,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration 0",
+    "duration": 0,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration 1",
+    "duration": 1,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration 1",
+    "duration": 1,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration 20",
+    "duration": 20,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration 20",
+    "duration": 20,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration 400",
+    "duration": 400,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 15.50025,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "402f0020c49ba5e3"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration 400",
+    "duration": 400,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "ordered duration 2147483647",
+    "duration": 2147483647,
+    "intervals": [
+      {
+        "before": null,
+        "end": "4056bca1af286c24",
+        "ended_at": "1970-01-01T00:00:02.500Z",
+        "last": "406599999999983f",
+        "net_power_bits": "406599999999983f",
+        "net_power_kw": 172.79999999999015,
+        "start": "406599999999983f",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "406599999999983f",
+        "end": "c021fffffffffedf",
+        "ended_at": "1970-01-01T00:00:12Z",
+        "last": "4056bca1af286c24",
+        "net_power_bits": "4056bca1af286c24",
+        "net_power_kw": 90.94736842105391,
+        "start": "4056bca1af286c24",
+        "started_at": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "before": "4056bca1af286c24",
+        "end": null,
+        "ended_at": "1970-01-01T00:01:00Z",
+        "last": "c021fffffffffedf",
+        "net_power_bits": "c021fffffffffedf",
+        "net_power_kw": -8.999999999999487,
+        "start": "c021fffffffffedf",
+        "started_at": "1970-01-01T00:00:12Z"
+      },
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:06:32.001Z",
+        "last": "407afc8bb4c60bef",
+        "net_power_bits": "407afc8bb4c60bef",
+        "net_power_kw": 431.7841079460331,
+        "start": "407afc8bb4c60bef",
+        "started_at": "1970-01-01T00:06:30Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 2.8871465487811466e-6,
+      "median_interval_seconds": 6.0,
+      "p90_interval_seconds": 36.45,
+      "sample_count": 4,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4018000000000000",
+      "404239999999999a",
+      "3ec8381999ca09cd"
+    ],
+    "rows": [
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      }
+    ]
+  },
+  {
+    "case": "reversed duration 2147483647",
+    "duration": 2147483647,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:06:32.001Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:06:30Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f33333333333",
+        "ts": "1970-01-01T00:01:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccd382c97",
+        "ts": "1970-01-01T00:00:13Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053eccccccccccd",
+        "ts": "1970-01-01T00:00:12Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:10Z"
+      },
+      {
+        "capacity": "406f400000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:04Z"
+      },
+      {
+        "capacity": "40fd4c0000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02.500Z"
+      },
+      {
+        "capacity": "4044000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC None",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": null,
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(-0.0)",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "8000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(0.0)",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(-0.1)",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "bfb999999999999a",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(100.0)",
+    "duration": 10,
+    "intervals": [
+      {
+        "before": null,
+        "end": null,
+        "ended_at": "1970-01-01T00:00:10Z",
+        "last": "4041fffffffffee0",
+        "net_power_bits": "4041fffffffffee0",
+        "net_power_kw": 35.999999999997954,
+        "start": "4041fffffffffee0",
+        "started_at": "1970-01-01T00:00:00Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 100.0,
+      "median_interval_seconds": 10.0,
+      "p90_interval_seconds": 10.0,
+      "sample_count": 1,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4024000000000000",
+      "4024000000000000",
+      "4059000000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4059000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(100.1)",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "4059066666666666",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(NaN)",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "7ff8000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "SOC Some(inf)",
+    "duration": 10,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "7ff0000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4058f9999999999a",
+        "ts": "1970-01-01T00:00:10Z"
+      }
+    ]
+  },
+  {
+    "case": "dedup 3eb0c6f7a0b5ed8c",
+    "duration": 30,
+    "intervals": [
+      {
+        "before": null,
+        "end": "c041ffffffffffff",
+        "ended_at": "1970-01-01T00:00:11Z",
+        "last": "c0405d1745d1745d",
+        "net_power_bits": "c0405d1745d1745d",
+        "net_power_kw": -32.72727272727273,
+        "start": "c0405d1745d1745d",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "c0405d1745d1745d",
+        "end": null,
+        "ended_at": "1970-01-01T00:00:21Z",
+        "last": "c041ffffffffffff",
+        "net_power_bits": "c041ffffffffffff",
+        "net_power_kw": -35.99999999999999,
+        "start": "c041ffffffffffff",
+        "started_at": "1970-01-01T00:00:11Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 70.0,
+      "median_interval_seconds": 10.5,
+      "p90_interval_seconds": 10.9,
+      "sample_count": 2,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4025000000000000",
+      "4025cccccccccccd",
+      "4051800000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3eb0c6f7a0b5ed8c",
+        "ts": "1970-01-01T00:00:01Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fb999999999999a",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fc999999999999a",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fd3333333333333",
+        "ts": "1970-01-01T00:00:21Z"
+      }
+    ]
+  },
+  {
+    "case": "dedup 3eb0c6f7a0b5ed8d",
+    "duration": 30,
+    "intervals": [
+      {
+        "before": null,
+        "end": "c041ffffffffffff",
+        "ended_at": "1970-01-01T00:00:11Z",
+        "last": "c0405d1745d1745d",
+        "net_power_bits": "c0405d1745d1745d",
+        "net_power_kw": -32.72727272727273,
+        "start": "c0405d1745d1745d",
+        "started_at": "1970-01-01T00:00:00Z"
+      },
+      {
+        "before": "c0405d1745d1745d",
+        "end": null,
+        "ended_at": "1970-01-01T00:00:21Z",
+        "last": "c041ffffffffffff",
+        "net_power_bits": "c041ffffffffffff",
+        "net_power_kw": -35.99999999999999,
+        "start": "c041ffffffffffff",
+        "started_at": "1970-01-01T00:00:11Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 70.0,
+      "median_interval_seconds": 10.5,
+      "p90_interval_seconds": 10.9,
+      "sample_count": 2,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4025000000000000",
+      "4025cccccccccccd",
+      "4051800000000000"
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3eb0c6f7a0b5ed8d",
+        "ts": "1970-01-01T00:00:01Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fb999999999999a",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fc999999999999a",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fd3333333333333",
+        "ts": "1970-01-01T00:00:21Z"
+      }
+    ]
+  },
+  {
+    "case": "dedup 3eb0c6f7a0b5ed8e",
+    "duration": 30,
+    "intervals": [
+      {
+        "before": null,
+        "end": "c041ffffffffffff",
+        "ended_at": "1970-01-01T00:00:11Z",
+        "last": "c041fff43419e300",
+        "net_power_bits": "c041fff43419e300",
+        "net_power_kw": -35.99964,
+        "start": "c041fff43419e300",
+        "started_at": "1970-01-01T00:00:01Z"
+      },
+      {
+        "before": "c041fff43419e300",
+        "end": null,
+        "ended_at": "1970-01-01T00:00:21Z",
+        "last": "c041ffffffffffff",
+        "net_power_bits": "c041ffffffffffff",
+        "net_power_kw": -35.99999999999999,
+        "start": "c041ffffffffffff",
+        "started_at": "1970-01-01T00:00:11Z"
+      }
+    ],
+    "metadata": {
+      "coverage_percent": 66.66666666666666,
+      "median_interval_seconds": 10.0,
+      "p90_interval_seconds": 10.0,
+      "sample_count": 2,
+      "source": "estimated_soc"
+    },
+    "metadata_bits": [
+      "4024000000000000",
+      "4024000000000000",
+      "4050aaaaaaaaaaaa"
+    ],
+    "rows": [
+      {
+        "capacity": "4059000000000000",
+        "power": null,
+        "regen": null,
+        "soc": "0000000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3eb0c6f7a0b5ed8e",
+        "ts": "1970-01-01T00:00:01Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fb999999999999a",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fc999999999999a",
+        "ts": "1970-01-01T00:00:11Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "3fd3333333333333",
+        "ts": "1970-01-01T00:00:21Z"
+      }
+    ]
+  },
+  {
+    "case": "direct None second false",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct None second true",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": "0000000000000000",
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(-0.0) second false",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "8000000000000000",
+        "regen": "8000000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(-0.0) second true",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 2,
+      "source": "direct"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "8000000000000000",
+        "regen": "8000000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": "0000000000000000",
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(-5.0) second false",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "c014000000000000",
+        "regen": "c014000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(-5.0) second true",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 2,
+      "source": "direct"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "c014000000000000",
+        "regen": "c014000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": "0000000000000000",
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(NaN) second false",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "7ff8000000000000",
+        "regen": "7ff8000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(NaN) second true",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "7ff8000000000000",
+        "regen": "7ff8000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": "0000000000000000",
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(inf) second false",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "7ff0000000000000",
+        "regen": "7ff0000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": null,
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "case": "direct Some(inf) second true",
+    "duration": 2,
+    "intervals": [],
+    "metadata": {
+      "coverage_percent": null,
+      "median_interval_seconds": null,
+      "p90_interval_seconds": null,
+      "sample_count": 0,
+      "source": "unavailable"
+    },
+    "metadata_bits": [
+      null,
+      null,
+      null
+    ],
+    "rows": [
+      {
+        "capacity": null,
+        "power": "7ff0000000000000",
+        "regen": "7ff0000000000000",
+        "soc": "4054000000000000",
+        "ts": "1970-01-01T00:00:00Z"
+      },
+      {
+        "capacity": null,
+        "power": null,
+        "regen": "0000000000000000",
+        "soc": "4053f9999999999a",
+        "ts": "1970-01-01T00:00:02Z"
+      }
+    ]
+  }
+]
