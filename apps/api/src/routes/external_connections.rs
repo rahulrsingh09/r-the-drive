@@ -1,3 +1,8 @@
+mod cache;
+mod catalog;
+mod preferences;
+mod settings;
+
 use crate::private_deployment::outbound::optional_client_for_url as outbound_client_for_url;
 use crate::services::outbound::{
     configured_private_network_allowlist, endpoint_is_private, is_forbidden_ip,
@@ -175,38 +180,7 @@ async fn build_response(
         let Some(definition) = DEFINITIONS.iter().find(|item| item.id == settings.id) else {
             continue;
         };
-        let (enabled, mode, endpoint) = if settings.id == connections::S3_BACKUP {
-            (backup.0, "custom".to_string(), backup.1.clone())
-        } else {
-            (
-                settings.is_active(),
-                settings.mode.clone(),
-                active_endpoint(&settings),
-            )
-        };
-        let openfreemap_active = settings.id == connections::BASEMAP
-            && resolve_basemap_provider(&settings) == "openfreemap";
-        let privacy_url = if openfreemap_active {
-            Some("https://openfreemap.org/privacy/")
-        } else {
-            definition.privacy_url
-        };
-        let terms_url = if openfreemap_active {
-            Some("https://openfreemap.org/tos/")
-        } else {
-            definition.terms_url
-        };
-        let (attribution, attribution_url) = if openfreemap_active {
-            (
-                Some("OpenFreeMap © OpenMapTiles Data from OpenStreetMap".into()),
-                Some("https://openfreemap.org/".into()),
-            )
-        } else {
-            (
-                settings.attribution.clone(),
-                settings.attribution_url.clone(),
-            )
-        };
+        let presentation = catalog::Presentation::resolve(&settings, &backup, definition);
         let cache = cache_summary(state, &settings.id).await;
         result.push(ConnectionResponse {
             id: settings.id.clone(),
@@ -215,29 +189,30 @@ async fn build_response(
             data_shared: definition.data_shared,
             disabled_effect: definition.disabled_effect,
             execution: definition.execution,
-            privacy_url,
-            terms_url,
+            privacy_url: presentation.privacy_url,
+            terms_url: presentation.terms_url,
             editable: definition.editable
                 && can_manage
                 && connections::connection_allowed(&settings.id),
-            enabled,
-            mode,
+            enabled: presentation.enabled,
+            mode: presentation.mode,
             basemap_provider: (settings.id == connections::BASEMAP)
                 .then_some(settings.basemap_provider.clone()),
             endpoint_is_private: settings.allow_private_network
-                || endpoint
+                || presentation
+                    .endpoint
                     .as_deref()
                     .map(endpoint_is_private)
                     .unwrap_or(false),
-            endpoint,
+            endpoint: presentation.endpoint,
             weather_precision: settings.weather_precision,
             forecast_url: settings.forecast_url,
             archive_url: settings.archive_url,
             base_url: settings.base_url,
             light_url_template: settings.light_url_template,
             dark_url_template: settings.dark_url_template,
-            attribution,
-            attribution_url,
+            attribution: presentation.attribution,
+            attribution_url: presentation.attribution_url,
             request_identifier: settings.request_identifier,
             custom_autocomplete: settings.custom_autocomplete,
             allow_private_network: settings.allow_private_network,
@@ -315,40 +290,8 @@ async fn cache_summary(state: &AppState, id: &str) -> Option<ConnectionCacheResp
 }
 
 async fn redis_cache_metrics(state: &AppState, pattern: &str) -> (u64, u64) {
-    let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await else {
-        return (0, 0);
-    };
-    let mut cursor = 0_u64;
-    let mut entries = 0_u64;
-    let mut bytes = 0_u64;
-    loop {
-        let result: redis::RedisResult<(u64, Vec<String>)> = redis::cmd("SCAN")
-            .arg(cursor)
-            .arg("MATCH")
-            .arg(pattern)
-            .arg("COUNT")
-            .arg(500)
-            .query_async(&mut redis)
-            .await;
-        let Ok((next, keys)) = result else { break };
-        for key in keys {
-            if key.ends_with(":content-type") || key.ends_with(":max-age") {
-                continue;
-            }
-            let length: u64 = redis::cmd("STRLEN")
-                .arg(&key)
-                .query_async(&mut redis)
-                .await
-                .unwrap_or(0);
-            entries = entries.saturating_add(1);
-            bytes = bytes.saturating_add(length);
-        }
-        cursor = next;
-        if cursor == 0 {
-            break;
-        }
-    }
-    (entries, bytes)
+    let totals = cache::traverse(state, pattern, cache::Operation::Measure).await;
+    (totals.entries, totals.bytes)
 }
 
 #[derive(Debug, Serialize)]
@@ -395,35 +338,9 @@ async fn purge_connection_cache(
 }
 
 async fn purge_redis_cache(state: &AppState, pattern: &str) -> u64 {
-    let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await else {
-        return 0;
-    };
-    let mut cursor = 0_u64;
-    let mut deleted = 0_u64;
-    loop {
-        let result: redis::RedisResult<(u64, Vec<String>)> = redis::cmd("SCAN")
-            .arg(cursor)
-            .arg("MATCH")
-            .arg(pattern)
-            .arg("COUNT")
-            .arg(500)
-            .query_async(&mut redis)
-            .await;
-        let Ok((next, keys)) = result else { break };
-        if !keys.is_empty() {
-            let removed: u64 = redis::cmd("UNLINK")
-                .arg(keys)
-                .query_async(&mut redis)
-                .await
-                .unwrap_or(0);
-            deleted = deleted.saturating_add(removed);
-        }
-        cursor = next;
-        if cursor == 0 {
-            break;
-        }
-    }
-    deleted
+    cache::traverse(state, pattern, cache::Operation::Purge)
+        .await
+        .entries
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -490,56 +407,7 @@ async fn update_connection(
 
     let api_key_encrypted = encrypt_secret(&state.age_key, body.api_key.as_deref())?;
     let bearer_token_encrypted = encrypt_secret(&state.age_key, body.bearer_token.as_deref())?;
-    // Accept the short-lived legacy value from older browsers, but never write
-    // it back after the database policy renamed "hosted" to "remote".
-    let mode = if body.enabled {
-        if body.mode == "hosted" {
-            "remote"
-        } else {
-            body.mode.as_str()
-        }
-    } else {
-        "disabled"
-    };
-    let mut forecast_url = normalize(body.forecast_url);
-    let mut archive_url = normalize(body.archive_url);
-    let mut base_url = normalize(body.base_url);
-    let mut light_url_template = normalize(body.light_url_template);
-    let mut dark_url_template = normalize(body.dark_url_template);
-    let mut attribution = normalize(body.attribution);
-    let mut attribution_url = normalize(body.attribution_url);
-
-    // Hosted mode is a named policy, not merely a label over the last custom
-    // values. Restore Panda's audited defaults when an admin switches back.
-    if mode == "remote" {
-        match id.as_str() {
-            connections::OPEN_METEO => {
-                forecast_url = Some("https://api.open-meteo.com/v1/forecast".into());
-                archive_url = Some("https://archive-api.open-meteo.com/v1/archive".into());
-                attribution = Some("Weather data by Open-Meteo".into());
-                attribution_url = Some("https://open-meteo.com/".into());
-            }
-            connections::NOMINATIM => {
-                base_url = Some("https://nominatim.openstreetmap.org".into());
-                attribution = Some("OpenStreetMap contributors".into());
-                attribution_url = Some("https://www.openstreetmap.org/copyright".into());
-            }
-            connections::BASEMAP => {
-                light_url_template =
-                    Some("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png".into());
-                dark_url_template =
-                    Some("https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png".into());
-                attribution = Some("OpenStreetMap contributors and CARTO".into());
-                attribution_url = Some("https://carto.com/attributions".into());
-            }
-            connections::ICONIFY => {
-                base_url = Some("https://api.iconify.design".into());
-                attribution = Some("Iconify".into());
-                attribution_url = Some("https://iconify.design/".into());
-            }
-            _ => {}
-        }
-    }
+    let plan = settings::UpdatePlan::resolve(&id, &body);
 
     sqlx::query(
         r#"UPDATE panda.external_connection_settings SET
@@ -560,16 +428,16 @@ async fn update_connection(
     )
     .bind(&id)
     .bind(body.enabled)
-    .bind(mode)
+    .bind(plan.mode)
     .bind(body.weather_precision.as_deref())
-    .bind(forecast_url)
-    .bind(archive_url)
-    .bind(base_url)
-    .bind(light_url_template)
-    .bind(dark_url_template)
-    .bind(attribution)
-    .bind(attribution_url)
-    .bind(normalize(body.request_identifier))
+    .bind(plan.forecast_url)
+    .bind(plan.archive_url)
+    .bind(plan.base_url)
+    .bind(plan.light_url_template)
+    .bind(plan.dark_url_template)
+    .bind(plan.attribution)
+    .bind(plan.attribution_url)
+    .bind(plan.request_identifier)
     .bind(body.custom_autocomplete)
     .bind(body.allow_private_network)
     .bind(private_network_allowlist.is_some())
@@ -698,19 +566,7 @@ fn openfreemap_style_proxy_url(style: &str, revision: &str) -> String {
 }
 
 fn resolve_basemap_provider(settings: &ConnectionSettingsRow) -> &'static str {
-    if !settings.enabled || settings.mode == "disabled" {
-        "disabled"
-    } else if settings.mode == "custom" {
-        "custom"
-    } else if settings.basemap_provider == "carto" {
-        "carto"
-    } else if settings.basemap_provider == "openfreemap" {
-        "openfreemap"
-    } else if settings.api_key_encrypted.is_some() {
-        "carto"
-    } else {
-        "openfreemap"
-    }
+    preferences::stored(settings)
 }
 
 fn basemap_styles(provider: &str, revision: &str) -> Vec<BasemapStyleDescriptor> {
@@ -1740,45 +1596,7 @@ fn resolve_basemap_provider_update(
     body: &UpdateConnectionBody,
     existing: Option<&ConnectionSettingsRow>,
 ) -> Result<Option<String>, AppError> {
-    if id != connections::BASEMAP {
-        if body.basemap_provider.is_some() {
-            return Err(AppError::Validation(
-                "basemap_provider is only supported for the map basemap connection".into(),
-            ));
-        }
-        return Ok(None);
-    }
-    let requested = body.basemap_provider.as_deref().unwrap_or_else(|| {
-        existing
-            .map(|row| row.basemap_provider.as_str())
-            .unwrap_or("auto")
-    });
-    if !matches!(requested, "auto" | "openfreemap" | "carto") {
-        return Err(AppError::Validation(
-            "basemap_provider must be auto, openfreemap, or carto".into(),
-        ));
-    }
-    // Clearing a key cannot leave an explicitly pinned CARTO configuration.
-    let provider = if requested == "carto" && body.clear_api_key.unwrap_or(false) {
-        "auto"
-    } else {
-        requested
-    };
-    let submitted_key = body
-        .api_key
-        .as_deref()
-        .is_some_and(|key| !key.trim().is_empty());
-    let stored_key = existing.is_some_and(|row| row.api_key_encrypted.is_some());
-    if body.enabled
-        && matches!(body.mode.as_str(), "remote" | "hosted")
-        && provider == "carto"
-        && !(submitted_key || (stored_key && !body.clear_api_key.unwrap_or(false)))
-    {
-        return Err(AppError::Validation(
-            "a CARTO basemap key is required when CARTO is pinned".into(),
-        ));
-    }
-    Ok(Some(provider.to_string()))
+    preferences::update(id, body, existing)
 }
 
 fn resolve_effective_basemap_provider_update(
@@ -1786,27 +1604,7 @@ fn resolve_effective_basemap_provider_update(
     body: &UpdateConnectionBody,
     existing: &ConnectionSettingsRow,
 ) -> Result<String, AppError> {
-    if !body.enabled || body.mode == "disabled" {
-        return Ok("disabled".into());
-    }
-    if body.mode == "custom" {
-        return Ok("custom".into());
-    }
-    let preference = resolve_basemap_provider_update(id, body, Some(existing))?
-        .expect("basemap provider is always present for the basemap connection");
-    if preference != "auto" {
-        return Ok(preference);
-    }
-    let submitted_key = body
-        .api_key
-        .as_deref()
-        .is_some_and(|key| !key.trim().is_empty());
-    let stored_key = existing.api_key_encrypted.is_some() && !body.clear_api_key.unwrap_or(false);
-    Ok(if submitted_key || stored_key {
-        "carto".into()
-    } else {
-        "openfreemap".into()
-    })
+    preferences::effective(id, body, existing)
 }
 
 async fn validate_tile_template(value: &str, allowlist: &[IpNet]) -> Result<(), AppError> {

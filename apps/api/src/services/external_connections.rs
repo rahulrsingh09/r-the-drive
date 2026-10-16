@@ -1,3 +1,5 @@
+mod activity;
+
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
@@ -311,62 +313,21 @@ pub async fn require_enabled(pool: &PgPool, id: &str) -> Result<ConnectionSettin
 }
 
 pub async fn record_attempt(pool: &PgPool, id: &str) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.external_connection_activity
-             (connection_id, last_attempt_at, usage_date, request_count)
-           VALUES ($1, now(), CURRENT_DATE, 1)
-           ON CONFLICT (connection_id) DO UPDATE SET
-             last_attempt_at = now(),
-             usage_date = CURRENT_DATE,
-             request_count = CASE
-               WHEN panda.external_connection_activity.usage_date = CURRENT_DATE
-                 THEN panda.external_connection_activity.request_count + 1
-               ELSE 1 END"#,
-    )
-    .bind(id)
-    .execute(pool)
-    .await;
+    activity::Event::Attempt.persist(pool, id).await;
 }
 
 pub async fn record_success(pool: &PgPool, id: &str) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.external_connection_activity
-             (connection_id, last_attempt_at, last_success_at, last_error, usage_date, request_count)
-           VALUES ($1, now(), now(), NULL, CURRENT_DATE, 0)
-           ON CONFLICT (connection_id) DO UPDATE SET last_success_at = now(), last_error = NULL"#,
-    )
-    .bind(id)
-    .execute(pool)
-    .await;
+    activity::Event::Success.persist(pool, id).await;
 }
 
 pub async fn record_failure(pool: &PgPool, id: &str, message: &str) {
-    let sanitized = sanitize_error(message);
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.external_connection_activity
-             (connection_id, last_attempt_at, last_error, usage_date, request_count)
-           VALUES ($1, now(), $2, CURRENT_DATE, 0)
-           ON CONFLICT (connection_id) DO UPDATE SET last_error = EXCLUDED.last_error"#,
-    )
-    .bind(id)
-    .bind(sanitized)
-    .execute(pool)
-    .await;
+    activity::Event::Failure(message).persist(pool, id).await;
 }
 
 pub async fn record_test(pool: &PgPool, id: &str, ok: bool, message: Option<&str>) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.external_connection_activity
-             (connection_id, last_attempt_at, usage_date, request_count, last_test_at, last_test_ok, last_test_error)
-           VALUES ($1, now(), CURRENT_DATE, 0, now(), $2, $3)
-           ON CONFLICT (connection_id) DO UPDATE SET
-             last_test_at = now(), last_test_ok = EXCLUDED.last_test_ok, last_test_error = EXCLUDED.last_test_error"#,
-    )
-    .bind(id)
-    .bind(ok)
-    .bind(message.map(sanitize_error))
-    .execute(pool)
-    .await;
+    activity::Event::Test { ok, message }
+        .persist(pool, id)
+        .await;
 }
 
 fn sanitize_error(message: &str) -> String {
