@@ -19,7 +19,7 @@ impl SnapshotScan {
         let statement = sqlx::AssertSqlSafe(format!(
             "DECLARE maintenance_rows NO SCROLL CURSOR FOR {select}"
         ));
-        let query = sqlx::query(statement);
+        let query = sqlx::query(statement).persistent(false);
         let query = match vehicle_id {
             Some(id) => query.bind(id),
             None => query,
@@ -32,7 +32,9 @@ impl SnapshotScan {
     where
         T: for<'row> FromRow<'row, PgRow> + Send + Unpin,
     {
+        // Cursor row shapes differ between maintenance stages on the same connection.
         Ok(sqlx::query_as("FETCH FORWARD 256 FROM maintenance_rows")
+            .persistent(false)
             .fetch_all(&mut *self.transaction)
             .await?)
     }

@@ -968,3 +968,7 @@ mod rebuild_contracts;
 #[cfg(test)]
 #[path = "__tests__/support.rs"]
 mod contract_support;
+
+#[cfg(test)]
+#[path = "__tests__/snapshot_scan_contracts.rs"]
+mod snapshot_scan_contracts;

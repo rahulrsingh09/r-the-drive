@@ -15,6 +15,11 @@ is dropped. Writes still use separate pool connections and preserve the original
 per-row commit boundaries. The binaries retain their five-connection pools.
 The cursor is configured for a full scan rather than an early exit.
 
+Cursor declaration and fetch statements are not retained in the connection's
+prepared-statement cache. The same fetch SQL serves differently shaped rows
+across maintenance stages, so cached column metadata must not cross those scans.
+Other queries retain their existing cache policy.
+
 This bounds the decoded input page, not the total amount of history processed.
 The trip detector still retains its active trip's track points. A long scan
 retains a database snapshot and its read locks; it is not a resumable job or a
@@ -89,6 +94,12 @@ arguments, more than one scan page, null/unit/timestamp boundaries, multiple
 vehicles and memberships, repeat runs, charge pins, exact gap boundaries,
 compaction contention, reference rollback, later-vehicle failure, statement
 cancellation, and restart.
+
+The cursor regression additionally alternates complete scalar, charge-location,
+and telemetry results through one restricted physical connection. Each 513-row
+scan returns pages of 256, 256, and one row before termination. Separate checks
+drop and cancel active scans, then verify rollback, reuse of that connection,
+unchanged history, and restart from the first row without clearing its cache.
 
 The binaries are database-administration processes, not HTTP endpoints accepting
 an authenticated owner, manager, viewer, or administrator. Tests preserve
