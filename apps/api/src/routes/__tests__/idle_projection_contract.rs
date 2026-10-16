@@ -161,8 +161,7 @@ fn idle_projection_full_contract() {
                 r.soc_start = Some(100.0);
                 r.soc_end = Some(100.0);
                 r.range_start_mi = Some(82.5);
-                r.range_end_mi =
-                    Some([117.499999, 117.5, 117.500001][variant - 6]);
+                r.range_end_mi = Some([117.499999, 117.5, 117.500001][variant - 6]);
             }
             9 => {
                 r.range_start_mi = Some(f64::MAX);

@@ -22,6 +22,7 @@ use crate::{
 };
 
 mod evidence;
+mod projection;
 mod workflow;
 
 const DEFAULT_MIN_DURATION_HOURS: f64 = 6.0;
@@ -237,105 +238,51 @@ pub(crate) async fn fetch_validated_idle_drain_periods_for_chart(
 fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
     let duration_hours = row.duration_hours.max(0.0);
     let duration_seconds = duration_hours * 3600.0;
-    let overlaps_trip = row.trip_overlap_count > 0;
-    let overlaps_charge = row.charge_overlap_count > 0;
-    // Tiny odometer drift is common in parked windows; only larger mileage
-    // changes or explicit trip/charge overlaps should mark movement.
-    let movement_detected = overlaps_trip
-        || overlaps_charge
-        || row.odometer_delta_mi.unwrap_or(0.0) >= MAX_ODOMETER_DELTA_MILES
-        || row.drive_sample_count >= 10;
-
-    let soc_start = finite_optional(row.soc_start);
-    let soc_end = finite_optional(row.soc_end);
-    let soc_gain_detected = match (soc_start, soc_end) {
-        (Some(start), Some(end)) => start < end,
-        _ => false,
-    };
-    let soc_lost_pct = match (soc_start, soc_end) {
-        (Some(start), Some(end)) if start >= end => Some(start - end),
-        _ => None,
-    };
-    let drain_pct_per_hour = match (soc_lost_pct, duration_hours > 0.0) {
-        (Some(loss), true) => Some(loss / duration_hours),
-        _ => None,
-    };
-
-    let sleep_seconds = row
-        .sleep_seconds
-        .unwrap_or(0.0)
-        .clamp(0.0, duration_seconds);
-    let covered_state_seconds = row
-        .covered_state_seconds
-        .unwrap_or(0.0)
-        .clamp(0.0, duration_seconds);
-    let state_coverage_pct = if duration_seconds > 0.0 {
-        Some((covered_state_seconds / duration_seconds).clamp(0.0, 1.0))
-    } else {
-        None
-    };
-    let sleep_share_pct = match state_coverage_pct {
-        Some(coverage) if coverage >= MIN_SLEEP_COVERAGE_PCT && duration_seconds > 0.0 => {
-            Some((sleep_seconds / duration_seconds).clamp(0.0, 1.0))
-        }
-        _ => None,
-    };
-
+    let activity = projection::ParkedActivity::read(&row);
+    let soc = projection::SocChange::from_anchors(row.soc_start, row.soc_end);
+    let drain_pct_per_hour = projection::per_hour(soc.loss, duration_hours);
+    let state = projection::StateCoverage::project(&row, duration_seconds);
     let validation_reason = classify_validation_reason(
         &row,
         duration_hours,
-        soc_lost_pct,
-        movement_detected,
-        soc_gain_detected,
+        soc.loss,
+        activity.movement_detected,
+        soc.gain_detected,
     );
     let validation_status = if validation_reason.is_some() {
         ValidationStatus::Excluded
     } else {
         ValidationStatus::Validated
     };
-
-    let energy_drained_kwh = match (soc_lost_pct, finite_optional(row.capacity_wh)) {
-        (Some(loss), Some(capacity_wh)) if capacity_wh > 10000.0 => {
-            Some((loss / 100.0) * (capacity_wh / 1000.0))
-        }
-        _ => None,
-    };
-    let avg_power_w = match (energy_drained_kwh, duration_hours > 0.0) {
-        (Some(kwh), true) => Some((kwh / duration_hours) * 1000.0),
-        _ => None,
-    };
-
-    let range_lost_mi = compute_range_loss(&row, soc_start, soc_end, soc_lost_pct);
-    let range_lost_per_hour_mi = match (range_lost_mi, duration_hours > 0.0) {
-        (Some(loss), true) => Some(loss / duration_hours),
-        _ => None,
-    };
+    let energy = projection::DrainEnergy::project(soc.loss, row.capacity_wh, duration_hours);
+    let range_lost_mi = compute_range_loss(&row, soc.start, soc.end, soc.loss);
+    let range_lost_per_hour_mi = projection::per_hour(range_lost_mi, duration_hours);
 
     PhantomPeriod {
         period_start: Some(row.period_start),
         period_end: Some(row.period_end),
         duration_hours: Some(duration_hours),
-        sleep_share_pct,
-        state_coverage_pct,
-        soc_start,
-        soc_end,
-        soc_lost_pct,
+        sleep_share_pct: state.sleep_share,
+        state_coverage_pct: state.coverage,
+        soc_start: soc.start,
+        soc_end: soc.end,
+        soc_lost_pct: soc.loss,
         drain_pct_per_hour,
         range_start_mi: finite_optional(row.range_start_mi),
         range_end_mi: finite_optional(row.range_end_mi),
         range_lost_mi,
         range_lost_per_hour_mi,
-        energy_drained_kwh,
-        avg_power_w,
+        energy_drained_kwh: energy.kwh,
+        avg_power_w: energy.average_watts,
         has_reduced_range: row.has_reduced_range,
         validation_status,
         validation_reason,
         sample_count: row.sample_count,
         start_sample_at: row.start_sample_at,
         end_sample_at: row.end_sample_at,
-        movement_detected,
-        overlaps_trip,
-        overlaps_charge,
+        movement_detected: activity.movement_detected,
+        overlaps_trip: activity.overlaps_trip,
+        overlaps_charge: activity.overlaps_charge,
     }
 }
 
@@ -346,52 +293,21 @@ fn classify_validation_reason(
     movement_detected: bool,
     soc_gain_detected: bool,
 ) -> Option<ValidationReason> {
-    if row.charge_overlap_count > 0 {
-        return Some(ValidationReason::OverlapsCharge);
-    }
-    if row.trip_overlap_count > 0 {
-        return Some(ValidationReason::OverlapsTrip);
-    }
-    if soc_gain_detected {
-        return Some(ValidationReason::NetGainDetected);
-    }
-    if movement_detected {
-        return Some(ValidationReason::MovementDetected);
-    }
-
-    if !boundary_gaps_are_valid(
-        duration_hours,
-        row.start_sample_gap_minutes,
-        row.end_sample_gap_minutes,
-    ) {
-        return Some(ValidationReason::SocAnchorUnreliable);
-    }
-
-    let required_samples = required_battery_samples(duration_hours, soc_lost_pct);
-    if row.battery_sample_count < required_samples {
-        return Some(ValidationReason::InsufficientTelemetry);
-    }
-
-    if requires_interior_soc_support(duration_hours, soc_lost_pct)
-        && row.interior_battery_sample_count < 1
+    if let Some(exclusion) =
+        projection::ActivityExclusion::select(row, movement_detected, soc_gain_detected)
     {
-        return Some(ValidationReason::InsufficientTelemetry);
+        return Some(exclusion.reason());
     }
-
-    if let (Some(loss), Some(min_soc), Some(max_soc)) = (
-        soc_lost_pct,
-        finite_optional(row.min_soc_in_window),
-        finite_optional(row.max_soc_in_window),
-    ) {
-        let observed_window_span = (max_soc - min_soc).max(0.0);
-        if row.battery_sample_count >= 3
-            && loss - observed_window_span > SOC_WINDOW_MISMATCH_TOLERANCE_PCT
-        {
-            return Some(ValidationReason::SocAnchorUnreliable);
-        }
+    let support = projection::SocSupport::new(row, duration_hours, soc_lost_pct);
+    if !support.anchors_are_reliable() {
+        Some(ValidationReason::SocAnchorUnreliable)
+    } else if !support.samples_are_sufficient() {
+        Some(ValidationReason::InsufficientTelemetry)
+    } else if support.contradicts_window() {
+        Some(ValidationReason::SocAnchorUnreliable)
+    } else {
+        None
     }
-
-    None
 }
 
 fn required_battery_samples(duration_hours: f64, soc_lost_pct: Option<f64>) -> i64 {
@@ -439,43 +355,9 @@ fn compute_range_loss(
     soc_end: Option<f64>,
     soc_lost_pct: Option<f64>,
 ) -> Option<f64> {
-    if !boundary_gaps_are_valid(
-        row.duration_hours,
-        row.start_range_gap_minutes,
-        row.end_range_gap_minutes,
-    ) {
-        return None;
-    }
-
-    if row.sample_count < 3 {
-        return None;
-    }
-
-    let start_range = finite_optional(row.range_start_mi)?;
-    let end_range = finite_optional(row.range_end_mi)?;
-    let start_soc = soc_start.filter(|value| *value > 0.0)?;
-    let end_soc = soc_end.filter(|value| *value > 0.0)?;
-    let soc_loss = soc_lost_pct?;
-
-    let range_loss = (start_range - end_range).max(0.0);
-    let start_eff = (start_range / start_soc) * 100.0;
-    let end_eff = (end_range / end_soc) * 100.0;
-    let avg_eff = (start_eff + end_eff) / 2.0;
-    if avg_eff <= 0.0 {
-        return None;
-    }
-
-    let efficiency_drift = ((start_eff - end_eff).abs()) / avg_eff;
-    if efficiency_drift > RANGE_EFFICIENCY_DRIFT_TOLERANCE {
-        return None;
-    }
-
-    let expected_loss = avg_eff * (soc_loss / 100.0);
-    if range_loss > expected_loss.max(5.0) * 3.0 {
-        return None;
-    }
-
-    Some(range_loss)
+    projection::RangeAnchors::select(row, soc_start, soc_end, soc_lost_pct)?
+        .project()
+        .plausible_miles()
 }
 
 fn finite_optional(value: Option<f64>) -> Option<f64> {

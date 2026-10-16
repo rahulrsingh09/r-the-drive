@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
-#[path = "energy_fixture.rs"]
+#[path = "live_projection_fixture.rs"]
 mod fixture;
 
 async fn snapshot(pool: &PgPool) -> Value {

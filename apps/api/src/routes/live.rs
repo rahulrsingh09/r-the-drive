@@ -21,6 +21,8 @@ use crate::{
     middleware::auth::{require_vehicle_access, AppState, AuthUser, Claims},
 };
 
+mod projection;
+
 #[cfg(test)]
 #[path = "live_authorization_tests.rs"]
 mod authorization_tests;
@@ -158,79 +160,13 @@ fn merge_live_session(
     now: DateTime<Utc>,
 ) -> Option<String> {
     let active = active?;
-    let mut value = raw
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    let object = value.as_object_mut().expect("object initialized above");
-    let legacy_at = object
-        .get("ts")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    let mut provenance = serde_json::Map::new();
-    for field in ["power_kw", "energy_kwh", "time_remaining_min"] {
-        if object.get(field).is_some_and(|value| !value.is_null()) {
-            provenance.insert(
-                field.into(),
-                serde_json::json!({"source":"legacy_charging_session","observed_at":legacy_at}),
-            );
+    let mut snapshot = projection::LiveSnapshot::from_legacy(raw.as_deref());
+    for observation in projection::observations(active) {
+        if let Some(selected) = observation.select(now) {
+            snapshot.overlay(selected);
         }
     }
-    let fresh = |observed: Option<DateTime<Utc>>| {
-        observed.filter(|ts| *ts >= now - chrono::Duration::seconds(120))
-    };
-    if let Some(observed) = fresh(active.parallax_power_observed_at) {
-        if let Some(power) = active.parallax_live_power_kw {
-            object.insert("power_kw".into(), serde_json::json!(power));
-            provenance.insert(
-                "power_kw".into(),
-                serde_json::json!({"source":"parallax","observed_at":observed}),
-            );
-        }
-    }
-    for (field, field_value, observed_at) in [
-        (
-            "energy_kwh",
-            active.parallax_total_charged_kwh,
-            active.parallax_total_energy_observed_at,
-        ),
-        (
-            "pack_energy_kwh",
-            active.parallax_pack_energy_kwh,
-            active.parallax_pack_energy_observed_at,
-        ),
-        (
-            "thermal_energy_kwh",
-            active.parallax_thermal_energy_kwh,
-            active.parallax_thermal_energy_observed_at,
-        ),
-    ] {
-        if let (Some(field_value), Some(observed)) = (field_value, fresh(observed_at)) {
-            object.insert(field.into(), serde_json::json!(field_value));
-            provenance.insert(
-                field.into(),
-                serde_json::json!({"source":"parallax","observed_at":observed}),
-            );
-        }
-    }
-    if let Some(observed) = fresh(active.parallax_time_observed_at) {
-        if let Some(minutes) = active.parallax_time_remaining_minutes {
-            object.insert("time_remaining_min".into(), serde_json::json!(minutes));
-            provenance.insert(
-                "time_remaining_min".into(),
-                serde_json::json!({"source":"parallax","observed_at":observed}),
-            );
-        }
-    }
-    if !provenance.is_empty() {
-        object.insert("provenance".into(), provenance.into());
-    }
-    if object.is_empty() {
-        None
-    } else {
-        serde_json::to_string(&value).ok()
-    }
+    snapshot.finish()
 }
 
 fn live_session_response(raw: Option<String>) -> axum::response::Response {
