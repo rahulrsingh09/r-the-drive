@@ -2,6 +2,7 @@
 //! closure states, and thermal event counts.
 
 mod history;
+mod observations;
 use history::{fetch_sw_history, fetch_thermal_count};
 
 use axum::{
@@ -255,17 +256,20 @@ async fn health(
     require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
-    let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count, extended) = tokio::try_join!(
+    let (vehicle, runtime, observations, sw_history, thermal_count, extended) = tokio::try_join!(
         fetch_vehicle(&state.pool, vehicle_id),
         fetch_runtime(&state.pool, vehicle_id),
-        fetch_latest(&state.pool, vehicle_id),
-        fetch_tires(&state.pool, vehicle_id),
-        fetch_closures(&state.pool, vehicle_id),
+        observations::fetch(&state.pool, vehicle_id),
         fetch_sw_history(&state.pool, vehicle_id),
         fetch_thermal_count(&state.pool, vehicle_id),
         fetch_extended_telemetry(&state.pool, vehicle_id),
     )?;
 
+    let observations::Observations {
+        latest,
+        tires,
+        closures,
+    } = observations;
     let ota_release_notes_url = vehicle.ota_release_notes_url.clone();
     let trip_capture = fetch_trip_capture_health(&state.pool, vehicle_id).await?;
 
@@ -396,75 +400,6 @@ async fn fetch_runtime(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<RuntimeH
         r#"SELECT is_online, last_event_at, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at
            FROM panda.vehicle_runtime_state
            WHERE vehicle_id = $1"#,
-    )
-    .bind(vid)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    Ok(row)
-}
-
-async fn fetch_latest(
-    pool: &sqlx::PgPool,
-    vid: Uuid,
-) -> Result<Option<LatestHealthTelemetry>, AppError> {
-    let row = sqlx::query_as::<_, LatestHealthTelemetry>(
-        r#"SELECT ts, twelve_volt_health, hv_thermal_event, ota_current_version,
-                  ota_available_version, ota_status, ota_current_status, is_online
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1
-             AND (twelve_volt_health IS NOT NULL
-                  OR hv_thermal_event IS NOT NULL
-                  OR ota_current_version IS NOT NULL
-                  OR ota_available_version IS NOT NULL
-                  OR ota_status IS NOT NULL
-                  OR ota_current_status IS NOT NULL
-                  OR is_online IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#,
-    )
-    .bind(vid)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    Ok(row)
-}
-
-async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressures>, AppError> {
-    let row = sqlx::query_as::<_, TirePressures>(
-        r#"SELECT ts,
-                  tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-                  tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1
-             AND (tire_fl_psi IS NOT NULL
-                  OR tire_fr_psi IS NOT NULL
-                  OR tire_rl_psi IS NOT NULL
-                  OR tire_rr_psi IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#,
-    )
-    .bind(vid)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    Ok(row)
-}
-
-async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closures>, AppError> {
-    let row = sqlx::query_as::<_, Closures>(
-        r#"SELECT ts,
-                  closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
-                  door_front_left_closed, door_front_right_closed,
-                  door_rear_left_closed, door_rear_right_closed
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1
-             AND (closure_frunk_closed IS NOT NULL
-                  OR closure_liftgate_closed IS NOT NULL
-                  OR closure_tailgate_closed IS NOT NULL
-                  OR door_front_left_closed IS NOT NULL
-                  OR door_front_right_closed IS NOT NULL
-                  OR door_rear_left_closed IS NOT NULL
-                  OR door_rear_right_closed IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#,
     )
     .bind(vid)
     .fetch_optional(pool)

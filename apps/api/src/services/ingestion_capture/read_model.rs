@@ -37,23 +37,36 @@ struct EventStats {
     count: i64,
     last_event_at: Option<DateTime<Utc>>,
     truncated: bool,
+    counts_by_kind: Vec<(String, i64)>,
 }
 
 async fn event_stats(pool: &PgPool, capture_id: Uuid) -> sqlx::Result<EventStats> {
-    let (count, last_event_at, truncated) =
-        sqlx::query_as::<_, (i64, Option<DateTime<Utc>>, bool)>(
-            "SELECT count(*) FILTER (WHERE kind NOT IN ('capture_started', 'capture_stopped', 'truncated')), \
-                    max(recorded_at), bool_or(kind = 'truncated') IS TRUE \
-             FROM panda.vehicle_ingestion_capture_events WHERE capture_id = $1",
-        )
-        .bind(capture_id)
-        .fetch_one(pool)
-        .await?;
-    Ok(EventStats {
-        count,
-        last_event_at,
-        truncated,
-    })
+    let groups = sqlx::query_as::<_, (String, i64, Option<DateTime<Utc>>)>(
+        "SELECT kind, count(*), max(recorded_at) \
+         FROM panda.vehicle_ingestion_capture_events WHERE capture_id = $1 \
+         GROUP BY kind ORDER BY kind",
+    )
+    .bind(capture_id)
+    .fetch_all(pool)
+    .await?;
+    let mut stats = EventStats {
+        count: 0,
+        last_event_at: None,
+        truncated: false,
+        counts_by_kind: Vec::with_capacity(groups.len()),
+    };
+    for (kind, count, last) in groups {
+        if !matches!(
+            kind.as_str(),
+            "capture_started" | "capture_stopped" | "truncated"
+        ) {
+            stats.count += count;
+        }
+        stats.last_event_at = stats.last_event_at.max(last);
+        stats.truncated |= kind == "truncated";
+        stats.counts_by_kind.push((kind, count));
+    }
+    Ok(stats)
 }
 
 pub async fn status(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<CaptureStatus> {
@@ -99,13 +112,6 @@ pub async fn export(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<Option<Expo
         return Ok(None);
     };
     let stats = event_stats(pool, row.capture_id).await?;
-    let counts = sqlx::query_as::<_, (String, i64)>(
-        "SELECT kind, count(*) FROM panda.vehicle_ingestion_capture_events \
-         WHERE capture_id = $1 GROUP BY kind ORDER BY kind",
-    )
-    .bind(row.capture_id)
-    .fetch_all(pool)
-    .await?;
     let model =
         sqlx::query_scalar::<_, Option<String>>("SELECT model FROM panda.vehicles WHERE id = $1")
             .bind(vehicle_id)
@@ -118,7 +124,7 @@ pub async fn export(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<Option<Expo
         row.started_at,
         (!running).then(|| row.stopped_at.unwrap_or(row.enabled_until)),
         row.stop_reason.as_deref(),
-        &counts,
+        &stats.counts_by_kind,
         stats.count,
         row.dropped_events,
         stats.truncated,

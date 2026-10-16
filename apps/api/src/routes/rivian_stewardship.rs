@@ -62,6 +62,19 @@ async fn stewardship(
 
     let rows = sqlx::query(
         r#"
+        WITH vehicle_totals AS (
+          SELECT vehicle_id,
+                 SUM(ws_messages_received)::BIGINT AS ws_messages_received,
+                 SUM(ws_heartbeats_received)::BIGINT AS ws_heartbeats_received,
+                 SUM(ws_payload_messages_received)::BIGINT AS ws_payload_messages_received,
+                 SUM(ws_reconnects)::BIGINT AS ws_reconnects,
+                 SUM(telemetry_writes_persisted)::BIGINT AS telemetry_writes_persisted,
+                 SUM(telemetry_writes_suppressed)::BIGINT AS telemetry_writes_suppressed,
+                 SUM(collector_lock_skips)::BIGINT AS collector_lock_skips
+          FROM panda.rivian_stewardship_counters
+          WHERE day >= CURRENT_DATE - 1
+          GROUP BY vehicle_id
+        )
         SELECT
           v.id::TEXT AS vehicle_id,
           COALESCE(v.name, v.model) AS display_name,
@@ -70,19 +83,16 @@ async fn stewardship(
           r.last_payload_at,
           r.last_persisted_at,
           r.last_heartbeat_at,
-          COALESCE(SUM(c.ws_messages_received), 0)::BIGINT AS ws_messages_received,
-          COALESCE(SUM(c.ws_heartbeats_received), 0)::BIGINT AS ws_heartbeats_received,
-          COALESCE(SUM(c.ws_payload_messages_received), 0)::BIGINT AS ws_payload_messages_received,
-          COALESCE(SUM(c.ws_reconnects), 0)::BIGINT AS ws_reconnects,
-          COALESCE(SUM(c.telemetry_writes_persisted), 0)::BIGINT AS telemetry_writes_persisted,
-          COALESCE(SUM(c.telemetry_writes_suppressed), 0)::BIGINT AS telemetry_writes_suppressed,
-          COALESCE(SUM(c.collector_lock_skips), 0)::BIGINT AS collector_lock_skips
+          COALESCE(c.ws_messages_received, 0)::BIGINT AS ws_messages_received,
+          COALESCE(c.ws_heartbeats_received, 0)::BIGINT AS ws_heartbeats_received,
+          COALESCE(c.ws_payload_messages_received, 0)::BIGINT AS ws_payload_messages_received,
+          COALESCE(c.ws_reconnects, 0)::BIGINT AS ws_reconnects,
+          COALESCE(c.telemetry_writes_persisted, 0)::BIGINT AS telemetry_writes_persisted,
+          COALESCE(c.telemetry_writes_suppressed, 0)::BIGINT AS telemetry_writes_suppressed,
+          COALESCE(c.collector_lock_skips, 0)::BIGINT AS collector_lock_skips
         FROM panda.vehicles v
         LEFT JOIN panda.vehicle_runtime_state r ON r.vehicle_id = v.id
-        LEFT JOIN panda.rivian_stewardship_counters c
-          ON c.vehicle_id = v.id AND c.day >= CURRENT_DATE - 1
-        GROUP BY v.id, v.name, v.model, r.worker_health, r.last_seen_at, r.last_payload_at,
-                 r.last_persisted_at, r.last_heartbeat_at
+        LEFT JOIN vehicle_totals c ON c.vehicle_id = v.id
         ORDER BY display_name
         "#,
     )

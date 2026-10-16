@@ -416,21 +416,40 @@ async fn operational_http_database_contract() {
     write("operational-actual.json", &normalized);
     f.cleanup().await;
     if std::env::var_os("OPERATIONAL_CAPTURE").is_none() {
-        let expected = serde_json::from_str::<Value>(include_str!("operational_expected.json")).unwrap();
-        let differences: Vec<_> = normalized.as_object().unwrap().iter()
-            .filter(|(key, value)| expected.get(*key) != Some(*value)).map(|(key, _)| key.clone()).collect();
-        assert!(differences.is_empty(), "Complete output mismatch; inspect raw artifacts for cases: {differences:?}");
-        assert_eq!(normalized.as_object().unwrap().len(), expected.as_object().unwrap().len());
+        let expected =
+            serde_json::from_str::<Value>(include_str!("operational_expected.json")).unwrap();
+        let differences: Vec<_> = normalized
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(key, value)| expected.get(*key) != Some(*value))
+            .map(|(key, _)| key.clone())
+            .collect();
+        assert!(
+            differences.is_empty(),
+            "Complete output mismatch; inspect raw artifacts for cases: {differences:?}"
+        );
+        assert_eq!(
+            normalized.as_object().unwrap().len(),
+            expected.as_object().unwrap().len()
+        );
     }
 }
 
 fn normalize(value: &mut Value) {
     match value {
         Value::Object(object) => {
-            if let Some(rows) = object.get_mut("panda.vehicle_memberships").and_then(Value::as_array_mut) {
+            if let Some(rows) = object
+                .get_mut("panda.vehicle_memberships")
+                .and_then(Value::as_array_mut)
+            {
                 for row in rows.iter_mut() {
                     assert!(row["id"].as_str().unwrap().parse::<Uuid>().is_ok());
-                    row["id"] = json!(format!("membership:{}:{}", row["vehicle_id"].as_str().unwrap(), row["user_id"].as_str().unwrap()));
+                    row["id"] = json!(format!(
+                        "membership:{}:{}",
+                        row["vehicle_id"].as_str().unwrap(),
+                        row["user_id"].as_str().unwrap()
+                    ));
                 }
                 rows.sort_by_key(|row| row["id"].as_str().unwrap().to_owned());
             }

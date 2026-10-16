@@ -11,6 +11,8 @@
 //!   POST /v1/grafana/tag-keys — stub (empty)
 //!   POST /v1/grafana/tag-values — stub (empty)
 
+mod plan;
+
 use axum::{
     extract::{DefaultBodyLimit, Query, State},
     http::StatusCode,
@@ -107,98 +109,13 @@ async fn query(
     Query(qp): Query<VehicleIdQuery>,
     Json(body): Json<GrafanaQueryBody>,
 ) -> Result<Json<Vec<TimeSeriesResult>>, AppError> {
-    if body.targets.len() > 32 {
-        return Err(AppError::Validation(
-            "at most 32 Grafana targets may be requested".into(),
-        ));
-    }
-    if body.range.from > body.range.to {
-        return Err(AppError::Validation(
-            "range.from must not exceed range.to".into(),
-        ));
-    }
-    for target in &body.targets {
-        if !ALLOWED_METRICS.contains(&target.target.as_str()) {
-            return Err(AppError::Validation("unknown Grafana metric".into()));
-        }
-        let vehicle_id = target
-            .vehicle_id
-            .or(qp.vehicle_id)
-            .ok_or_else(|| AppError::Validation("vehicleId is required".into()))?;
-        require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-    }
+    let plan = plan::ReadPlan::admit(&state, &auth, qp.vehicle_id, body).await?;
     let permit = state
         .resources
         .heavy(auth.user_id, &state.config.security)?;
     tokio::time::timeout(
         std::time::Duration::from_secs(state.config.security.metrics_timeout_seconds),
-        async {
-            let mut tx = crate::services::admitted_read::AdmittedRead::begin(
-                &state.pool,
-                permit,
-                state.config.security.metrics_timeout_seconds,
-            )
-            .await?;
-            let max_points = body.max_data_points.unwrap_or(1000).clamp(1, 10_000);
-            let mut results = Vec::with_capacity(body.targets.len());
-
-            for target in &body.targets {
-                // Validate metric name against allowlist.
-                let column = ALLOWED_METRICS
-                    .iter()
-                    .find(|&&m| m == target.target.as_str())
-                    .ok_or_else(|| {
-                        AppError::Validation(format!(
-                            "unknown metric '{}'; valid metrics: {}",
-                            target.target,
-                            ALLOWED_METRICS.join(", ")
-                        ))
-                    })?;
-
-                // Vehicle ID: prefer target-level, fall back to query param.
-                let vehicle_id = target
-                    .vehicle_id
-                    .or(qp.vehicle_id)
-                    .ok_or_else(|| AppError::Validation("vehicleId is required".to_string()))?;
-
-                // Query with time-bucketing to respect maxDataPoints.
-                // We use a simple approach: fetch all rows in range, client-side limited.
-                // For large ranges, Grafana will send maxDataPoints < total rows.
-                let sql = format!(
-                    r#"
-            SELECT
-                extract(epoch FROM ts) * 1000.0 AS ts_ms,
-                {column}::float8 AS value
-            FROM timeseries.telemetry
-            WHERE vehicle_id = $1
-              AND ts BETWEEN $2 AND $3
-              AND {column} IS NOT NULL
-            ORDER BY ts
-            LIMIT $4
-            "#
-                );
-
-                let rows = sqlx::query_as::<_, (f64, f64)>(sqlx::AssertSqlSafe(sql.as_str()))
-                    .bind(vehicle_id)
-                    .bind(body.range.from)
-                    .bind(body.range.to)
-                    .bind(max_points)
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(AppError::from)?;
-
-                let datapoints: Vec<[f64; 2]> =
-                    rows.into_iter().map(|(ts_ms, val)| [val, ts_ms]).collect();
-
-                results.push(TimeSeriesResult {
-                    target: target.target.clone(),
-                    datapoints,
-                });
-            }
-
-            tx.commit().await?;
-            Ok(Json(results))
-        },
+        plan.execute(&state, permit),
     )
     .await
     .map_err(|_| AppError::DependencyUnavailable("Grafana query deadline exceeded".into()))?
