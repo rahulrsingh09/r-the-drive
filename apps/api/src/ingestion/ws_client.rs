@@ -1109,7 +1109,11 @@ fn truncate_ws_message(value: &str) -> String {
     if value.len() <= MAX_LEN {
         return value.to_string();
     }
-    format!("{}...", &value[..MAX_LEN])
+    let mut end = MAX_LEN;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
 }
 
 fn rejected_vehicle_state_fields(value: &Value) -> Vec<String> {

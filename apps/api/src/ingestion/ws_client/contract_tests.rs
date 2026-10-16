@@ -325,3 +325,15 @@ async fn provider_correction_shutdown_interrupts_initialized_socket() {
         "the session must reach the acknowledgement wait before cancellation"
     );
 }
+
+#[test]
+fn provider_correction_diagnostics_truncate_on_utf8_boundaries() {
+    let text = format!("{}é{}", "a".repeat(499), "z".repeat(20));
+    let truncated = truncate_ws_message(&text);
+    assert_eq!(truncated, format!("{}...", "a".repeat(499)));
+    assert_eq!(
+        truncate_ws_message(&"a".repeat(501)),
+        format!("{}...", "a".repeat(500))
+    );
+    assert_eq!(truncate_ws_message("short é"), "short é");
+}

@@ -145,3 +145,8 @@ polls; a missing acknowledgement, a full delivery channel or a waiting database
 operation could delay termination. Synthetic timeout regressions fail before this
 change and pass with it. Dropping pending database work retains SQLx transaction
 rollback and existing per-vehicle lock ownership semantics.
+
+WebSocket diagnostics now truncate at a UTF-8 boundary within the existing
+500-byte prefix limit. Previously a multibyte character crossing byte 500 could
+panic while reporting a provider error. ASCII truncation and short messages are
+unchanged.
