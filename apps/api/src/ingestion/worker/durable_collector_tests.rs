@@ -961,3 +961,5 @@ mod charge_durability;
 mod telemetry_workflows;
 
 mod residual_workflows;
+
+mod legacy_charge_reference;

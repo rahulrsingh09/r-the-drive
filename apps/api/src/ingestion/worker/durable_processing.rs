@@ -52,7 +52,7 @@ impl CollectorPipeline {
             },
             lifecycle: LifecycleStage {
                 active_period,
-                software: None,
+                software: software_history::SoftwareHistory::default(),
                 available_version: None,
             },
         }
@@ -406,7 +406,7 @@ impl TelemetryStage {
 
 struct LifecycleStage {
     active_period: Option<ActiveStatePeriod>,
-    software: Option<(String, DateTime<Utc>)>,
+    software: software_history::SoftwareHistory,
     available_version: Option<String>,
 }
 
@@ -458,13 +458,9 @@ impl LifecycleStage {
             );
         }
         if let Some(version) = &event.ota_current_version {
-            if self.software.as_ref().map(|(old, _)| old) != Some(version) {
-                if let Some((previous, _)) = self.software.take() {
-                    close_software_version(&io.pool, io.vehicle_id, &previous, event.ts).await;
-                }
-                open_software_version(&io.pool, io.vehicle_id, version, event.ts).await;
-                self.software = Some((version.clone(), event.ts));
-            }
+            self.software
+                .observe(&io.pool, io.vehicle_id, version, event.ts)
+                .await;
         }
         if let Some(version) = &event.ota_available_version {
             if self.available_version.as_ref() != Some(version) {

@@ -67,8 +67,10 @@ fn normalize(value: &mut Value, db: &CollectorFixture) {
     match value {
         Value::Object(map) => {
             for (key, value) in map {
-                if matches!(key.as_str(), "created_at" | "updated_at" | "computed_at")
-                    && !value.is_null()
+                if matches!(
+                    key.as_str(),
+                    "created_at" | "updated_at" | "computed_at" | "next_attempt_at"
+                ) && !value.is_null()
                 {
                     *value = json!("<clock>");
                 } else {
@@ -160,6 +162,13 @@ async fn residual_trip_projection_complete_rows_fallback_and_admission() {
     enqueue(&db, &zero).await;
     persist_trip(&db.pool, &zero, 0.1).await.unwrap();
     persist_trip(&db.pool, &full, 2.0).await.unwrap();
+    let scheduled_at_creation: bool = sqlx::query_scalar(
+        "SELECT bool_and(next_attempt_at=created_at) FROM panda.weather_enrichment_jobs",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(scheduled_at_creation);
     golden(
         "trip-completions",
         trip_rows(&db).await,

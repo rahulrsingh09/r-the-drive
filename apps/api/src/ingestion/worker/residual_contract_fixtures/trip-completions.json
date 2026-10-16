@@ -5,7 +5,7 @@
       "completed_at": null,
       "created_at": "<clock>",
       "last_error": null,
-      "next_attempt_at": "@600003ms",
+      "next_attempt_at": "<clock>",
       "status": "pending",
       "trip_id": "00000000-0000-0000-0000-000000000065",
       "updated_at": "<clock>"
@@ -15,7 +15,7 @@
       "completed_at": null,
       "created_at": "<clock>",
       "last_error": null,
-      "next_attempt_at": "@600033ms",
+      "next_attempt_at": "<clock>",
       "status": "pending",
       "trip_id": "00000000-0000-0000-0000-000000000066",
       "updated_at": "<clock>"
@@ -25,7 +25,7 @@
       "completed_at": null,
       "created_at": "<clock>",
       "last_error": null,
-      "next_attempt_at": "@600040ms",
+      "next_attempt_at": "<clock>",
       "status": "pending",
       "trip_id": "00000000-0000-0000-0000-000000000068",
       "updated_at": "<clock>"

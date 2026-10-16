@@ -39,6 +39,22 @@ mod durable_collector_tests;
 #[cfg(test)]
 mod telemetry_contract_tests;
 
+mod acquisition_host;
+mod charge_projection;
+mod software_history;
+mod stewardship;
+mod trip_completion;
+#[cfg(test)]
+use charge_projection::charge_session_coordinates;
+use charge_projection::{
+    apply_charging_session_update, ensure_active_charge_session, ensure_active_charge_session_on,
+    load_active_charge_snapshot_on, persist_charge_session, persist_charge_session_record,
+};
+use stewardship::{
+    cleanup_raw_events, flush_legacy_charging_diagnostics, handle_inbound_accounting,
+    increment_counter, CounterBatch,
+};
+use trip_completion::persist_trip;
 mod charge_capture;
 mod durable_charge_restart;
 mod durable_processing;
@@ -252,21 +268,6 @@ pub fn classify_legacy_charging_session(
     } else {
         LegacyChargingSessionClass::Meaningful
     }
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct ActiveChargeDetectorRow {
-    session_id: Uuid,
-    started_at: DateTime<Utc>,
-    last_charge_ts: DateTime<Utc>,
-    location_lat: Option<f64>,
-    location_lng: Option<f64>,
-    soc_start: Option<f64>,
-    last_soc: Option<f64>,
-    charge_limit: Option<f64>,
-    battery_capacity_wh: Option<f64>,
-    power_samples_ts: Vec<DateTime<Utc>>,
-    power_samples_kw: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -601,9 +602,8 @@ pub async fn run_vehicle_worker(
     // Rehydrate the detector before opening the socket.  This ordering is
     // important on restart: the first frame must be evaluated against the
     // existing session UUID instead of racing startup with a fresh detector.
-    let mut ws_handle = spawn_ws_loop();
-    let mut ws_started_at = tokio::time::Instant::now();
-    let mut ws_exit_backoff = 1;
+    let ws_handle = spawn_ws_loop();
+    let ws_started_at = tokio::time::Instant::now();
     // State periods are durable state, not a best-effort in-memory overlay.
     // Rehydrate before processing any new payload so a worker restart can close
     // the existing period instead of colliding with the partial unique index.
@@ -634,73 +634,43 @@ pub async fn run_vehicle_worker(
         charge_capture,
         active_state_period,
     );
-    let mut last_ws_inbound_at = tokio::time::Instant::now();
-    let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
-    state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Startup reconciliation above already covered the current tail.
-    state_reconcile_interval.tick().await;
-    let mut trip_retry_interval = tokio::time::interval(std::time::Duration::from_secs(15));
-    trip_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut host = acquisition_host::AcquisitionHost::new(ws_handle, ws_started_at).await;
     loop {
         while companions.try_join_next().is_some() {}
-        let inbound = tokio::select! {
-            _ = worker_shutdown.recv() => {
-                break;
-            }
-            _ = trip_retry_interval.tick() => {
+        use acquisition_host::Signal;
+        let inbound = match host
+            .next(
+                &mut worker_shutdown,
+                &mut ev_rx,
+                &mut parallax_rx,
+                parallax_handle.is_some(),
+            )
+            .await
+        {
+            Signal::Stop => break,
+            Signal::RetryCompletions => {
                 pipeline.retry_completion().await;
                 continue;
             }
-            _ = state_reconcile_interval.tick() => {
+            Signal::ReconcileState => {
                 pipeline.reconcile().await;
                 continue;
             }
-            _ = tokio::time::sleep_until(last_ws_inbound_at + WS_WATCHDOG_TIMEOUT) => {
-                tracing::warn!(
-                    vehicle_id=%vehicle_id,
-                    timeout_seconds=WS_WATCHDOG_TIMEOUT.as_secs(),
-                    "worker watchdog detected a silent Rivian WS stream; restarting websocket collector"
-                );
-                upsert_health(
-                    &pool,
-                    vehicle_id,
-                    false,
-                    "stale",
-                    "No Rivian WS messages received within the watchdog window; restarting websocket collector",
-                    None,
-                    Some("rivian_ws_silent"),
-                )
-                .await;
-                ws_handle.abort();
-                let _ = (&mut ws_handle).await;
-                ws_handle = spawn_ws_loop();
-                ws_started_at = tokio::time::Instant::now();
-                last_ws_inbound_at = tokio::time::Instant::now();
+            Signal::EmptyParallax => continue,
+            Signal::SilentSocket => {
+                upsert_health(&pool,vehicle_id,false,"stale",
+                    "No Rivian WS messages received within the watchdog window; restarting websocket collector",None,Some("rivian_ws_silent")).await;
+                host.replace(&spawn_ws_loop, false).await;
                 continue;
             }
-            // Normal event path.
-            msg = ev_rx.recv() => match msg {
-                Some(ev) => ev,
-                None => break,
-            },
-            parallax_event = parallax_rx.recv(), if parallax_handle.is_some() && !parallax_rx.is_closed() => match parallax_event {
-                Some((topic, event)) => WsInboundEvent {
-                    kind: WsInboundKind::Telemetry,
-                    received_at: Utc::now(),
-                    raw: String::new(),
-                    message_type: Some(format!("parallax:{topic}")),
-                    telemetry: Some(event),
-                    charging_session: None,
-                    battery_cell_type: None,
-                },
-                None => continue,
-            },
-            // Monitor the WS task; log if it exits unexpectedly.
-            result = &mut ws_handle => {
+            Signal::SocketExited(result) => {
                 match result {
-                    Ok(()) => tracing::warn!(vehicle_id=%vehicle_id, "WS task exited cleanly; restarting websocket collector"),
-                    Err(e) if e.is_panic() => tracing::error!(vehicle_id=%vehicle_id, "WS task panicked; restarting websocket collector"),
-                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "WS task exited with error; restarting websocket collector"),
+                    Ok(()) => {
+                        tracing::warn!(%vehicle_id,"WS task exited cleanly; restarting websocket collector")
+                    }
+                    Err(error) => {
+                        tracing::warn!(%vehicle_id,%error,"WS task exited with error; restarting websocket collector")
+                    }
                 }
                 upsert_health(
                     &pool,
@@ -712,27 +682,20 @@ pub async fn run_vehicle_worker(
                     Some("rivian_ws_restarting"),
                 )
                 .await;
-                if ws_started_at.elapsed() >= std::time::Duration::from_secs(300) {
-                    ws_exit_backoff = 1;
+                if !host.wait_for_restart(&mut worker_shutdown).await {
+                    return;
                 }
-                tokio::select! {
-                    biased;
-                    _ = worker_shutdown.recv() => return,
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(ws_exit_backoff)) => {}
-                }
-                ws_exit_backoff = (ws_exit_backoff * 2).min(60);
-                ws_handle = spawn_ws_loop();
-                ws_started_at = tokio::time::Instant::now();
-                last_ws_inbound_at = tokio::time::Instant::now();
+                host.replace(&spawn_ws_loop, true).await;
                 continue;
             }
+            Signal::Inbound(inbound) => *inbound,
         };
         match pipeline
             .process(
                 inbound,
                 &mut lock_conn,
                 &mut worker_shutdown,
-                &mut last_ws_inbound_at,
+                &mut host.last_inbound,
             )
             .await
         {
@@ -769,58 +732,8 @@ pub async fn run_vehicle_worker(
     }
 
     pipeline.flush().await;
-    ws_handle.abort();
-    let _ = (&mut ws_handle).await;
-    if let Some(mut handle) = parallax_handle.take() {
-        tokio::select! {
-            _ = &mut handle => {}
-            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                handle.abort();
-                let _ = handle.await;
-            }
-        }
-    }
-    companions.abort_all();
-    while companions.join_next().await.is_some() {}
+    host.stop(&mut parallax_handle, &mut companions).await;
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
-}
-
-async fn flush_legacy_charging_diagnostics(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    counts: &mut [i64; 5],
-    last_class: Option<LegacyChargingSessionClass>,
-    last_frame_at: Option<DateTime<Utc>>,
-    last_meaningful_at: Option<DateTime<Utc>>,
-) {
-    if counts.iter().all(|count| *count == 0) {
-        return;
-    }
-    let result = sqlx::query(
-        r#"INSERT INTO panda.parallax_collector_state (
-               vehicle_id,status,schema_version,legacy_last_frame_at,
-               legacy_last_meaningful_frame_at,legacy_last_classification,
-               legacy_null_count,legacy_missing_count,legacy_malformed_count,
-               legacy_all_null_count,legacy_meaningful_count)
-           VALUES ($1,'starting',1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT(vehicle_id) DO UPDATE SET
-               legacy_last_frame_at=GREATEST(panda.parallax_collector_state.legacy_last_frame_at,EXCLUDED.legacy_last_frame_at),
-               legacy_last_meaningful_frame_at=GREATEST(panda.parallax_collector_state.legacy_last_meaningful_frame_at,EXCLUDED.legacy_last_meaningful_frame_at),
-               legacy_last_classification=EXCLUDED.legacy_last_classification,
-               legacy_null_count=panda.parallax_collector_state.legacy_null_count+EXCLUDED.legacy_null_count,
-               legacy_missing_count=panda.parallax_collector_state.legacy_missing_count+EXCLUDED.legacy_missing_count,
-               legacy_malformed_count=panda.parallax_collector_state.legacy_malformed_count+EXCLUDED.legacy_malformed_count,
-               legacy_all_null_count=panda.parallax_collector_state.legacy_all_null_count+EXCLUDED.legacy_all_null_count,
-               legacy_meaningful_count=panda.parallax_collector_state.legacy_meaningful_count+EXCLUDED.legacy_meaningful_count"#,
-    ).bind(vehicle_id).bind(last_frame_at).bind(last_meaningful_at)
-     .bind(last_class.map(LegacyChargingSessionClass::as_str))
-     .bind(counts[0]).bind(counts[1]).bind(counts[2]).bind(counts[3]).bind(counts[4])
-     .execute(pool).await;
-    if let Err(error) = result {
-        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "legacy charging diagnostics flush failed");
-    } else {
-        *counts = [0; 5];
-    }
 }
 
 fn parallax_enabled() -> bool {
@@ -851,139 +764,6 @@ async fn upsert_battery_cell_type(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-async fn ensure_active_charge_session(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    session_id: Uuid,
-    event: &TelemetryEvent,
-) -> anyhow::Result<()> {
-    let mut conn = pool.acquire().await?;
-    ensure_active_charge_session_on(&mut conn, vehicle_id, session_id, event).await
-}
-
-async fn ensure_active_charge_session_on(
-    conn: &mut PgConnection,
-    vehicle_id: Uuid,
-    session_id: Uuid,
-    event: &TelemetryEvent,
-) -> anyhow::Result<()> {
-    let location = match (event.latitude, event.longitude) {
-        (Some(latitude), Some(longitude))
-            if latitude.is_finite()
-                && longitude.is_finite()
-                && (-90.0..=90.0).contains(&latitude)
-                && (-180.0..=180.0).contains(&longitude)
-                && !(latitude == 0.0 && longitude == 0.0) =>
-        {
-            Some((latitude, longitude))
-        }
-        _ => None,
-    };
-    let saved: Option<Uuid> = sqlx::query_scalar(
-        r#"INSERT INTO panda.charge_sessions
-           (id, vehicle_id, started_at,
-            location_lat, location_lng, source_location_lat, source_location_lng,
-            soc_start, charge_limit, source, data_confidence)
-           SELECT $1, $2,
-                  COALESCE(MIN(t.ts), $3),
-                  $6, $7, $6, $7,
-                  COALESCE(
-                      (ARRAY_AGG(t.battery_level ORDER BY t.ts)
-                       FILTER (WHERE t.battery_level IS NOT NULL))[1],
-                      $4
-                  ),
-                  COALESCE(MAX(t.battery_limit), $5),
-                  'telemetry',
-                  'telemetry'
-           FROM timeseries.telemetry t
-           WHERE t.vehicle_id = $2
-             AND t.charge_session_id = $1
-           ON CONFLICT (id) DO UPDATE SET
-             started_at = COALESCE(panda.charge_sessions.started_at, EXCLUDED.started_at),
-             location_lat = COALESCE(panda.charge_sessions.location_lat, EXCLUDED.location_lat),
-             location_lng = COALESCE(panda.charge_sessions.location_lng, EXCLUDED.location_lng),
-             source_location_lat = COALESCE(panda.charge_sessions.source_location_lat, EXCLUDED.source_location_lat),
-             source_location_lng = COALESCE(panda.charge_sessions.source_location_lng, EXCLUDED.source_location_lng),
-             soc_start = COALESCE(panda.charge_sessions.soc_start, EXCLUDED.soc_start),
-             charge_limit = COALESCE(panda.charge_sessions.charge_limit, EXCLUDED.charge_limit)
-           WHERE panda.charge_sessions.vehicle_id=EXCLUDED.vehicle_id RETURNING id"#,
-    )
-    .bind(session_id)
-    .bind(vehicle_id)
-    .bind(event.ts)
-    .bind(event.battery_level)
-    .bind(event.battery_limit)
-    .bind(location.map(|(latitude, _)| latitude))
-    .bind(location.map(|(_, longitude)| longitude))
-    .fetch_optional(conn)
-    .await?;
-    anyhow::ensure!(
-        saved == Some(session_id),
-        "active charge session ownership mismatch"
-    );
-    Ok(())
-}
-
-async fn apply_charging_session_update(
-    pool: &PgPool,
-    redis_conn: &mut redis::aio::MultiplexedConnection,
-    vehicle_id: Uuid,
-    event: &parser::ChargingSessionEvent,
-    received_at: DateTime<Utc>,
-    active_session_id: Option<Uuid>,
-) {
-    let live_key = rivian_poll::live_session_redis_key(vehicle_id);
-    let live = rivian_poll::normalize_charging_session(event, received_at);
-
-    match live {
-        Some(live) if active_session_id.is_some() => {
-            if let Ok(json) = serde_json::to_string(&live) {
-                if let Err(error) = redis_conn
-                    .set_ex::<_, _, ()>(&live_key, json, rivian_poll::LIVE_SESSION_TTL_SECONDS)
-                    .await
-                {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis write failed");
-                }
-            }
-            if let Err(error) =
-                rivian_poll::persist_live_session_data(pool, active_session_id, &live).await
-            {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session database update failed");
-            }
-        }
-        Some(_) => {
-            // A late legacy frame cannot recreate state after canonical
-            // vehicleState ended the session.
-            if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "late live session Redis cleanup failed");
-            }
-        }
-        None if should_clear_live_session(event) => {
-            // An explicit root null means the legacy projection is no longer
-            // meaningful. Never leave a stale Redis snapshot visible.
-            if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "null live session Redis cleanup failed");
-            }
-        }
-        None => {
-            // An all-null object or liveData:null is only an empty partial
-            // update. Preserve the existing TTL snapshot; a later meaningful
-            // frame can refresh it, while natural expiry handles staleness.
-        }
-    }
-
-    if let Err(error) = rivian_poll::persist_charging_session_chart(
-        pool,
-        vehicle_id,
-        active_session_id,
-        &event.chart_data,
-    )
-    .await
-    {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live charge curve update failed");
-    }
 }
 
 fn should_clear_live_session(event: &parser::ChargingSessionEvent) -> bool {
@@ -1051,233 +831,6 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     2.0 * radius_m * a.sqrt().asin()
 }
 
-/// Batches stewardship counter increments and flushes them in a single upsert.
-struct CounterBatch {
-    vehicle_id: Uuid,
-    counts: std::collections::HashMap<&'static str, i64>,
-}
-
-impl CounterBatch {
-    fn new(vehicle_id: Uuid) -> Self {
-        Self {
-            vehicle_id,
-            counts: std::collections::HashMap::new(),
-        }
-    }
-
-    fn increment(&mut self, column: &str) {
-        if let Some(col) = stewardship_counter_column(column) {
-            *self.counts.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    /// Flush accumulated counts to the DB and reset the batch for reuse.
-    async fn flush(&mut self, pool: &PgPool) {
-        if self.counts.is_empty() {
-            return;
-        }
-        let cols: Vec<&'static str> = self.counts.keys().copied().collect();
-        let set_clause = cols
-            .iter()
-            .map(|c| format!("{c} = panda.rivian_stewardship_counters.{c} + EXCLUDED.{c}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let col_list = cols.join(", ");
-        let placeholders: Vec<String> = cols
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("${}", i + 3))
-            .collect();
-        let sql = format!(
-            "INSERT INTO panda.rivian_stewardship_counters (vehicle_id, day, {col_list}) \
-             VALUES ($1, CURRENT_DATE, {vals}) \
-             ON CONFLICT (vehicle_id, day) DO UPDATE SET {set_clause}, updated_at = now()",
-            vals = placeholders.join(", "),
-        );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(self.vehicle_id)
-            .bind(chrono::Utc::now().date_naive());
-        for col in &cols {
-            q = q.bind(*self.counts.get(col).unwrap_or(&0));
-        }
-        let _ = q.execute(pool).await;
-        self.counts.clear();
-    }
-}
-
-/// Accumulate per-event counters into `batch`. The caller is responsible for
-/// flushing `batch` to the DB periodically (every N events) to amortize the
-/// cost of the upsert across many messages.
-async fn handle_inbound_accounting(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    config: &Config,
-    inbound: &WsInboundEvent,
-    batch: &mut CounterBatch,
-) {
-    if !is_synthetic_control(inbound.message_type.as_deref()) {
-        batch.increment("ws_messages_received");
-        match inbound.kind {
-            WsInboundKind::Control => {
-                batch.increment("ws_control_messages_received");
-            }
-            WsInboundKind::Heartbeat => {
-                batch.increment("ws_heartbeats_received");
-            }
-            WsInboundKind::Telemetry => {
-                batch.increment("ws_payload_messages_received");
-            }
-            WsInboundKind::ChargingSession => {
-                batch.increment("ws_payload_messages_received");
-            }
-        }
-    }
-    match inbound.message_type.as_deref() {
-        Some("connection_ack") => {
-            batch.increment("ws_connections_opened");
-            // The account card reflects a successful authenticated Rivian
-            // session, rather than only the time credentials were saved.
-            crate::services::external_connections::record_attempt(
-                pool,
-                crate::services::external_connections::RIVIAN_ACCOUNT,
-            )
-            .await;
-            crate::services::external_connections::record_success(
-                pool,
-                crate::services::external_connections::RIVIAN_ACCOUNT,
-            )
-            .await;
-        }
-        Some("reconnect") => batch.increment("ws_reconnects"),
-        Some("connection_init" | "subscribe") => {
-            batch.increment("outbound_messages_sent");
-        }
-        _ => {}
-    }
-    if let Some(update) = runtime_health_update_for_ws_control(inbound) {
-        if matches!(
-            inbound.message_type.as_deref(),
-            Some("ws_handshake_rejected" | "ws_schema_rejected")
-        ) {
-            crate::services::external_connections::record_failure(
-                pool,
-                crate::services::external_connections::RIVIAN_ACCOUNT,
-                &update.worker_health_msg,
-            )
-            .await;
-        }
-        upsert_health(
-            pool,
-            vehicle_id,
-            update.online,
-            update.worker_health,
-            &update.worker_health_msg,
-            Some(update.auth_state),
-            update.auth_reason_code,
-        )
-        .await;
-    }
-    if config.rivian_persist_raw_events {
-        persist_raw_event(pool, batch, vehicle_id, inbound).await;
-    }
-}
-
-async fn persist_raw_event(
-    pool: &PgPool,
-    batch: &mut CounterBatch,
-    vehicle_id: Uuid,
-    inbound: &WsInboundEvent,
-) {
-    let payload_json = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
-    let result = sqlx::query(
-        r#"
-        INSERT INTO panda.rivian_ws_raw_events
-          (vehicle_id, received_at, event_type, message_type, payload_json, payload_text)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(inbound.received_at)
-    .bind(inbound.kind.as_str())
-    .bind(inbound.message_type.as_deref())
-    .bind(payload_json)
-    .bind(&inbound.raw)
-    .execute(pool)
-    .await;
-
-    if result.is_ok() {
-        batch.increment("raw_events_persisted");
-    }
-}
-
-async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
-    // Use a non-blocking advisory lock (id 0x726d_5241 = "rmRA") so that
-    // concurrent workers skip the DELETE rather than pile up on the same rows.
-    let got_lock: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(0x726d5241::bigint)")
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
-    if !got_lock {
-        return;
-    }
-
-    let _ = sqlx::query(
-        "DELETE FROM panda.rivian_ws_raw_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
-    )
-    .bind(retention_days.max(1) as i32)
-    .execute(pool)
-    .await;
-
-    let _ = sqlx::query(
-        "DELETE FROM panda.rivian_parallax_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
-    )
-    .bind(retention_days.max(1) as i32)
-    .execute(pool)
-    .await;
-
-    // Release the session-level lock immediately so other workers can take it next cycle.
-    let _ = sqlx::query("SELECT pg_advisory_unlock(0x726d5241::bigint)")
-        .execute(pool)
-        .await;
-}
-
-async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {
-    let Some(column) = stewardship_counter_column(column) else {
-        return;
-    };
-    let sql = format!(
-        "INSERT INTO panda.rivian_stewardship_counters (vehicle_id, day, {column}) \
-         VALUES ($1, CURRENT_DATE, 1) \
-         ON CONFLICT (vehicle_id, day) DO UPDATE \
-         SET {column} = panda.rivian_stewardship_counters.{column} + 1, updated_at = now()"
-    );
-    let _ = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vehicle_id)
-        .execute(pool)
-        .await;
-}
-
-fn stewardship_counter_column(column: &str) -> Option<&'static str> {
-    match column {
-        "ws_messages_received" => Some("ws_messages_received"),
-        "ws_heartbeats_received" => Some("ws_heartbeats_received"),
-        "ws_payload_messages_received" => Some("ws_payload_messages_received"),
-        "ws_control_messages_received" => Some("ws_control_messages_received"),
-        "ws_connections_opened" => Some("ws_connections_opened"),
-        "ws_reconnects" => Some("ws_reconnects"),
-        "outbound_messages_sent" => Some("outbound_messages_sent"),
-        "outbound_graphql_requests" => Some("outbound_graphql_requests"),
-        "telemetry_writes_persisted" => Some("telemetry_writes_persisted"),
-        "telemetry_writes_suppressed" => Some("telemetry_writes_suppressed"),
-        "telemetry_suppressed_duplicate" => Some("telemetry_suppressed_duplicate"),
-        "telemetry_suppressed_empty" => Some("telemetry_suppressed_empty"),
-        "telemetry_suppressed_threshold" => Some("telemetry_suppressed_threshold"),
-        "collector_lock_skips" => Some("collector_lock_skips"),
-        "raw_events_persisted" => Some("raw_events_persisted"),
-        _ => None,
-    }
-}
-
 fn collector_lock_key(vehicle_id: Uuid) -> i64 {
     let bytes = vehicle_id.as_bytes();
     let mut first = [0u8; 8];
@@ -1304,104 +857,6 @@ async fn load_active_charge_snapshot_result(
 ) -> anyhow::Result<Option<ActiveChargeSessionSnapshot>> {
     let mut conn = pool.acquire().await?;
     load_active_charge_snapshot_on(&mut conn, vehicle_id).await
-}
-
-async fn load_active_charge_snapshot_on(
-    conn: &mut PgConnection,
-    vehicle_id: Uuid,
-) -> anyhow::Result<Option<ActiveChargeSessionSnapshot>> {
-    let row = sqlx::query_as::<_, ActiveChargeDetectorRow>(
-        r#"
-        WITH active_samples AS (
-            SELECT
-                t.charge_session_id,
-                t.ts,
-                t.latitude,
-                t.longitude,
-                t.battery_level,
-                t.battery_capacity_wh,
-                t.battery_limit,
-                t.power_kw
-            FROM timeseries.telemetry t
-            LEFT JOIN panda.charge_sessions cs
-              ON cs.id = t.charge_session_id
-            WHERE t.vehicle_id = $1
-              AND t.charge_session_id IS NOT NULL
-              -- Both materialized and not-yet-materialized sessions are
-              -- eligible.  The old cs.id IS NULL predicate discarded the
-              -- exact row ensure_active_charge_session had just created.
-              AND (cs.id IS NULL OR cs.ended_at IS NULL)
-              AND t.ts >= now() - ($2::int * interval '1 hour')
-        ),
-        candidate_sessions AS (
-            SELECT
-                charge_session_id AS session_id,
-                MIN(ts) AS started_at,
-                MAX(ts) AS last_charge_ts,
-                (ARRAY_AGG(latitude ORDER BY ts) FILTER (
-                    WHERE latitude IS NOT NULL
-                      AND longitude IS NOT NULL
-                      AND NOT (latitude = 0 AND longitude = 0)
-                ))[1] AS location_lat,
-                (ARRAY_AGG(longitude ORDER BY ts) FILTER (
-                    WHERE latitude IS NOT NULL
-                      AND longitude IS NOT NULL
-                      AND NOT (latitude = 0 AND longitude = 0)
-                ))[1] AS location_lng,
-                (ARRAY_AGG(battery_level ORDER BY ts) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_start,
-                (ARRAY_AGG(battery_level ORDER BY ts DESC) FILTER (WHERE battery_level IS NOT NULL))[1] AS last_soc,
-                MAX(battery_limit) AS charge_limit,
-                (ARRAY_AGG(battery_capacity_wh ORDER BY ts DESC) FILTER (WHERE battery_capacity_wh IS NOT NULL))[1] AS battery_capacity_wh,
-                ARRAY_AGG(ts ORDER BY ts) AS power_samples_ts,
-                ARRAY_AGG(power_kw ORDER BY ts) AS power_samples_kw
-            FROM active_samples
-            GROUP BY charge_session_id
-        )
-        SELECT
-            session_id,
-            started_at,
-            last_charge_ts,
-            location_lat,
-            location_lng,
-            soc_start,
-            last_soc,
-            charge_limit,
-            battery_capacity_wh,
-            power_samples_ts,
-            power_samples_kw
-        FROM candidate_sessions
-        WHERE last_charge_ts >= now() - ($3::int * interval '1 minute')
-        ORDER BY last_charge_ts DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(CHARGE_DETECTOR_REHYDRATE_LOOKBACK_HOURS)
-    .bind(CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES)
-    .fetch_optional(conn)
-    .await?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-
-    let power = durable_charge_restart::ReconstructedChargePower::from_samples(
-        row.started_at,
-        row.power_samples_ts.into_iter().zip(row.power_samples_kw),
-    );
-    Ok(Some(ActiveChargeSessionSnapshot {
-        session_id: row.session_id,
-        started_at: row.started_at,
-        location_lat: row.location_lat,
-        location_lng: row.location_lng,
-        soc_start: row.soc_start,
-        last_soc: row.last_soc,
-        charge_limit: row.charge_limit,
-        battery_capacity_wh: row.battery_capacity_wh,
-        last_charge_ts: row.last_charge_ts,
-        last_power_ts: Some(power.last_power_ts),
-        energy_used_wh: power.energy_used_wh,
-        peak_charge_kw: power.peak_charge_kw,
-    }))
 }
 
 async fn acquire_collector_lock(
@@ -1516,366 +971,6 @@ mod snapshot_tests {
         assert_eq!(payload["data"]["location"]["lat"], 30.25);
         assert_eq!(payload["data"]["location"]["lng"], -97.75);
     }
-}
-
-async fn last_battery_level_at(pool: &PgPool, vehicle_id: Uuid, at: DateTime<Utc>) -> Option<f64> {
-    sqlx::query_scalar(
-        r#"SELECT battery_level
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1 AND ts <= $2 AND battery_level IS NOT NULL
-           ORDER BY ts DESC
-           LIMIT 1"#,
-    )
-    .bind(vehicle_id)
-    .bind(at)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-}
-
-async fn persist_trip(
-    pool: &PgPool,
-    trip: &crate::ingestion::trip_detector::CompletedTripData,
-    distance: f64,
-) -> anyhow::Result<()> {
-    let duration = (trip.ended_at - trip.started_at).num_seconds() as i32;
-    let max_speed = trip
-        .points
-        .iter()
-        .map(|p| p.speed_mph)
-        .fold(0.0_f64, f64::max);
-    let avg_speed = if duration > 0 {
-        Some(distance / (duration as f64 / 3600.0))
-    } else {
-        None
-    };
-
-    // The detector only knows battery levels it saw in this process, and the
-    // vehicle reports one only when it changes. After a restart, or on a short
-    // trip with no change, fall back to the last persisted reading.
-    let soc_start = match trip.soc_start {
-        Some(soc) => Some(soc),
-        None => last_battery_level_at(pool, trip.vehicle_id, trip.started_at).await,
-    };
-    let soc_end = match trip.soc_end {
-        Some(soc) => Some(soc),
-        None => last_battery_level_at(pool, trip.vehicle_id, trip.ended_at).await,
-    };
-
-    // Energy ensemble
-    let (energy_wh, energy_strategy, efficiency_wh_per_mi) = match compute_trip_energy(
-        soc_start,
-        soc_end,
-        trip.battery_capacity_wh,
-        trip.range_start_mi,
-        trip.range_end_mi,
-        distance,
-        None,
-    ) {
-        Some((wh, strat)) => {
-            let eff = if distance > 0.0 {
-                Some(wh / distance)
-            } else {
-                None
-            };
-            (Some(wh), Some(strat.to_string()), eff)
-        }
-        None => {
-            // Fallback: use SOC-based efficiency
-            let eff = match (soc_start, soc_end, trip.battery_capacity_wh) {
-                (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
-                    Some(((s0 - s1) / 100.0) * cap / distance)
-                }
-                _ => None,
-            };
-            (None, None, eff)
-        }
-    };
-
-    let start = trip.points.first();
-    let end = trip.points.last();
-
-    // The periodic location reconciler enriches trips after durable capture.
-    let start_match = MatchedLocation::none();
-    let end_match = MatchedLocation::none();
-
-    let route_points = trip
-        .points
-        .iter()
-        .map(|point| (point.lat, point.lng))
-        .collect::<Vec<_>>();
-    let route_preview = serde_json::to_value(build_route_preview(&route_points))?;
-
-    let mut tx = pool.begin().await?;
-    if distance >= MIN_TRIP_DISTANCE_MILES {
-        sqlx::query(
-        r#"INSERT INTO panda.trips
-           (id, vehicle_id, started_at, ended_at,
-            start_lat, start_lng, end_lat, end_lng,
-            distance_miles, duration_seconds,
-            soc_start, soc_end,
-            efficiency_wh_per_mile, max_speed_mph, avg_speed_mph, drive_mode,
-            start_odometer_mi, end_odometer_mi,
-            start_position_ts, end_position_ts,
-            start_geofence_id, end_geofence_id,
-            start_address_id, end_address_id,
-            range_start_mi, range_end_mi,
-            power_max_kw, power_min_kw,
-            elevation_gain_m, elevation_loss_m,
-            inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy,
-            route_preview, route_preview_version)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,1) ON CONFLICT(id) DO NOTHING"#,
-    )
-        .bind(trip.trip_id)
-        .bind(trip.vehicle_id)
-        .bind(trip.started_at)
-        .bind(trip.ended_at)
-        .bind(start.map(|p| p.lat))
-        .bind(start.map(|p| p.lng))
-        .bind(end.map(|p| p.lat))
-        .bind(end.map(|p| p.lng))
-        .bind(distance)
-        .bind(duration)
-        .bind(soc_start)
-        .bind(soc_end)
-        .bind(efficiency_wh_per_mi)
-        .bind(max_speed)
-        .bind(avg_speed)
-        .bind(trip.dominant_drive_mode.as_deref())
-        .bind(trip.start_odometer_mi)
-        .bind(trip.end_odometer_mi)
-        .bind(start.map(|p| p.ts))
-        .bind(end.map(|p| p.ts))
-        .bind(start_match.geofence_id)
-        .bind(end_match.geofence_id)
-        .bind(start_match.address_id)
-        .bind(end_match.address_id)
-        .bind(trip.range_start_mi)
-        .bind(trip.range_end_mi)
-        .bind(trip.power_max_kw)
-        .bind(trip.power_min_kw)
-        .bind(trip.elevation_gain_m)
-        .bind(trip.elevation_loss_m)
-        .bind(trip.inside_temp_avg_c)
-        .bind(Option::<f64>::None)
-        .bind(trip.regen_wh)
-        .bind(energy_wh)
-        .bind(energy_strategy.as_deref())
-        .bind(route_preview)
-        .execute(&mut *tx)
-        .await?;
-
-        let identity: (Uuid, DateTime<Utc>, Option<DateTime<Utc>>) =
-            sqlx::query_as("SELECT vehicle_id,started_at,ended_at FROM panda.trips WHERE id=$1")
-                .bind(trip.trip_id)
-                .fetch_one(&mut *tx)
-                .await?;
-        anyhow::ensure!(
-            identity.0 == trip.vehicle_id
-                && identity.1.timestamp_micros() == trip.started_at.timestamp_micros()
-                && identity.2.map(|at| at.timestamp_micros())
-                    == Some(trip.ended_at.timestamp_micros()),
-            "trip identity collision; retaining completion for investigation"
-        );
-        sqlx::query(
-            "INSERT INTO panda.weather_enrichment_jobs(trip_id) VALUES($1) ON CONFLICT(trip_id) DO NOTHING",
-        ).bind(trip.trip_id).execute(&mut *tx).await?;
-    }
-    sqlx::query("DELETE FROM panda.pending_trip_completions WHERE trip_id=$1 AND vehicle_id=$2")
-        .bind(trip.trip_id)
-        .bind(trip.vehicle_id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-
-    Ok(())
-}
-
-/// Where a completed session happened. Charging frames rarely carry GPS, so
-/// when the detector never saw a fix, use the row's stored location and then
-/// the vehicle's nearest telemetry fix, so the saved place and address can
-/// still be matched.
-async fn charge_session_coordinates(
-    pool: &PgPool,
-    session: &crate::ingestion::charge_detector::CompletedChargeSession,
-) -> (Option<f64>, Option<f64>) {
-    if let (Some(lat), Some(lng)) = (session.location_lat, session.location_lng) {
-        return (Some(lat), Some(lng));
-    }
-
-    let stored = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
-        "SELECT location_lat, location_lng FROM panda.charge_sessions WHERE id = $1",
-    )
-    .bind(session.session_id)
-    .fetch_optional(pool)
-    .await;
-    match stored {
-        Ok(Some((Some(lat), Some(lng)))) => return (Some(lat), Some(lng)),
-        Ok(_) => {}
-        Err(error) => {
-            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_stored_location_failed");
-        }
-    }
-
-    match crate::services::trip_enrichment::nearest_telemetry_fix(
-        pool,
-        session.vehicle_id,
-        session.started_at,
-    )
-    .await
-    {
-        Ok(Some((lat, lng))) => (Some(lat), Some(lng)),
-        Ok(None) => (None, None),
-        Err(error) => {
-            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_telemetry_fix_failed");
-            (None, None)
-        }
-    }
-}
-
-async fn persist_charge_session(
-    pool: &PgPool,
-    session: &crate::ingestion::charge_detector::CompletedChargeSession,
-) -> anyhow::Result<()> {
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_default();
-    let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
-    let (location_lat, location_lng) = charge_session_coordinates(pool, session).await;
-    let location_match = match (owner_id, location_lat, location_lng) {
-        (Some(user_id), Some(lat), Some(lon)) => {
-            resolve_trip_location(pool, &http_client, user_id, lat, lon).await?
-        }
-        _ => MatchedLocation::none(),
-    };
-
-    let mut conn = pool.begin().await?;
-    crate::services::charge_sessions::lock_charge_history(&mut conn, session.vehicle_id).await?;
-    let present: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM panda.charge_sessions WHERE id=$1 AND vehicle_id=$2)",
-    )
-    .bind(session.session_id)
-    .bind(session.vehicle_id)
-    .fetch_one(&mut *conn)
-    .await?;
-    anyhow::ensure!(
-        present,
-        "charge session was canonicalized before optional enrichment"
-    );
-    persist_charge_session_record(
-        &mut conn,
-        session,
-        location_lat,
-        location_lng,
-        &location_match,
-    )
-    .await?;
-    conn.commit().await?;
-
-    if let Some(user_id) = owner_id {
-        sqlx::query(
-            r#"INSERT INTO panda.charge_session_user_annotations
-               (charge_session_id, user_id, geofence_id, address_id, is_home, computed_at)
-               VALUES ($1, $2, $3, $4, $5, now())
-               ON CONFLICT (charge_session_id, user_id) DO UPDATE
-               SET geofence_id = EXCLUDED.geofence_id,
-                   address_id = EXCLUDED.address_id,
-                   is_home = EXCLUDED.is_home,
-                   computed_at = now(),
-                   updated_at = now()"#,
-        )
-        .bind(session.session_id)
-        .bind(user_id)
-        .bind(location_match.geofence_id)
-        .bind(location_match.address_id)
-        .bind(location_match.is_home)
-        .execute(pool)
-        .await?;
-    }
-
-    let _ = recompute_charge_session_cost(pool, session.session_id).await?;
-    Ok(())
-}
-
-async fn persist_charge_session_record(
-    conn: &mut PgConnection,
-    session: &crate::ingestion::charge_detector::CompletedChargeSession,
-    location_lat: Option<f64>,
-    location_lng: Option<f64>,
-    location_match: &MatchedLocation,
-) -> anyhow::Result<()> {
-    let duration_minutes = ((session.ended_at - session.started_at).num_seconds() / 60) as i32;
-    let energy_added_kwh = session.energy_added_wh.map(|wh| wh / 1000.0);
-    let saved: Option<Uuid> = sqlx::query_scalar(
-        r#"INSERT INTO panda.charge_sessions
-           (id, vehicle_id, started_at, ended_at,
-            location_lat, location_lng, source_location_lat, source_location_lng,
-            is_home,
-            soc_start, soc_end, charge_limit, duration_minutes,
-            kwh_added, max_charge_rate_kw, cost_usd,
-            energy_added_wh, energy_used_wh,
-            avg_charge_rate_kw, peak_voltage,
-            geofence_id, address_id, cost_profile_id, cost_method,
-            charger_type, source, data_confidence)
-              VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry','telemetry')
-              ON CONFLICT (id) DO UPDATE SET
-                  started_at = LEAST(charge_sessions.started_at, EXCLUDED.started_at),
-                  ended_at = EXCLUDED.ended_at,
-                  location_lat = COALESCE(EXCLUDED.location_lat, charge_sessions.location_lat),
-                  location_lng = COALESCE(EXCLUDED.location_lng, charge_sessions.location_lng),
-                  source_location_lat = COALESCE(EXCLUDED.source_location_lat, charge_sessions.source_location_lat),
-                  source_location_lng = COALESCE(EXCLUDED.source_location_lng, charge_sessions.source_location_lng),
-                  is_home = COALESCE(EXCLUDED.is_home, charge_sessions.is_home),
-                  soc_start = COALESCE(charge_sessions.soc_start, EXCLUDED.soc_start),
-                  soc_end = EXCLUDED.soc_end,
-                  charge_limit = COALESCE(EXCLUDED.charge_limit, charge_sessions.charge_limit),
-                  duration_minutes = EXCLUDED.duration_minutes,
-                  kwh_added = COALESCE(EXCLUDED.kwh_added, charge_sessions.kwh_added),
-                  max_charge_rate_kw = COALESCE(EXCLUDED.max_charge_rate_kw, charge_sessions.max_charge_rate_kw),
-                  energy_added_wh = COALESCE(EXCLUDED.energy_added_wh, charge_sessions.energy_added_wh),
-                  energy_used_wh = COALESCE(EXCLUDED.energy_used_wh, charge_sessions.energy_used_wh),
-                  avg_charge_rate_kw = COALESCE(EXCLUDED.avg_charge_rate_kw, charge_sessions.avg_charge_rate_kw),
-                  peak_voltage = COALESCE(EXCLUDED.peak_voltage, charge_sessions.peak_voltage),
-                  geofence_id = COALESCE(EXCLUDED.geofence_id, charge_sessions.geofence_id),
-                  address_id = COALESCE(EXCLUDED.address_id, charge_sessions.address_id),
-                  charger_type = COALESCE(EXCLUDED.charger_type, charge_sessions.charger_type),
-                  source = COALESCE(charge_sessions.source, EXCLUDED.source),
-                  data_confidence = COALESCE(charge_sessions.data_confidence, EXCLUDED.data_confidence)
-                  WHERE charge_sessions.vehicle_id=EXCLUDED.vehicle_id RETURNING id"#,
-    )
-    .bind(session.session_id)
-    .bind(session.vehicle_id)
-    .bind(session.started_at)
-    .bind(session.ended_at)
-    .bind(location_lat)
-    .bind(location_lng)
-    .bind(location_match.is_home)
-    .bind(session.soc_start)
-    .bind(session.soc_end)
-    .bind(session.charge_limit)
-    .bind(duration_minutes)
-    .bind(energy_added_kwh)
-    .bind(session.peak_charge_kw)
-    .bind(Option::<f64>::None)
-    .bind(session.energy_added_wh)
-    .bind(session.energy_used_wh)
-    .bind(session.avg_charge_rate_kw)
-    .bind(session.peak_charge_kw)
-    .bind(location_match.geofence_id)
-    .bind(location_match.address_id)
-    .bind(Option::<Uuid>::None)
-    .bind(Option::<&str>::None)
-    .bind(session.charger_type.as_deref())
-    .fetch_optional(conn)
-    .await?;
-    anyhow::ensure!(
-        saved == Some(session.session_id),
-        "completed charge session ownership mismatch"
-    );
-
-    Ok(())
 }
 
 #[allow(dead_code)]
@@ -2077,70 +1172,6 @@ struct LifecycleUpdates {
     state_period: bool,
     power_state: bool,
     charging: bool,
-}
-
-async fn open_software_version(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    version: &str,
-    installed_at: chrono::DateTime<Utc>,
-) {
-    let current_open = sqlx::query_scalar::<_, Option<String>>(
-        r#"SELECT version
-           FROM panda.software_versions
-           WHERE vehicle_id = $1 AND observed_until IS NULL
-           ORDER BY installed_at DESC
-           LIMIT 1"#,
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    if current_open.as_ref().and_then(|v| v.as_deref()) == Some(version) {
-        return;
-    }
-
-    if current_open.is_some() {
-        let _ = sqlx::query(
-            r#"UPDATE panda.software_versions
-               SET observed_until = $1
-               WHERE vehicle_id = $2 AND observed_until IS NULL"#,
-        )
-        .bind(installed_at)
-        .bind(vehicle_id)
-        .execute(pool)
-        .await;
-    }
-
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.software_versions (vehicle_id, version, installed_at)
-           VALUES ($1, $2, $3)"#,
-    )
-    .bind(vehicle_id)
-    .bind(version)
-    .bind(installed_at)
-    .execute(pool)
-    .await;
-}
-
-async fn close_software_version(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    version: &str,
-    observed_until: chrono::DateTime<Utc>,
-) {
-    let _ = sqlx::query(
-        r#"UPDATE panda.software_versions
-           SET observed_until = $1
-           WHERE vehicle_id = $2 AND version = $3 AND observed_until IS NULL"#,
-    )
-    .bind(observed_until)
-    .bind(vehicle_id)
-    .bind(version)
-    .execute(pool)
-    .await;
 }
 
 async fn upsert_health(
