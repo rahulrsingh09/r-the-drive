@@ -1218,3 +1218,7 @@ mod tests {
             .expect("delete demo seed test user");
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/demo_generation.rs"]
+mod characterization;
