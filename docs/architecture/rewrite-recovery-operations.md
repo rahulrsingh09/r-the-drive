@@ -117,11 +117,18 @@ session through acquisition and release, including cancelled queries.
 Baseline schema proof also owns its asynchronous lifetime. A reproduced
 cancellation after scratch-database creation previously skipped its cleanup.
 The probe now completes and cleans its own database even when its waiter is
-cancelled. The operation uses the default recovery deadline; database removal
-and pool close each have a 30-second cleanup allowance. Cleanup failure is
-logged and returned when a waiter remains. Server unavailability or process
-termination can still prevent cleanup; the probe never removes another
-operation's database.
+cancelled. Before installing its schema, the generated scratch database disables
+Timescale telemetry for that database alone; a temporary schema proof must not
+start outbound reporting jobs. The candidate's settings remain unchanged.
+The operation uses the default recovery deadline. Cleanup first closes new
+connections to that generated scratch database. Forced removal retries
+only PostgreSQL's `55006` (database busy) error, with at most ten attempts
+separated by 100 ms. Other errors return immediately; an absent scratch database
+already satisfies cleanup. Admission closure, removal and pool close share one
+30-second cleanup deadline. Cleanup failure is logged and returned when a
+waiter remains. Server unavailability or process termination can still prevent
+cleanup; the probe never changes connections to or removes the candidate or
+another operation's database.
 
 The journal staging regressions previously overwrote a separate synthetic file
 through a predictable temporary symlink and left a temporary file after rename

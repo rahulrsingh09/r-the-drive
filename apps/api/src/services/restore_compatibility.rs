@@ -462,6 +462,10 @@ where
             sqlx::query(AssertSqlSafe(format!(
                 "CREATE DATABASE \"{database_name}\" TEMPLATE template0"
             ))).execute(&admin_pool).await?;
+            // A temporary schema proof must not start outbound telemetry jobs.
+            sqlx::query(AssertSqlSafe(format!(
+                "ALTER DATABASE \"{database_name}\" SET timescaledb.telemetry_level = 'off'"
+            ))).execute(&admin_pool).await?;
             after_create(database_name.clone()).await;
             let scratch_pool = PgPoolOptions::new().max_connections(2)
                 .connect(scratch_url.as_str()).await?;
@@ -473,18 +477,64 @@ where
             result
         }).await.map_err(|_| anyhow::anyhow!("recovery baseline verification deadline exceeded"))
             .and_then(|result| result);
-        let cleanup = tokio::time::timeout(cleanup_budget, sqlx::query(AssertSqlSafe(format!(
-            "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
-        ))).execute(&admin_pool)).await
+        let cleanup_deadline = tokio::time::Instant::now() + cleanup_budget;
+        let cleanup = tokio::time::timeout_at(cleanup_deadline,
+            drop_baseline_scratch_database(&admin_pool, &database_name)).await
             .map_err(|_| anyhow::anyhow!("recovery baseline cleanup deadline exceeded"))
             .and_then(|result| result.map_err(anyhow::Error::from));
-        let _ = tokio::time::timeout(cleanup_budget, admin_pool.close()).await;
+        let _ = tokio::time::timeout_at(cleanup_deadline, admin_pool.close()).await;
         if let Err(error) = &cleanup {
             tracing::error!(database = %database_name, error = %error, "recovery.baseline.cleanup_failed");
         }
         cleanup?;
         result
     }).await.map_err(|error| anyhow::anyhow!("recovery baseline task failed: {error}"))?
+}
+
+async fn drop_baseline_scratch_database(
+    admin_pool: &PgPool,
+    database_name: &str,
+) -> Result<(), sqlx::Error> {
+    // Stop Timescale background workers reconnecting during forced removal.
+    if let Err(error) = sqlx::query(AssertSqlSafe(format!(
+        "ALTER DATABASE \"{database_name}\" ALLOW_CONNECTIONS false"
+    )))
+    .execute(admin_pool)
+    .await
+    {
+        if error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref()
+            == Some("3D000")
+        {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    for attempt in 0..10 {
+        match sqlx::query(AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
+        )))
+        .execute(admin_pool)
+        .await
+        {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                if attempt == 9
+                    || error
+                        .as_database_error()
+                        .and_then(|error| error.code())
+                        .as_deref()
+                        != Some("55006")
+                {
+                    return Err(error);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+    unreachable!("the final drop attempt returns its result")
 }
 
 fn inject_candidate_fault(phase: &str) -> anyhow::Result<()> {
