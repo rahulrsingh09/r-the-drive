@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BatteryHealthSummary,
@@ -10,7 +10,7 @@ import type {
 } from '@panda/types';
 import type { DashboardDataRequirements, WidgetCtx } from '@panda/dashboards';
 
-type QueryResult<T> = { data: T | null | undefined; isFetching: boolean };
+type QueryResult<T> = { data: T | null | undefined; isFetching: boolean; isPlaceholderData?: boolean };
 
 const hooks = vi.hoisted(() => ({
   metricBatch: vi.fn<(...args: unknown[]) => QueryResult<MetricBatchResponse>>(),
@@ -282,5 +282,177 @@ describe('DashboardDataProvider consumer contract', () => {
     expect(hooks.batteryHealth).toHaveBeenLastCalledWith(null);
     expect(hooks.chargingSummary).toHaveBeenLastCalledWith(null, null, null);
     expect(hooks.efficiencySummary).toHaveBeenLastCalledWith(null, null, null, undefined);
+  });
+
+  it('withholds all cached data after the selected vehicle is cleared', () => {
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    const requirements = { ...ALL_SUMMARIES, metrics: [{ metric: 'trip_miles' }] };
+    const view = render(provider(requirements));
+    expect(readSnapshot().metrics).toHaveProperty('trip_miles');
+
+    view.rerender(provider(requirements, { ...CTX, vehicleId: null }));
+
+    expect(readSnapshot()).toEqual(EMPTY_SNAPSHOT);
+  });
+
+  it('clears cached metrics when the last metric requirement is removed', () => {
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    const view = render(provider({ metrics: [{ metric: 'trip_miles' }] }));
+    expect(readSnapshot().metrics).toHaveProperty('trip_miles');
+
+    view.rerender(provider({ metrics: [] }));
+
+    expect(readSnapshot()).toEqual(EMPTY_SNAPSHOT);
+    expect(hooks.metricBatch).toHaveBeenLastCalledWith(CTX.vehicleId, [], CTX.from, CTX.to, false, undefined);
+  });
+
+  it('withholds cross-vehicle placeholders until each source supplies selected-vehicle data', () => {
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    const requirements = { ...ALL_SUMMARIES, metrics: [{ metric: 'trip_miles' }] };
+    const view = render(provider(requirements));
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: true, isPlaceholderData: true });
+    hooks.status.mockReturnValue({ data: CACHED_SUMMARIES.status, isFetching: true, isPlaceholderData: true });
+    hooks.batteryHealth.mockReturnValue({ data: CACHED_SUMMARIES.batteryHealth, isFetching: true, isPlaceholderData: true });
+    hooks.chargingSummary.mockReturnValue({ data: CACHED_SUMMARIES.chargingSummary, isFetching: true, isPlaceholderData: true });
+    hooks.efficiencySummary.mockReturnValue({ data: CACHED_SUMMARIES.efficiencySummary, isFetching: true, isPlaceholderData: true });
+
+    const nextCtx = { ...CTX, vehicleId: 'other-synthetic-vehicle' };
+    view.rerender(provider(requirements, nextCtx));
+    expect(readSnapshot()).toEqual({ ...EMPTY_SNAPSHOT, isRefreshing: true });
+    view.rerender(provider({ ...requirements }, nextCtx));
+    expect(readSnapshot()).toEqual({ ...EMPTY_SNAPSHOT, isRefreshing: true });
+
+    const nextBatch: MetricBatchResponse = {
+      ...BATCH, values: [{ ...BATCH.values[0]!, value: 24 }], series: [],
+    };
+    const nextStatus = { ...CACHED_SUMMARIES.status, vehicle_id: nextCtx.vehicleId, battery_level: 50 };
+    hooks.metricBatch.mockReturnValue({ data: nextBatch, isFetching: false, isPlaceholderData: false });
+    hooks.status.mockReturnValue({ data: nextStatus, isFetching: false, isPlaceholderData: false });
+    view.rerender(provider(requirements, nextCtx));
+    expect(readSnapshot()).toEqual({
+      ...EMPTY_SNAPSHOT,
+      values: { trip_miles: nextBatch.values[0] },
+      metrics: { trip_miles: { value: nextBatch.values[0], series: [] } },
+      status: nextStatus,
+      isRefreshing: true,
+    });
+
+    // A quick switch back must not publish the second vehicle's real result
+    // when its observer now presents that result as placeholder data.
+    hooks.metricBatch.mockReturnValue({ data: nextBatch, isFetching: true, isPlaceholderData: true });
+    hooks.status.mockReturnValue({ data: nextStatus, isFetching: true, isPlaceholderData: true });
+    view.rerender(provider(requirements));
+    expect(readSnapshot().metrics).toEqual({});
+    expect(readSnapshot()).not.toHaveProperty('status');
+  });
+
+  it('preserves same-vehicle placeholders during a date-range change', () => {
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    const requirements = { ...ALL_SUMMARIES, metrics: [{ metric: 'trip_miles' }] };
+    const view = render(provider(requirements));
+    const initial = readSnapshot();
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: true, isPlaceholderData: true });
+    hooks.status.mockReturnValue({ data: CACHED_SUMMARIES.status, isFetching: true, isPlaceholderData: true });
+    hooks.batteryHealth.mockReturnValue({ data: CACHED_SUMMARIES.batteryHealth, isFetching: true, isPlaceholderData: true });
+    hooks.chargingSummary.mockReturnValue({ data: CACHED_SUMMARIES.chargingSummary, isFetching: true, isPlaceholderData: true });
+    hooks.efficiencySummary.mockReturnValue({ data: CACHED_SUMMARIES.efficiencySummary, isFetching: true, isPlaceholderData: true });
+
+    view.rerender(provider(requirements, { ...CTX, from: null, to: null }));
+
+    expect(readSnapshot()).toEqual({ ...initial, isRefreshing: true });
+  });
+
+  it('rejects a status payload that identifies a different vehicle even without a placeholder flag', () => {
+    hooks.status.mockReturnValue({
+      data: { ...CACHED_SUMMARIES.status, vehicle_id: 'other-synthetic-vehicle' },
+      isFetching: false,
+    });
+
+    render(provider({ status: true }));
+
+    expect(readSnapshot()).toEqual(EMPTY_SNAPSHOT);
+  });
+
+  it('does not rerender a metric-only subscriber when just live status changes', () => {
+    const reads = vi.fn();
+    const MetricOnly = React.memo(function MetricOnly() {
+      reads(useDashboardMetric('trip_miles'));
+      return null;
+    });
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    const requirements = { status: true, metrics: [{ metric: 'trip_miles' }] };
+    const content = <MetricOnly />;
+    const view = render(<DashboardDataProvider ctx={CTX} requirements={requirements}>{content}</DashboardDataProvider>);
+    expect(reads).toHaveBeenCalled();
+    reads.mockClear();
+
+    hooks.status.mockReturnValue({
+      data: { ...CACHED_SUMMARIES.status, battery_level: 60 },
+      isFetching: false,
+    });
+    view.rerender(<DashboardDataProvider ctx={CTX} requirements={requirements}>{content}</DashboardDataProvider>);
+
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it('caches an allocating selector within each snapshot', () => {
+    function CountConsumer() {
+      const selection = useDashboardDataSelector((snapshot) => ({ count: snapshot.metrics.size }));
+      return <output data-testid="count">{selection?.count}</output>;
+    }
+    const requirements = { metrics: [{ metric: 'trip_miles' }] };
+    const view = render(
+      <DashboardDataProvider ctx={CTX} requirements={requirements}><CountConsumer /></DashboardDataProvider>,
+    );
+    expect(screen.getByTestId('count')).toHaveTextContent('0');
+
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    view.rerender(
+      <DashboardDataProvider ctx={CTX} requirements={requirements}><CountConsumer /></DashboardDataProvider>,
+    );
+
+    expect(screen.getByTestId('count')).toHaveTextContent('3');
+  });
+
+  it('does not publish a snapshot from a suspended transition to the committed subscribers', () => {
+    const pending = new Promise<void>(() => {});
+    function Pause({ active }: { active: boolean }) {
+      if (active) throw pending;
+      return null;
+    }
+    function ReadCommittedMetric() {
+      const [reads, setReads] = React.useState(0);
+      const metric = useDashboardMetric('trip_miles');
+      return <button type="button" onClick={() => setReads((value) => value + 1)}>
+        Read committed: {metric?.value?.value} ({reads})
+      </button>;
+    }
+    function App() {
+      const [paused, setPaused] = React.useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => React.startTransition(() => setPaused(true))}>Start transition</button>
+          <React.Suspense fallback={<span>Waiting</span>}>
+            <DashboardDataProvider ctx={CTX} requirements={{ metrics: [{ metric: 'trip_miles' }] }}>
+              <ReadCommittedMetric />
+              <Pause active={paused} />
+            </DashboardDataProvider>
+          </React.Suspense>
+        </>
+      );
+    }
+    hooks.metricBatch.mockReturnValue({ data: BATCH, isFetching: false });
+    render(<App />);
+    const reader = screen.getByRole('button', { name: 'Read committed: 0 (0)' });
+    hooks.metricBatch.mockReturnValue({
+      data: { ...BATCH, values: [{ ...BATCH.values[0]!, value: 999 }] },
+      isFetching: false,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start transition' }));
+    expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
+    fireEvent.click(reader);
+
+    expect(screen.getByRole('button', { name: 'Read committed: 0 (1)' })).toBeInTheDocument();
   });
 });

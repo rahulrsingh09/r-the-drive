@@ -10,13 +10,14 @@ import type {
   BatteryHealthSummary,
   ChargingSummary,
   EfficiencySummary,
-  MetricBatchMetricRequest,
+  MetricBatchResponse,
   MetricSeriesPoint,
   MetricValueResponse,
   VehicleStatus,
 } from '@panda/types';
 import { getWidgetForInstance } from './registry';
 import type { DashboardDataRequirements, WidgetInstance, WidgetCtx } from './registry';
+import { createDashboardQueryPlan, mergeDashboardRequirements } from './dashboardQueryPlan';
 
 export type { DashboardDataRequirements } from './registry';
 
@@ -38,18 +39,9 @@ export interface DashboardDataSnapshot {
 }
 
 class DashboardDataStore {
-  private snapshot: DashboardDataSnapshot;
   private readonly listeners = new Set<() => void>();
 
-  constructor() {
-    this.snapshot = {
-      hasProvider: true,
-      values: new Map(),
-      series: new Map(),
-      metrics: new Map(),
-      isRefreshing: false,
-    };
-  }
+  constructor(private snapshot: DashboardDataSnapshot) {}
 
   getSnapshot = () => this.snapshot;
 
@@ -58,11 +50,9 @@ class DashboardDataStore {
     return () => this.listeners.delete(listener);
   };
 
-  setSnapshot(snapshot: DashboardDataSnapshot) {
+  publish(snapshot: DashboardDataSnapshot) {
+    if (this.snapshot === snapshot) return;
     this.snapshot = snapshot;
-  }
-
-  notify() {
     this.listeners.forEach((listener) => listener());
   }
 }
@@ -70,34 +60,50 @@ class DashboardDataStore {
 const DashboardDataContext = React.createContext<DashboardDataStore | null>(null);
 
 export function collectDashboardDataRequirements(widgets: readonly WidgetInstance[]): DashboardDataRequirements {
-  const metricRequests = new Map<string, MetricBatchMetricRequest>();
-  const result: DashboardDataRequirements = {};
+  const declarations = widgets.flatMap((instance) => {
+    const requirements = getWidgetForInstance(instance)?.dataRequirements?.(instance);
+    return requirements ? [requirements] : [];
+  });
+  return mergeDashboardRequirements(declarations);
+}
 
-  for (const instance of widgets) {
-    const definition = getWidgetForInstance(instance);
-    const requirements = definition?.dataRequirements?.(instance);
-    if (!requirements) continue;
+interface QueryObservation<T> {
+  data: T | null | undefined;
+  isPlaceholderData?: boolean;
+}
 
-    result.status ||= requirements.status === true;
-    result.batteryHealth ||= requirements.batteryHealth === true;
-    result.chargingSummary ||= requirements.chargingSummary === true;
-    result.efficiencySummary ||= requirements.efficiencySummary === true;
-    for (const request of requirements.metrics ?? []) {
-      const current = metricRequests.get(request.metric);
-      metricRequests.set(request.metric, {
-        metric: request.metric,
-        include_latest: current
-          ? current.include_latest !== false || request.include_latest !== false
-          : request.include_latest !== false,
-        include_series: current
-          ? current.include_series === true || request.include_series === true
-          : request.include_series === true,
-      });
-    }
+/**
+ * Query observers may carry the preceding key's result while fetching. Only a
+ * committed real result establishes which vehicle that source belongs to.
+ * Range/filter placeholders for that vehicle remain usable.
+ */
+function useVehicleSource<T>(vehicleId: string | null, observation: QueryObservation<T>): T | undefined {
+  const confirmedVehicle = React.useRef<string | null>(null);
+  const { data, isPlaceholderData } = observation;
+  React.useLayoutEffect(() => {
+    if (vehicleId && data != null && !isPlaceholderData) confirmedVehicle.current = vehicleId;
+  }, [vehicleId, data, isPlaceholderData]);
+
+  if (!vehicleId || (isPlaceholderData && confirmedVehicle.current !== vehicleId)) return undefined;
+  return data ?? undefined;
+}
+
+/** Build once per batch response, independently of high-frequency live status. */
+function projectMetrics(batch: MetricBatchResponse | undefined) {
+  const values = new Map<string, MetricValueResponse>();
+  const series = new Map<string, MetricSeriesPoint[]>();
+  const metrics = new Map<string, DashboardMetricData>();
+
+  for (const value of batch?.values ?? []) {
+    values.set(value.metric, value);
+    metrics.set(value.metric, { value, series: [] });
   }
-
-  const metrics = [...metricRequests.values()].sort((left, right) => left.metric.localeCompare(right.metric));
-  return metrics.length > 0 ? { ...result, metrics } : result;
+  for (const entry of batch?.series ?? []) {
+    series.set(entry.metric, entry.points);
+    const value = values.get(entry.metric);
+    metrics.set(entry.metric, value ? { value, series: entry.points } : { series: entry.points });
+  }
+  return { values, series, metrics };
 }
 
 export function DashboardDataProvider({
@@ -109,66 +115,51 @@ export function DashboardDataProvider({
   requirements: DashboardDataRequirements;
   children: React.ReactNode;
 }) {
-  const storeRef = React.useRef<DashboardDataStore | undefined>(undefined);
-  if (!storeRef.current) storeRef.current = new DashboardDataStore();
-  const store = storeRef.current;
-  const metrics = requirements.metrics ?? [];
-  const lifetime = !ctx.from && !ctx.to;
-  const batch = useMetricBatch(ctx.vehicleId, metrics, ctx.from, ctx.to, lifetime, ctx.tripTagFilter);
-  const status = useCurrentVehicleStatus(requirements.status ? ctx.vehicleId : null);
-  const batteryHealth = useBatteryHealth(requirements.batteryHealth ? ctx.vehicleId : null);
+  const plan = React.useMemo(() => createDashboardQueryPlan(ctx, requirements), [
+    ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter,
+    requirements.metrics, requirements.status, requirements.batteryHealth,
+    requirements.chargingSummary, requirements.efficiencySummary,
+  ]);
+  const batch = useMetricBatch(plan.vehicleId, plan.metrics, plan.from, plan.to, plan.lifetime, plan.tripTagFilter);
+  const status = useCurrentVehicleStatus(plan.summaryVehicles.status);
+  const batteryHealth = useBatteryHealth(plan.summaryVehicles.batteryHealth);
   const chargingSummary = useChargingSummary(
-    requirements.chargingSummary ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
+    plan.summaryVehicles.chargingSummary, plan.from, plan.to,
   );
   const efficiencySummary = useEfficiencySummary(
-    requirements.efficiencySummary ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-    ctx.tripTagFilter,
+    plan.summaryVehicles.efficiencySummary, plan.from, plan.to, plan.tripTagFilter,
   );
 
-  const snapshot = React.useMemo<DashboardDataSnapshot>(() => {
-    const values = new Map((batch.data?.values ?? []).map((value) => [value.metric, value]));
-    const series = new Map((batch.data?.series ?? []).map((entry) => [entry.metric, entry.points]));
-    const metrics = new Map<string, DashboardMetricData>();
-    for (const metric of new Set([...values.keys(), ...series.keys()])) {
-      const value = values.get(metric);
-      metrics.set(metric, { ...(value ? { value } : {}), series: series.get(metric) ?? [] });
-    }
-    return {
+  const batchData = useVehicleSource(plan.metrics.length ? plan.vehicleId : null, batch);
+  const statusData = useVehicleSource(plan.summaryVehicles.status, status);
+  const selectedStatus = statusData?.vehicle_id && statusData.vehicle_id !== plan.vehicleId
+    ? undefined
+    : statusData;
+  const healthData = useVehicleSource(plan.summaryVehicles.batteryHealth, batteryHealth);
+  const chargingData = useVehicleSource(plan.summaryVehicles.chargingSummary, chargingSummary);
+  const efficiencyData = useVehicleSource(plan.summaryVehicles.efficiencySummary, efficiencySummary);
+  const metricData = React.useMemo(() => projectMetrics(batchData), [batchData]);
+
+  const snapshot = React.useMemo<DashboardDataSnapshot>(() => Object.freeze({
     hasProvider: true,
-    values,
-    series,
-    metrics,
-    ...(requirements.status && status.data ? { status: status.data } : {}),
-    ...(requirements.batteryHealth && batteryHealth.data ? { batteryHealth: batteryHealth.data } : {}),
-    ...(requirements.chargingSummary && chargingSummary.data ? { chargingSummary: chargingSummary.data } : {}),
-    ...(requirements.efficiencySummary && efficiencySummary.data ? { efficiencySummary: efficiencySummary.data } : {}),
+    ...metricData,
+    ...(selectedStatus ? { status: selectedStatus } : {}),
+    ...(healthData ? { batteryHealth: healthData } : {}),
+    ...(chargingData ? { chargingSummary: chargingData } : {}),
+    ...(efficiencyData ? { efficiencySummary: efficiencyData } : {}),
     isRefreshing: batch.isFetching || status.isFetching || batteryHealth.isFetching
       || chargingSummary.isFetching || efficiencySummary.isFetching,
-    };
-  }, [
-    batch.data,
-    batch.isFetching,
-    status.data,
-    status.isFetching,
-    batteryHealth.data,
-    batteryHealth.isFetching,
-    chargingSummary.data,
-    chargingSummary.isFetching,
-    efficiencySummary.data,
-    efficiencySummary.isFetching,
-    requirements.status,
-    requirements.batteryHealth,
-    requirements.chargingSummary,
-    requirements.efficiencySummary,
+  }), [
+    metricData, selectedStatus, healthData, chargingData, efficiencyData,
+    batch.isFetching, status.isFetching, batteryHealth.isFetching,
+    chargingSummary.isFetching, efficiencySummary.isFetching,
   ]);
 
-  store.setSnapshot(snapshot);
-  React.useEffect(() => {
-    store.notify();
+  // Changing vehicles supplies a new, already-scoped store without remounting
+  // widgets. Existing stores only publish committed renders, before paint.
+  const store = React.useMemo(() => new DashboardDataStore(snapshot), [plan.vehicleId]);
+  React.useLayoutEffect(() => {
+    store.publish(snapshot);
   }, [snapshot, store]);
 
   return <DashboardDataContext.Provider value={store}>{children}</DashboardDataContext.Provider>;
@@ -176,14 +167,23 @@ export function DashboardDataProvider({
 
 export function useDashboardDataSelector<T>(selector: (snapshot: DashboardDataSnapshot) => T): T | undefined {
   const store = React.useContext(DashboardDataContext);
-  const selectorRef = React.useRef(selector);
-  selectorRef.current = selector;
-  const subscribe = React.useCallback((listener: () => void) => store?.subscribe(listener) ?? (() => {}), [store]);
-  const getSnapshot = React.useCallback(
-    () => (store ? selectorRef.current(store.getSnapshot()) : undefined),
+  const subscribe = React.useCallback(
+    (listener: () => void) => store?.subscribe(listener) ?? (() => {}),
     [store],
   );
-  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const getSelection = React.useMemo(() => {
+    let previous: DashboardDataSnapshot | undefined;
+    let selected: T | undefined;
+    return () => {
+      const snapshot = store?.getSnapshot();
+      if (snapshot !== previous) {
+        previous = snapshot;
+        selected = snapshot ? selector(snapshot) : undefined;
+      }
+      return selected;
+    };
+  }, [store, selector]);
+  return React.useSyncExternalStore(subscribe, getSelection, getSelection);
 }
 
 export function useDashboardMetric(metric: string | null) {
