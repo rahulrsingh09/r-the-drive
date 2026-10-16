@@ -1,5 +1,7 @@
 //! Shared, vehicle-scoped trip tag catalog and assignment routes.
 
+mod assignment;
+
 use axum::{
     extract::{Path, State},
     routing::{get, patch, post},
@@ -220,54 +222,9 @@ async fn update_assignments(
     Json(body): Json<AssignmentBody>,
 ) -> Result<Json<AssignmentResponse>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    validate_assignment_ids(&body)?;
-    assert_vehicle_ids(&state.pool, vehicle_id, &body.trip_ids, &body.tag_ids).await?;
-
-    let mut tx = state.pool.begin().await?;
-    match body.mode {
-        AssignmentMode::Add => {
-            sqlx::query(
-                "INSERT INTO panda.trip_tag_assignments (trip_id, tag_id, assigned_by)
-                 SELECT trip_id, tag_id, $3 FROM unnest($1::uuid[]) trip_id CROSS JOIN unnest($2::uuid[]) tag_id
-                 ON CONFLICT (trip_id, tag_id) DO NOTHING",
-            )
-            .bind(&body.trip_ids)
-            .bind(&body.tag_ids)
-            .bind(auth.user_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-        AssignmentMode::Remove => {
-            sqlx::query(
-                "DELETE FROM panda.trip_tag_assignments WHERE trip_id=ANY($1) AND tag_id=ANY($2)",
-            )
-            .bind(&body.trip_ids)
-            .bind(&body.tag_ids)
-            .execute(&mut *tx)
-            .await?;
-        }
-        AssignmentMode::Replace => {
-            sqlx::query("DELETE FROM panda.trip_tag_assignments WHERE trip_id=ANY($1)")
-                .bind(&body.trip_ids)
-                .execute(&mut *tx)
-                .await?;
-            if !body.tag_ids.is_empty() {
-                sqlx::query(
-                    "INSERT INTO panda.trip_tag_assignments (trip_id, tag_id, assigned_by)
-                     SELECT trip_id, tag_id, $3 FROM unnest($1::uuid[]) trip_id CROSS JOIN unnest($2::uuid[]) tag_id",
-                )
-                .bind(&body.trip_ids)
-                .bind(&body.tag_ids)
-                .bind(auth.user_id)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-    }
-    tx.commit().await?;
-    Ok(Json(AssignmentResponse {
-        updated_trip_count: body.trip_ids.len(),
-    }))
+    let plan =
+        assignment::AssignmentPlan::prepare(&state.pool, vehicle_id, auth.user_id, body).await?;
+    Ok(Json(plan.commit(&state.pool).await?))
 }
 
 fn validate_assignment_ids(body: &AssignmentBody) -> Result<(), AppError> {

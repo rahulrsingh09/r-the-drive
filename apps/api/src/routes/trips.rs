@@ -1,3 +1,7 @@
+mod history;
+mod map_projection;
+mod sample_projection;
+mod telemetry;
 use axum::{
     extract::{Path, Query, State},
     routing::get,
@@ -596,19 +600,10 @@ async fn load_trip_power_data(
     ended_at: DateTime<Utc>,
     duration_seconds: i32,
 ) -> Result<TripPowerData, AppError> {
-    let rows = sqlx::query_as::<_, TripPowerTelemetryRow>(
-        r#"SELECT ts, battery_level, battery_capacity_wh, power_kw, regen_power_kw
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND ts>=$3 AND ts<=$4
-             AND (trip_id=$2 OR trip_id IS NULL)
-           ORDER BY ts"#,
-    )
-    .bind(vehicle_id)
-    .bind(trip_id)
-    .bind(started_at)
-    .bind(ended_at)
-    .fetch_all(pool)
-    .await?;
+    let window = telemetry::Window::new(vehicle_id, trip_id, started_at, ended_at);
+    let rows = window
+        .fetch(pool, telemetry::Projection::PowerEvidence)
+        .await?;
 
     Ok(derive_soc_power(&rows, duration_seconds))
 }
@@ -625,100 +620,8 @@ async fn list_trips(
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = parse_tag_filter(&p)?;
     require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
-    let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
-    let page = p.page.unwrap_or(1).max(1);
-    let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
-    let search = p
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
-
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *tx)
-        .await?;
-
-    let rows_sql = format!(
-        "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
-                t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
-                t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
-                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
-                sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
-                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM panda.trip_tag_assignments tta JOIN panda.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
-         FROM panda.trips t \
-         LEFT JOIN panda.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $7 \
-         LEFT JOIN panda.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
-         LEFT JOIN panda.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
-         LEFT JOIN panda.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
-         LEFT JOIN panda.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
-         {} \
-         {} ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
-        trip_search_predicate(6),
-        sql_predicate("t", 8, 9, 10),
-    );
-    let rows = sqlx::query_as::<_, TripRow>(sqlx::AssertSqlSafe(rows_sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(limit)
-        .bind(offset)
-        .bind(search.as_deref())
-        .bind(auth.user_id)
-        .bind(tag_filter.tag_ids.clone())
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&mut *tx)
-        .await?;
-
-    let total_sql = format!(
-        "SELECT COUNT(*) \
-         FROM panda.trips t \
-         LEFT JOIN panda.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5 \
-         LEFT JOIN panda.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
-         LEFT JOIN panda.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
-         LEFT JOIN panda.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
-         LEFT JOIN panda.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
-         AND ($4::text IS NULL OR \
-              COALESCE(sg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(eg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              EXISTS (SELECT 1 FROM panda.trip_tag_assignments tta JOIN panda.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || $4 || '%' ESCAPE '\\'))
-         {}",
-        sql_predicate("t", 6, 7, 8),
-    );
-    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(total_sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(search.as_deref())
-        .bind(auth.user_id)
-        .bind(tag_filter.tag_ids.clone())
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    tx.rollback().await?;
-
-    Ok(Json(serde_json::json!({
-        "data": rows,
-        "items": rows,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "page": (offset / limit) + 1,
-        "per_page": limit
-    })))
+    let plan = history::HistoryPlan::new(vid, auth.user_id, &p, tag_filter);
+    Ok(Json(plan.page(&state.pool, history::Page::new(&p)).await?))
 }
 
 async fn get_tire_pressure_timeline(
@@ -733,65 +636,8 @@ async fn get_tire_pressure_timeline(
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = parse_tag_filter(&p)?;
     require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
-
-    let samples = sqlx::query_as::<_, TirePressureTimelineSample>(
-        r#"SELECT ts, tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3
-           ORDER BY ts"#,
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let trips_sql = format!(
-        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.duration_seconds,
-                  COALESCE(t.duration_seconds::float8 / 60.0,
-                           EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) / 60.0) AS duration_min,
-                  t.distance_miles,
-                  COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place,
-                  COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place,
-                  sa.display_name AS start_address, ea.display_name AS end_address,
-                  COALESCE((SELECT jsonb_agg(jsonb_build_object(
-                      'id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name,
-                      'color_token', tt.color_token, 'created_by', tt.created_by,
-                      'created_at', tt.created_at, 'updated_at', tt.updated_at)
-                      ORDER BY lower(tt.name), tt.id)
-                    FROM panda.trip_tag_assignments tta
-                    JOIN panda.trip_tags tt ON tt.id=tta.tag_id
-                    WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
-           FROM panda.trips t
-           LEFT JOIN panda.trip_user_annotations tua ON tua.trip_id=t.id AND tua.user_id=$4
-           LEFT JOIN panda.geofences sg ON sg.id=COALESCE(tua.start_geofence_id, t.start_geofence_id)
-           LEFT JOIN panda.geofences eg ON eg.id=COALESCE(tua.end_geofence_id, t.end_geofence_id)
-           LEFT JOIN panda.addresses sa ON sa.id=COALESCE(tua.start_address_id, t.start_address_id)
-           LEFT JOIN panda.addresses ea ON ea.id=COALESCE(tua.end_address_id, t.end_address_id)
-           WHERE t.vehicle_id=$1 AND t.started_at <= $3 AND t.ended_at >= $2
-             {} ORDER BY t.started_at"#,
-        sql_predicate("t", 5, 6, 7),
-    );
-    let trips =
-        sqlx::query_as::<_, TirePressureTimelineTrip>(sqlx::AssertSqlSafe(trips_sql.as_str()))
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .bind(auth.user_id)
-            .bind(tag_filter.tag_ids)
-            .bind(tag_filter.match_all)
-            .bind(tag_filter.untagged)
-            .fetch_all(&state.pool)
-            .await?;
-
-    Ok(Json(TirePressureTimelineResponse {
-        vehicle_id: vid,
-        from,
-        to,
-        samples,
-        trips,
-    }))
+    let plan = history::HistoryPlan::new(vid, auth.user_id, &p, tag_filter);
+    Ok(Json(plan.timeline(&state.pool).await?))
 }
 
 async fn get_trip(
@@ -806,29 +652,7 @@ async fn get_trip(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
-    let row = sqlx::query_as::<_, TripRow>(
-        "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
-                t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
-                t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
-                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
-                sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
-                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM panda.trip_tag_assignments tta JOIN panda.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
-         FROM panda.trips t \
-         LEFT JOIN panda.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
-         LEFT JOIN panda.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
-         LEFT JOIN panda.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
-         LEFT JOIN panda.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
-         LEFT JOIN panda.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
-            WHERE t.id=$1 AND t.vehicle_id=$2",
-    )
-    .bind(id)
-    .bind(vid)
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let row = history::trip(&state.pool, vid, id, auth.user_id).await?;
 
     Ok(Json(row))
 }
@@ -845,146 +669,8 @@ async fn get_trip_map(
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = parse_tag_filter(&p)?;
     require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
-    let search = p
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
-
-    let map_sql = format!(
-        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview,
-                  COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM panda.trip_tag_assignments tta JOIN panda.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
-           FROM panda.trips t
-           LEFT JOIN panda.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5
-           LEFT JOIN panda.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id)
-           LEFT JOIN panda.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id)
-           LEFT JOIN panda.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id)
-           LEFT JOIN panda.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id)
-           WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-             {}
-             {}
-           ORDER BY t.started_at DESC"#,
-        trip_search_predicate(4),
-        sql_predicate("t", 6, 7, 8),
-    );
-    let rows = sqlx::query_as::<_, TripMapRow>(sqlx::AssertSqlSafe(map_sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(search.as_deref())
-        .bind(auth.user_id)
-        .bind(tag_filter.tag_ids.clone())
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
-        .await?;
-
-    let mut route_by_id = std::collections::HashMap::<Uuid, Vec<[f64; 2]>>::new();
-    let mut missing = Vec::new();
-    for row in &rows {
-        match row
-            .route_preview
-            .as_ref()
-            .and_then(|value| serde_json::from_value::<Vec<[f64; 2]>>(value.clone()).ok())
-            .filter(|points| points.len() > 1)
-        {
-            Some(points) => {
-                route_by_id.insert(row.id, points);
-            }
-            None => missing.push(row.id),
-        }
-    }
-
-    if !missing.is_empty() {
-        let missing_ids = missing
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        let linked = sqlx::query_as::<_, RouteTelemetryRow>(
-            r#"SELECT trip_id, latitude AS lat, longitude AS lng
-               FROM timeseries.telemetry
-               WHERE trip_id = ANY($1)
-                 AND latitude IS NOT NULL AND longitude IS NOT NULL
-                 AND NOT (latitude = 0 AND longitude = 0)
-               ORDER BY trip_id, ts"#,
-        )
-        .bind(&missing)
-        .fetch_all(&state.pool)
-        .await?;
-
-        let mut points_by_id = std::collections::HashMap::<Uuid, Vec<(f64, f64)>>::new();
-        for point in linked {
-            points_by_id
-                .entry(point.trip_id)
-                .or_default()
-                .push((point.lat, point.lng));
-        }
-
-        for row in rows.iter().filter(|row| missing_ids.contains(&row.id)) {
-            let mut points = points_by_id.remove(&row.id).unwrap_or_default();
-            if points.len() < 2 {
-                let fallback = sqlx::query_as::<_, (f64, f64)>(
-                    r#"SELECT latitude, longitude
-                       FROM timeseries.telemetry
-                       WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3
-                         AND latitude IS NOT NULL AND longitude IS NOT NULL
-                         AND NOT (latitude = 0 AND longitude = 0)
-                       ORDER BY ts LIMIT 5000"#,
-                )
-                .bind(row.vehicle_id)
-                .bind(row.started_at)
-                .bind(row.ended_at)
-                .fetch_all(&state.pool)
-                .await?;
-                points = fallback;
-            }
-
-            let preview = build_route_preview(&points);
-            if preview.len() > 1 {
-                route_by_id.insert(row.id, preview.clone());
-                let preview_json = serde_json::to_value(&preview)
-                    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-                sqlx::query(
-                    "UPDATE panda.trips SET route_preview=$2, route_preview_version=1 WHERE id=$1",
-                )
-                .bind(row.id)
-                .bind(preview_json)
-                .execute(&state.pool)
-                .await?;
-            }
-        }
-    }
-
-    let routes = rows
-        .iter()
-        .filter_map(|row| {
-            route_by_id.remove(&row.id).map(|coordinates| TripMapRoute {
-                trip_id: row.id,
-                coordinates,
-                tags: row.tags.clone(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let missing_route_count = rows.len().saturating_sub(routes.len());
-
-    debug!(
-        vehicle_id = %vid,
-        total_trips = rows.len(),
-        route_count = routes.len(),
-        missing_route_count,
-        "trips.map_data"
-    );
-
-    Ok(Json(TripMapResponse {
-        vehicle_id: vid,
-        from,
-        to,
-        total_trips: rows.len(),
-        missing_route_count,
-        routes,
-    }))
+    let plan = history::HistoryPlan::new(vid, auth.user_id, &p, tag_filter);
+    Ok(Json(plan.map(&state.pool).await?))
 }
 
 async fn get_trip_detail(
@@ -999,29 +685,7 @@ async fn get_trip_detail(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
-    let trip = sqlx::query_as::<_, TripRow>(
-        "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
-                t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
-                t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
-                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
-                sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
-                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM panda.trip_tag_assignments tta JOIN panda.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
-         FROM panda.trips t \
-         LEFT JOIN panda.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
-         LEFT JOIN panda.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
-         LEFT JOIN panda.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
-         LEFT JOIN panda.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
-         LEFT JOIN panda.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
-         WHERE t.id=$1 AND t.vehicle_id=$2",
-    )
-    .bind(id)
-    .bind(vid)
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let trip = history::trip(&state.pool, vid, id, auth.user_id).await?;
 
     let duration_seconds = trip
         .duration_seconds
@@ -1039,55 +703,27 @@ async fn get_trip_detail(
         let cached: Option<String> = conn.get(&cache_key).await.ok();
         if let Some(payload) = cached {
             if let Ok(cached) = serde_json::from_str::<TripDetailCachePayload>(&payload) {
-                let mut samples = cached.samples;
-                let raw_elapsed = raw_outside_elapsed(&samples);
-                merge_weather_samples(&mut samples, &weather_rows);
-                let outside_temperature =
-                    build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
+                let (payload, outside_temperature) =
+                    sample_projection::DetailEvidence::cached(cached).project(&trip, &weather_rows);
                 debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.detail_cache");
                 return Ok(Json(TripDetailResponse {
                     trip,
                     sample_interval_seconds,
-                    samples,
-                    power: cached.power,
+                    samples: payload.samples,
+                    power: payload.power,
                     outside_temperature,
                 }));
             }
         }
     }
 
-    let rows = sqlx::query_as::<_, DetailSampleRow>(
-        r#"SELECT time_bucket(make_interval(secs => $5), ts) AS bucket_ts,
-                  EXTRACT(EPOCH FROM (time_bucket(make_interval(secs => $5), ts) - $3))::int AS elapsed_s,
-                  last(latitude, ts) FILTER (WHERE latitude IS NOT NULL AND latitude <> 0) AS lat,
-                  last(longitude, ts) FILTER (WHERE longitude IS NOT NULL AND longitude <> 0) AS lng,
-                  last(altitude_m, ts) AS altitude_m,
-                  avg(speed_mph) AS speed_mph,
-                  avg(power_kw) AS power_kw,
-                  avg(regen_power_kw) AS regen_power_kw,
-                  avg(battery_level) AS battery_level,
-                  avg(outside_temp_c) AS outside_temp_c,
-                  avg(cabin_temp_c) AS cabin_temp_c,
-                  avg(driver_temp_c) AS driver_temp_c,
-                  bool_or(hvac_active) AS hvac_active,
-                  avg(tire_fl_psi) AS tire_fl_psi,
-                  avg(tire_fr_psi) AS tire_fr_psi,
-                  avg(tire_rl_psi) AS tire_rl_psi,
-                  avg(tire_rr_psi) AS tire_rr_psi
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND ts>=$3 AND ts<=$4
-             AND (trip_id=$2 OR trip_id IS NULL)
-           GROUP BY 1
-           ORDER BY 1
-           LIMIT 2000"#,
-    )
-    .bind(vid)
-    .bind(id)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .bind(sample_interval_seconds)
-    .fetch_all(&state.pool)
-    .await?;
+    let window = telemetry::Window::new(vid, id, trip.started_at, trip.ended_at);
+    let rows = window
+        .fetch(
+            &state.pool,
+            telemetry::Projection::Detail(sample_interval_seconds),
+        )
+        .await?;
 
     let power_data = load_trip_power_data(
         &state.pool,
@@ -1098,39 +734,10 @@ async fn get_trip_detail(
         duration_seconds,
     )
     .await?;
-    let mut samples = TripDetailSamples::default();
-    for row in rows {
-        samples.elapsed_s.push(row.elapsed_s);
-        samples.lat.push(row.lat);
-        samples.lng.push(row.lng);
-        samples.altitude_m.push(row.altitude_m);
-        samples.speed_mph.push(row.speed_mph);
-        samples.power_kw.push(row.power_kw);
-        samples.regen_power_kw.push(row.regen_power_kw);
-        samples
-            .estimated_net_power_kw
-            .push(power_data.estimated_at(row.bucket_ts));
-        samples.battery_level.push(row.battery_level);
-        samples.outside_temp_c.push(row.outside_temp_c);
-        samples.cabin_temp_c.push(row.cabin_temp_c);
-        samples.driver_temp_c.push(row.driver_temp_c);
-        samples.hvac_active.push(row.hvac_active);
-        samples.tire_fl_psi.push(row.tire_fl_psi);
-        samples.tire_fr_psi.push(row.tire_fr_psi);
-        samples.tire_rl_psi.push(row.tire_rl_psi);
-        samples.tire_rr_psi.push(row.tire_rr_psi);
-    }
-
-    let raw_elapsed = raw_outside_elapsed(&samples);
-    merge_weather_samples(&mut samples, &weather_rows);
-    let outside_temperature =
-        build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
+    let (payload, outside_temperature) =
+        sample_projection::DetailEvidence::sampled(rows, power_data).project(&trip, &weather_rows);
 
     if let Some(conn) = redis_conn.as_mut() {
-        let payload = TripDetailCachePayload {
-            samples: samples.clone(),
-            power: power_data.metadata.clone(),
-        };
         if let Ok(payload) = serde_json::to_string(&payload) {
             let _: Result<(), redis::RedisError> =
                 conn.set_ex(&cache_key, payload, 24 * 60 * 60).await;
@@ -1142,15 +749,15 @@ async fn get_trip_detail(
         vehicle_id = %vid,
         cache_hit = false,
         sample_interval_seconds,
-        point_count = samples.elapsed_s.len(),
+        point_count = payload.samples.elapsed_s.len(),
         "trips.detail_data"
     );
 
     Ok(Json(TripDetailResponse {
         trip,
         sample_interval_seconds,
-        samples,
-        power: power_data.metadata,
+        samples: payload.samples,
+        power: payload.power,
         outside_temperature,
     }))
 }
@@ -1274,23 +881,9 @@ async fn get_track(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
-    let trip = sqlx::query_as::<_, TripWindowRow>(
-        "SELECT started_at, ended_at, duration_seconds FROM panda.trips WHERE id=$1 AND vehicle_id=$2"
-    )
-    .bind(id)
-    .bind(vid)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let trip = telemetry::Window::load(&state.pool, vid, id, true).await?;
 
-    let duration_min = trip.duration_seconds.unwrap_or(0) / 60;
-    let bucket = if duration_min < 15 {
-        "1 second"
-    } else if duration_min < 60 {
-        "5 seconds"
-    } else {
-        "15 seconds"
-    };
+    let (bucket, projection) = trip.track();
 
     let cache_key = format!("trips:track:v2:{vid}:{id}:{bucket}");
     let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
@@ -1305,36 +898,7 @@ async fn get_track(
         }
     }
 
-    // Dynamically pick bucket — use 1hr agg for very long trips as fallback
-    let points: Vec<TrackPoint> = match bucket {
-        "1 second" => sqlx::query_as::<_, TrackPoint>(
-            "SELECT ts, latitude AS lat, longitude AS lng, speed_mph, altitude_m \
-             FROM timeseries.telemetry \
-             WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL \
-               AND longitude IS NOT NULL \
-               AND NOT (latitude = 0 AND longitude = 0) \
-             ORDER BY ts LIMIT 5000",
-        )
-        .bind(vid)
-        .bind(trip.started_at)
-        .bind(trip.ended_at)
-        .fetch_all(&state.pool)
-        .await?,
-        _ => sqlx::query_as::<_, TrackPoint>(
-            r#"SELECT time_bucket('15 seconds'::interval, ts) AS ts, avg(latitude) AS lat, avg(longitude) AS lng,
-                      avg(speed_mph) AS speed_mph, avg(altitude_m) AS altitude_m
-               FROM timeseries.telemetry
-               WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL
-                 AND longitude IS NOT NULL
-                 AND NOT (latitude = 0 AND longitude = 0)
-               GROUP BY 1 ORDER BY 1 LIMIT 5000"#,
-        )
-        .bind(vid)
-        .bind(trip.started_at)
-        .bind(trip.ended_at)
-        .fetch_all(&state.pool)
-        .await?,
-    };
+    let points: Vec<TrackPoint> = trip.fetch(&state.pool, projection).await?;
 
     if let Some(conn) = redis_conn.as_mut() {
         if let Ok(payload) = serde_json::to_string(&points) {
@@ -1360,32 +924,11 @@ async fn get_speed_profile(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
-    let trip = sqlx::query_as::<_, TripWindowRow>(
-        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM panda.trips WHERE id=$1 AND vehicle_id=$2"
-    )
-    .bind(id)
-    .bind(vid)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let trip = telemetry::Window::load(&state.pool, vid, id, false).await?;
 
-    let points = sqlx::query_as::<_, SpeedProfileRow>(
-        r#"SELECT EXTRACT(EPOCH FROM (time_bucket('10 seconds'::interval, ts) - $3))::float8 AS elapsed_s,
-                  avg(speed_mph) AS speed_mph
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1
-             AND ts>=$3 AND ts<=$4
-             AND ($2::uuid IS NULL OR trip_id=$2 OR trip_id IS NULL)
-             AND speed_mph IS NOT NULL
-           GROUP BY 1
-           ORDER BY 1"#
-    )
-    .bind(vid)
-    .bind(id)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .fetch_all(&state.pool)
-    .await?;
+    let points: Vec<SpeedProfileRow> = trip
+        .fetch(&state.pool, telemetry::Projection::Speed)
+        .await?;
 
     Ok(Json(serde_json::json!(points)))
 }
@@ -1402,26 +945,11 @@ async fn get_elevation_profile(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
-    let trip = sqlx::query_as::<_, TripWindowRow>(
-        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM panda.trips WHERE id=$1 AND vehicle_id=$2"
-    )
-    .bind(id)
-    .bind(vid)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let trip = telemetry::Window::load(&state.pool, vid, id, false).await?;
 
-    let points = sqlx::query_as::<_, ElevationPointRow>(
-        r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts, avg(altitude_m) AS value
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND altitude_m IS NOT NULL
-           GROUP BY 1 ORDER BY 1"#,
-    )
-    .bind(vid)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .fetch_all(&state.pool)
-    .await?;
+    let points: Vec<ElevationPointRow> = trip
+        .fetch(&state.pool, telemetry::Projection::Elevation)
+        .await?;
 
     Ok(Json(serde_json::json!(points)))
 }
@@ -1469,33 +997,11 @@ async fn power_profile_response(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
-    let trip = sqlx::query_as::<_, TripWindowRow>(
-        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM panda.trips WHERE id=$1 AND vehicle_id=$2"
-    )
-    .bind(trip_id)
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let trip = telemetry::Window::load(&state.pool, vehicle_id, trip_id, false).await?;
 
-    let points = sqlx::query_as::<_, PowerProfileRow>(
-        r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts,
-                  avg(power_kw) AS power_kw,
-                  avg(regen_power_kw) AS regen_power_kw,
-                  avg(speed_mph) AS speed_mph,
-                  avg(battery_level) AS battery_level
-           FROM timeseries.telemetry
-            WHERE vehicle_id=$1
-              AND ts>=$3 AND ts<=$4
-              AND (trip_id=$2 OR trip_id IS NULL)
-           GROUP BY 1 ORDER BY 1"#,
-    )
-    .bind(vehicle_id)
-    .bind(trip_id)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .fetch_all(&state.pool)
-    .await?;
+    let points: Vec<PowerProfileRow> = trip
+        .fetch(&state.pool, telemetry::Projection::Power)
+        .await?;
 
     let power_data = load_trip_power_data(
         &state.pool,
@@ -1506,20 +1012,7 @@ async fn power_profile_response(
         (trip.ended_at - trip.started_at).num_seconds().max(1) as i32,
     )
     .await?;
-    let points = points
-        .into_iter()
-        .map(|point| {
-            serde_json::json!({
-                "ts": point.ts,
-                "power_kw": point.power_kw,
-                "regen_power_kw": point.regen_power_kw,
-                "speed_mph": point.speed_mph,
-                "battery_level": point.battery_level,
-                "estimated_net_power_kw": power_data.estimated_at(point.ts),
-                "power_source": power_data.source(),
-            })
-        })
-        .collect::<Vec<_>>();
+    let points = sample_projection::powered(points, |point| point.ts, &power_data);
 
     Ok(Json(serde_json::json!(points)))
 }
@@ -1532,41 +1025,11 @@ async fn trip_series_response(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
-    let trip = sqlx::query_as::<_, TripWindowRow>(
-        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM panda.trips WHERE id=$1 AND vehicle_id=$2",
-    )
-    .bind(trip_id)
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let trip = telemetry::Window::load(&state.pool, vehicle_id, trip_id, false).await?;
 
-    let points = sqlx::query_as::<_, TripSeriesRow>(
-        r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts,
-                  avg(speed_mph) AS speed_mph,
-                  avg(power_kw) AS power_kw,
-                  avg(regen_power_kw) AS regen_power_kw,
-                  avg(battery_level) AS battery_level,
-                  avg(outside_temp_c) AS outside_temp_c,
-                  avg(cabin_temp_c) AS cabin_temp_c,
-                  avg(driver_temp_c) AS driver_temp_c,
-                  bool_or(hvac_active) AS hvac_active,
-                  avg(tire_fl_psi) AS tire_fl_psi,
-                  avg(tire_fr_psi) AS tire_fr_psi,
-                  avg(tire_rl_psi) AS tire_rl_psi,
-                  avg(tire_rr_psi) AS tire_rr_psi
-           FROM timeseries.telemetry
-                WHERE vehicle_id=$1
-                  AND ts>=$3 AND ts<=$4
-                  AND (trip_id=$2 OR trip_id IS NULL)
-           GROUP BY 1 ORDER BY 1"#,
-    )
-    .bind(vehicle_id)
-    .bind(trip_id)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .fetch_all(&state.pool)
-    .await?;
+    let points: Vec<TripSeriesRow> = trip
+        .fetch(&state.pool, telemetry::Projection::Series)
+        .await?;
 
     let power_data = load_trip_power_data(
         &state.pool,
@@ -1577,28 +1040,7 @@ async fn trip_series_response(
         (trip.ended_at - trip.started_at).num_seconds().max(1) as i32,
     )
     .await?;
-    let points = points
-        .into_iter()
-        .map(|point| {
-            serde_json::json!({
-                "ts": point.ts,
-                "speed_mph": point.speed_mph,
-                "power_kw": point.power_kw,
-                "regen_power_kw": point.regen_power_kw,
-                "battery_level": point.battery_level,
-                "outside_temp_c": point.outside_temp_c,
-                "cabin_temp_c": point.cabin_temp_c,
-                "driver_temp_c": point.driver_temp_c,
-                "hvac_active": point.hvac_active,
-                "tire_fl_psi": point.tire_fl_psi,
-                "tire_fr_psi": point.tire_fr_psi,
-                "tire_rl_psi": point.tire_rl_psi,
-                "tire_rr_psi": point.tire_rr_psi,
-                "estimated_net_power_kw": power_data.estimated_at(point.ts),
-                "power_source": power_data.source(),
-            })
-        })
-        .collect::<Vec<_>>();
+    let points = sample_projection::powered(points, |point| point.ts, &power_data);
 
     Ok(Json(serde_json::json!(points)))
 }
