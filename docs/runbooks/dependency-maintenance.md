@@ -39,6 +39,31 @@ The [dated dependency review](../dependency-review-2026-10-05.md) records source
 - Run `node --test scripts/check-dependency-audits.test.mjs scripts/image-size-security.test.mjs` after a frozen install. Parser tests cover both CommonJS/ESM public buffer and file APIs, including zero/undersized/truncated ICNS, HEIF and JXL data and valid image dimensions.
 - Dependency install scripts are restricted to esbuild's binary setup. The unnecessary core-js banner/cache postinstall is explicitly denied. Re-review any change to the allowlist; do not auto-approve newly introduced scripts.
 
+## Rust patch baseline — 2026-10-16
+
+The API lockfile now selects `quinn-proto 0.11.18` (previously 0.11.16) and
+`rustls 0.23.46` (previously 0.23.45). RustSec's published version ranges
+confirm these releases cover the following advisories:
+
+- Quinn: [RUSTSEC-2026-0338](https://rustsec.org/advisories/RUSTSEC-2026-0338.html),
+  [0339](https://rustsec.org/advisories/RUSTSEC-2026-0339.html),
+  [0340](https://rustsec.org/advisories/RUSTSEC-2026-0340.html),
+  [0341](https://rustsec.org/advisories/RUSTSEC-2026-0341.html), and
+  [0342](https://rustsec.org/advisories/RUSTSEC-2026-0342.html). The fixes span
+  0.11.17 and 0.11.18; the selected version includes both.
+- Rustls: [RUSTSEC-2026-0346](https://rustsec.org/advisories/RUSTSEC-2026-0346.html),
+  [0347](https://rustsec.org/advisories/RUSTSEC-2026-0347.html),
+  [0348](https://rustsec.org/advisories/RUSTSEC-2026-0348.html), and
+  [0349](https://rustsec.org/advisories/RUSTSEC-2026-0349.html), each listing
+  0.23.46 as the first patched release.
+
+The accompanying lock resolution uses `getrandom 0.3.4` for `tempfile 3.27.0`,
+within its declared `>=0.3.0, <0.5` requirement. Direct dependency requirements
+and the audit exception register are unchanged. This scoped patch does not
+establish a clean security audit: the existing RSA exception and npm findings
+recorded above still require their scheduled review. Preserve raw scan results
+and distinguish a policy pass with exceptions from a scan without findings.
+
 ## Maintenance register
 
 This register records accepted maintenance debt that is not release-blocking.
