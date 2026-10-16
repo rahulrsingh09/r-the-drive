@@ -36,6 +36,8 @@ use crate::ingestion::{charge_detector::ChargeDetectorState, trip_detector::Trip
 
 #[cfg(test)]
 mod durable_collector_tests;
+#[cfg(test)]
+mod telemetry_contract_tests;
 
 mod charge_capture;
 mod durable_charge_restart;
