@@ -1,0 +1,1656 @@
+[
+  {
+    "capacity_bits": "bff0000000000000",
+    "result": null
+  },
+  {
+    "capacity_bits": "0000000000000000",
+    "result": null
+  },
+  {
+    "capacity_bits": "4043ffdf3b645a1d",
+    "result": null
+  },
+  {
+    "capacity_bits": "4044000000000000",
+    "result": 40.0
+  },
+  {
+    "capacity_bits": "4072c00000000000",
+    "result": 300.0
+  },
+  {
+    "capacity_bits": "4072c004189374bc",
+    "result": null
+  },
+  {
+    "capacity_bits": "408f400000000000",
+    "result": null
+  },
+  {
+    "capacity_bits": "408f40020c49ba5e",
+    "result": null
+  },
+  {
+    "capacity_bits": "40e3880000000000",
+    "result": 40.0
+  },
+  {
+    "capacity_bits": "41124f8000000000",
+    "result": 300.0
+  },
+  {
+    "capacity_bits": "41124f8400000000",
+    "result": null
+  },
+  {
+    "capacity_bits": "7ff8000000000000",
+    "result": null
+  },
+  {
+    "capacity_bits": "7ff0000000000000",
+    "result": null
+  },
+  {
+    "kind": null,
+    "power": null,
+    "result": null,
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": -1.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": 0.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": 19.999,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": 20.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": 300.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": null,
+    "result": null,
+    "vendor": null
+  },
+  {
+    "kind": null,
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": -1.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": 0.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": 19.999,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": 20.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": 300.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": null,
+    "power": null,
+    "result": null,
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": null,
+    "power": -1.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": null,
+    "power": 0.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": null,
+    "power": 19.999,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": null,
+    "power": 20.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": null,
+    "power": 300.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": null,
+    "power": null,
+    "result": null,
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": null,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": null,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "dc",
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "dc",
+    "power": null,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "dc",
+    "power": null,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": null,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": null,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": " DCFC ",
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": " DCFC ",
+    "power": null,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": " DCFC ",
+    "power": null,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": null,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": -1.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": 0.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": 19.999,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": 20.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": 300.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": null,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "ac_l2",
+    "power": null,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": -1.0,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": 0.0,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": 19.999,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": 20.0,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": 300.0,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": null,
+    "result": "AC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "ac_l2",
+    "power": null,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": -1.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": 0.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": 19.999,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": 20.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": 300.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "ac_l2",
+    "power": null,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": null,
+    "result": null,
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": -1.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": 0.0,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": 19.999,
+    "result": "AC",
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": null,
+    "result": null,
+    "vendor": null
+  },
+  {
+    "kind": "other",
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": -1.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": 0.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": 19.999,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": null,
+    "result": "DC",
+    "vendor": " TESLA "
+  },
+  {
+    "kind": "other",
+    "power": null,
+    "result": null,
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": -1.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": 0.0,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": 19.999,
+    "result": "AC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": 20.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": 300.0,
+    "result": "DC",
+    "vendor": "Synthetic"
+  },
+  {
+    "kind": "other",
+    "power": null,
+    "result": null,
+    "vendor": "Synthetic"
+  },
+  {
+    "cap": 22.0,
+    "count": 0,
+    "end_seconds": -60,
+    "result": []
+  },
+  {
+    "cap": 300.0,
+    "count": 0,
+    "end_seconds": -60,
+    "result": []
+  },
+  {
+    "cap": 22.0,
+    "count": 0,
+    "end_seconds": 0,
+    "result": []
+  },
+  {
+    "cap": 300.0,
+    "count": 0,
+    "end_seconds": 0,
+    "result": []
+  },
+  {
+    "cap": 22.0,
+    "count": 0,
+    "end_seconds": 60,
+    "result": []
+  },
+  {
+    "cap": 300.0,
+    "count": 0,
+    "end_seconds": 60,
+    "result": []
+  },
+  {
+    "cap": 22.0,
+    "count": 0,
+    "end_seconds": 600,
+    "result": []
+  },
+  {
+    "cap": 300.0,
+    "count": 0,
+    "end_seconds": 600,
+    "result": []
+  },
+  {
+    "cap": 22.0,
+    "count": 1,
+    "end_seconds": -60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 1,
+    "end_seconds": -60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 1,
+    "end_seconds": 0,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 1,
+    "end_seconds": 0,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 1,
+    "end_seconds": 60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 1,
+    "end_seconds": 60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 1,
+    "end_seconds": 600,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 1,
+    "end_seconds": 600,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 2,
+    "end_seconds": -60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 2,
+    "end_seconds": -60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 2,
+    "end_seconds": 0,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 2,
+    "end_seconds": 0,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 2,
+    "end_seconds": 60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 2,
+    "end_seconds": 60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 2,
+    "end_seconds": 600,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 2,
+    "end_seconds": 600,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 3,
+    "end_seconds": -60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 3,
+    "end_seconds": -60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 3,
+    "end_seconds": 0,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 3,
+    "end_seconds": 0,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.016666666666666666,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 3,
+    "end_seconds": 60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 3,
+    "end_seconds": 60,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 22.0,
+    "count": 3,
+    "end_seconds": 600,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 22.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 3.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "cap": 300.0,
+    "count": 3,
+    "end_seconds": 600,
+    "result": [
+      {
+        "charge_rate_kw": 0.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 0.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 20.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 1.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 50.0
+      },
+      {
+        "charge_rate_kw": 300.0,
+        "charger_type": "dc",
+        "minutes_elapsed": 3.0,
+        "power_method": "recorded",
+        "sample_source": "synthetic",
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "soc": 80.0
+      }
+    ]
+  },
+  {
+    "daily": [
+      {
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "session_count": 1,
+        "total_energy_kwh": 0.0
+      },
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 5.0
+      }
+    ],
+    "energies": [
+      null,
+      -2.0,
+      5.0
+    ],
+    "reverse": false,
+    "sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "energy_added_kwh": -2.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000065",
+        "started_at": "2026-01-01T00:00:01Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": null,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "started_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 5.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000066",
+        "started_at": "2026-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "daily": [
+      {
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "session_count": 1,
+        "total_energy_kwh": 1.0
+      },
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 1e+16
+      }
+    ],
+    "energies": [
+      1e+16,
+      1.0,
+      1.0
+    ],
+    "reverse": false,
+    "sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "energy_added_kwh": 1.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000065",
+        "started_at": "2026-01-01T00:00:01Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 1e+16,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "started_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 1.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000066",
+        "started_at": "2026-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "daily": [
+      {
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "session_count": 1,
+        "total_energy_kwh": 0.0
+      },
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 2.0
+      }
+    ],
+    "energies": [
+      0.0,
+      -0.0,
+      2.0
+    ],
+    "reverse": false,
+    "sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "energy_added_kwh": -0.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000065",
+        "started_at": "2026-01-01T00:00:01Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 0.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "started_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 2.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000066",
+        "started_at": "2026-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "daily": [
+      {
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "session_count": 1,
+        "total_energy_kwh": 0.0
+      },
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 5.0
+      }
+    ],
+    "energies": [
+      null,
+      -2.0,
+      5.0
+    ],
+    "reverse": true,
+    "sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "energy_added_kwh": -2.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000065",
+        "started_at": "2026-01-01T00:00:01Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": null,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "started_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 5.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000066",
+        "started_at": "2026-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "daily": [
+      {
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "session_count": 1,
+        "total_energy_kwh": 1.0
+      },
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 1e+16
+      }
+    ],
+    "energies": [
+      1e+16,
+      1.0,
+      1.0
+    ],
+    "reverse": true,
+    "sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "energy_added_kwh": 1.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000065",
+        "started_at": "2026-01-01T00:00:01Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 1e+16,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "started_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 1.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000066",
+        "started_at": "2026-01-01T00:00:02Z"
+      }
+    ]
+  },
+  {
+    "daily": [
+      {
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "session_count": 1,
+        "total_energy_kwh": 0.0
+      },
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 2.0
+      }
+    ],
+    "energies": [
+      0.0,
+      -0.0,
+      2.0
+    ],
+    "reverse": true,
+    "sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2025-12-31",
+        "day_start": "2025-12-31T00:00:00Z",
+        "energy_added_kwh": -0.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000065",
+        "started_at": "2026-01-01T00:00:01Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 0.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000064",
+        "started_at": "2026-01-01T00:00:00Z"
+      },
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": 2.0,
+        "location_name": null,
+        "session_id": "00000000-0000-0000-0000-000000000066",
+        "started_at": "2026-01-01T00:00:02Z"
+      }
+    ]
+  }
+]

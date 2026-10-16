@@ -2258,3 +2258,7 @@ async fn load_curve_analysis_samples(
         cap_kw,
     ))
 }
+
+#[cfg(test)]
+#[path = "__tests__/charging_workflow.rs"]
+mod workflow_contract_tests;
