@@ -5,6 +5,13 @@ export const CHART_EXPORT_KIND = 'panda-chart' as const;
 export const CHART_EXPORT_VERSION = 1 as const;
 export const MAX_CHART_EXPORT_BYTES = 256 * 1024;
 
+type ChartImportDraft = Omit<ChartRecord, 'id' | 'ownerId' | 'baselineRevision'>;
+const ChartImportDraftSchema = ChartRecordSchema.omit({
+  id: true,
+  ownerId: true,
+  baselineRevision: true,
+});
+
 function portableChartDocument(record: ChartRecord): PortableChartDocument {
   return {
     kind: CHART_EXPORT_KIND,
@@ -32,33 +39,33 @@ export function parseChartJson(text: string): PortableChartDocument {
     slug: parsed.chart.slug,
     name: parsed.chart.name,
     enabled: parsed.chart.enabled,
-    definition: parsed.chart.definition as unknown as ChartDefinitionV1,
+    definition: parsed.chart.definition as ChartDefinitionV1,
   };
   if (parsed.chart.description !== undefined) chart.description = parsed.chart.description;
   return { kind: parsed.kind, version: parsed.version, chart };
 }
 
 export function importChartJson(text: string): Omit<ChartRecord, 'id' | 'ownerId' | 'baselineRevision'> {
-  const document = parseChartJson(text);
-  const record = {
-    id: '00000000-0000-0000-0000-000000000000',
-    ownerId: null,
-    slug: document.chart.slug,
-    name: document.chart.name,
-    ...(document.chart.description ? { description: document.chart.description } : {}),
+  return toChartImportDraft(parseChartJson(text).chart);
+}
+
+function toChartImportDraft(chart: PortableChartDocument['chart']): ChartImportDraft {
+  const parsed = ChartImportDraftSchema.parse({
+    slug: chart.slug,
+    name: chart.name,
+    ...(chart.description ? { description: chart.description } : {}),
     isDefault: false,
     isLocked: false,
-    isEnabled: document.chart.enabled,
-    config: document.chart.definition as unknown as ChartDefinitionV1,
-  } satisfies ChartRecord;
-  const parsed = ChartRecordSchema.parse(record);
-  const draft: Omit<ChartRecord, 'id' | 'ownerId' | 'baselineRevision'> = {
+    isEnabled: chart.enabled,
+    config: chart.definition,
+  });
+  const draft: ChartImportDraft = {
     slug: parsed.slug,
     name: parsed.name,
     isDefault: parsed.isDefault,
     isLocked: parsed.isLocked,
     isEnabled: parsed.isEnabled,
-    config: parsed.config as unknown as ChartDefinitionV1,
+    config: parsed.config as ChartDefinitionV1,
   };
   if (parsed.description !== undefined) draft.description = parsed.description;
   return draft;

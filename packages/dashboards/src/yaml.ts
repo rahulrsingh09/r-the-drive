@@ -1,14 +1,14 @@
 import { parse, stringify } from 'yaml';
 import { v4 as uuidv4 } from 'uuid';
-import { DashboardConfigSchema, SCHEMA_VERSION } from './schema';
+import { SCHEMA_VERSION } from './schema';
 import { sanitizeDashboardConfig } from './layout';
 import type { DashboardConfig, DashboardExport } from './schema';
 import { normalizeDashboardConfig } from './api';
 
 const YAML_HEADER = `# Panda dashboard v${SCHEMA_VERSION}\n`;
 
-export function exportDashboardYaml(config: DashboardConfig): string {
-  const payload: DashboardExport = {
+function toDashboardExport(config: DashboardConfig): DashboardExport {
+  return {
     schemaVersion: config.schemaVersion,
     slug: config.slug,
     name: config.name,
@@ -16,32 +16,35 @@ export function exportDashboardYaml(config: DashboardConfig): string {
     controls: config.controls,
     widgets: config.widgets,
   };
-  return YAML_HEADER + stringify(payload, { indent: 2 });
 }
 
-export function downloadDashboardYaml(config: DashboardConfig) {
-  const yaml = exportDashboardYaml(config);
-  const blob = new Blob([yaml], { type: 'text/yaml' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${config.slug}.yaml`;
-  a.click();
-  URL.revokeObjectURL(url);
+export function exportDashboardYaml(config: DashboardConfig): string {
+  return YAML_HEADER + stringify(toDashboardExport(config), { indent: 2 });
 }
 
-/** Parse YAML text → DashboardConfig ready to POST (new id, no owner). */
-export function importDashboardYaml(text: string): DashboardConfig {
-  const raw = parse(text) as unknown;
-  const partial = raw as DashboardExport;
-
-  const config: DashboardConfig = {
-    ...partial,
+function createImportedDashboard(document: unknown): DashboardConfig {
+  return sanitizeDashboardConfig({
+    ...(document as DashboardExport),
     id: uuidv4(),
     isDefault: false,
     isLocked: false,
     ownerId: null,
-  };
+  });
+}
 
-  return normalizeDashboardConfig(sanitizeDashboardConfig(DashboardConfigSchema.parse(config)));
+/** Parse YAML text → DashboardConfig ready to POST (new id, no owner). */
+export function importDashboardYaml(text: string): DashboardConfig {
+  const document: unknown = parse(text);
+  const validated = createImportedDashboard(document);
+  return normalizeDashboardConfig(validated);
+}
+
+export function downloadDashboardYaml(config: DashboardConfig) {
+  const blob = new Blob([exportDashboardYaml(config)], { type: 'text/yaml' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${config.slug}.yaml`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
