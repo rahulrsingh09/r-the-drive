@@ -274,11 +274,16 @@ async fn energy_complete_http_database_contract() {
             endpoint.to_string()
         };
         for (label, query, bytes) in [
-            ("defaults", format!("vehicle_id={}", id(10)), 0),
+            ("defaults", format!("vehicle_id={}", id(11)), 0),
             ("missing-vehicle", String::new(), 0),
             ("bad-date", format!("vehicle_id={}&from=bad", id(10)), 0),
             ("body-limit", format!("vehicle_id={}", id(10)), 65537),
         ] {
+            let path = if endpoint == "idle-drain" && label == "defaults" {
+                format!("vehicles/{}/idle-drain", id(11))
+            } else {
+                path.clone()
+            };
             responses.push(json!({"endpoint":endpoint,"case":label,"response":request(&app,Some(&tokens[0]),&format!("/v1/{path}?{query}"),bytes).await}));
         }
         if endpoint.starts_with("efficiency/") {
@@ -389,4 +394,15 @@ async fn energy_original_auth_tests() {
         )));
     }
     fixture.cleanup().await;
+}
+
+#[test]
+fn energy_default_time_windows() {
+    for days in [7, 30, 90, 180, 365, 730] {
+        let before = Utc::now();
+        let (from, to) = super::resolve_time_bounds(None, None, false, days);
+        let after = Utc::now();
+        assert!(from >= before - Duration::days(days) && from <= after - Duration::days(days));
+        assert!(to >= before && to <= after);
+    }
 }

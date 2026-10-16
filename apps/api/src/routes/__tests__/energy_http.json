@@ -25158,117 +25158,16 @@
       "case": "defaults",
       "endpoint": "battery/capacity",
       "response": {
-        "body": [
-          {
-            "ts": "2026-05-01T01:00:00Z",
-            "value": 129990.0
-          },
-          {
-            "ts": "2026-05-01T04:00:00Z",
-            "value": 129960.0
-          },
-          {
-            "ts": "2026-05-01T08:00:00Z",
-            "value": 129920.0
-          },
-          {
-            "ts": "2026-05-01T13:00:00Z",
-            "value": 129870.0
-          },
-          {
-            "ts": "2026-05-01T15:00:00Z",
-            "value": 129850.0
-          },
-          {
-            "ts": "2026-05-01T20:00:00Z",
-            "value": 129800.0
-          },
-          {
-            "ts": "2026-05-02T04:00:00Z",
-            "value": 129720.0
-          },
-          {
-            "ts": "2026-05-02T09:00:00Z",
-            "value": 129670.0
-          },
-          {
-            "ts": "2026-05-02T10:00:00Z",
-            "value": 129660.0
-          },
-          {
-            "ts": "2026-05-02T21:00:00Z",
-            "value": 129550.0
-          },
-          {
-            "ts": "2026-05-03T12:00:00Z",
-            "value": 129400.0
-          },
-          {
-            "ts": "2026-05-04T08:00:00Z",
-            "value": 129200.0
-          },
-          {
-            "ts": "2026-05-05T03:00:00Z",
-            "value": 129010.0
-          },
-          {
-            "ts": "2026-05-05T04:00:00Z",
-            "value": 129000.0
-          },
-          {
-            "ts": "2026-05-05T05:00:00Z",
-            "value": 128990.0
-          },
-          {
-            "ts": "2026-05-05T07:00:00Z",
-            "value": 128970.0
-          },
-          {
-            "ts": "2026-05-05T10:00:00Z",
-            "value": 10000.0
-          },
-          {
-            "ts": "2026-05-05T12:00:00Z",
-            "value": 128920.0
-          },
-          {
-            "ts": "2026-05-05T13:00:00Z",
-            "value": 128910.0
-          },
-          {
-            "ts": "2026-05-05T21:00:00Z",
-            "value": 128830.0
-          },
-          {
-            "ts": "2026-05-06T05:00:00Z",
-            "value": 128750.0
-          },
-          {
-            "ts": "2026-05-06T06:00:00Z",
-            "value": 128740.0
-          },
-          {
-            "ts": "2026-05-06T10:00:00Z",
-            "value": 128700.0
-          },
-          {
-            "ts": "2026-05-06T11:00:00Z",
-            "value": 128690.0
-          },
-          {
-            "ts": "2026-05-06T13:00:00Z",
-            "value": 128670.0
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "1175",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -25722,20 +25621,20 @@
       "endpoint": "battery/health",
       "response": {
         "body": {
-          "battery_health_pct": 100.0,
-          "charge_count": 2,
-          "charging_cycles": 0.0,
-          "charging_efficiency_pct": 80.76923076923077,
-          "estimated_degradation_pct": 0.0,
-          "total_energy_added_kwh": 21.0,
-          "total_energy_used_kwh": 26.0,
-          "usable_new_kwh": 131.0,
-          "usable_now_kwh": 132.0
+          "battery_health_pct": null,
+          "charge_count": 0,
+          "charging_cycles": null,
+          "charging_efficiency_pct": null,
+          "estimated_degradation_pct": null,
+          "total_energy_added_kwh": null,
+          "total_energy_used_kwh": null,
+          "usable_new_kwh": null,
+          "usable_now_kwh": null
         },
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "248",
+          "content-length": "234",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
@@ -27088,209 +26987,16 @@
       "case": "defaults",
       "endpoint": "battery/mileage",
       "response": {
-        "body": [
-          {
-            "degradation_pct": 0.7709923664122016,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 279.65000000000003,
-            "ts": "2026-05-01T01:00:00Z",
-            "usable_kwh": 129.99
-          },
-          {
-            "degradation_pct": 0.7938931297709786,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 278.59999999999997,
-            "ts": "2026-05-01T04:00:00Z",
-            "usable_kwh": 129.96
-          },
-          {
-            "degradation_pct": 0.824427480916043,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 349.99999999999994,
-            "range_mi": 277.2,
-            "ts": "2026-05-01T08:00:00Z",
-            "usable_kwh": 129.92
-          },
-          {
-            "degradation_pct": 0.8625954198473238,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 349.99999999999994,
-            "range_mi": 275.45,
-            "ts": "2026-05-01T13:00:00Z",
-            "usable_kwh": 129.87
-          },
-          {
-            "degradation_pct": 0.8778625954198418,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 274.75,
-            "ts": "2026-05-01T15:00:00Z",
-            "usable_kwh": 129.85
-          },
-          {
-            "degradation_pct": 0.9160305343511368,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 273.0,
-            "ts": "2026-05-01T20:00:00Z",
-            "usable_kwh": 129.8
-          },
-          {
-            "degradation_pct": 0.977099236641223,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 349.99999999999994,
-            "range_mi": 270.2,
-            "ts": "2026-05-02T04:00:00Z",
-            "usable_kwh": 129.72
-          },
-          {
-            "degradation_pct": 1.0152671755725322,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 349.99999999999994,
-            "range_mi": 268.45,
-            "ts": "2026-05-02T09:00:00Z",
-            "usable_kwh": 129.67
-          },
-          {
-            "degradation_pct": 1.022900763358777,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 268.09999999999997,
-            "ts": "2026-05-02T10:00:00Z",
-            "usable_kwh": 129.66
-          },
-          {
-            "degradation_pct": 1.1068702290076118,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 264.25,
-            "ts": "2026-05-02T21:00:00Z",
-            "usable_kwh": 129.55
-          },
-          {
-            "degradation_pct": 1.2213740458015252,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 259.0,
-            "ts": "2026-05-03T12:00:00Z",
-            "usable_kwh": 129.4
-          },
-          {
-            "degradation_pct": 1.3740458015267194,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 252.0,
-            "ts": "2026-05-04T08:00:00Z",
-            "usable_kwh": 129.2
-          },
-          {
-            "degradation_pct": 1.5190839694656688,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 245.34999999999997,
-            "ts": "2026-05-05T03:00:00Z",
-            "usable_kwh": 129.01
-          },
-          {
-            "degradation_pct": 1.5267175572519136,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 245.0,
-            "ts": "2026-05-05T04:00:00Z",
-            "usable_kwh": 129.0
-          },
-          {
-            "degradation_pct": 1.5343511450381584,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 244.65000000000003,
-            "ts": "2026-05-05T05:00:00Z",
-            "usable_kwh": 128.99
-          },
-          {
-            "degradation_pct": 1.5496183206106906,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": null,
-            "range_mi": null,
-            "ts": "2026-05-05T07:00:00Z",
-            "usable_kwh": 128.97
-          },
-          {
-            "degradation_pct": 1.5877862595419998,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 242.2,
-            "ts": "2026-05-05T12:00:00Z",
-            "usable_kwh": 128.92
-          },
-          {
-            "degradation_pct": 1.5954198473282446,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 241.84999999999997,
-            "ts": "2026-05-05T13:00:00Z",
-            "usable_kwh": 128.91
-          },
-          {
-            "degradation_pct": 1.6564885496183024,
-            "odometer_mi": 100.0,
-            "projected_max_range_mi": null,
-            "range_mi": null,
-            "ts": "2026-05-05T21:00:00Z",
-            "usable_kwh": 128.83
-          },
-          {
-            "degradation_pct": 1.7175572519084028,
-            "odometer_mi": 102.0,
-            "projected_max_range_mi": -5.9259259259259265,
-            "range_mi": -4.0,
-            "ts": "2026-05-06T05:00:00Z",
-            "usable_kwh": 128.75
-          },
-          {
-            "degradation_pct": 1.7251908396946476,
-            "odometer_mi": 102.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 235.90000000000003,
-            "ts": "2026-05-06T06:00:00Z",
-            "usable_kwh": 128.74
-          },
-          {
-            "degradation_pct": 1.755725190839712,
-            "odometer_mi": 102.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 234.5,
-            "ts": "2026-05-06T10:00:00Z",
-            "usable_kwh": 128.7
-          },
-          {
-            "degradation_pct": 1.7633587786259568,
-            "odometer_mi": 102.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 234.15000000000003,
-            "ts": "2026-05-06T11:00:00Z",
-            "usable_kwh": 128.69
-          },
-          {
-            "degradation_pct": 1.778625954198489,
-            "odometer_mi": 102.0,
-            "projected_max_range_mi": 350.0,
-            "range_mi": 233.45,
-            "ts": "2026-05-06T13:00:00Z",
-            "usable_kwh": 128.67
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "3906",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -28518,185 +28224,16 @@
       "case": "defaults",
       "endpoint": "battery/degradation",
       "response": {
-        "body": [
-          {
-            "capacity_pct": 99.22900763358778,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-01T01:00:00Z",
-            "usable_kwh": 129.99
-          },
-          {
-            "capacity_pct": 99.206106870229,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-01T04:00:00Z",
-            "usable_kwh": 129.96
-          },
-          {
-            "capacity_pct": 99.17557251908396,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-01T08:00:00Z",
-            "usable_kwh": 129.92
-          },
-          {
-            "capacity_pct": 99.13740458015268,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-01T13:00:00Z",
-            "usable_kwh": 129.87
-          },
-          {
-            "capacity_pct": 99.12213740458016,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-01T15:00:00Z",
-            "usable_kwh": 129.85
-          },
-          {
-            "capacity_pct": 99.08396946564886,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-01T20:00:00Z",
-            "usable_kwh": 129.8
-          },
-          {
-            "capacity_pct": 99.02290076335878,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-02T04:00:00Z",
-            "usable_kwh": 129.72
-          },
-          {
-            "capacity_pct": 98.98473282442748,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-02T09:00:00Z",
-            "usable_kwh": 129.67
-          },
-          {
-            "capacity_pct": 98.97709923664122,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-02T10:00:00Z",
-            "usable_kwh": 129.66
-          },
-          {
-            "capacity_pct": 98.89312977099236,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-02T21:00:00Z",
-            "usable_kwh": 129.55
-          },
-          {
-            "capacity_pct": 98.77862595419847,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-03T12:00:00Z",
-            "usable_kwh": 129.4
-          },
-          {
-            "capacity_pct": 98.62595419847328,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-04T08:00:00Z",
-            "usable_kwh": 129.2
-          },
-          {
-            "capacity_pct": 98.48091603053436,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T03:00:00Z",
-            "usable_kwh": 129.01
-          },
-          {
-            "capacity_pct": 98.47328244274809,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T04:00:00Z",
-            "usable_kwh": 129.0
-          },
-          {
-            "capacity_pct": 98.46564885496184,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T05:00:00Z",
-            "usable_kwh": 128.99
-          },
-          {
-            "capacity_pct": 98.45038167938932,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T07:00:00Z",
-            "usable_kwh": 128.97
-          },
-          {
-            "capacity_pct": 98.412213740458,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T12:00:00Z",
-            "usable_kwh": 128.92
-          },
-          {
-            "capacity_pct": 98.40458015267176,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T13:00:00Z",
-            "usable_kwh": 128.91
-          },
-          {
-            "capacity_pct": 98.34351145038168,
-            "odometer_mi": 100.0,
-            "rated_kwh": null,
-            "ts": "2026-05-05T21:00:00Z",
-            "usable_kwh": 128.83
-          },
-          {
-            "capacity_pct": 98.2824427480916,
-            "odometer_mi": 102.0,
-            "rated_kwh": null,
-            "ts": "2026-05-06T05:00:00Z",
-            "usable_kwh": 128.75
-          },
-          {
-            "capacity_pct": 98.27480916030534,
-            "odometer_mi": 102.0,
-            "rated_kwh": null,
-            "ts": "2026-05-06T06:00:00Z",
-            "usable_kwh": 128.74
-          },
-          {
-            "capacity_pct": 98.2442748091603,
-            "odometer_mi": 102.0,
-            "rated_kwh": null,
-            "ts": "2026-05-06T10:00:00Z",
-            "usable_kwh": 128.7
-          },
-          {
-            "capacity_pct": 98.23664122137404,
-            "odometer_mi": 102.0,
-            "rated_kwh": null,
-            "ts": "2026-05-06T11:00:00Z",
-            "usable_kwh": 128.69
-          },
-          {
-            "capacity_pct": 98.22137404580153,
-            "odometer_mi": 102.0,
-            "rated_kwh": null,
-            "ts": "2026-05-06T13:00:00Z",
-            "usable_kwh": 128.67
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "2874",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -30327,29 +29864,16 @@
       "case": "defaults",
       "endpoint": "efficiency/by-mode",
       "response": {
-        "body": [
-          {
-            "avg_wh_per_mi": 266.6666666666667,
-            "drive_mode": "conserve",
-            "total_miles": 30.0,
-            "trip_count": 2
-          },
-          {
-            "avg_wh_per_mi": 401.61290322580646,
-            "drive_mode": "sport",
-            "total_miles": 31.0,
-            "trip_count": 2
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "187",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -31150,44 +30674,16 @@
       "case": "defaults",
       "endpoint": "efficiency/by-tag",
       "response": {
-        "body": [
-          {
-            "avg_efficiency_wh_mi": 375.0,
-            "coverage": 1.0,
-            "efficiency_miles": 40.0,
-            "tag_id": "00000000-0000-0000-0000-000000000028",
-            "tag_name": "Alpha",
-            "total_miles": 40.0,
-            "trip_count": 2
-          },
-          {
-            "avg_efficiency_wh_mi": 400.0,
-            "coverage": 0.8571428571428571,
-            "efficiency_miles": 30.0,
-            "tag_id": "00000000-0000-0000-0000-000000000029",
-            "tag_name": "beta",
-            "total_miles": 35.0,
-            "trip_count": 2
-          },
-          {
-            "avg_efficiency_wh_mi": 280.4347826086956,
-            "coverage": 1.0,
-            "efficiency_miles": 23.0,
-            "tag_id": null,
-            "tag_name": "Untagged",
-            "total_miles": 23.0,
-            "trip_count": 3
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "509",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -32012,41 +31508,16 @@
       "case": "defaults",
       "endpoint": "efficiency/range-vs-temp",
       "response": {
-        "body": [
-          {
-            "avg_temp_c": -17.77777777777778,
-            "distance_miles": 2.0,
-            "efficiency_wh_per_mi": 500.0,
-            "trip_id": "00000000-0000-0000-0000-0000000003ef"
-          },
-          {
-            "avg_temp_c": 15.555555555555555,
-            "distance_miles": 20.0,
-            "efficiency_wh_per_mi": 250.0,
-            "trip_id": "00000000-0000-0000-0000-0000000003ee"
-          },
-          {
-            "avg_temp_c": 0.0,
-            "distance_miles": 30.0,
-            "efficiency_wh_per_mi": 400.0,
-            "trip_id": "00000000-0000-0000-0000-0000000003e9"
-          },
-          {
-            "avg_temp_c": -5.0,
-            "distance_miles": 10.0,
-            "efficiency_wh_per_mi": 300.0,
-            "trip_id": "00000000-0000-0000-0000-0000000003e8"
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "507",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -32930,57 +32401,16 @@
       "case": "defaults",
       "endpoint": "efficiency/vs-temp",
       "response": {
-        "body": [
-          {
-            "avg_efficiency_wh_mi": 500.0,
-            "avg_speed_mph": 2.0,
-            "temp_c_high": -12.22222222222222,
-            "temp_c_low": -17.77777777777778,
-            "total_miles": 2.0,
-            "trip_count": 1
-          },
-          {
-            "avg_efficiency_wh_mi": 300.0,
-            "avg_speed_mph": 10.0,
-            "temp_c_high": -1.1111111111111112,
-            "temp_c_low": -6.666666666666667,
-            "total_miles": 10.0,
-            "trip_count": 1
-          },
-          {
-            "avg_efficiency_wh_mi": 400.0,
-            "avg_speed_mph": 30.0,
-            "temp_c_high": 4.444444444444445,
-            "temp_c_low": -1.1111111111111112,
-            "total_miles": 30.0,
-            "trip_count": 1
-          },
-          {
-            "avg_efficiency_wh_mi": 450.0,
-            "avg_speed_mph": null,
-            "temp_c_high": 15.555555555555555,
-            "temp_c_low": 10.0,
-            "total_miles": 1.0,
-            "trip_count": 1
-          },
-          {
-            "avg_efficiency_wh_mi": 250.0,
-            "avg_speed_mph": 20.0,
-            "temp_c_high": 21.11111111111111,
-            "temp_c_low": 15.555555555555555,
-            "total_miles": 20.0,
-            "trip_count": 1
-          }
-        ],
+        "body": [],
         "headers": {
           "access-control-allow-credentials": "true",
           "access-control-expose-headers": "etag",
-          "content-length": "740",
+          "content-length": "2",
           "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
           "content-type": "application/json",
           "referrer-policy": "no-referrer",
           "strict-transport-security": "max-age=31536000; includeSubDomains",
-          "vary": "accept-encoding",
+          "vary": "origin",
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
           "x-panda-ratelimit-class": "auth_read",
@@ -34915,7 +34345,7 @@
       "response": {
         "body": {
           "periods": [],
-          "vehicle_id": "00000000-0000-0000-0000-00000000000a"
+          "vehicle_id": "00000000-0000-0000-0000-00000000000b"
         },
         "headers": {
           "access-control-allow-credentials": "true",

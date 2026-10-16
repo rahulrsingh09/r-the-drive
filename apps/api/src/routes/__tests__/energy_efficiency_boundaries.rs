@@ -38,3 +38,17 @@ fn energy_efficiency_boundary_contract() {
         );
     }
 }
+
+#[test]
+fn energy_default_time_windows() {
+    for days in [7, 30, 90, 180, 365, 730] {
+        let before = Utc::now();
+        let (from, to) = resolve_time_bounds(None, None, false, days);
+        let after = Utc::now();
+        assert!(
+            from >= before - chrono::Duration::days(days)
+                && from <= after - chrono::Duration::days(days)
+        );
+        assert!(to >= before && to <= after);
+    }
+}
