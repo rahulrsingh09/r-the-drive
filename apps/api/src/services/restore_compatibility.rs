@@ -11,6 +11,9 @@ use crate::{
     errors::AppError,
 };
 
+#[path = "restore_compatibility_recovery_stages.rs"]
+mod recovery_stages;
+
 pub const RECOVERY_FORMAT_V1: &str = "panda-recovery-v1";
 pub const RECOVERY_FORMAT_V2: &str = "panda-recovery-v2";
 pub const RECOVERY_FORMAT_V3: &str = "panda-recovery-v3";
@@ -399,106 +402,13 @@ pub async fn prepare_candidate_schema(
     administrative_database_url: &str,
     manifest: &Value,
 ) -> anyhow::Result<CandidatePreparationReport> {
-    let format = manifest
-        .get("format")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if format != RECOVERY_FORMAT_V3 {
-        anyhow::bail!("recovery package belongs to an unsupported migration chain");
-    }
-    let source = source_profile_from_manifest(manifest)?;
-    validate_source_schema_metadata(&source).map_err(|error| anyhow::anyhow!(error.message))?;
-
-    let exact_prefix = migrations::validate_ledger_prefix(&source.migration_ledger).is_ok();
-    let source_schema =
-        validate_schema_contract_for_source(pool, exact_prefix && source.migration_version >= 11)
-            .await?;
-    if !source_schema.required_relations_present
-        || !source_schema.telemetry_hypertable
-        || !source_schema.foreign_keys_validated
-    {
-        anyhow::bail!(
-            "restored candidate does not match a complete Panda schema contract: missing={:?}, telemetry_hypertable={}, foreign_keys_validated={}",
-            source_schema.missing_relations,
-            source_schema.telemetry_hypertable,
-            source_schema.foreign_keys_validated
-        );
-    }
-    let expected_fingerprint = source
-        .schema_fingerprint
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("v3 recovery package is missing its schema fingerprint"))?;
-    if source.schema_contract_version.as_deref() != Some(SCHEMA_CONTRACT_VERSION) {
-        anyhow::bail!("recovery package uses an unsupported schema contract version");
-    }
-    if expected_fingerprint != source_schema.schema_fingerprint {
-        anyhow::bail!(
-            "recovery package schema contract mismatch: declared {expected_fingerprint}, restored {}",
-            source_schema.schema_fingerprint
-        );
-    }
-
-    if exact_prefix {
-        migrations::restore_ledger(pool, &source.migration_ledger).await?;
-    } else {
-        // The candidate's declared v3 contract was just verified against the
-        // restored schema. Accept a legacy SQLx ledger only when the physical
-        // schema is exactly the immutable public baseline; otherwise fail
-        // closed rather than guessing how to transform historical data.
-        let baseline = baseline_schema_fingerprint(administrative_database_url).await?;
-        if source_schema.schema_fingerprint != baseline {
-            anyhow::bail!(
-                "recovery package uses an unrecognized migration ledger and its restored schema is not the public baseline"
-            );
-        }
-        migrations::restore_baseline_ledger(pool).await?;
-    }
-    let adopted_ledger_len = if exact_prefix {
-        source.migration_ledger.len()
-    } else {
-        1
-    };
-    let migrations_applied = compiled_migration_ledger()
-        .into_iter()
-        .skip(adopted_ledger_len)
-        .map(|migration| migration.version)
-        .collect::<Vec<_>>();
-
-    let mut migration_connection = pool.acquire().await?;
-    sqlx::query("SET search_path = public")
-        .execute(&mut *migration_connection)
-        .await?;
-    inject_candidate_fault("target_migrations")?;
-    MIGRATOR
-        .run_direct(None, &mut *migration_connection, false)
-        .await?;
-    drop(migration_connection);
-    crate::services::restore_policy::sanitize(pool).await?;
-    let mut migration_connection = pool.acquire().await?;
-    ensure_sanitized_authentication_settings(&mut *migration_connection).await?;
-    drop(migration_connection);
-
-    let target_profile = runtime_database_profile(pool).await?;
-    migrations::validate_complete_ledger(&target_profile.migration_ledger)
-        .map_err(|error| anyhow::anyhow!("candidate migration ledger invalid: {error}"))?;
-    if !target_profile.migration_ledger_successful {
-        anyhow::bail!("candidate migration ledger contains a failed migration");
-    }
-    let target_schema = validate_schema_contract(pool).await?;
-    if !target_schema.required_relations_present
-        || !target_schema.telemetry_hypertable
-        || !target_schema.foreign_keys_validated
-    {
-        anyhow::bail!("candidate final schema contract is incomplete");
-    }
-
-    Ok(CandidatePreparationReport {
-        foreign_keys_validated: target_schema.foreign_keys_validated,
-        source_schema,
-        target_schema,
-        applied_transforms: Vec::new(),
-        migrations_applied,
-    })
+    recovery_stages::CandidateSource::admit(manifest)?
+        .verify(pool)
+        .await?
+        .migrate(pool, administrative_database_url)
+        .await?
+        .verify(pool)
+        .await
 }
 
 /// Recreate the redacted authentication singleton after a package restore.
@@ -636,152 +546,19 @@ pub async fn plan_restore(
     target_pool: &PgPool,
     dump: Option<&DumpInspection>,
 ) -> Result<RestorePlan, AppError> {
-    let package_format = manifest
+    let format = manifest
         .get("format")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .to_string();
+        .to_owned();
     let source = source_profile_from_manifest(manifest)?;
     let target = runtime_database_profile(target_pool).await?;
-    let mut blocking_errors = Vec::new();
-
-    if package_format != RECOVERY_FORMAT_V3 {
-        blocking_errors.push(RestoreBlockingError {
-            code: if matches!(
-                package_format.as_str(),
-                RECOVERY_FORMAT_V1 | RECOVERY_FORMAT_V2
-            ) {
-                RestoreBlockingCode::UnsupportedMigrationChain
-            } else {
-                RestoreBlockingCode::UnsupportedPackageFormat
-            },
-            message: if matches!(
-                package_format.as_str(),
-                RECOVERY_FORMAT_V1 | RECOVERY_FORMAT_V2
-            ) {
-                "This package predates the public migration baseline and is retained for rollback only. Create a new v3 package after adopting the baseline.".into()
-            } else {
-                format!("Unsupported recovery package format: {package_format}")
-            },
-        });
-    } else if let Err(error) = validate_source_schema_metadata(&source) {
-        blocking_errors.push(error);
-    }
-
-    if let Some(dump) = dump {
-        if !dump.has_panda_schema || !dump.has_timeseries_schema {
-            blocking_errors.push(RestoreBlockingError {
-                code: RestoreBlockingCode::SchemaContractMismatch,
-                message: "The recovery dump is missing required Panda schemas.".into(),
-            });
-        }
-    }
-
-    if !target.migration_ledger_successful {
-        blocking_errors.push(RestoreBlockingError {
-            code: RestoreBlockingCode::TargetMigrationDrift,
-            message: "The target migration ledger contains a failed migration.".into(),
-        });
-    }
-    if let Err(error) = migrations::validate_complete_ledger(&target.migration_ledger) {
-        blocking_errors.push(blocking_from_ledger_error(true, error));
-    }
-
-    let source_ledger_is_prefix =
-        migrations::validate_ledger_prefix(&source.migration_ledger).is_ok();
-    if source_ledger_is_prefix && source.migration_version > latest_migration_version() {
-        blocking_errors.push(RestoreBlockingError {
-            code: RestoreBlockingCode::NewerSourceSchema,
-            message: format!(
-                "The package schema version {} is newer than this release version {}.",
-                source.migration_version,
-                latest_migration_version()
-            ),
-        });
-    }
-    if let (Some(source_major), Some(target_major)) = (source.postgres_major, target.postgres_major)
-    {
-        if source_major > target_major {
-            blocking_errors.push(RestoreBlockingError {
-                code: RestoreBlockingCode::UnsupportedPostgresVersion,
-                message: format!(
-                    "PostgreSQL {source_major} packages cannot be restored into PostgreSQL {target_major}."
-                ),
-            });
-        }
-    }
-    if !timescale_versions_compatible(
-        source.timescale_version.as_deref(),
-        target.timescale_version.as_deref(),
-    ) {
-        blocking_errors.push(RestoreBlockingError {
-            code: RestoreBlockingCode::UnsupportedTimescaleVersion,
-            message: format!(
-                "TimescaleDB source {:?} is not compatible with target {:?}.",
-                source.timescale_version, target.timescale_version
-            ),
-        });
-    }
-    if package_format == RECOVERY_FORMAT_V3
-        && (source.schema_contract_version.as_deref() != Some(SCHEMA_CONTRACT_VERSION)
-            || source.schema_fingerprint.is_none())
-    {
-        blocking_errors.push(RestoreBlockingError {
-            code: RestoreBlockingCode::SchemaContractMismatch,
-            message: "The package is missing the supported versioned schema contract.".into(),
-        });
-    }
-
-    let adopted_ledger_len = if source_ledger_is_prefix {
-        source.migration_ledger.len()
-    } else {
-        1
-    };
-    let pending_migrations = compiled_migration_ledger()
-        .into_iter()
-        .skip(adopted_ledger_len)
-        .map(|migration| migration.version)
-        .collect::<Vec<_>>();
-    let transforms = Vec::new();
-    let validation_checks = vec![
-        "v3_schema_contract".into(),
-        "candidate_schema_matches_declared_fingerprint".into(),
-        "legacy_ledger_requires_public_baseline_contract".into(),
-        "schema_contract".into(),
-        "timescale_objects".into(),
-        "foreign_key_integrity".into(),
-        "application_health".into(),
-    ];
-    let plan_material = serde_json::to_vec(&serde_json::json!({
-        "engine_version": RESTORE_ENGINE_VERSION,
-        "package_checksum_sha256": package_checksum_sha256,
-        "package_format": package_format,
-        "source": source,
-        "target": target,
-        "compiled_catalog": compiled_migration_ledger(),
-        "compiled_catalog_digest": migrations::migration_catalog_digest(),
-        "schema_contract_version": SCHEMA_CONTRACT_VERSION,
-        "dump": dump,
-        "pending_migrations": pending_migrations,
-        "transforms": transforms,
-        "validation_checks": validation_checks,
-    }))
-    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-    Ok(RestorePlan {
-        plan_id: hex::encode(Sha256::digest(plan_material)),
-        engine_version: RESTORE_ENGINE_VERSION,
-        package_checksum_sha256: package_checksum_sha256.to_string(),
-        package_format,
-        compatible: blocking_errors.is_empty(),
+    recovery_stages::PlanInput {
+        format,
         source,
         target,
-        pending_migrations,
-        transforms,
-        validation_checks,
-        warnings: Vec::new(),
-        blocking_errors,
-        planned_at: Utc::now(),
-    })
+    }
+    .build(package_checksum_sha256, dump)
 }
 
 fn source_profile_from_manifest(manifest: &Value) -> Result<DatabaseProfile, AppError> {

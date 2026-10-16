@@ -6,6 +6,28 @@ The implementation preserves PANDA/panda, R:The Drive behavior and existing
 GPL/NOTICE attribution. It is informed by the existing implementation; it is
 not a clean-room implementation or an exclusive-authorship claim.
 
+## Responsibility stages
+
+Admission composes a compressed-byte reader, the tar framing boundary, one
+member-evidence inventory and manifest contract verification. The inventory
+retains each member name once and provides component size, digest and database
+magic evidence. The semantic verifier cannot substitute manifest claims for
+bytes measured by the inventory.
+
+Compatibility planning first captures the source and target profiles, assesses
+blocking conditions in the existing serialized order, then constructs the
+unchanged plan-digest material. Candidate preparation uses separate admitted,
+verified and migrated types. Only a verified source can adopt a migration
+ledger; a legacy ledger still requires physical baseline proof. Migration and
+sanitation precede final ledger/schema verification. Planning and preparation
+share the same ledger-adoption decision.
+
+Local catalog reconciliation moves sorted discovery results through existing
+row/active-run admission, confined file verification and publication. Only the
+verified stage carries bytes-derived manifest, length and checksum evidence.
+Journal reconciliation similarly prepares verified inputs before entering its
+database transaction and records completion only after commit.
+
 ## Gzip integrity correction
 
 Standalone admission previously accepted a complete tar archive when its

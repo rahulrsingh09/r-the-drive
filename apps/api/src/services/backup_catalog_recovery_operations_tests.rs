@@ -20,6 +20,32 @@ fn catalog_recognizes_service_run_names_without_guessing_other_paths() {
 }
 
 #[tokio::test]
+async fn catalog_scan_observes_count_deadline_and_sorted_discovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("backups");
+    std::fs::create_dir(&root).unwrap();
+    for name in ["b.rma.tar.gz", "a.rma.tar.gz"] {
+        std::fs::write(root.join(name), b"synthetic").unwrap();
+    }
+    let mut config = crate::services::restore_jobs::recovery_operations_tests::config(&root);
+    let paths = scan_local_packages(&root, &config).await.unwrap();
+    assert_eq!(
+        paths,
+        vec![root.join("a.rma.tar.gz"), root.join("b.rma.tar.gz")]
+    );
+    config.recovery.max_members = 1;
+    assert!(matches!(
+        scan_local_packages(&root, &config).await,
+        Err(AppError::RecoveryTooLarge(_))
+    ));
+    config.recovery.restore_deadline_seconds = 0;
+    assert!(matches!(
+        scan_local_packages(&root, &config).await,
+        Err(AppError::RecoveryDeadline(_))
+    ));
+}
+
+#[tokio::test]
 #[ignore = "requires the uniquely named disposable recovery operations database"]
 async fn catalog_characterizes_discovery_active_runs_and_reverification() {
     use crate::services::recovery_extract::recovery_validation_fixtures::{members, write_archive};

@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, HashSet},
     fs::File,
     io::{Cursor, Read},
     path::{Path, PathBuf},
@@ -29,6 +28,10 @@ use crate::{
         s3_backups::{self, S3Settings},
     },
 };
+
+#[path = "backups_recovery_admission.rs"]
+mod recovery_admission;
+use recovery_admission::RecoveryInventory;
 
 #[path = "backups_recovery_stream.rs"]
 mod recovery_stream;
@@ -1085,147 +1088,23 @@ fn validate_recovery_reader<R: Read>(
     let source = CompressedInput::new(source, limits, started);
     let decoder = GzDecoder::new(source);
     let mut archive = Archive::new(TarEnvelope::new(decoder, limits, started));
-    let mut manifest_bytes = None;
-    let mut file_checksums = HashMap::<String, String>::new();
-    let mut file_sizes = HashMap::<String, u64>::new();
-    let mut database_magic = Vec::with_capacity(5);
-    let mut members = HashSet::<String>::new();
-    let mut expanded_bytes = 0_u64;
-    let mut member_count = 0_usize;
-    let mut path_bytes = 0_usize;
-
-    for entry in archive.entries().map_err(stream_error)? {
-        let mut entry = entry.map_err(stream_error)?;
-        let path = entry
-            .path()
-            .map_err(|error| AppError::Validation(format!("Invalid archive path: {error}")))?;
-        let normalized = path
-            .to_str()
-            .ok_or_else(|| AppError::Validation("Invalid recovery archive path encoding.".into()))?
-            .replace('\\', "/");
-        path_bytes = path_bytes
-            .checked_add(normalized.len())
-            .ok_or_else(|| AppError::Validation("Recovery path size overflowed.".into()))?;
-        if path_bytes as u64 > limits.max_manifest_bytes {
-            return Err(AppError::Validation(
-                "Recovery package exceeds the configured metadata limit for archive paths.".into(),
-            ));
-        }
-        let entry_type = entry.header().entry_type();
-        if !entry_type.is_file() && !entry_type.is_dir() {
-            return Err(AppError::Validation(format!(
-                "Recovery package member {normalized} has unsupported archive type {}.",
-                entry_type.as_byte()
-            )));
-        }
-        if (entry_type.is_file() && normalized.ends_with('/'))
-            || path.is_absolute()
-            || normalized.starts_with('/')
-            || normalized.trim_end_matches('/').split('/').any(|segment| {
-                segment == "."
-                    || segment == ".."
-                    || segment.is_empty()
-                    || segment.contains(':')
-                    || segment.chars().any(char::is_control)
-            })
-        {
-            return Err(AppError::Validation(format!(
-                "Unsafe recovery package path: {normalized}"
-            )));
-        }
-        member_count = member_count.checked_add(1).ok_or_else(|| {
-            AppError::Validation("Recovery package has too many archive members.".into())
-        })?;
-        if member_count > limits.max_members {
-            return Err(AppError::Validation(format!(
-                "Recovery package exceeds the {} member limit.",
-                limits.max_members
-            )));
-        }
-        if !members.insert(normalized.trim_end_matches('/').to_owned()) {
-            return Err(AppError::Validation(format!(
-                "Recovery package contains duplicate member {normalized}."
-            )));
-        }
-        let allowed = matches!(
-            normalized.as_str(),
-            "manifest.json" | "database.dump" | "backup-settings.json" | "operational-history.json"
-        ) || normalized == "vehicle-image-cache"
-            || normalized.starts_with("vehicle-image-cache/");
-        if !allowed {
-            return Err(AppError::Validation(format!(
-                "Unexpected recovery package member: {normalized}"
-            )));
-        }
-        if entry_type.is_dir() {
-            continue;
-        }
-
-        check_deadline(started, limits)?;
-        let entry_size = entry.size();
-        if entry_size > metadata_limit(&normalized, limits) {
-            return Err(AppError::Validation(format!("Recovery package member {normalized} exceeds its configured metadata or member size limit.")));
-        }
-        if entry_size > limits.max_member_bytes {
-            return Err(AppError::Validation(format!(
-                "Recovery package member {normalized} exceeds the configured member byte limit."
-            )));
-        }
-        expanded_bytes = expanded_bytes.checked_add(entry_size).ok_or_else(|| {
-            AppError::Validation("Recovery package expanded size overflowed.".into())
-        })?;
-        if expanded_bytes > limits.max_expanded_bytes {
-            return Err(AppError::Validation(
-                "Recovery package exceeds the configured expanded byte limit.".into(),
-            ));
-        }
-        if expanded_bytes
-            > compressed_bytes
-                .max(1)
-                .saturating_mul(limits.max_compression_ratio)
-        {
-            return Err(AppError::Validation(
-                "Recovery package exceeds the maximum expansion ratio.".into(),
-            ));
-        }
-
-        if normalized == "manifest.json" {
-            if entry_size > limits.max_manifest_bytes {
-                return Err(AppError::Validation(
-                    "Recovery package manifest is unexpectedly large.".into(),
-                ));
-            }
-            let mut bytes = Vec::with_capacity(entry_size as usize);
-            entry.read_to_end(&mut bytes).map_err(stream_error)?;
-            manifest_bytes = Some(bytes);
-            continue;
-        }
-
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            check_deadline(started, limits)?;
-            let read = entry.read(&mut buffer).map_err(stream_error)?;
-            if read == 0 {
-                break;
-            }
-            if normalized == "database.dump" && database_magic.len() < 5 {
-                let remaining = 5 - database_magic.len();
-                database_magic.extend_from_slice(&buffer[..read.min(remaining)]);
-            }
-            hasher.update(&buffer[..read]);
-        }
-        file_sizes.insert(normalized.clone(), entry_size);
-        file_checksums.insert(normalized, hex::encode(hasher.finalize()));
-    }
-
+    let inventory = RecoveryInventory::read(&mut archive, limits, compressed_bytes, started)?;
     let source = archive.into_inner().finish()?.into_inner();
+    let manifest = inventory.manifest()?;
+    validate_manifest_contract(&manifest, &inventory)?;
+    let validated = source.finish(manifest)?;
+    if validated.size_bytes as u64 != compressed_bytes {
+        return Err(AppError::Validation(
+            "Recovery package size changed during validation.".into(),
+        ));
+    }
+    Ok(validated)
+}
 
-    let manifest_bytes = manifest_bytes
-        .ok_or_else(|| AppError::Validation("Recovery package is missing manifest.json.".into()))?;
-    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
-        AppError::Validation(format!("Recovery manifest is invalid JSON: {error}"))
-    })?;
+fn validate_manifest_contract(
+    manifest: &serde_json::Value,
+    inventory: &RecoveryInventory,
+) -> Result<(), AppError> {
     let format = manifest
         .get("format")
         .and_then(|value| value.as_str())
@@ -1269,7 +1148,7 @@ fn validate_recovery_reader<R: Read>(
                 "Recovery package requires unsupported restore engine version {engine_version}."
             )));
         }
-        validate_migration_ledger_shape(&manifest)?;
+        validate_migration_ledger_shape(manifest)?;
         if format == RECOVERY_FORMAT_V3 {
             for pointer in [
                 "/source/migration_chain_id",
@@ -1317,30 +1196,22 @@ fn validate_recovery_reader<R: Read>(
         }
     }
 
-    verify_manifest_component(
-        &manifest,
-        &file_checksums,
-        &file_sizes,
-        "database",
-        "database.dump",
-    )?;
-    if database_magic != b"PGDMP" {
+    verify_manifest_component(&manifest, inventory, "database", "database.dump")?;
+    if !inventory.custom_database_dump() {
         return Err(AppError::Validation(
             "Recovery package database.dump is not a PostgreSQL custom-format dump.".into(),
         ));
     }
     verify_manifest_component(
         &manifest,
-        &file_checksums,
-        &file_sizes,
+        inventory,
         "backup_settings",
         "backup-settings.json",
     )?;
     if matches!(format, RECOVERY_FORMAT_V2 | RECOVERY_FORMAT_V3) {
         verify_manifest_component(
             &manifest,
-            &file_checksums,
-            &file_sizes,
+            inventory,
             "operational_history",
             "operational-history.json",
         )?;
@@ -1362,7 +1233,7 @@ fn validate_recovery_reader<R: Read>(
                 .ok_or_else(|| {
                     AppError::Validation("Artwork manifest entry is missing its checksum.".into())
                 })?;
-            if file_checksums.get(path).map(String::as_str) != Some(expected) {
+            if inventory.checksum(path) != Some(expected) {
                 return Err(AppError::Validation(format!(
                     "Recovery package checksum mismatch for {path}."
                 )));
@@ -1373,30 +1244,23 @@ fn validate_recovery_reader<R: Read>(
                 .ok_or_else(|| {
                     AppError::Validation("Artwork manifest entry is missing its size.".into())
                 })?;
-            if file_sizes.get(path).copied() != Some(expected_size) {
+            if inventory.size(path) != Some(expected_size) {
                 return Err(AppError::Validation(format!(
                     "Recovery package size mismatch for {path}."
                 )));
             }
         }
         if matches!(format, RECOVERY_FORMAT_V2 | RECOVERY_FORMAT_V3) {
-            validate_v2_artwork_component(&manifest, files)?;
+            validate_v2_artwork_component(manifest, files)?;
         }
     }
 
-    let validated = source.finish(manifest)?;
-    if validated.size_bytes as u64 != compressed_bytes {
-        return Err(AppError::Validation(
-            "Recovery package size changed during validation.".into(),
-        ));
-    }
-    Ok(validated)
+    Ok(())
 }
 
 fn verify_manifest_component(
     manifest: &serde_json::Value,
-    checksums: &HashMap<String, String>,
-    sizes: &HashMap<String, u64>,
+    inventory: &RecoveryInventory,
     component: &str,
     expected_path: &str,
 ) -> Result<(), AppError> {
@@ -1417,7 +1281,7 @@ fn verify_manifest_component(
                 "Recovery manifest is missing the checksum for {component}."
             ))
         })?;
-    if path != expected_path || checksums.get(path).map(String::as_str) != Some(expected) {
+    if path != expected_path || inventory.checksum(path) != Some(expected) {
         return Err(AppError::Validation(format!(
             "Recovery package checksum mismatch for {expected_path}."
         )));
@@ -1430,7 +1294,7 @@ fn verify_manifest_component(
                 "Recovery manifest is missing the size for {expected_path}."
             ))
         })?;
-    if sizes.get(path).copied() != Some(expected_size) {
+    if inventory.size(path) != Some(expected_size) {
         return Err(AppError::Validation(format!(
             "Recovery package size mismatch for {expected_path}."
         )));

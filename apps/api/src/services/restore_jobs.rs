@@ -660,6 +660,7 @@ pub fn jobs_dir(config: &Config) -> PathBuf {
     Path::new(&config.backup_artifact_dir).join(".restore-jobs")
 }
 
+#[cfg(test)]
 fn job_path(config: &Config, id: Uuid) -> PathBuf {
     jobs_dir(config).join(format!("{id}.json"))
 }

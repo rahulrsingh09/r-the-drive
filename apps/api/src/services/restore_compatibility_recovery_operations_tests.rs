@@ -9,6 +9,10 @@ pub(crate) struct SyntheticDatabase {
 
 impl SyntheticDatabase {
     pub(crate) async fn new() -> Self {
+        Self::create(true).await
+    }
+
+    async fn create(migrate: bool) -> Self {
         let base = std::env::var("RECOVERY_OPERATIONS_TEST_DATABASE_URL")
             .expect("explicit disposable recovery operations database required");
         let mut url = Url::parse(&base).unwrap();
@@ -31,7 +35,11 @@ impl SyntheticDatabase {
             .connect(url.as_str())
             .await
             .unwrap();
-        MIGRATOR.run(&pool).await.unwrap();
+        if migrate {
+            MIGRATOR.run(&pool).await.unwrap();
+        } else {
+            migrations::apply_baseline_schema(&pool).await.unwrap();
+        }
         Self {
             pool,
             admin,
@@ -119,4 +127,40 @@ async fn compatibility_characterizes_candidate_schema_and_sanitization() {
     let safe: bool = sqlx::query_scalar("SELECT NOT oidc_enabled AND password_login_enabled AND client_secret_encrypted IS NULL FROM panda.authentication_settings WHERE id=TRUE").fetch_one(&db.pool).await.unwrap();
     assert!(safe);
     db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the uniquely named disposable recovery operations database"]
+async fn candidate_adopts_legacy_ledger_only_with_physical_baseline_proof() {
+    for baseline in [true, false] {
+        let db = SyntheticDatabase::create(!baseline).await;
+        let source = serde_json::json!({
+            "format": RECOVERY_FORMAT_V3,
+            "source": {
+                "migration_version": 3,
+                "migration_ledger": [{"version": 3, "description": "synthetic legacy", "checksum_sha384": "00".repeat(48)}],
+                "schema_contract_version": SCHEMA_CONTRACT_VERSION,
+                "schema_fingerprint": schema_fingerprint(&db.pool).await.unwrap(),
+            }
+        });
+        let result = prepare_candidate_schema(&db.pool, &db.url, &source).await;
+        if baseline {
+            let report = result.unwrap();
+            assert_eq!(
+                report.migrations_applied,
+                compiled_migration_ledger()
+                    .iter()
+                    .skip(1)
+                    .map(|migration| migration.version)
+                    .collect::<Vec<_>>()
+            );
+            assert!(report.target_schema.required_relations_present);
+        } else {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("not the public baseline"));
+        }
+        db.close().await;
+    }
 }

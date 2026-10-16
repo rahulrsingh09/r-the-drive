@@ -450,3 +450,60 @@ async fn journal_rejects_symlinked_roots_and_mismatched_record_identity() {
         Err(AppError::Validation(_))
     ));
 }
+
+#[tokio::test]
+#[ignore = "requires the uniquely named disposable recovery operations database"]
+async fn catalog_snapshot_budget_rejects_before_client_materialization() {
+    let db =
+        crate::services::restore_compatibility::recovery_operations_tests::SyntheticDatabase::new()
+            .await;
+    let snapshot = catalog();
+    merge_catalog_snapshot(&db.pool, &snapshot).await.unwrap();
+    sqlx::query("UPDATE panda.backup_artifacts SET manifest=jsonb_build_object('padding', repeat('x',17000000))")
+        .execute(&db.pool).await.unwrap();
+    assert!(matches!(
+        snapshot_catalog(&db.pool).await,
+        Err(AppError::RecoveryTooLarge(_))
+    ));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM panda.backup_artifacts")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn cancelled_journal_waiter_leaves_publication_and_lock_owned_by_worker() {
+    let root = tempfile::tempdir().unwrap();
+    let config = config(root.path());
+    let (job, _) = create(
+        &config,
+        Uuid::new_v4(),
+        "/synthetic/package".into(),
+        Uuid::new_v4(),
+        plan(),
+    )
+    .await
+    .unwrap();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (finish, wait) = std::sync::mpsc::channel();
+    let worker_config = config.clone();
+    let waiter = tokio::spawn(async move {
+        recovery_journal::mutate(&worker_config, job.id, move |job| {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            job.automatic_retry_count += 1;
+        })
+        .await
+        .unwrap();
+    });
+    ready.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    finish.send(()).unwrap();
+    let current = recovery_journal::mutate(&config, job.id, |job| job.automatic_retry_count += 1)
+        .await
+        .unwrap();
+    assert_eq!(current.automatic_retry_count, 2);
+}
