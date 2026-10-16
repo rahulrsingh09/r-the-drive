@@ -54,6 +54,10 @@ mod enrollment;
 mod membership;
 
 #[cfg(test)]
+#[path = "vehicles/__tests__/diagnostics.rs"]
+mod diagnostic_contracts;
+
+#[cfg(test)]
 #[path = "vehicles/__tests__/contracts.rs"]
 mod workflow_contracts;
 
