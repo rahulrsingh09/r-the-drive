@@ -585,3 +585,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/energy_http.rs"]
+mod energy_http;

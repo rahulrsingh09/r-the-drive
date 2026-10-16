@@ -617,3 +617,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/energy_efficiency_boundaries.rs"]
+mod energy_efficiency_boundaries;

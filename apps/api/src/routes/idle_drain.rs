@@ -942,3 +942,7 @@ mod tests {
         assert!(period.state_coverage_pct.unwrap() < 0.5);
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/energy_idle_boundaries.rs"]
+mod energy_idle_boundaries;

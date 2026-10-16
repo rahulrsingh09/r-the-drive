@@ -1,0 +1,347 @@
+[
+  {
+    "distances": [
+      10.0,
+      30.0
+    ],
+    "offset": 0,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 375.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.0,
+      0.0
+    ],
+    "offset": 0,
+    "points": [
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.1,
+      10000.0
+    ],
+    "offset": 0,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 399.99900000999986,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      10.0,
+      30.0
+    ],
+    "offset": 1,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 375.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T00:00:01Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.0,
+      0.0
+    ],
+    "offset": 1,
+    "points": [
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T00:00:01Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.1,
+      10000.0
+    ],
+    "offset": 1,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 399.99900000999986,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T00:00:01Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      10.0,
+      30.0
+    ],
+    "offset": 86399,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 375.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T23:59:59Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.0,
+      0.0
+    ],
+    "offset": 86399,
+    "points": [
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T23:59:59Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.1,
+      10000.0
+    ],
+    "offset": 86399,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 399.99900000999986,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-01T23:59:59Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      10.0,
+      30.0
+    ],
+    "offset": 86400,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 375.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-02T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.0,
+      0.0
+    ],
+    "offset": 86400,
+    "points": [
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-02T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.1,
+      10000.0
+    ],
+    "offset": 86400,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 399.99900000999986,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-02T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      10.0,
+      30.0
+    ],
+    "offset": 86401,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 400.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-02T00:00:01Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.0,
+      0.0
+    ],
+    "offset": 86401,
+    "points": [
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-02T00:00:01Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.1,
+      10000.0
+    ],
+    "offset": 86401,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 400.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-02T00:00:01Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      10.0,
+      30.0
+    ],
+    "offset": 172800,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 400.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-03T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.0,
+      0.0
+    ],
+    "offset": 172800,
+    "points": [
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": null,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-03T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "distances": [
+      0.1,
+      10000.0
+    ],
+    "offset": 172800,
+    "points": [
+      {
+        "rolling_24h_wh_mi": 300.0,
+        "trip_efficiency_wh_mi": 300.0,
+        "ts": "2026-05-01T00:00:00Z"
+      },
+      {
+        "rolling_24h_wh_mi": 400.0,
+        "trip_efficiency_wh_mi": 400.0,
+        "ts": "2026-05-03T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "empty": []
+  }
+]
