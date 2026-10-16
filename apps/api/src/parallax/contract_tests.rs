@@ -304,10 +304,10 @@ fn subscription_timestamp_and_boundary_contract() {
     );
 }
 
-struct ScriptSocket {
-    incoming: VecDeque<Result<Message, SocketError>>,
-    outgoing: Vec<Message>,
-    pending: bool,
+pub(super) struct ScriptSocket {
+    pub(super) incoming: VecDeque<Result<Message, SocketError>>,
+    pub(super) outgoing: Vec<Message>,
+    pub(super) pending: bool,
 }
 impl Stream for ScriptSocket {
     type Item = Result<Message, SocketError>;
@@ -407,5 +407,195 @@ async fn envelope_errors_precede_database_access() {
         "envelope-errors",
         &json!(output),
         include_str!("fixtures/envelope-errors.json"),
+    );
+}
+
+#[test]
+fn read_only_handshake_and_header_errors() {
+    let mut tokens = RivianTokenBundle {
+        access_token: "synthetic-access".into(),
+        refresh_token: "synthetic-refresh".into(),
+        app_session_token: "synthetic-app".into(),
+        user_session_token: "synthetic-user".into(),
+        csrf_token: "synthetic-csrf".into(),
+        created_at: at(),
+    };
+    let request = transport::connection_request(&tokens).unwrap();
+    assert_eq!(request.method(), http::Method::GET);
+    assert_eq!(request.uri().to_string(), WS_URL);
+    let mut headers = request
+        .headers()
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_str().unwrap().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let socket_key = headers.remove("sec-websocket-key").unwrap();
+    assert_eq!(BASE64.decode(socket_key).unwrap().len(), 16);
+    assert_eq!(
+        json!(headers),
+        json!({"a-sess":"synthetic-app","u-sess":"synthetic-user","csrf-token":"synthetic-csrf","sec-websocket-protocol":"graphql-transport-ws","host":"api.rivian.com","connection":"Upgrade","upgrade":"websocket","sec-websocket-version":"13"})
+    );
+    let Message::Text(init) = transport::connection_init(&tokens, Uuid::from_u128(1)) else {
+        panic!("text init")
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&init).unwrap(),
+        json!({"type":"connection_init","payload":{"client-name":"com.rivian.ios.consumer-apollo-ios","client-version":"1.13.0-1494","dc-cid":"m-ios-00000000-0000-0000-0000-000000000001","u-sess":"synthetic-user"}})
+    );
+    tokens.csrf_token.clear();
+    assert!(transport::connection_request(&tokens)
+        .unwrap()
+        .headers()
+        .get("csrf-token")
+        .is_none());
+    tokens.app_session_token = "bad\nheader".into();
+    tokens.user_session_token = "bad\nheader".into();
+    assert_eq!(
+        transport::connection_request(&tokens)
+            .unwrap_err()
+            .to_string(),
+        "invalid Rivian app session header"
+    );
+    tokens.app_session_token = "valid".into();
+    assert_eq!(
+        transport::connection_request(&tokens)
+            .unwrap_err()
+            .to_string(),
+        "invalid Rivian user session header"
+    );
+    tokens.user_session_token = "valid".into();
+    tokens.csrf_token = "bad\nheader".into();
+    assert_eq!(
+        transport::connection_request(&tokens)
+            .unwrap_err()
+            .to_string(),
+        "invalid Rivian CSRF header"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_delays_cap_reset_and_cancel_without_advancing_time() {
+    let mut schedule = RetrySchedule::default();
+    let mut delays = vec![];
+    for _ in 0..10 {
+        delays.push(schedule.delay().as_secs());
+        schedule.advance();
+    }
+    assert_eq!(delays, vec![2, 4, 8, 16, 32, 64, 120, 120, 120, 120]);
+    schedule.reset();
+    assert_eq!(schedule.delay(), Duration::from_secs(2));
+    let (tx, mut rx) = broadcast::channel(1);
+    let started = tokio::time::Instant::now();
+    assert!(transport::wait_to_retry(&mut rx, schedule.delay()).await);
+    assert_eq!(started.elapsed(), Duration::from_secs(2));
+    tx.send(()).unwrap();
+    let started = tokio::time::Instant::now();
+    assert!(!transport::wait_to_retry(&mut rx, schedule.delay()).await);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    drop(tx);
+    assert!(!transport::wait_to_retry(&mut rx, schedule.delay()).await);
+}
+
+#[test]
+fn socket_actions_gate_subscription_before_envelope() {
+    for frame in [
+        json!(null),
+        json!({}),
+        json!({"id":"other","type":"error"}),
+        json!({"id":SUBSCRIPTION_ID,"type":"next","payload":{}}),
+        json!({"id":SUBSCRIPTION_ID,"type":"ping"}),
+    ] {
+        assert!(matches!(
+            SocketAction::classify(Message::Text(frame.to_string().into())),
+            SocketAction::Ignore
+        ));
+    }
+    assert!(matches!(
+        SocketAction::classify(Message::Text("{".into())),
+        SocketAction::Ignore
+    ));
+    let payload = json!({"rvm":"vehicle.power.state","payload":"CAQ="});
+    let frame =
+        json!({"id":SUBSCRIPTION_ID,"type":"next","payload":{"data":{"parallaxMessages":payload}}});
+    let SocketAction::Envelope(actual) =
+        SocketAction::classify(Message::Text(frame.to_string().into()))
+    else {
+        panic!("expected envelope")
+    };
+    assert_eq!(actual, payload);
+    for (kind, rejected) in [("error", true), ("complete", false)] {
+        let action = SocketAction::classify(Message::Text(
+            json!({"id":SUBSCRIPTION_ID,"type":kind}).to_string().into(),
+        ));
+        assert!(if rejected {
+            matches!(action, SocketAction::Rejected)
+        } else {
+            matches!(action, SocketAction::Completed)
+        });
+    }
+    let SocketAction::Reply(reply) = SocketAction::classify(Message::Ping(vec![9, 8, 7].into()))
+    else {
+        panic!("pong")
+    };
+    assert_eq!(reply, Message::Pong(vec![9, 8, 7].into()));
+}
+
+#[tokio::test]
+async fn subscribed_driver_handles_transport_without_network() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .unwrap();
+    let session = CollectorSession {
+        vehicle_id: vehicle(),
+        rivian_vehicle_id: "synthetic".into(),
+        tokens: RivianTokenBundle {
+            access_token: String::new(),
+            refresh_token: String::new(),
+            app_session_token: String::new(),
+            user_session_token: String::new(),
+            csrf_token: String::new(),
+            created_at: at(),
+        },
+    };
+    let (_tx, mut context) =
+        watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
+    for (kind, error) in [
+        ("error", "Parallax subscription rejected"),
+        ("complete", "Parallax subscription completed"),
+    ] {
+        let mut socket = ScriptSocket {
+            incoming: vec![
+                Ok(Message::Text("{".into())),
+                Ok(Message::Ping(vec![4, 5].into())),
+                Ok(Message::Text(
+                    json!({"id":"other","type":"error"}).to_string().into(),
+                )),
+                Ok(Message::Text(
+                    json!({"id":SUBSCRIPTION_ID,"type":kind}).to_string().into(),
+                )),
+            ]
+            .into(),
+            outgoing: vec![],
+            pending: false,
+        };
+        assert_eq!(
+            drive_subscribed_socket(&pool, &session, &mut context, None, &mut socket)
+                .await
+                .unwrap_err()
+                .to_string(),
+            error
+        );
+        assert_eq!(socket.outgoing, vec![Message::Pong(vec![4, 5].into())]);
+    }
+    let mut socket = ScriptSocket {
+        incoming: VecDeque::new(),
+        outgoing: vec![],
+        pending: false,
+    };
+    assert_eq!(
+        drive_subscribed_socket(&pool, &session, &mut context, None, &mut socket)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "Parallax socket ended"
     );
 }

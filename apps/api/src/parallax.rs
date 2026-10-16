@@ -30,6 +30,17 @@ use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
 use crate::models::telemetry::{ClosureTransition, PowerState, TelemetryEvent};
 use crate::services::ingestion_capture::{self, Kind as CaptureKind};
 
+#[path = "parallax/forwarding.rs"]
+mod forwarding;
+#[path = "parallax/transport.rs"]
+mod transport;
+use transport::{RetrySchedule, SocketAction};
+#[path = "parallax/projection.rs"]
+mod projection;
+#[path = "parallax/snapshot.rs"]
+mod snapshot;
+use snapshot::Snapshot;
+
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const SUBSCRIPTION_ID: &str = "panda-parallax-collector";
 const SCHEMA_VERSION: i32 = 1;
@@ -93,12 +104,11 @@ pub fn spawn_in_process(
                     tracing::warn!(vehicle_id=%vehicle_id, err=%error, "Parallax lease acquisition failed")
                 }
             }
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
-                _ = shutdown.recv() => { return; }
+            if !transport::wait_to_retry(&mut shutdown, Duration::from_secs(30)).await {
+                return;
             }
         }
-        let mut backoff = 2u64;
+        let mut backoff = RetrySchedule::default();
         loop {
             let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
                 vehicle_id, &pool, &age_key,
@@ -110,11 +120,10 @@ pub fn spawn_in_process(
                     let _ =
                         set_collector_state(&pool, vehicle_id, "error", Some(&error.to_string()))
                             .await;
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
-                        _ = shutdown.recv() => { break; }
+                    if !transport::wait_to_retry(&mut shutdown, backoff.delay()).await {
+                        break;
                     }
-                    backoff = (backoff * 2).min(120);
+                    backoff.advance();
                     continue;
                 }
             };
@@ -131,7 +140,7 @@ pub fn spawn_in_process(
                 result = collect_connection_with_context(&pool, &session, &mut active_sessions, Some(&telemetry_tx)) => result
             };
             if result.is_ok() {
-                backoff = 2;
+                backoff.reset();
             } else if shutdown.try_recv().is_ok() {
                 break;
             } else {
@@ -139,11 +148,10 @@ pub fn spawn_in_process(
                     .bind(vehicle_id).execute(&pool).await;
                 let message = result.err().map(|e| e.to_string());
                 let _ = set_collector_state(&pool, vehicle_id, "error", message.as_deref()).await;
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
-                    _ = shutdown.recv() => { break; }
+                if !transport::wait_to_retry(&mut shutdown, backoff.delay()).await {
+                    break;
                 }
-                backoff = (backoff * 2).min(120);
+                backoff.advance();
             }
         }
         let _ = release_in_process_lease(&pool, vehicle_id, owner_id).await;
@@ -459,233 +467,10 @@ pub(crate) fn decode_vehicle_telemetry_with_notes(
     vehicle_id: Uuid,
     notes: &mut Vec<String>,
 ) -> Result<Option<TelemetryEvent>> {
-    let mut event = TelemetryEvent::empty(vehicle_id, source_at);
-    let mut meaningful = false;
-    match topic {
-        "vehicle.power.state" => {
-            let value = PowerStateMessage::decode(payload)?;
-            let state = match value.state.context("missing power state")? {
-                1 => PowerState::Sleep,
-                2 => PowerState::Unknown, // Rivian's standby has no canonical field.
-                3 => PowerState::Ready,
-                4 => PowerState::Go,
-                state => anyhow::bail!("unknown Parallax power state {state}"),
-            };
-            event.power_state = Some(state);
-            event.power_state_ts = Some(source_at);
-            meaningful = true;
-        }
-        "dynamics.vehicle.gnss" => {
-            let value = GnssState::decode(payload)?;
-            let latitude = value.latitude.context("missing GNSS latitude")?;
-            let longitude = value.longitude.context("missing GNSS longitude")?;
-            if !latitude.is_finite()
-                || !(-90.0..=90.0).contains(&latitude)
-                || !longitude.is_finite()
-                || !(-180.0..=180.0).contains(&longitude)
-            {
-                anyhow::bail!("invalid GNSS coordinates");
-            }
-            event.latitude = Some(latitude);
-            event.longitude = Some(longitude);
-            event.location_ts = Some(source_at);
-            if let Some(altitude) = value.altitude_m {
-                if !altitude.is_finite() || !(-1_000.0..=20_000.0).contains(&altitude) {
-                    anyhow::bail!("invalid GNSS altitude");
-                }
-                event.altitude_m = Some(altitude);
-            }
-            meaningful = true;
-        }
-        "dynamics.vehicle.odometer" => {
-            let value = OdometerState::decode(payload)?;
-            let kilometers = value.kilometers.context("missing odometer")?;
-            if kilometers > 2_000_000 {
-                anyhow::bail!("invalid odometer");
-            }
-            event.odometer_miles = Some(kilometers as f64 * 0.621_371_192);
-            event.odometer_miles_ts = Some(source_at);
-            meaningful = true;
-        }
-        "dynamics.vehicle.gear" => {
-            // Gear enum as observed on an R1S by apohor/rivolt: 1 P, 2 R,
-            // 4 D; 3 N is inferred from the ordering. Values match the legacy
-            // gearStatus strings.
-            let value = GearState::decode(payload)?;
-            let gear = match value.gear.context("missing gear")? {
-                1 => Some("park"),
-                2 => Some("reverse"),
-                3 => Some("neutral"),
-                4 => Some("drive"),
-                other => {
-                    notes.push(format!("skipped unknown gear {other}"));
-                    None
-                }
-            };
-            if let Some(gear) = gear {
-                event.gear_status = Some(gear.into());
-                meaningful = true;
-            }
-        }
-        "body.closures.states" => {
-            let value = ClosureStates::decode(payload)?;
-            for state in value.states {
-                let position = state.position.context("missing closure position")?;
-                // Every frame ends with this marker: stateless on the R2,
-                // mirroring the window state on the R1.
-                if position == CLOSURE_SENTINEL_POSITION {
-                    continue;
-                }
-                // Protobuf omits a zero status, which the app enum defines as
-                // unspecified: the vehicle does not have this closure (for
-                // example the side bin or tonneau on an R1S).
-                let Some(status) = state.state.filter(|status| *status != 0) else {
-                    continue;
-                };
-                if position == CLOSURE_CHARGE_PORT_POSITION {
-                    // Same meaning as legacy chargePortState: open or ajar
-                    // count as open; opening, closing, and closed do not.
-                    if (1..=5).contains(&status) {
-                        event.charge_port_open = Some(matches!(status, 1 | 3));
-                        meaningful = true;
-                    } else {
-                        notes.push(format!(
-                            "skipped charge port with unexpected state {status}"
-                        ));
-                    }
-                    continue;
-                }
-                let field = closure_field(&mut event, position);
-                if field.is_none() && position != CLOSURE_REAR_GLASS_POSITION {
-                    notes.push(format!(
-                        "skipped unmapped closure position {position} with state {status}"
-                    ));
-                    continue;
-                }
-                // App enum: 1 OPEN, 2 CLOSE, 3 AJAR, 4 OPENING, 5 CLOSING.
-                // Every state except CLOSE is "not closed", as legacy reports.
-                let closed = match status {
-                    2 => true,
-                    1 | 3 | 4 | 5 => false,
-                    other => {
-                        notes.push(format!(
-                            "skipped closure position {position} with unexpected state {other}"
-                        ));
-                        continue;
-                    }
-                };
-                if let Some(field) = field {
-                    *field = Some(closed);
-                    meaningful = true;
-                }
-                let transition = match status {
-                    3 => Some(ClosureTransition::Ajar),
-                    4 => Some(ClosureTransition::Opening),
-                    5 => Some(ClosureTransition::Closing),
-                    _ => None,
-                };
-                if let (Some(transition), Some(name)) = (transition, closure_field_name(position)) {
-                    event
-                        .closure_transitions
-                        .get_or_insert_with(Default::default)
-                        .insert(name.to_owned(), transition);
-                }
-            }
-        }
-        "body.locks.states" => {
-            let value = LockStates::decode(payload)?;
-            for state in value.states {
-                let position = state.position.context("missing lock position")?;
-                // R1 vehicles also report positions with no canonical field
-                // (14, 15). Skip those entries rather than losing the other
-                // locks in the same frame.
-                if lock_field_name(position).is_none() {
-                    notes.push(format!("skipped unmapped lock position {position}"));
-                    continue;
-                }
-                // App enum: 1 LOCKED, 2 UNLOCKED, 3 PARTIALLY_UNLOCKED.
-                let locked = match state.state {
-                    Some(1) => true,
-                    Some(2 | 3) => false,
-                    other => {
-                        let reason = other.map_or_else(
-                            || "missing state".into(),
-                            |s| format!("unexpected state {s}"),
-                        );
-                        notes.push(format!("skipped lock position {position} with {reason}"));
-                        continue;
-                    }
-                };
-                meaningful |= set_lock(&mut event, position, locked)?;
-            }
-        }
-        "dynamics.tires.state" => {
-            let value = TireStates::decode(payload)?;
-            for state in value.states {
-                let position = state.position.context("missing tire position")?;
-                let status = state.status.context("missing tire status")?;
-                if !matches!(status, 1 | 2) {
-                    anyhow::bail!("unknown tire status {status}");
-                }
-                let pressure_bar = state.pressure_bar.context("missing tire pressure")?;
-                if !pressure_bar.is_finite() || !(0.0..=10.0).contains(&pressure_bar) {
-                    anyhow::bail!("invalid tire pressure");
-                }
-                meaningful |= set_tire(&mut event, position, pressure_bar, status == 1)?;
-            }
-        }
-        "comfort.cabin.cabin_temperatures" => {
-            let value = CabinTemperatures::decode(payload)?;
-            if let Some(cabin) = value.cabin_c {
-                event.cabin_temp_c = Some(valid_temperature(cabin as f64)?);
-                meaningful = true;
-            }
-            if let Some(driver) = value.driver_c {
-                event.driver_temp_c = Some(valid_temperature(driver as f64)?);
-                meaningful = true;
-            }
-        }
-        "comfort.cabin.cabin_preconditioning_status" => {
-            let value = PreconditioningState::decode(payload)?;
-            let status = match value.status {
-                Some(1 | 2) => Some("initiate"),
-                Some(4) => Some("active"),
-                Some(0 | 3) => Some("off"),
-                None if payload.is_empty() => Some("off"),
-                Some(other) => {
-                    notes.push(format!("skipped unknown preconditioning status {other}"));
-                    None
-                }
-                None => {
-                    notes.push("skipped preconditioning frame with missing status".into());
-                    None
-                }
-            };
-            if let Some(status) = status {
-                event.cabin_precon_status = Some(status.into());
-                meaningful = true;
-            }
-        }
-        "comfort.cabin.defrost_defog_status" => {
-            let value = DefrostState::decode(payload)?;
-            let status = match value.status.context("missing defrost status")? {
-                // The R1S reports 4 whenever legacy reports "Off"; as in
-                // rivian-python-client, only 2 means defrosting.
-                0 | 1 | 4 => Some(false),
-                2 => Some(true),
-                other => {
-                    notes.push(format!("skipped unknown defrost status {other}"));
-                    None
-                }
-            };
-            if let Some(status) = status {
-                event.defrost_active = Some(status);
-                meaningful = true;
-            }
-        }
-        _ => return Ok(None),
-    }
-    Ok(meaningful.then_some(event))
+    let Some(reading) = projection::CanonicalReading::decode(topic, payload)? else {
+        return Ok(None);
+    };
+    reading.project(payload.is_empty(), source_at, vehicle_id, notes)
 }
 
 fn valid_temperature(value: f64) -> Result<f64> {
@@ -927,21 +712,21 @@ async fn load_sessions(pool: &PgPool) -> Result<Vec<CollectorSession>> {
 }
 
 async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
-    let mut backoff = 2u64;
+    let mut backoff = RetrySchedule::default();
     loop {
         match collect_connection(&pool, &session).await {
-            Ok(()) => backoff = 2,
+            Ok(()) => backoff.reset(),
             Err(error) => {
                 set_collector_state(&pool, session.vehicle_id, "error", Some(&error.to_string()))
                     .await?;
                 tracing::warn!(
                     vehicle_id = %session.vehicle_id,
                     error = %error,
-                    retry_seconds = backoff,
+                    retry_seconds = backoff.delay().as_secs(),
                     "Parallax collector disconnected"
                 );
-                tokio::time::sleep(Duration::from_secs(backoff)).await;
-                backoff = (backoff * 2).min(120);
+                tokio::time::sleep(backoff.delay()).await;
+                backoff.advance();
             }
         }
     }
@@ -959,51 +744,10 @@ async fn collect_connection_with_context(
     active_sessions: &mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
     telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
 ) -> Result<()> {
-    let mut request = WS_URL.into_client_request()?;
-    request
-        .headers_mut()
-        .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
-    request.headers_mut().insert(
-        "A-Sess",
-        session
-            .tokens
-            .app_session_token
-            .parse()
-            .context("invalid Rivian app session header")?,
-    );
-    request.headers_mut().insert(
-        "U-Sess",
-        session
-            .tokens
-            .user_session_token
-            .parse()
-            .context("invalid Rivian user session header")?,
-    );
-    if !session.tokens.csrf_token.is_empty() {
-        request.headers_mut().insert(
-            "Csrf-Token",
-            session
-                .tokens
-                .csrf_token
-                .parse()
-                .context("invalid Rivian CSRF header")?,
-        );
-    }
+    let request = transport::connection_request(&session.tokens)?;
     let (mut websocket, _) = tokio_tungstenite::connect_async(request).await?;
     websocket
-        .send(Message::Text(
-            json!({
-                "type": "connection_init",
-                "payload": {
-                    "client-name": "com.rivian.ios.consumer-apollo-ios",
-                    "client-version": "1.13.0-1494",
-                    "dc-cid": format!("m-ios-{}", Uuid::new_v4()),
-                    "u-sess": session.tokens.user_session_token,
-                }
-            })
-            .to_string()
-            .into(),
-        ))
+        .send(transport::connection_init(&session.tokens, Uuid::new_v4()))
         .await?;
 
     wait_for_ack(&mut websocket).await?;
@@ -1021,6 +765,21 @@ async fn collect_connection_with_context(
         json!({ "event": "subscribed", "topics": VEHICLE_STATE_TOPICS.len() }),
     );
 
+    drive_subscribed_socket(pool, session, active_sessions, telemetry_tx, &mut websocket).await
+}
+
+async fn drive_subscribed_socket<S>(
+    pool: &PgPool,
+    session: &CollectorSession,
+    active_sessions: &mut watch::Receiver<crate::ingestion::worker::ActiveSessionContext>,
+    telemetry_tx: Option<&mpsc::Sender<(String, TelemetryEvent)>>,
+    websocket: &mut S,
+) -> Result<()>
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.tick().await;
     loop {
@@ -1029,47 +788,27 @@ async fn collect_connection_with_context(
                 let Some(message) = message else {
                     anyhow::bail!("Parallax socket ended");
                 };
-                match message? {
-                    Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
-                    Message::Text(text) => {
-                        let value: Value = serde_json::from_str(&text).unwrap_or_default();
-                        if value.get("id").and_then(Value::as_str) != Some(SUBSCRIPTION_ID) {
-                            continue;
-                        }
-                        match value.get("type").and_then(Value::as_str) {
-                            Some("next") => {
-                                let Some(envelope) =
-                                    value.pointer("/payload/data/parallaxMessages")
-                                else {
-                                    continue;
-                                };
-                                let context = active_sessions.borrow_and_update().clone();
-                                if persist_envelope(pool, session.vehicle_id, envelope, &context, telemetry_tx).await.is_err() {
-                                    tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
-                                    let _ = sqlx::query("UPDATE panda.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
-                                        .bind(session.vehicle_id).execute(pool).await;
-                                }
-                            }
-                            Some("error") => {
-                                ingestion_capture::record(
-                                    session.vehicle_id,
-                                    CaptureKind::ParallaxConnection,
-                                    json!({ "event": "subscription_rejected" }),
-                                );
-                                anyhow::bail!("Parallax subscription rejected")
-                            }
-                            Some("complete") => {
-                                ingestion_capture::record(
-                                    session.vehicle_id,
-                                    CaptureKind::ParallaxConnection,
-                                    json!({ "event": "subscription_completed" }),
-                                );
-                                anyhow::bail!("Parallax subscription completed")
-                            }
-                            _ => {}
+                match SocketAction::classify(message?) {
+                    SocketAction::Reply(message) => websocket.send(message).await?,
+                    SocketAction::Envelope(envelope) => {
+                        let context = active_sessions.borrow_and_update().clone();
+                        if persist_envelope(pool, session.vehicle_id, &envelope, &context, telemetry_tx).await.is_err() {
+                            tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
+                            let _ = sqlx::query("UPDATE panda.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
+                                .bind(session.vehicle_id).execute(pool).await;
                         }
                     }
-                    Message::Close(frame) => {
+                    SocketAction::Rejected => {
+                        ingestion_capture::record(session.vehicle_id, CaptureKind::ParallaxConnection,
+                            json!({ "event": "subscription_rejected" }));
+                        anyhow::bail!("Parallax subscription rejected")
+                    }
+                    SocketAction::Completed => {
+                        ingestion_capture::record(session.vehicle_id, CaptureKind::ParallaxConnection,
+                            json!({ "event": "subscription_completed" }));
+                        anyhow::bail!("Parallax subscription completed")
+                    }
+                    SocketAction::Closed(frame) => {
                         // Rivian closes every subscription when its connection
                         // TTL runs out. That is a routine renewal, not a
                         // failure: returning Ok resets the backoff so the
@@ -1093,7 +832,7 @@ async fn collect_connection_with_context(
                         }
                         anyhow::bail!("Parallax socket closed: {frame:?}");
                     }
-                    _ => {}
+                    SocketAction::Ignore => {}
                 }
             }
             _ = heartbeat.tick() => {
@@ -1423,86 +1162,22 @@ async fn persist_allowlisted_envelope(
     let hash = Sha256::digest(payload).to_vec();
     let associated_session = matching_active_session(active_session, source_at);
 
-    // The canonical worker owns merging and persistence. A full or closed
-    // channel must never interrupt this companion's independent storage path.
-    let mut canonical_outcome = None;
-    if is_canonical_telemetry_topic(topic) {
-        report.forward_outcome = ForwardOutcome::NotEvaluated;
-        let decoded = decode_vehicle_telemetry_with_notes(
-            topic,
-            payload,
-            source_at,
-            vehicle_id,
-            &mut report.notes,
-        );
-        match decoded {
-            Ok(Some(event)) => {
-                canonical_outcome = Some(EnvelopeOutcome::Decoded);
-                if capturing {
-                    report.decoded = Some(ingestion_capture::present_fields(&event));
-                }
-                if source_at < received_at - chrono::Duration::minutes(5)
-                    || source_at > received_at + chrono::Duration::seconds(30)
-                {
-                    report.forward_outcome = ForwardOutcome::Stale;
-                } else if let Some(telemetry_tx) = telemetry_tx {
-                    match telemetry_tx.try_send((topic.to_owned(), event)) {
-                        Ok(()) => report.forward_outcome = ForwardOutcome::Enqueued,
-                        Err(error) => {
-                            let (reason, outcome) = match &error {
-                                mpsc::error::TrySendError::Full(_) => {
-                                    ("full", ForwardOutcome::Full)
-                                }
-                                mpsc::error::TrySendError::Closed(_) => {
-                                    ("closed", ForwardOutcome::Closed)
-                                }
-                            };
-                            report.forward_outcome = outcome;
-                            let count = TELEMETRY_FORWARD_DROP_LOG_COUNT
-                                .fetch_add(1, Ordering::Relaxed)
-                                + 1;
-                            tracing::debug!(
-                                vehicle_id=%vehicle_id,
-                                source=%topic,
-                                reason,
-                                "validated Parallax telemetry could not reach canonical worker"
-                            );
-                            if count == 1 || count.is_power_of_two() {
-                                tracing::warn!(
-                                    vehicle_id=%vehicle_id,
-                                    source=%topic,
-                                    reason,
-                                    sampled_drop_count=count,
-                                    "validated Parallax telemetry could not reach canonical worker"
-                                );
-                            }
-                        }
-                    }
-                } else {
-                    report.forward_outcome = ForwardOutcome::NotAttached;
-                }
-            }
-            Ok(None) => {
-                canonical_outcome = Some(if report.notes.is_empty() {
-                    EnvelopeOutcome::Empty
-                } else {
-                    EnvelopeOutcome::Ignored
-                });
-                report.forward_outcome = ForwardOutcome::NoCanonicalData;
-            }
-            Err(_) => {
-                anyhow::bail!("typed Parallax decoder rejected topic {topic}");
-            }
-        }
-    }
+    let canonical_outcome = forwarding::project_and_forward(
+        topic,
+        payload,
+        received_at,
+        source_at,
+        vehicle_id,
+        telemetry_tx,
+        report,
+        capturing,
+    )?;
 
-    match topic {
-        "vehicle.network.state" => {
-            let value = NetworkState::decode(payload)?;
-            let wifi = value.wifi.unwrap_or_default();
-            let cellular = value.cellular.unwrap_or_default();
-            let rssi = without_signal_sentinel(wifi.rssi_dbm);
-            let cellular_signal = without_signal_sentinel(cellular.signal_dbm);
+    let snapshot = Snapshot::decode(topic, payload, active_session)?;
+    match snapshot {
+        Snapshot::Network(value) => {
+            let wifi = value.wifi;
+            let cellular = value.cellular;
             sqlx::query(
                 r#"INSERT INTO timeseries.parallax_network_samples
                    (vehicle_id, source_at, received_at, payload_hash, overall_state,
@@ -1519,24 +1194,18 @@ async fn persist_allowlisted_envelope(
             .bind(value.overall_state)
             .bind(value.active_transport)
             .bind(wifi.status)
-            .bind(wifi.status == Some(2) && rssi.is_some())
-            .bind(rssi)
+            .bind(value.connected)
+            .bind(wifi.rssi_dbm)
             .bind(wifi.link_speed_mbps)
             .bind(wifi.frequency_mhz)
             .bind(wifi.channel_width_mhz)
-            .bind(cellular.access_technology.filter(|v| v.len() <= 16))
-            .bind(cellular_signal)
+            .bind(cellular.access_technology)
+            .bind(cellular.signal_dbm)
             .bind(SCHEMA_VERSION)
             .execute(pool)
             .await?;
         }
-        "dynamics.vehicle.efficiency" => {
-            let value = EfficiencyState::decode(payload)?;
-            let ranges: BTreeMap<String, i32> = value
-                .mode_ranges
-                .into_iter()
-                .filter_map(|item| Some((item.mode?.to_string(), item.full_charge_range_km?)))
-                .collect();
+        Snapshot::Efficiency(value) => {
             sqlx::query(
                 r#"INSERT INTO timeseries.parallax_efficiency_samples
                    (vehicle_id, source_at, received_at, payload_hash, reference_wh_per_km,
@@ -1549,17 +1218,13 @@ async fn persist_allowlisted_envelope(
             .bind(hash)
             .bind(value.reference_wh_per_km)
             .bind(value.learned_wh_per_km)
-            .bind(sqlx::types::Json(ranges))
+            .bind(sqlx::types::Json(value.ranges))
             .bind(SCHEMA_VERSION)
             .execute(pool)
             .await?;
         }
-        "dynamics.vehicle.mass_estimate" => {
-            let value = MassEstimate::decode(payload)?;
-            if let Some(mass) = value
-                .estimated_mass_kg
-                .filter(|mass| (1000..=10_000).contains(mass))
-            {
+        Snapshot::Mass(mass) => {
+            if let Some(mass) = mass {
                 sqlx::query(
                     r#"INSERT INTO timeseries.parallax_mass_samples
                        (vehicle_id, source_at, received_at, payload_hash, estimated_mass_kg, schema_version)
@@ -1569,39 +1234,25 @@ async fn persist_allowlisted_envelope(
                 .bind(mass).bind(SCHEMA_VERSION).execute(pool).await?;
             }
         }
-        "energy_edge_compute.graphs.parked_energy_distributions" => {
-            let value = ParkedEnergyDistributions::decode(payload)?;
-            for (window, sample) in [
-                ("24h", value.hours_24),
-                ("8h", value.hours_8),
-                ("since_parked", value.since_parked),
-            ] {
-                if let Some(sample) = sample {
-                    persist_parked_window(
-                        pool,
-                        vehicle_id,
-                        source_at,
-                        received_at,
-                        &hash,
-                        window,
-                        sample,
-                    )
-                    .await?;
-                }
+        Snapshot::Parked(windows) => {
+            for (window, sample) in windows {
+                persist_parked_window(
+                    pool,
+                    vehicle_id,
+                    source_at,
+                    received_at,
+                    &hash,
+                    window,
+                    sample,
+                )
+                .await?;
             }
         }
-        "energy_edge_compute.graphs.charge_session_breakdown" => {
-            let value = ChargeBreakdown::decode(payload)?;
-            let total_kwh = f64_opt(value.total_kwh).filter(|v| v.is_finite() && *v >= 0.0);
-            let current_power_kw = value
-                .current_power_kw
-                .map(f64::from)
-                .or_else(|| value.fallback_power_kw.map(f64::from))
-                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v));
-            if total_kwh.is_none() && current_power_kw.is_none() && value.charging_state.is_none() {
-                record_empty_frame(pool, vehicle_id).await?;
-                return Ok(EnvelopeOutcome::Empty);
-            }
+        Snapshot::Breakdown {
+            total_kwh,
+            power_kw: current_power_kw,
+            state,
+        } => {
             sqlx::query(
                 r#"INSERT INTO timeseries.parallax_charge_breakdown_samples
                    (vehicle_id, source_at, received_at, payload_hash, charge_session_id, total_kwh, pack_kwh,
@@ -1617,7 +1268,7 @@ async fn persist_allowlisted_envelope(
             .bind(None::<f64>)
             .bind(None::<f64>)
             .bind(None::<i32>)
-            .bind(value.charging_state)
+            .bind(state)
             .bind(None::<i32>)
             .bind(SCHEMA_VERSION)
             .execute(pool)
@@ -1633,67 +1284,22 @@ async fn persist_allowlisted_envelope(
                 }
             }
         }
-        "energy.high_voltage.battery_state" => {
-            let value = match HvBatteryState::decode(payload) {
-                Ok(v) => v,
-                Err(_) => {
-                    record_decode_error(pool, vehicle_id).await?;
-                    return Ok(EnvelopeOutcome::Rejected);
-                }
-            };
-            let Some(pack) = value
-                .charge_state
-                .and_then(|state| state.pack_energy_kwh)
-                .filter(|v| v.is_finite() && (0.0..=500.0).contains(v))
-            else {
-                record_empty_frame(pool, vehicle_id).await?;
-                return Ok(EnvelopeOutcome::Empty);
-            };
+        Snapshot::Pack(pack) => {
             if let Some(session_id) = associated_session {
                 sqlx::query("UPDATE panda.charge_sessions SET parallax_pack_energy_kwh=$1,parallax_pack_energy_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_pack_energy_observed_at IS NULL OR $4>=parallax_pack_energy_observed_at)")
                     .bind(pack).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
             }
         }
-        "energy_edge_compute.graphs.charging_graph_global" => {
-            let value = match ChargingGraphGlobal::decode(payload) {
-                Ok(v) => v,
-                Err(_) => {
-                    record_decode_error(pool, vehicle_id).await?;
-                    return Ok(EnvelopeOutcome::Rejected);
-                }
-            };
-            let mut persisted = 0usize;
-            let mut latest_power: Option<(DateTime<Utc>, f64)> = None;
-            for (index, segment) in value.segments.into_iter().enumerate() {
-                let Some(ms) = segment.start_unix_ms else {
-                    continue;
-                };
-                let Some(ts) = Utc.timestamp_millis_opt(ms).single() else {
-                    continue;
-                };
-                let power_kw = segment
-                    .power_kw
-                    .filter(|v| v.is_finite() && (0.0..=500.0).contains(v));
-                let soc = segment.soc.filter(|v| (0..=100).contains(v));
-                if power_kw.is_none() && soc.is_none() {
-                    continue;
-                }
-                if let Some(power) = power_kw {
-                    if latest_power.is_none_or(|(latest_ts, _)| ts >= latest_ts) {
-                        latest_power = Some((ts, f64::from(power)));
-                    }
-                }
-                let session_id = matching_active_session(active_session, ts);
+        Snapshot::Curve {
+            points,
+            latest_power,
+        } => {
+            for point in points {
                 sqlx::query("INSERT INTO timeseries.parallax_charge_curve_points (vehicle_id,source_at,segment_index,charge_session_id,power_kw,soc,delivered_energy_kwh,received_at,schema_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING")
-                        .bind(vehicle_id).bind(ts).bind(index as i32).bind(session_id)
-                        .bind(power_kw.map(f64::from)).bind(soc.map(f64::from))
+                        .bind(vehicle_id).bind(point.at).bind(point.index).bind(point.session)
+                        .bind(point.power_kw).bind(point.soc)
                         .bind(None::<f64>).bind(received_at).bind(SCHEMA_VERSION)
                         .execute(pool).await?;
-                persisted += 1;
-            }
-            if persisted == 0 {
-                record_empty_frame(pool, vehicle_id).await?;
-                return Ok(EnvelopeOutcome::Empty);
             }
             if let Some((observed_at, power)) = latest_power {
                 if let Some(session_id) = matching_active_session(active_session, observed_at) {
@@ -1701,61 +1307,23 @@ async fn persist_allowlisted_envelope(
                 }
             }
         }
-        "charging.session.time_estimation" => {
-            let value = match ChargingTimeEstimation::decode(payload) {
-                Ok(v) => v,
-                Err(_) => {
-                    record_decode_error(pool, vehicle_id).await?;
-                    return Ok(EnvelopeOutcome::Rejected);
-                }
-            };
-            let Some(seconds) = value
-                .remaining_seconds
-                .filter(|v| (0..=172_800).contains(v))
-            else {
-                record_empty_frame(pool, vehicle_id).await?;
-                return Ok(EnvelopeOutcome::Empty);
-            };
-            let minutes = (seconds + 59) / 60;
+        Snapshot::Remaining(minutes) => {
             if let Some(session_id) = associated_session {
                 sqlx::query("UPDATE panda.charge_sessions SET parallax_time_remaining_minutes=$1,parallax_time_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_time_observed_at IS NULL OR $4>=parallax_time_observed_at)")
                     .bind(minutes).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
             }
         }
-        "charging.session.status" => {
-            let value = match ChargingStatus::decode(payload) {
-                Ok(v) => v,
-                Err(_) => {
-                    record_decode_error(pool, vehicle_id).await?;
-                    return Ok(EnvelopeOutcome::Rejected);
-                }
-            };
-            if value.plug_connection_status.is_none()
-                && value.display_status.is_none()
-                && value.evse_type.is_none()
-            {
-                record_empty_frame(pool, vehicle_id).await?;
-                return Ok(EnvelopeOutcome::Empty);
-            }
+        Snapshot::Status(state) => {
             if let Some(session_id) = associated_session {
-                let state = format!(
-                    "plug={};display={};evse={}",
-                    value
-                        .plug_connection_status
-                        .map_or_else(|| "unknown".into(), |v| v.to_string()),
-                    value
-                        .display_status
-                        .map_or_else(|| "unknown".into(), |v| v.to_string()),
-                    value
-                        .evse_type
-                        .map_or_else(|| "unknown".into(), |v| v.to_string()),
-                );
                 sqlx::query("UPDATE panda.charge_sessions SET parallax_charger_status=$1,parallax_status_observed_at=$4 WHERE id=$2 AND vehicle_id=$3 AND ended_at IS NULL AND (parallax_status_observed_at IS NULL OR $4>=parallax_status_observed_at)")
                     .bind(state).bind(session_id).bind(vehicle_id).bind(source_at).execute(pool).await?;
             }
         }
-        "energy_edge_compute.graphs.cold_weather_soc" => {
-            let value = ColdWeatherSoc::decode(payload)?;
+        Snapshot::Cold {
+            available,
+            limited,
+            impact_km,
+        } => {
             sqlx::query(
                 r#"INSERT INTO timeseries.parallax_cold_weather_samples
                    (vehicle_id, source_at, received_at, payload_hash, available_soc_pct,
@@ -1766,20 +1334,26 @@ async fn persist_allowlisted_envelope(
             .bind(source_at)
             .bind(received_at)
             .bind(hash)
-            .bind(value.available_soc_pct)
-            .bind(value.cold_limited_soc_pct)
-            .bind(f64_opt(value.cold_range_impact_km))
+            .bind(available)
+            .bind(limited)
+            .bind(impact_km)
             .bind(SCHEMA_VERSION)
             .execute(pool)
             .await?;
         }
-        "dynamics.vehicle.drive_mode" => {
-            // Retained in the allowlist for continued schema observation. No
-            // stable enum labels are exposed until more modes are observed.
-            record_empty_frame(pool, vehicle_id).await?;
-            return Ok(EnvelopeOutcome::Ignored);
+        Snapshot::Rejected => {
+            record_decode_error(pool, vehicle_id).await?;
+            return Ok(EnvelopeOutcome::Rejected);
         }
-        _ => {
+        Snapshot::Empty | Snapshot::Ignored => {
+            record_empty_frame(pool, vehicle_id).await?;
+            return Ok(if matches!(snapshot, Snapshot::Empty) {
+                EnvelopeOutcome::Empty
+            } else {
+                EnvelopeOutcome::Ignored
+            });
+        }
+        Snapshot::Canonical => {
             let outcome = canonical_outcome.unwrap_or(EnvelopeOutcome::Ignored);
             if outcome != EnvelopeOutcome::Decoded {
                 record_empty_frame(pool, vehicle_id).await?;

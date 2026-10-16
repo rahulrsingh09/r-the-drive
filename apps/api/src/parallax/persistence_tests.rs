@@ -627,3 +627,65 @@ async fn companion_shutdown_during_lease_and_token_retry() {
     );
     db.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated synthetic TimescaleDB; run with --ignored"]
+async fn scripted_socket_persists_and_classifies_closes() {
+    use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+    let db = Fixture::new().await;
+    let (vehicle, _) = db.seed(2002).await;
+    let session = CollectorSession {
+        vehicle_id: vehicle,
+        rivian_vehicle_id: "synthetic".into(),
+        tokens: RivianTokenBundle {
+            access_token: String::new(),
+            refresh_token: String::new(),
+            app_session_token: String::new(),
+            user_session_token: String::new(),
+            csrf_token: String::new(),
+            created_at: at(),
+        },
+    };
+    let (_context_tx, mut context) =
+        watch::channel(crate::ingestion::worker::ActiveSessionContext::default());
+    let envelope = |value: Value| {
+        Ok(Message::Text(json!({"id":SUBSCRIPTION_ID,"type":"next","payload":{"data":{"parallaxMessages":value}}}).to_string().into()))
+    };
+    let mut socket=contract_tests::ScriptSocket{incoming:vec![
+        Ok(Message::Ping(vec![1,2].into())),
+        envelope(json!({"rvm":"unknown.synthetic","payload":"not-base64"})),
+        envelope(json!({"rvm":"vehicle.power.state","payload":"!"})),
+        envelope(json!({"rvm":"vehicle.network.state","payload":"","timestamp":at().timestamp_millis()})),
+        envelope(json!({"rvm":"vehicle.power.state","payload":"Cv8="})),
+        Ok(Message::Close(Some(CloseFrame{code:CloseCode::Library(4420),reason:"Connection TTL expired".into()}))),
+    ].into(),outgoing:vec![],pending:false};
+    drive_subscribed_socket(&db.pool, &session, &mut context, None, &mut socket)
+        .await
+        .unwrap();
+    assert_eq!(socket.outgoing, vec![Message::Pong(vec![1, 2].into())]);
+    let state:(String,i64,i64)=sqlx::query_as("SELECT status,decode_error_count::bigint,empty_frame_count::bigint FROM panda.parallax_collector_state WHERE vehicle_id=$1").bind(vehicle).fetch_one(&db.pool).await.unwrap();
+    assert_eq!(state, ("disconnected".into(), 2, 0));
+    let samples:i64=sqlx::query_scalar("SELECT count(*) FROM timeseries.parallax_network_samples WHERE vehicle_id=$1 AND source_at=$2 AND schema_version=1").bind(vehicle).bind(at()).fetch_one(&db.pool).await.unwrap();
+    assert_eq!(samples, 1);
+    set_collector_state(&db.pool, vehicle, "connected", None)
+        .await
+        .unwrap();
+    let close = Some(CloseFrame {
+        code: CloseCode::Normal,
+        reason: "synthetic close".into(),
+    });
+    let expected = format!("Parallax socket closed: {close:?}");
+    let mut socket = contract_tests::ScriptSocket {
+        incoming: vec![Ok(Message::Close(close))].into(),
+        outgoing: vec![],
+        pending: false,
+    };
+    assert_eq!(
+        drive_subscribed_socket(&db.pool, &session, &mut context, None, &mut socket)
+            .await
+            .unwrap_err()
+            .to_string(),
+        expected
+    );
+    db.close().await;
+}
