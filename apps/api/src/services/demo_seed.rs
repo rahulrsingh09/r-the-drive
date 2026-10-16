@@ -168,7 +168,91 @@ pub fn validate_fixture(fixture: &DemoFixtureSpec) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Serialize create-if-missing requests and recheck authority under the user lock.
+pub(crate) async fn lock_demo_creator(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    let creator = sqlx::query_as::<_, (bool, String)>(
+        "SELECT is_disabled, role FROM panda.users WHERE id=$1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match creator {
+        Some((false, role)) if matches!(role.as_str(), "admin" | "super_user") => Ok(()),
+        Some(_) => Err(AppError::Forbidden),
+        None => Err(AppError::Unauthorized),
+    }
+}
+
+/// Populate only an empty demo. This path never requires history deletion.
+pub async fn seed_new_demo_vehicle(
+    tx: &mut Transaction<'_, Postgres>,
+    vehicle_id: Uuid,
+    model: &str,
+    anchor: DateTime<Utc>,
+) -> Result<DemoSeedSummary, AppError> {
+    lock_demo_vehicle(tx, vehicle_id).await?;
+    let populated: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM timeseries.telemetry WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.trips WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.charge_sessions WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.vehicle_state_periods WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.software_versions WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.battery_capacity_snapshots WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.rivian_charge_curve_points WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.vehicle_images WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.vehicle_latest_status WHERE vehicle_id=$1
+            UNION ALL SELECT 1 FROM panda.vehicle_runtime_state WHERE vehicle_id=$1
+        )",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if populated {
+        return Err(AppError::Conflict(
+            "Fresh demo seeding requires an empty vehicle; existing data was preserved.".into(),
+        ));
+    }
+    populate_demo_history(tx, vehicle_id, model, anchor).await
+}
+
+/// Replace illustrative history. The HTTP route forbids this in production.
 pub async fn seed_demo_vehicle(
+    tx: &mut Transaction<'_, Postgres>,
+    vehicle_id: Uuid,
+    model: &str,
+    anchor: DateTime<Utc>,
+) -> Result<DemoSeedSummary, AppError> {
+    // Reject invalid input before resetting anything in the caller's transaction.
+    load_fixture()?;
+    model_profile(model)?;
+    lock_demo_vehicle(tx, vehicle_id).await?;
+    clear_seeded_history(tx, vehicle_id).await?;
+    populate_demo_history(tx, vehicle_id, model, anchor).await
+}
+
+async fn lock_demo_vehicle(
+    tx: &mut Transaction<'_, Postgres>,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
+    let key: String =
+        sqlx::query_scalar("SELECT rivian_vehicle_id FROM panda.vehicles WHERE id=$1 FOR UPDATE")
+            .bind(vehicle_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    if !key.starts_with("demo-") {
+        return Err(AppError::Validation(
+            "only demo vehicles can receive demo history".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn populate_demo_history(
     tx: &mut Transaction<'_, Postgres>,
     vehicle_id: Uuid,
     model: &str,
@@ -179,7 +263,6 @@ pub async fn seed_demo_vehicle(
     let anchor = anchor.with_nanosecond(0).unwrap_or(anchor);
     let window_start = anchor - Duration::days(fixture.window_days);
 
-    clear_seeded_history(tx, vehicle_id).await?;
     let address_ids = ensure_demo_addresses(tx).await?;
     seed_trips(
         tx,

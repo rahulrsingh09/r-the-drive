@@ -36,7 +36,7 @@ use crate::{
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::range_normalization::normalize_remaining_range_miles,
     services::{
-        demo_seed::seed_demo_vehicle,
+        demo_seed::{lock_demo_creator, seed_demo_vehicle, seed_new_demo_vehicle},
         external_connections::{
             rivian_renewal_state_for_auth, RivianRenewalState, RIVIAN_RENEWAL_INTERVAL,
         },
@@ -47,6 +47,10 @@ use crate::{
 #[cfg(test)]
 #[path = "vehicles_authorization_tests.rs"]
 mod authorization_tests;
+
+#[cfg(test)]
+#[path = "vehicles_demo_history_tests.rs"]
+mod demo_history_tests;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -2400,6 +2404,7 @@ async fn create_demo_vehicle(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     let mut tx = state.pool.begin().await?;
+    lock_demo_creator(&mut tx, auth.user_id).await?;
     let requested_model = body
         .as_ref()
         .map(|payload| payload.model.trim().to_uppercase())
@@ -2492,7 +2497,7 @@ async fn create_demo_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    let summary = seed_demo_vehicle(&mut tx, vehicle_id, model, Utc::now()).await?;
+    let summary = seed_new_demo_vehicle(&mut tx, vehicle_id, model, Utc::now()).await?;
 
     tx.commit().await?;
     Ok(Json(serde_json::json!({
@@ -2525,6 +2530,12 @@ async fn refresh_demo_vehicle(
     if !is_demo_vehicle_key(&demo_key) {
         return Err(AppError::Validation(
             "only demo vehicles can refresh demo data".into(),
+        ));
+    }
+    if state.config.is_production() {
+        return Err(AppError::Conflict(
+            "Demo history is protected in production. Refresh is unavailable; existing data was preserved."
+                .into(),
         ));
     }
 
