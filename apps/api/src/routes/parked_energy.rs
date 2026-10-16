@@ -57,27 +57,8 @@ async fn parked_energy(
     Query(params): Query<ParkedEnergyParams>,
 ) -> Result<Json<ParkedEnergyResponse>, AppError> {
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-    let to = params.to.unwrap_or_else(Utc::now);
-    let from = params
-        .from
-        .unwrap_or_else(|| to - chrono::Duration::days(30));
-
-    let samples = sqlx::query_as::<_, ParkedEnergySample>(
-        r#"SELECT DISTINCT ON (period_window)
-                  period_window AS window, source_at, received_at, parked_started_at, duration_minutes,
-                  total_kwh, vehicle_systems_kwh, outlets_kwh, climate_kwh,
-                  gear_guard_kwh, total_range_impact_km,
-                  vehicle_systems_range_impact_km, outlets_range_impact_km,
-                  climate_range_impact_km, gear_guard_range_impact_km
-           FROM timeseries.parallax_parked_energy_samples
-           WHERE vehicle_id = $1 AND source_at >= $2 AND source_at <= $3
-           ORDER BY period_window, source_at DESC"#,
-    )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
+    let plan = ParkedEvidencePlan::resolve(params);
+    let samples = plan.read(&state.pool, vehicle_id).await?;
 
     Ok(Json(ParkedEnergyResponse {
         vehicle_id,
@@ -85,4 +66,40 @@ async fn parked_energy(
         source: "rivian_reported",
         samples,
     }))
+}
+
+struct ParkedEvidencePlan {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+}
+
+impl ParkedEvidencePlan {
+    fn resolve(params: ParkedEnergyParams) -> Self {
+        let to = params.to.unwrap_or_else(Utc::now);
+        Self {
+            from: params
+                .from
+                .unwrap_or_else(|| to - chrono::Duration::days(30)),
+            to,
+        }
+    }
+
+    async fn read(
+        self,
+        pool: &sqlx::PgPool,
+        vehicle: Uuid,
+    ) -> Result<Vec<ParkedEnergySample>, AppError> {
+        Ok(sqlx::query_as::<_, ParkedEnergySample>(
+            "WITH evidence AS (
+                SELECT *, row_number() OVER (PARTITION BY period_window ORDER BY source_at DESC) AS rank
+                FROM timeseries.parallax_parked_energy_samples
+                WHERE vehicle_id=$1 AND source_at >= $2 AND source_at <= $3
+             )
+             SELECT period_window AS window,source_at,received_at,parked_started_at,duration_minutes,
+                    total_kwh,vehicle_systems_kwh,outlets_kwh,climate_kwh,gear_guard_kwh,
+                    total_range_impact_km,vehicle_systems_range_impact_km,outlets_range_impact_km,
+                    climate_range_impact_km,gear_guard_range_impact_km
+             FROM evidence WHERE rank=1 ORDER BY period_window"
+        ).bind(vehicle).bind(self.from).bind(self.to).fetch_all(pool).await?)
+    }
 }

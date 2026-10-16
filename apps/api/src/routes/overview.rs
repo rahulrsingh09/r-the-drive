@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -30,7 +30,7 @@ struct OverviewResponse {
     today: TodayTile,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Deserialize, Serialize, sqlx::FromRow)]
 struct LiveTile {
     battery_level: Option<f64>,
     distance_to_empty_mi: Option<f64>,
@@ -40,7 +40,7 @@ struct LiveTile {
     ts: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Deserialize, Serialize, sqlx::FromRow)]
 struct TripTile {
     id: Uuid,
     started_at: DateTime<Utc>,
@@ -51,7 +51,7 @@ struct TripTile {
     soc_end: Option<f64>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Deserialize, Serialize, sqlx::FromRow)]
 struct ChargeTile {
     id: Uuid,
     started_at: DateTime<Utc>,
@@ -76,87 +76,48 @@ async fn overview(
     require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
-    let (live, last_trip, last_charge, today_miles) = tokio::try_join!(
-        fetch_live(&state.pool, vehicle_id),
-        fetch_last_trip(&state.pool, vehicle_id),
-        fetch_last_charge(&state.pool, vehicle_id),
-        fetch_today_miles(&state.pool, vehicle_id),
-    )?;
+    let evidence = OverviewEvidence::read(&state.pool, vehicle_id).await?;
 
     Ok(Json(OverviewResponse {
         vehicle_id,
         generated_at: Utc::now(),
-        live,
-        last_trip,
-        last_charge,
+        live: evidence.live.map(|value| value.0),
+        last_trip: evidence.last_trip.map(|value| value.0),
+        last_charge: evidence.last_charge.map(|value| value.0),
         today: TodayTile {
             date: Utc::now().date_naive(),
-            miles_driven: today_miles,
+            miles_driven: evidence.today_miles,
         },
     }))
 }
 
-async fn fetch_live(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<LiveTile>, AppError> {
-    let row = sqlx::query_as!(
-        LiveTile,
-        r#"SELECT battery_level, distance_to_empty_mi, power_state, odometer_miles,
-                  outside_temp_c, ts
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1
-           ORDER BY ts DESC LIMIT 1"#,
-        vid
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    Ok(row)
+#[derive(sqlx::FromRow)]
+struct OverviewEvidence {
+    live: Option<sqlx::types::Json<LiveTile>>,
+    last_trip: Option<sqlx::types::Json<TripTile>>,
+    last_charge: Option<sqlx::types::Json<ChargeTile>>,
+    today_miles: Option<f64>,
 }
 
-async fn fetch_last_trip(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TripTile>, AppError> {
-    let row = sqlx::query_as!(
-        TripTile,
-        r#"SELECT id, started_at, ended_at, distance_miles,
-                  efficiency_wh_per_mile, soc_start, soc_end
-           FROM panda.trips
-           WHERE vehicle_id = $1
-           ORDER BY ended_at DESC LIMIT 1"#,
-        vid
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    Ok(row)
-}
-
-async fn fetch_last_charge(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<ChargeTile>, AppError> {
-    let row = sqlx::query_as!(
-        ChargeTile,
-        r#"SELECT id, started_at, ended_at, soc_start, soc_end,
-                  energy_added_wh, charger_type
-           FROM panda.charge_sessions
-           WHERE vehicle_id = $1
-           ORDER BY started_at DESC LIMIT 1"#,
-        vid
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    Ok(row)
-}
-
-async fn fetch_today_miles(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<f64>, AppError> {
-    // odometer_daily CAGG stores max odometer per day; diff today's max from yesterday's max
-    let miles: Option<f64> = sqlx::query_scalar!(
-        r#"SELECT miles_driven
-           FROM timeseries.odometer_daily
-           WHERE vehicle_id = $1
-                         AND day = date_trunc('day', now())::timestamptz
-           LIMIT 1"#,
-        vid
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?
-    .flatten();
-    Ok(miles)
+impl OverviewEvidence {
+    async fn read(pool: &sqlx::PgPool, vehicle: Uuid) -> Result<Self, AppError> {
+        Ok(sqlx::query_as::<_, Self>(
+            "SELECT
+             (SELECT to_jsonb(live) FROM (
+                 SELECT battery_level,distance_to_empty_mi,power_state,odometer_miles,outside_temp_c,ts
+                 FROM timeseries.telemetry WHERE vehicle_id=$1 ORDER BY ts DESC LIMIT 1
+             ) live) AS live,
+             (SELECT to_jsonb(trip) FROM (
+                 SELECT id,started_at,ended_at,distance_miles,efficiency_wh_per_mile,soc_start,soc_end
+                 FROM panda.trips WHERE vehicle_id=$1 ORDER BY ended_at DESC LIMIT 1
+             ) trip) AS last_trip,
+             (SELECT to_jsonb(charge) FROM (
+                 SELECT id,started_at,ended_at,soc_start,soc_end,energy_added_wh,charger_type
+                 FROM panda.charge_sessions WHERE vehicle_id=$1 ORDER BY started_at DESC LIMIT 1
+             ) charge) AS last_charge,
+             (SELECT miles_driven FROM timeseries.odometer_daily
+                 WHERE vehicle_id=$1 AND day=date_trunc('day',now())::timestamptz LIMIT 1
+             ) AS today_miles"
+        ).bind(vehicle).fetch_one(pool).await?)
+    }
 }
