@@ -37,7 +37,9 @@ fn fixed_job() -> restore_jobs::RestoreJob {
 }
 
 fn evidence(name: &str, value: &Value) {
-    let root = std::env::var("RESTORE_CONTRACT_ARTIFACT_DIR").unwrap();
+    let Ok(root) = std::env::var("RESTORE_CONTRACT_ARTIFACT_DIR") else {
+        return;
+    };
     std::fs::write(
         Path::new(&root).join(format!("{name}-actual.json")),
         serde_json::to_vec_pretty(value).unwrap(),
@@ -215,8 +217,7 @@ impl DatabaseFixture {
             .await
             .unwrap();
         bootstrap.close().await;
-        let directory =
-            tempfile::tempdir_in(std::env::var("RESTORE_CONTRACT_ARTIFACT_DIR").unwrap()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
         let mut config = config(directory.path());
         config.database_url = url.to_string();
         let keys = panda_api::keys::generate_keys().unwrap();
@@ -484,13 +485,20 @@ async fn candidate_package_and_preparation_fault_contract() {
     )
     .await
     .unwrap();
-    fs::copy(
-        &package,
-        Path::new(&std::env::var("RESTORE_CONTRACT_ARTIFACT_DIR").unwrap())
-            .join("historical-fixture.rma.tar.gz"),
-    )
-    .await
-    .unwrap();
+    if let Ok(directory) = std::env::var("RESTORE_CONTRACT_ARTIFACT_DIR") {
+        fs::copy(
+            &package,
+            Path::new(&directory).join("historical-fixture.rma.tar.gz"),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            Path::new(&directory).join("historical-fixture-role.txt"),
+            &fixture.role,
+        )
+        .await
+        .unwrap();
+    }
     let staging = fixture.directory.path().join("extracted");
     extract_package(&fixture.config, Path::new(&package), &staging)
         .await
