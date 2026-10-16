@@ -390,3 +390,39 @@ async fn provider_contract_curve_overlap_dedup_and_vehicle_isolation() {
     );
     db.cleanup().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn provider_correction_shutdown_cancels_inflight_poll() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(3600))
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .unwrap();
+    let (_power, power_state_rx) =
+        tokio::sync::watch::channel(Some(crate::models::telemetry::PowerState::Ready));
+    let (_charging, charging_rx) = tokio::sync::watch::channel(false);
+    let (stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let mut task = tokio::spawn(run_poll_loop(
+        Uuid::nil(),
+        pool,
+        reqwest::Client::new(),
+        "synthetic-invalid-key".into(),
+        PollLoopSignals {
+            power_state_rx,
+            charging_rx,
+            shutdown,
+        },
+        redis::Client::open("redis://127.0.0.1:1/").unwrap(),
+    ));
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(300)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    stop.send(()).unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut task).await;
+    task.abort();
+    assert!(
+        result.is_ok(),
+        "shutdown must interrupt a poll waiting for database acquisition"
+    );
+}

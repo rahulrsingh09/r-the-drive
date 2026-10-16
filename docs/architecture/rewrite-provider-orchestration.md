@@ -135,3 +135,13 @@ callers. No test requires a real account or provider credentials.
 The integration owner must register this document in the shared Docusaurus sidebar
 and rerun the combined documentation gates. This branch deliberately does not edit
 that shared file.
+
+## Intentional corrections
+
+Cancellation now encloses credential loading, socket connection, protocol I/O and
+bounded-channel delivery, and interrupts periodic history work while it is pending.
+Previously shutdown was selected only during established-stream reads and between
+polls; a missing acknowledgement, a full delivery channel or a waiting database
+operation could delay termination. Synthetic timeout regressions fail before this
+change and pass with it. Dropping pending database work retains SQLx transaction
+rollback and existing per-vehicle lock ownership semantics.

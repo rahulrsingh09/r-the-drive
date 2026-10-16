@@ -578,71 +578,80 @@ pub async fn run_ws_loop(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     config: Config,
 ) {
-    let mut retry = ReconnectPolicy::new(&config);
-    let mut health = VehicleStateSubscriptionHealth::default();
-    let mut state = ReconnectState::Credentials;
-    loop {
-        state = match state {
-            ReconnectState::Credentials => {
-                match crate::ingestion::rivian_poll::load_vehicle_tokens(
-                    vehicle_id, &pool, &age_key,
-                )
-                .await
-                {
-                    Ok((_, tokens)) => ReconnectState::Connect(tokens),
-                    Err(error) => {
-                        tracing::warn!(%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
-                        ReconnectState::Backoff(retry.wait(false))
-                    }
-                }
-            }
-            ReconnectState::Connect(tokens) => {
-                let query = health.build_query();
-                let result = connect_and_subscribe(
-                    &vehicle_id,
-                    &rivian_veh_id,
-                    &tokens,
-                    &tx,
-                    &mut shutdown,
-                    WsSubscription {
-                        query: &query,
-                        disabled_field_count: health.disabled_count(),
-                    },
-                )
-                .await;
-                match result {
-                    Ok(WsLoopEnd::Shutdown) => return,
-                    Ok(WsLoopEnd::ConnectionTtlExpired) => {
-                        tracing::info!(%vehicle_id, "Rivian WS connection TTL expired; renewing subscription");
-                        retry.renewed();
-                        ReconnectState::Credentials
-                    }
-                    Err(error) => {
-                        if let Some(rejection) = error.downcast_ref::<RivianSubscriptionRejection>()
-                        {
-                            if health.record_rejection(&vehicle_id, &rejection.invalid_fields) {
-                                let _ = tx.send(WsInboundEvent::control(json!({"type":"ws_schema_degraded","disabled_vehicle_state_fields":health.disabled_count(),"invalid_fields":rejection.invalid_fields}))).await;
-                            }
+    let mut connection_shutdown = shutdown.resubscribe();
+    let reconnecting = async {
+        let mut retry = ReconnectPolicy::new(&config);
+        let mut health = VehicleStateSubscriptionHealth::default();
+        let mut state = ReconnectState::Credentials;
+        loop {
+            state = match state {
+                ReconnectState::Credentials => {
+                    match crate::ingestion::rivian_poll::load_vehicle_tokens(
+                        vehicle_id, &pool, &age_key,
+                    )
+                    .await
+                    {
+                        Ok((_, tokens)) => ReconnectState::Connect(tokens),
+                        Err(error) => {
+                            tracing::warn!(%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
+                            ReconnectState::Backoff(retry.wait(false))
                         }
-                        let delay = retry.wait(true);
-                        tracing::warn!(%vehicle_id, err=%error, backoff=delay, "WS error, reconnecting");
-                        let _ = tx
-                            .send(WsInboundEvent::control(
-                                json!({"type":"reconnect","backoff_seconds":delay}),
-                            ))
-                            .await;
-                        ReconnectState::Backoff(delay)
                     }
                 }
-            }
-            ReconnectState::Backoff(seconds) => {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {},
-                    _ = shutdown.recv() => return,
+                ReconnectState::Connect(tokens) => {
+                    let query = health.build_query();
+                    let result = connect_and_subscribe(
+                        &vehicle_id,
+                        &rivian_veh_id,
+                        &tokens,
+                        &tx,
+                        &mut connection_shutdown,
+                        WsSubscription {
+                            query: &query,
+                            disabled_field_count: health.disabled_count(),
+                        },
+                    )
+                    .await;
+                    match result {
+                        Ok(WsLoopEnd::Shutdown) => return,
+                        Ok(WsLoopEnd::ConnectionTtlExpired) => {
+                            tracing::info!(%vehicle_id, "Rivian WS connection TTL expired; renewing subscription");
+                            retry.renewed();
+                            ReconnectState::Credentials
+                        }
+                        Err(error) => {
+                            if let Some(rejection) =
+                                error.downcast_ref::<RivianSubscriptionRejection>()
+                            {
+                                if health.record_rejection(&vehicle_id, &rejection.invalid_fields) {
+                                    let _ = tx.send(WsInboundEvent::control(json!({"type":"ws_schema_degraded","disabled_vehicle_state_fields":health.disabled_count(),"invalid_fields":rejection.invalid_fields}))).await;
+                                }
+                            }
+                            let delay = retry.wait(true);
+                            tracing::warn!(%vehicle_id, err=%error, backoff=delay, "WS error, reconnecting");
+                            let _ = tx
+                                .send(WsInboundEvent::control(
+                                    json!({"type":"reconnect","backoff_seconds":delay}),
+                                ))
+                                .await;
+                            ReconnectState::Backoff(delay)
+                        }
+                    }
                 }
-                ReconnectState::Credentials
-            }
-        };
+                ReconnectState::Backoff(seconds) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {},
+                        _ = connection_shutdown.recv() => return,
+                    }
+                    ReconnectState::Credentials
+                }
+            };
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = shutdown.recv() => {},
+        _ = reconnecting => {},
     }
 }
 
@@ -814,94 +823,98 @@ where
         + futures::Stream<Item = Result<Message, WsError>>
         + Unpin,
 {
-    let mut state = ConnectionState::Initializing;
-    loop {
-        state = match state {
-            ConnectionState::Initializing => {
-                let _ = tx
-                    .send(WsInboundEvent::control(json!({"type":"connection_open"})))
-                    .await;
-                ws.send(Message::Text(
-                    json!({
-                        "type":"connection_init",
-                        "payload":{
-                            "client-name":"com.rivian.ios.consumer-apollo-ios",
-                            "client-version":"1.13.0-1494",
-                            "dc-cid":format!("m-ios-{}", Uuid::new_v4()),
-                            "u-sess":tokens.user_session_token,
-                        }
-                    })
-                    .to_string()
-                    .into(),
-                ))
-                .await?;
-                let _ = tx
-                    .send(WsInboundEvent::control(json!({"type":"connection_init"})))
-                    .await;
-                ConnectionState::AwaitingAck
-            }
-            ConnectionState::AwaitingAck => match ws.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let event = WsInboundEvent::raw_control(text.to_string());
-                    let acknowledged = event.message_type.as_deref() == Some("connection_ack");
-                    let _ = tx.send(event).await;
-                    if acknowledged {
-                        ConnectionState::Subscribing
-                    } else {
-                        tracing::warn!(%vehicle_id, message=%truncate_ws_message(&text), "Rivian WS message before ack");
-                        ConnectionState::AwaitingAck
-                    }
-                }
-                Some(Ok(Message::Ping(data))) => {
-                    ws.send(Message::Pong(data)).await?;
+    let protocol = async {
+        let mut state = ConnectionState::Initializing;
+        loop {
+            state = match state {
+                ConnectionState::Initializing => {
+                    let _ = tx
+                        .send(WsInboundEvent::control(json!({"type":"connection_open"})))
+                        .await;
+                    ws.send(Message::Text(
+                        json!({
+                            "type":"connection_init",
+                            "payload":{
+                                "client-name":"com.rivian.ios.consumer-apollo-ios",
+                                "client-version":"1.13.0-1494",
+                                "dc-cid":format!("m-ios-{}", Uuid::new_v4()),
+                                "u-sess":tokens.user_session_token,
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await?;
+                    let _ = tx
+                        .send(WsInboundEvent::control(json!({"type":"connection_init"})))
+                        .await;
                     ConnectionState::AwaitingAck
                 }
-                Some(Ok(_)) => ConnectionState::AwaitingAck,
-                _ => anyhow::bail!("connection closed before ack"),
-            },
-            ConnectionState::Subscribing => {
-                for (request, diagnostic) in subscription_frames(
-                    rivian_veh_id,
-                    WsSubscription {
-                        query: subscription.query,
-                        disabled_field_count: subscription.disabled_field_count,
-                    },
-                ) {
-                    ws.send(Message::Text(request.to_string().into())).await?;
-                    let _ = tx.send(WsInboundEvent::control(diagnostic)).await;
+                ConnectionState::AwaitingAck => match ws.next().await {
+                    Some(Ok(Message::Text(text))) => {
+                        let event = WsInboundEvent::raw_control(text.to_string());
+                        let acknowledged = event.message_type.as_deref() == Some("connection_ack");
+                        let _ = tx.send(event).await;
+                        if acknowledged {
+                            ConnectionState::Subscribing
+                        } else {
+                            tracing::warn!(%vehicle_id, message=%truncate_ws_message(&text), "Rivian WS message before ack");
+                            ConnectionState::AwaitingAck
+                        }
+                    }
+                    Some(Ok(Message::Ping(data))) => {
+                        ws.send(Message::Pong(data)).await?;
+                        ConnectionState::AwaitingAck
+                    }
+                    Some(Ok(_)) => ConnectionState::AwaitingAck,
+                    _ => anyhow::bail!("connection closed before ack"),
+                },
+                ConnectionState::Subscribing => {
+                    for (request, diagnostic) in subscription_frames(
+                        rivian_veh_id,
+                        WsSubscription {
+                            query: subscription.query,
+                            disabled_field_count: subscription.disabled_field_count,
+                        },
+                    ) {
+                        ws.send(Message::Text(request.to_string().into())).await?;
+                        let _ = tx.send(WsInboundEvent::control(diagnostic)).await;
+                    }
+                    ConnectionState::Streaming
                 }
-                ConnectionState::Streaming
-            }
-            ConnectionState::Streaming => {
-                let frame = tokio::select! {
-                    _ = shutdown.recv() => return Ok(WsLoopEnd::Shutdown),
-                    frame = ws.next() => frame,
-                };
-                match streaming_action(frame, *vehicle_id) {
-                    FrameAction::Publish(event) => {
-                        let _ = tx.send(*event).await;
+                ConnectionState::Streaming => {
+                    let frame = ws.next().await;
+                    match streaming_action(frame, *vehicle_id) {
+                        FrameAction::Publish(event) => {
+                            let _ = tx.send(*event).await;
+                        }
+                        FrameAction::Reply(frame) => ws.send(frame).await?,
+                        FrameAction::Renew => return Ok(WsLoopEnd::ConnectionTtlExpired),
+                        FrameAction::Closed => anyhow::bail!("WS closed"),
+                        FrameAction::Ignore => {}
+                        FrameAction::NoSubscriptions(reason) => {
+                            let _ = tx
+                                .send(WsInboundEvent::control(
+                                    json!({"type":"ws_no_active_subscriptions","reason":reason}),
+                                ))
+                                .await;
+                            anyhow::bail!("Rivian WS subscription closed: {reason}");
+                        }
+                        FrameAction::Rejected(rejection) => {
+                            tracing::error!(%vehicle_id, message=%rejection.reason, invalid_fields=?rejection.invalid_fields, "Rivian WS subscription rejected by VehicleState schema");
+                            let _ = tx.send(WsInboundEvent::control(json!({"type":"ws_schema_rejected","reason":rejection.reason,"invalid_fields":rejection.invalid_fields}))).await;
+                            return Err(rejection.into());
+                        }
                     }
-                    FrameAction::Reply(frame) => ws.send(frame).await?,
-                    FrameAction::Renew => return Ok(WsLoopEnd::ConnectionTtlExpired),
-                    FrameAction::Closed => anyhow::bail!("WS closed"),
-                    FrameAction::Ignore => {}
-                    FrameAction::NoSubscriptions(reason) => {
-                        let _ = tx
-                            .send(WsInboundEvent::control(
-                                json!({"type":"ws_no_active_subscriptions","reason":reason}),
-                            ))
-                            .await;
-                        anyhow::bail!("Rivian WS subscription closed: {reason}");
-                    }
-                    FrameAction::Rejected(rejection) => {
-                        tracing::error!(%vehicle_id, message=%rejection.reason, invalid_fields=?rejection.invalid_fields, "Rivian WS subscription rejected by VehicleState schema");
-                        let _ = tx.send(WsInboundEvent::control(json!({"type":"ws_schema_rejected","reason":rejection.reason,"invalid_fields":rejection.invalid_fields}))).await;
-                        return Err(rejection.into());
-                    }
+                    ConnectionState::Streaming
                 }
-                ConnectionState::Streaming
-            }
-        };
+            };
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = shutdown.recv() => Ok(WsLoopEnd::Shutdown),
+        result = protocol => result,
     }
 }
 

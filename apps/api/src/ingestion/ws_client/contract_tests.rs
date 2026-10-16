@@ -217,3 +217,111 @@ fn provider_contract_field_health_and_vehicle_isolation() {
         assert!((base..=base + base / 4).contains(&delay));
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn provider_correction_shutdown_cancels_missing_ack() {
+    let mut socket = ScriptedSocket {
+        pending: true,
+        ..Default::default()
+    };
+    let (tx, _rx) = mpsc::channel(8);
+    let (stop, mut shutdown) = tokio::sync::broadcast::channel(1);
+    stop.send(()).unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        drive_socket(
+            &mut socket,
+            &Uuid::nil(),
+            "fixture",
+            &tokens(),
+            &tx,
+            &mut shutdown,
+            WsSubscription {
+                query: "subscription vehicleState { vehicleState { __typename } }",
+                disabled_field_count: 4,
+            },
+        ),
+    )
+    .await;
+    assert_eq!(
+        result
+            .expect("shutdown must interrupt acknowledgement wait")
+            .unwrap(),
+        WsLoopEnd::Shutdown
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_correction_shutdown_cancels_full_delivery_channel() {
+    let mut socket = ScriptedSocket {
+        pending: true,
+        ..Default::default()
+    };
+    let (tx, _rx) = mpsc::channel(1);
+    tx.send(WsInboundEvent::raw_control("{}".into()))
+        .await
+        .unwrap();
+    let (stop, mut shutdown) = tokio::sync::broadcast::channel(1);
+    stop.send(()).unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        drive_socket(
+            &mut socket,
+            &Uuid::nil(),
+            "fixture",
+            &tokens(),
+            &tx,
+            &mut shutdown,
+            WsSubscription {
+                query: "subscription vehicleState { vehicleState { __typename } }",
+                disabled_field_count: 4,
+            },
+        ),
+    )
+    .await;
+    assert_eq!(
+        result
+            .expect("shutdown must interrupt event delivery")
+            .unwrap(),
+        WsLoopEnd::Shutdown
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_correction_shutdown_interrupts_initialized_socket() {
+    let mut socket = ScriptedSocket {
+        pending: true,
+        ..Default::default()
+    };
+    let (tx, _rx) = mpsc::channel(8);
+    let (stop, mut shutdown) = tokio::sync::broadcast::channel(1);
+    let signal = async move {
+        tokio::task::yield_now().await;
+        stop.send(()).unwrap();
+    };
+    let session = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            drive_socket(
+                &mut socket,
+                &Uuid::nil(),
+                "fixture",
+                &tokens(),
+                &tx,
+                &mut shutdown,
+                WsSubscription {
+                    query: "subscription vehicleState { vehicleState { __typename } }",
+                    disabled_field_count: 4,
+                },
+            ),
+        )
+        .await
+    };
+    let (result, ()) = tokio::join!(session, signal);
+    assert_eq!(result.unwrap().unwrap(), WsLoopEnd::Shutdown);
+    assert_eq!(
+        socket.outgoing.len(),
+        1,
+        "the session must reach the acknowledgement wait before cancellation"
+    );
+}

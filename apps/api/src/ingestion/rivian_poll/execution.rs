@@ -263,13 +263,11 @@ impl VehiclePoll<'_> {
                 }
                 PeriodicState::Syncing => {
                     cadence.attempted();
-                    let result = fetch_charge_history_for_vehicle(
-                        self.vehicle_id,
-                        self.pool,
-                        self.client,
-                        self.age_key,
-                    )
-                    .await;
+                    let result = tokio::select! {
+                        biased;
+                        _ = shutdown.recv() => return,
+                        result = fetch_charge_history_for_vehicle(self.vehicle_id, self.pool, self.client, self.age_key) => result,
+                    };
                     let detail = result.as_ref().map_or(
                         serde_json::Value::Null,
                         |n| serde_json::json!({"reconciled":n}),
