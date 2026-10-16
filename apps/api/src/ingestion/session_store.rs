@@ -32,13 +32,34 @@ impl RivianTokenBundle {
     /// corrupted blobs early, without rejecting valid bundles that happen to
     /// have an empty `user_session_token`.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.access_token.is_empty() {
-            anyhow::bail!("RivianTokenBundle: access_token is empty");
+        match (self.access_token.is_empty(), self.refresh_token.is_empty()) {
+            (true, _) => anyhow::bail!("RivianTokenBundle: access_token is empty"),
+            (false, true) => anyhow::bail!("RivianTokenBundle: refresh_token is empty"),
+            (false, false) => Ok(()),
         }
-        if self.refresh_token.is_empty() {
-            anyhow::bail!("RivianTokenBundle: refresh_token is empty");
+    }
+
+    pub(super) fn has_same_session_snapshot(&self, other: &Self) -> bool {
+        SessionSnapshot::from(self) == SessionSnapshot::from(other)
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct SessionSnapshot<'a> {
+    app: &'a str,
+    user: &'a str,
+    csrf: &'a str,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl<'a> From<&'a RivianTokenBundle> for SessionSnapshot<'a> {
+    fn from(bundle: &'a RivianTokenBundle) -> Self {
+        Self {
+            app: &bundle.app_session_token,
+            user: &bundle.user_session_token,
+            csrf: &bundle.csrf_token,
+            created_at: bundle.created_at,
         }
-        Ok(())
     }
 }
 
@@ -83,4 +104,44 @@ pub fn decrypt_tokens(
     identity: &x25519::Identity,
 ) -> anyhow::Result<RivianTokenBundle> {
     decrypt_json(ciphertext, identity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_contract_tokens_keep_optional_sessions_and_validation_precedence() {
+        let mut tokens = RivianTokenBundle {
+            access_token: String::new(),
+            refresh_token: String::new(),
+            app_session_token: String::new(),
+            user_session_token: String::new(),
+            csrf_token: String::new(),
+            created_at: chrono::Utc::now(),
+        };
+        assert_eq!(
+            tokens.validate().unwrap_err().to_string(),
+            "RivianTokenBundle: access_token is empty"
+        );
+        tokens.access_token = "synthetic".into();
+        assert_eq!(
+            tokens.validate().unwrap_err().to_string(),
+            "RivianTokenBundle: refresh_token is empty"
+        );
+        tokens.refresh_token = "synthetic".into();
+        tokens.validate().unwrap();
+        let identity = x25519::Identity::generate();
+        let recovered =
+            decrypt_tokens(&encrypt_tokens(&tokens, &identity).unwrap(), &identity).unwrap();
+        assert_eq!(
+            serde_json::to_value(&tokens).unwrap(),
+            serde_json::to_value(recovered).unwrap()
+        );
+        let mut changed = tokens.clone();
+        changed.access_token = "other access".into();
+        assert!(tokens.has_same_session_snapshot(&changed));
+        changed.created_at += chrono::Duration::seconds(1);
+        assert!(!tokens.has_same_session_snapshot(&changed));
+    }
 }

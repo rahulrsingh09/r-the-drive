@@ -47,7 +47,10 @@ use crate::services::charge_sessions::{
     self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
 };
 
+mod execution;
+mod requests;
 mod transport;
+use requests::ReadOperation;
 
 static BASELINE_FORWARD_DROP_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -55,7 +58,7 @@ pub use transport::AuthError;
 
 /// Stable transport adapter; production requests always use the private policy transport.
 pub async fn gql_request<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     url: &str,
     tokens: &RivianTokenBundle,
     operation: &str,
@@ -67,7 +70,7 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         crate::services::outbound_policy::require_telemetry_query(query)?;
         return Ok(serde_json::from_value(result?)?);
     }
-    transport::gql_request(client, url, tokens, operation, query, variables).await
+    transport::gql_request(_client, url, tokens, operation, query, variables).await
 }
 
 // ── URL constants ────────────────────────────────────────────────────────────
@@ -152,10 +155,7 @@ async fn try_refresh_csrf(
 }
 
 fn session_token_snapshot_changed(left: &RivianTokenBundle, right: &RivianTokenBundle) -> bool {
-    left.app_session_token != right.app_session_token
-        || left.user_session_token != right.user_session_token
-        || left.csrf_token != right.csrf_token
-        || left.created_at != right.created_at
+    !left.has_same_session_snapshot(right)
 }
 
 pub(crate) async fn load_vehicle_tokens(
@@ -207,57 +207,46 @@ where
     let (rivian_vehicle_id, current_tokens) =
         load_vehicle_tokens(vehicle_id, pool, age_key).await?;
 
-    match operation(&rivian_vehicle_id, &current_tokens, pool, client).await {
-        Ok(value) => {
-            reset_auth_failure_counter(pool, vehicle_id).await;
-            Ok(value)
-        }
-        Err(error) if is_auth_error(&error) => {
-            // CSRF/app-session may have expired — rotate them and retry once.
-            // This mirrors the HA integration's RivianExpiredTokenError handler.
-            // The access token itself is long-lived and is never refreshed here.
-            tracing::info!(
-                vehicle_id=%vehicle_id,
-                operation=operation_name,
-                "Rivian auth failed; rotating CSRF and retrying"
-            );
-
-            let refreshed_tokens =
-                match try_refresh_csrf(vehicle_id, &current_tokens, client, pool, age_key).await {
-                    Ok(tokens) => tokens,
-                    Err(refresh_error) => {
-                        tracing::warn!(
-                            vehicle_id=%vehicle_id,
-                            operation=operation_name,
-                            err=%refresh_error,
-                            "CSRF refresh failed"
-                        );
-                        record_auth_failure(pool, vehicle_id, &refresh_error.to_string()).await;
-                        return Err(refresh_error);
+    enum RequestState {
+        Current(RivianTokenBundle),
+        Refresh(RivianTokenBundle),
+        Retry(RivianTokenBundle),
+    }
+    let mut state = RequestState::Current(current_tokens);
+    loop {
+        state = match state {
+            RequestState::Current(tokens) => {
+                match operation(&rivian_vehicle_id, &tokens, pool, client).await {
+                    Ok(value) => {
+                        reset_auth_failure_counter(pool, vehicle_id).await;
+                        return Ok(value);
                     }
-                };
-
-            match operation(&rivian_vehicle_id, &refreshed_tokens, pool, client).await {
-                Ok(value) => {
-                    reset_auth_failure_counter(pool, vehicle_id).await;
-                    Ok(value)
+                    Err(error) if is_auth_error(&error) => RequestState::Refresh(tokens),
+                    Err(error) => return Err(error),
                 }
-                Err(retry_error) if is_auth_error(&retry_error) => {
-                    // Transient 401s can survive a single CSRF refresh.  Don't
-                    // flip needs_reauth on the first occurrence — only after we
-                    // see this happen consecutively over a meaningful window.
-                    tracing::info!(
-                        vehicle_id=%vehicle_id,
-                        operation=operation_name,
-                        "operation still unauthenticated after CSRF refresh"
-                    );
-                    record_auth_failure(pool, vehicle_id, &retry_error.to_string()).await;
-                    Err(retry_error)
-                }
-                Err(other) => Err(other),
             }
-        }
-        Err(error) => Err(error),
+            RequestState::Refresh(rejected) => {
+                tracing::info!(%vehicle_id, operation=operation_name, "Rivian auth failed; rotating CSRF and retrying");
+                match try_refresh_csrf(vehicle_id, &rejected, client, pool, age_key).await {
+                    Ok(tokens) => RequestState::Retry(tokens),
+                    Err(error) => {
+                        record_auth_failure(pool, vehicle_id, &error.to_string()).await;
+                        return Err(error);
+                    }
+                }
+            }
+            RequestState::Retry(tokens) => {
+                let result = operation(&rivian_vehicle_id, &tokens, pool, client).await;
+                match &result {
+                    Ok(_) => reset_auth_failure_counter(pool, vehicle_id).await,
+                    Err(error) if is_auth_error(error) => {
+                        record_auth_failure(pool, vehicle_id, &error.to_string()).await;
+                    }
+                    Err(_) => {}
+                }
+                return result;
+            }
+        };
     }
 }
 
@@ -419,38 +408,9 @@ pub async fn fetch_vehicle_enrichment(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const Q: &str = r#"
-        query getUserInfo {
-          currentUser {
-            vehicles {
-              id
-              vehicle {
-                mobileConfiguration {
-                  trimOption          { optionId optionName }
-                  exteriorColorOption { optionId optionName }
-                  interiorColorOption { optionId optionName }
-                }
-                vehicleState {
-                  supportedFeatures {
-                    name
-                    status
-                  }
-                }
-              }
-            }
-          }
-        }
-    "#;
-
-    let data: UserInfoEnrichmentData = gql_request(
-        client,
-        GATEWAY_URL,
-        tokens,
-        "getUserInfo",
-        Q,
-        serde_json::Value::Null,
-    )
-    .await?;
+    let data: UserInfoEnrichmentData = ReadOperation::Enrichment
+        .execute(client, tokens, rivian_vehicle_id)
+        .await?;
 
     let item = data
         .current_user
@@ -540,31 +500,7 @@ pub async fn fetch_wallboxes(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const Q: &str = r#"
-        query getRegisteredWallboxes {
-          getRegisteredWallboxes {
-            wallboxId
-            name
-            latitude
-            longitude
-            maxPower
-            model
-            serialNumber
-            softwareVersion
-            linked
-          }
-        }
-    "#;
-
-    let data: WallboxesData = gql_request(
-        client,
-        CHRG_URL,
-        tokens,
-        "getRegisteredWallboxes",
-        Q,
-        serde_json::Value::Null,
-    )
-    .await?;
+    let data: WallboxesData = ReadOperation::Wallboxes.execute(client, tokens, "").await?;
 
     let boxes = data.get_registered_wallboxes.unwrap_or_default();
     for wb in &boxes {
@@ -746,7 +682,7 @@ async fn record_charge_history_sync_succeeded(pool: &PgPool, vehicle_id: Uuid) {
 ///   telemetry sessions can still land in the canonical charging history.
 /// - **`full_backfill = true`** (first-start backfill): additionally INSERTs
 ///   sessions that have no local match at all, tagged with `source = 'rivian_api'`.
-///   Paginates until the API returns fewer than `PAGE_SIZE` results (cap: 50 pages).
+///   The provider returns one complete summary response; this adapter does not paginate.
 pub async fn fetch_charge_history(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -834,41 +770,9 @@ async fn fetch_charge_history_locked(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    const Q: &str = r#"
-        query getCompletedSessionSummaries {
-          getCompletedSessionSummaries {
-            transactionId
-            startInstant
-            endInstant
-            totalEnergyKwh
-            rangeAddedKm
-            vendor
-            paidTotal
-            chargerType
-            currencyCode
-            city
-            vehicleId
-            vehicleName
-            isPublic
-            isHomeCharger
-            isRoamingNetwork
-            meta {
-              transactionIdGroupingKey
-              dataSources
-            }
-          }
-        }
-    "#;
-
-    let data: CompletedSessionsData = gql_request(
-        client,
-        CHRG_URL,
-        tokens,
-        "getCompletedSessionSummaries",
-        Q,
-        serde_json::Value::Null,
-    )
-    .await?;
+    let data: CompletedSessionsData = ReadOperation::CompletedHistory
+        .execute(client, tokens, "")
+        .await?;
 
     increment_poll_counter(pool, vehicle_id).await;
 
@@ -1426,13 +1330,8 @@ async fn clear_expired_payload_aliases(
     Ok(())
 }
 
-const LIVE_SESSION_HISTORY_QUERY: &str = r#"
-    query getLiveSessionHistory($vehicleId: ID!) {
-      getLiveSessionHistory(vehicleId: $vehicleId) {
-        chartData { kw time }
-      }
-    }
-"#;
+#[cfg(test)]
+const LIVE_SESSION_HISTORY_QUERY: &str = requests::LIVE_HISTORY_TEST_QUERY;
 
 pub async fn fetch_live_session_history(
     rivian_vehicle_id: &str,
@@ -1442,15 +1341,9 @@ pub async fn fetch_live_session_history(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    let data: LiveSessionHistoryData = gql_request(
-        client,
-        CHRG_URL,
-        tokens,
-        "getLiveSessionHistory",
-        LIVE_SESSION_HISTORY_QUERY,
-        serde_json::json!({ "vehicleId": rivian_vehicle_id }),
-    )
-    .await?;
+    let data: LiveSessionHistoryData = ReadOperation::LiveHistory
+        .execute(client, tokens, rivian_vehicle_id)
+        .await?;
     increment_poll_counter(pool, vehicle_id).await;
 
     let points = data
@@ -1485,50 +1378,18 @@ pub async fn fetch_live_session_history(
 
     let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
     let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
-    let actions = sqlx::query_scalar::<_, bool>(
-        r#"INSERT INTO panda.rivian_charge_curve_points
-               (vehicle_id, charge_session_id, ts, power_kw)
-           SELECT $1, $2, incoming.ts, incoming.power_kw
-           FROM unnest($3::timestamptz[], $4::double precision[])
-               AS incoming(ts, power_kw)
-           ON CONFLICT (vehicle_id, ts)
-           DO UPDATE SET
-               charge_session_id = COALESCE(
-                   rivian_charge_curve_points.charge_session_id,
-                   EXCLUDED.charge_session_id
-               ),
-               power_kw = COALESCE(
-                   EXCLUDED.power_kw,
-                   rivian_charge_curve_points.power_kw
-               )
-           WHERE rivian_charge_curve_points.charge_session_id IS DISTINCT FROM
-                     COALESCE(
-                         rivian_charge_curve_points.charge_session_id,
-                         EXCLUDED.charge_session_id
-                     )
-              OR rivian_charge_curve_points.power_kw IS DISTINCT FROM
-                     COALESCE(
-                         EXCLUDED.power_kw,
-                         rivian_charge_curve_points.power_kw
-                     )
-           RETURNING xmax = 0"#,
-    )
-    .bind(vehicle_id)
-    .bind(active_session_id)
-    .bind(&timestamps)
-    .bind(&power)
-    .fetch_all(pool)
-    .await?;
+    let changed =
+        persist_curve_batch(pool, vehicle_id, active_session_id, &timestamps, &power).await?;
 
     tracing::debug!(
         vehicle_id=%vehicle_id,
         records_received,
         records_selected=selected.len(),
-        curve_points_changed=actions.len(),
+        curve_points_changed=changed,
         "live charge curve synchronized"
     );
 
-    Ok(actions.len())
+    Ok(changed)
 }
 
 pub async fn fetch_live_session_history_for_vehicle(
@@ -1731,6 +1592,19 @@ pub async fn persist_charging_session_chart(
 
     let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
     let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
+    persist_curve_batch(pool, vehicle_id, active_session_id, &timestamps, &power).await
+}
+
+async fn persist_curve_batch(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    active_session_id: Option<Uuid>,
+    timestamps: &[DateTime<Utc>],
+    power: &[Option<f64>],
+) -> Result<usize> {
+    if timestamps.is_empty() {
+        return Ok(0);
+    }
     let actions = sqlx::query_scalar::<_, bool>(
         r#"INSERT INTO panda.rivian_charge_curve_points
                (vehicle_id, charge_session_id, ts, power_kw)
@@ -1761,8 +1635,8 @@ pub async fn persist_charging_session_chart(
     )
     .bind(vehicle_id)
     .bind(active_session_id)
-    .bind(&timestamps)
-    .bind(&power)
+    .bind(timestamps)
+    .bind(power)
     .fetch_all(pool)
     .await?;
     Ok(actions.len())
@@ -1808,27 +1682,9 @@ pub async fn fetch_charging_schedule(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const Q: &str = r#"
-        query GetChargingSchedule($vehicleId: String!) {
-          getVehicle(id: $vehicleId) {
-            chargingSchedules {
-              enabled
-              startTime
-              duration
-              amperage
-              location {
-                latitude
-                longitude
-              }
-              weekDays
-            }
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({ "vehicleId": rivian_vehicle_id });
-    let data: ChargingScheduleData =
-        gql_request(client, GATEWAY_URL, tokens, "GetChargingSchedule", Q, vars).await?;
+    let data: ChargingScheduleData = ReadOperation::ChargingSchedule
+        .execute(client, tokens, rivian_vehicle_id)
+        .await?;
 
     let policy = data
         .get_vehicle
@@ -1918,28 +1774,9 @@ pub async fn fetch_departure_schedules(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const Q: &str = r#"
-        query getDepartureSchedules($vehicleId: String!) {
-          getDepartureSchedules(vehicleId: $vehicleId) {
-            id
-            name
-            enabled
-            occurrence
-            preconditioningSettings
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({ "vehicleId": rivian_vehicle_id });
-    let data: DepartureSchedulesData = gql_request(
-        client,
-        GATEWAY_URL,
-        tokens,
-        "getDepartureSchedules",
-        Q,
-        vars,
-    )
-    .await?;
+    let data: DepartureSchedulesData = ReadOperation::DepartureSchedules
+        .execute(client, tokens, rivian_vehicle_id)
+        .await?;
 
     for sched in data.get_departure_schedules.unwrap_or_default() {
         let Some(rivian_id) = &sched.id else { continue };
@@ -1992,17 +1829,9 @@ pub async fn fetch_ota_details(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const Q: &str = r#"
-        query getOTAUpdateDetails($vehicleId: String!) {
-          getOTAUpdateDetails(vehicleId: $vehicleId) {
-            releaseNotesUrl
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({ "vehicleId": rivian_vehicle_id });
-    let data: OtaDetailsData =
-        gql_request(client, GATEWAY_URL, tokens, "getOTAUpdateDetails", Q, vars).await?;
+    let data: OtaDetailsData = ReadOperation::OtaDetails
+        .execute(client, tokens, rivian_vehicle_id)
+        .await?;
 
     let url = data
         .get_ota_update_details
@@ -2037,16 +1866,7 @@ pub struct ChargingScheduleInput {
     pub week_days: Option<Vec<String>>,
 }
 
-/// Mutation response — field received from Rivian but success is inferred from HTTP status.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct MutateChargingScheduleData {
-    update_vehicle_charging_settings: Option<serde_json::Value>,
-}
-
-/// Send the `updateVehicleChargingSettings` mutation to Rivian and upsert
-/// the result into `charging_schedules`.
+/// Stable adapter: vehicle changes are denied by the read-only provider policy.
 pub async fn mutate_charging_schedule(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -2055,42 +1875,8 @@ pub async fn mutate_charging_schedule(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const M: &str = r#"
-        mutation updateVehicleChargingSettings($vehicleId: String!, $chargePolicy: ChargePolicyInput!) {
-          updateVehicleChargingSettings(vehicleId: $vehicleId, chargePolicy: $chargePolicy) {
-            __typename
-          }
-        }
-    "#;
-
-    let policy = serde_json::json!({
-        "enabled": input.enabled,
-        "startTime": input.start_time_minutes,
-        "duration": input.duration_minutes,
-        "amperage": input.amperage,
-        "latitude": input.location_lat,
-        "longitude": input.location_lng,
-        "weekDays": input.week_days,
-    });
-    let vars = serde_json::json!({
-        "vehicleId": rivian_vehicle_id,
-        "chargePolicy": policy,
-    });
-
-    let _: MutateChargingScheduleData = gql_request(
-        client,
-        GATEWAY_URL,
-        tokens,
-        "updateVehicleChargingSettings",
-        M,
-        vars,
-    )
-    .await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-
-    // Refresh from API to pick up server-side normalisation.
-    fetch_charging_schedule(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
+    let _ = (rivian_vehicle_id, vehicle_id, input, pool, client, tokens);
+    Err(crate::services::outbound_policy::PolicyError::VehicleWrite.into())
 }
 
 pub async fn mutate_charging_schedule_for_vehicle(
@@ -2136,20 +1922,7 @@ pub struct DepartureScheduleInput {
     pub comfort_settings: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateDepartureData {
-    create_departure_schedule: Option<CreatedDeparture>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedDeparture {
-    id: Option<String>,
-}
-
-/// Create a new departure schedule on Rivian and insert into the DB.
-/// Returns the Rivian schedule id.
+/// Stable adapter: creating departure schedules is denied by provider policy.
 pub async fn create_departure_schedule(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -2158,62 +1931,8 @@ pub async fn create_departure_schedule(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<String> {
-    const M: &str = r#"
-        mutation createDepartureSchedule($vehicleId: String!, $input: DepartureScheduleInput!) {
-          createDepartureSchedule(vehicleId: $vehicleId, input: $input) {
-            id
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({
-        "vehicleId": rivian_vehicle_id,
-        "input": {
-            "name": input.name,
-            "enabled": input.enabled,
-            "occurrence": input.occurrence,
-            "preconditioningSettings": input.comfort_settings,
-        },
-    });
-
-    let data: CreateDepartureData = gql_request(
-        client,
-        GATEWAY_URL,
-        tokens,
-        "createDepartureSchedule",
-        M,
-        vars,
-    )
-    .await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-
-    let rivian_id = data
-        .create_departure_schedule
-        .and_then(|d| d.id)
-        .ok_or_else(|| anyhow!("createDepartureSchedule returned no id"))?;
-
-    sqlx::query(
-        "INSERT INTO panda.departure_schedules
-             (vehicle_id, rivian_schedule_id, name, enabled, occurrence, comfort_settings)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (vehicle_id, rivian_schedule_id) DO UPDATE SET
-             name             = EXCLUDED.name,
-             enabled          = EXCLUDED.enabled,
-             occurrence       = EXCLUDED.occurrence,
-             comfort_settings = EXCLUDED.comfort_settings,
-             updated_at       = now()",
-    )
-    .bind(vehicle_id)
-    .bind(&rivian_id)
-    .bind(&input.name)
-    .bind(input.enabled)
-    .bind(&input.occurrence)
-    .bind(&input.comfort_settings)
-    .execute(pool)
-    .await?;
-
-    Ok(rivian_id)
+    let _ = (rivian_vehicle_id, vehicle_id, input, pool, client, tokens);
+    Err(crate::services::outbound_policy::PolicyError::VehicleWrite.into())
 }
 
 pub async fn create_departure_schedule_for_vehicle(
@@ -2248,15 +1967,7 @@ pub async fn create_departure_schedule_for_vehicle(
     .await
 }
 
-/// Mutation response — field received from Rivian but success is inferred from HTTP status.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct UpdateDepartureData {
-    update_departure_schedule: Option<serde_json::Value>,
-}
-
-/// Update an existing departure schedule on Rivian and in the DB.
+/// Stable adapter: updating departure schedules is denied by provider policy.
 pub async fn update_departure_schedule(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -2266,56 +1977,16 @@ pub async fn update_departure_schedule(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const M: &str = r#"
-        mutation updateDepartureSchedule($vehicleId: String!, $scheduleId: String!, $input: DepartureScheduleInput!) {
-          updateDepartureSchedule(vehicleId: $vehicleId, scheduleId: $scheduleId, input: $input) {
-            __typename
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({
-        "vehicleId": rivian_vehicle_id,
-        "scheduleId": rivian_schedule_id,
-        "input": {
-            "name": input.name,
-            "enabled": input.enabled,
-            "occurrence": input.occurrence,
-            "preconditioningSettings": input.comfort_settings,
-        },
-    });
-
-    let _: UpdateDepartureData = gql_request(
+    let _ = (
+        rivian_vehicle_id,
+        vehicle_id,
+        rivian_schedule_id,
+        input,
+        pool,
         client,
-        GATEWAY_URL,
         tokens,
-        "updateDepartureSchedule",
-        M,
-        vars,
-    )
-    .await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-
-    sqlx::query(
-        "UPDATE panda.departure_schedules SET
-             name             = COALESCE($3, name),
-             enabled          = $4,
-             occurrence       = COALESCE($5, occurrence),
-             comfort_settings = COALESCE($6, comfort_settings),
-             updated_at       = now()
-         WHERE vehicle_id = $1 AND rivian_schedule_id = $2",
-    )
-    .bind(vehicle_id)
-    .bind(rivian_schedule_id)
-    .bind(&input.name)
-    .bind(input.enabled)
-    .bind(&input.occurrence)
-    .bind(&input.comfort_settings)
-    .execute(pool)
-    .await?;
-
-    Ok(())
+    );
+    Err(crate::services::outbound_policy::PolicyError::VehicleWrite.into())
 }
 
 pub async fn update_departure_schedule_for_vehicle(
@@ -2354,15 +2025,7 @@ pub async fn update_departure_schedule_for_vehicle(
     .await
 }
 
-/// Mutation response — field received from Rivian but success is inferred from HTTP status.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct DeleteDepartureData {
-    delete_departure_schedule: Option<serde_json::Value>,
-}
-
-/// Delete a departure schedule on Rivian and remove from the DB.
+/// Stable adapter: deleting departure schedules is denied by provider policy.
 pub async fn delete_departure_schedule(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -2371,40 +2034,15 @@ pub async fn delete_departure_schedule(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
-    const M: &str = r#"
-        mutation deleteDepartureSchedule($vehicleId: String!, $scheduleId: String!) {
-          deleteDepartureSchedule(vehicleId: $vehicleId, scheduleId: $scheduleId) {
-            __typename
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({
-        "vehicleId": rivian_vehicle_id,
-        "scheduleId": rivian_schedule_id,
-    });
-
-    let _: DeleteDepartureData = gql_request(
+    let _ = (
+        rivian_vehicle_id,
+        vehicle_id,
+        rivian_schedule_id,
+        pool,
         client,
-        GATEWAY_URL,
         tokens,
-        "deleteDepartureSchedule",
-        M,
-        vars,
-    )
-    .await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-
-    sqlx::query(
-        "DELETE FROM panda.departure_schedules WHERE vehicle_id = $1 AND rivian_schedule_id = $2",
-    )
-    .bind(vehicle_id)
-    .bind(rivian_schedule_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
+    );
+    Err(crate::services::outbound_policy::PolicyError::VehicleWrite.into())
 }
 
 pub async fn delete_departure_schedule_for_vehicle(
@@ -2449,8 +2087,7 @@ pub async fn delete_departure_schedule_for_vehicle(
 /// If `history_backfilled_at IS NULL` (first time this vehicle's worker has
 /// ever run), a full charge-history backfill is performed that also inserts
 /// sessions sourced entirely from the Rivian API.  On subsequent starts only
-/// the most recent page is fetched to pick up any sessions missed since the
-/// last run.
+/// the summary response is reconciled with the recent-insert policy.
 pub async fn run_startup_polls(
     vehicle_id: Uuid,
     user_id: Uuid,
@@ -2459,210 +2096,21 @@ pub async fn run_startup_polls(
     age_key: String,
     baseline_tx: mpsc::Sender<WsInboundEvent>,
 ) {
-    tracing::info!(vehicle_id=%vehicle_id, "startup polls begin");
-
-    // Proactively rotate the CSRF/app-session pair before any operation runs.
-    // The stored pair from the last session may have expired during downtime;
-    // doing this once at boot avoids the otherwise-guaranteed "first poll 401
-    // → CSRF refresh → retry" dance on every restart.
-    if let Ok((_, current_tokens)) = load_vehicle_tokens(vehicle_id, &pool, &age_key).await {
-        match try_refresh_csrf(vehicle_id, &current_tokens, &client, &pool, &age_key).await {
-            Ok(_) => {
-                tracing::debug!(vehicle_id=%vehicle_id, "boot CSRF rotation complete");
-            }
-            Err(e) => {
-                tracing::debug!(
-                    vehicle_id=%vehicle_id,
-                    err=%e,
-                    "boot CSRF rotation failed (will retry on first poll)"
-                );
-            }
-        }
-    }
-
-    // A one-shot baseline fills fields that did not change after the socket
-    // subscribed. Keep the selection small and tolerate schema differences.
-    const STATE_Q: &str = "query GetVehicleState($vehicleID: String!) { vehicleState(id: $vehicleID) { powerState { timeStamp value } gnssLocation { latitude longitude timeStamp } batteryLevel { timeStamp value } distanceToEmpty { timeStamp value } vehicleMileage { timeStamp value } chargerState { timeStamp value } } }";
-    let baseline = with_vehicle_auth_retry(
+    execution::VehiclePoll {
         vehicle_id,
-        &pool,
-        &client,
-        &age_key,
-        "GetVehicleState",
-        |rivian_id, tokens, _, client| {
-            Box::pin(async move {
-                gql_request::<serde_json::Value>(
-                    client,
-                    GATEWAY_URL,
-                    tokens,
-                    "GetVehicleState",
-                    STATE_Q,
-                    serde_json::json!({"vehicleID": rivian_id}),
-                )
-                .await
-            })
-        },
-    )
+        pool: &pool,
+        client: &client,
+        age_key: &age_key,
+    }
+    .startup(user_id, &baseline_tx)
     .await;
-    capture_poll(
-        vehicle_id,
-        "vehicle_state_baseline",
-        &baseline,
-        serde_json::Value::Null,
-    );
-    match baseline {
-        Ok(data) => {
-            increment_poll_counter(&pool, vehicle_id).await;
-            let raw = serde_json::json!({"type":"next","payload":{"data":data}}).to_string();
-            if let Ok(Some(event)) = parser::parse_ws_message(&raw, vehicle_id) {
-                let baseline_event = WsInboundEvent {
-                    kind: WsInboundKind::Telemetry,
-                    received_at: Utc::now(),
-                    // Kept so an ingestion capture records the baseline's
-                    // fields and their source timestamps.
-                    raw,
-                    message_type: Some("baseline".into()),
-                    telemetry: Some(event),
-                    charging_session: None,
-                    battery_cell_type: None,
-                };
-                if let Err(error) = baseline_tx.try_send(baseline_event) {
-                    let count = BASELINE_FORWARD_DROP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-                    let reason = match &error {
-                        mpsc::error::TrySendError::Full(_) => "full",
-                        mpsc::error::TrySendError::Closed(_) => "closed",
-                    };
-                    tracing::debug!(
-                        vehicle_id=%vehicle_id,
-                        source="vehicle_state_baseline",
-                        reason,
-                        "vehicle-state baseline could not reach canonical worker"
-                    );
-                    if count == 1 || count.is_power_of_two() {
-                        tracing::warn!(
-                            vehicle_id=%vehicle_id,
-                            source="vehicle_state_baseline",
-                            reason,
-                            sampled_drop_count=count,
-                            "vehicle-state baseline could not reach canonical worker"
-                        );
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            tracing::debug!(vehicle_id=%vehicle_id, err=%error, "vehicle-state baseline unavailable")
-        }
-    }
-
-    let enrichment =
-        fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
-    capture_poll(
-        vehicle_id,
-        "vehicle_enrichment",
-        &enrichment,
-        serde_json::Value::Null,
-    );
-    if let Err(e) = enrichment {
-        if is_auth_error(&e) {
-            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment skipped: authentication required");
-        } else {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
-        }
-    }
-
-    let wallboxes =
-        fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await;
-    capture_poll(vehicle_id, "wallboxes", &wallboxes, serde_json::Value::Null);
-    if let Err(e) = wallboxes {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
-    }
-
-    // Check whether this vehicle has already been fully backfilled.
-    let needs_full_backfill: bool = sqlx::query_scalar(
-        "SELECT history_backfilled_at IS NULL FROM panda.vehicles WHERE id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(true);
-
-    if needs_full_backfill {
-        tracing::info!(vehicle_id=%vehicle_id, "starting full charge history backfill");
-
-        match charge_backfill::run(&pool, &client, &age_key, vehicle_id).await {
-            Ok(count) => {
-                tracing::info!(vehicle_id=%vehicle_id, count, "full backfill complete");
-            }
-            Err(ChargeBackfillError::AlreadyRunning) => {
-                tracing::info!(vehicle_id=%vehicle_id, "full backfill already running; running incremental charge sync");
-                match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-                    Ok(n) => {
-                        tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
-                    }
-                    Err(e) => {
-                        if is_auth_error(&e) {
-                            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history skipped: authentication required")
-                        } else {
-                            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%e, "full backfill failed");
-            }
-        }
-    } else {
-        // Incremental enrich: just reconcile any sessions that appeared since last run.
-        let history = fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
-        let detail = history.as_ref().map_or(
-            serde_json::Value::Null,
-            |n| serde_json::json!({ "reconciled": n }),
-        );
-        capture_poll(vehicle_id, "charge_history", &history, detail);
-        match history {
-            Ok(n) => {
-                tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
-            }
-            Err(e) => {
-                if is_auth_error(&e) {
-                    tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history skipped: authentication required")
-                } else {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
-                }
-            }
-        }
-    }
-
-    let schedule = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
-    capture_poll(
-        vehicle_id,
-        "charging_schedule",
-        &schedule,
-        serde_json::Value::Null,
-    );
-    if let Err(e) = schedule {
-        if is_auth_error(&e) {
-            tracing::debug!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule skipped: authentication required");
-        } else {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
-        }
-    }
-
-    // NOTE: `getDepartureSchedules` does not exist in Rivian's schema — departure
-    // schedules are subscription-only.  The call has been intentionally removed.
-
-    tracing::info!(vehicle_id=%vehicle_id, "startup polls complete");
 }
 
 /// Periodic and event-driven poll loop.
 ///
 /// - Watches `power_state_rx` so it can adapt cadence with [`poll_interval`].
-/// - Responds to `PollEvent` signals: charge session ended → re-sync history;
-///   OTA version changed → fetch release notes.
+/// - Charging changes wake cadence evaluation; history runs after 5 minutes
+///   in Ready/Charging power states or 30 minutes in other states.
 pub(crate) struct PollLoopSignals {
     pub power_state_rx: tokio::sync::watch::Receiver<Option<crate::models::telemetry::PowerState>>,
     pub charging_rx: tokio::sync::watch::Receiver<bool>,
@@ -2677,77 +2125,14 @@ pub(crate) async fn run_poll_loop(
     signals: PollLoopSignals,
     _redis: redis::Client,
 ) {
-    let PollLoopSignals {
-        mut power_state_rx,
-        mut charging_rx,
-        mut shutdown,
-    } = signals;
-
-    use crate::ingestion::poller::poll_interval;
-    tracing::info!(vehicle_id=%vehicle_id, "poll loop started");
-    let mut last_charge_history_sync = tokio::time::Instant::now();
-
-    loop {
-        let current_power = power_state_rx.borrow().clone();
-        let actively_charging = *charging_rx.borrow();
-        let sleep_dur = if actively_charging {
-            std::time::Duration::from_secs(30)
-        } else {
-            poll_interval(current_power.as_ref())
-        };
-
-        // Adaptive sleep — bail early on shutdown or power state change.
-        tokio::select! {
-            _ = tokio::time::sleep(sleep_dur) => {},
-            _ = power_state_rx.changed() => {
-                // Power state changed; re-evaluate immediately.
-            },
-            _ = charging_rx.changed() => {
-                // Charger status changed; re-evaluate immediately.
-            },
-            _ = shutdown.recv() => {
-                tracing::info!(vehicle_id=%vehicle_id, "poll loop shutdown");
-                return;
-            }
-        }
-
-        let current_power = power_state_rx.borrow().clone();
-
-        // Live charging data is pushed by the chargingSession WebSocket
-        // subscription. REST history is intentionally limited to post-session
-        // reconciliation below; it is not a live-telemetry replacement.
-
-        let charge_history_interval = match current_power {
-            Some(crate::models::telemetry::PowerState::Charging)
-            | Some(crate::models::telemetry::PowerState::Ready) => {
-                std::time::Duration::from_secs(300)
-            }
-            _ => std::time::Duration::from_secs(1800),
-        };
-
-        if last_charge_history_sync.elapsed() >= charge_history_interval {
-            last_charge_history_sync = tokio::time::Instant::now();
-            let history =
-                fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await;
-            let detail = history.as_ref().map_or(
-                serde_json::Value::Null,
-                |n| serde_json::json!({ "reconciled": n }),
-            );
-            capture_poll(vehicle_id, "charge_history_periodic", &history, detail);
-            match history {
-                Ok(count) => {
-                    tracing::debug!(vehicle_id=%vehicle_id, reconciled=count, "periodic charge history sync complete");
-                }
-                Err(error) => {
-                    if is_auth_error(&error) {
-                        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "periodic charge history sync skipped: authentication required");
-                    } else {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "periodic charge history sync failed");
-                    }
-                }
-            }
-        }
+    execution::VehiclePoll {
+        vehicle_id,
+        pool: &pool,
+        client: &client,
+        age_key: &age_key,
     }
+    .periodic(signals)
+    .await;
 }
 
 #[cfg(test)]

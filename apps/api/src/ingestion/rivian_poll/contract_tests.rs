@@ -336,3 +336,57 @@ async fn provider_contract_startup_order_survives_stage_failure_and_forwards_bas
     server.abort();
     db.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+async fn provider_contract_curve_overlap_dedup_and_vehicle_isolation() {
+    let db = super::tests::DisposableDatabase::new().await;
+    let left = super::tests::seed_vehicle(&db.pool).await;
+    let right = super::tests::seed_vehicle(&db.pool).await;
+    let chart=parser::parse_charging_session_message(r#"{"type":"next","payload":{"data":{"chargingSession":{"chartData":[{"powerKW":3,"startTime":"2026-10-16T12:10:00Z"},{"powerKW":9}]}}}}"#).unwrap().unwrap();
+    assert_eq!(
+        persist_charging_session_chart(&db.pool, left, None, &chart.chart_data)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        persist_charging_session_chart(&db.pool, left, None, &chart.chart_data)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        persist_charging_session_chart(&db.pool, right, None, &chart.chart_data)
+            .await
+            .unwrap(),
+        1
+    );
+    REQUESTS.scope(RefCell::new(VecDeque::from([expected("getLiveSessionHistory",CHRG_URL,json!({"vehicleId":"left"}),json!({"getLiveSessionHistory":{"chartData":[{"kw":1,"time":"2026-10-16T12:04:59Z"},{"kw":2,"time":"2026-10-16T12:05:00Z"},{"kw":4,"time":"2026-10-16T12:10:00Z"}]}}))])),async {
+        assert_eq!(fetch_live_session_history("left",left,None,&db.pool,&reqwest::Client::new(),&tokens()).await.unwrap(),2);
+    }).await;
+    let left_power: Vec<f64> = sqlx::query_scalar(
+        "SELECT power_kw FROM panda.rivian_charge_curve_points WHERE vehicle_id=$1 ORDER BY ts",
+    )
+    .bind(left)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    let right_power: Vec<f64> = sqlx::query_scalar(
+        "SELECT power_kw FROM panda.rivian_charge_curve_points WHERE vehicle_id=$1 ORDER BY ts",
+    )
+    .bind(right)
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(left_power, vec![2.0, 4.0]);
+    assert_eq!(right_power, vec![3.0]);
+    let null_power=parser::parse_charging_session_message(r#"{"type":"next","payload":{"data":{"chargingSession":{"chartData":[{"powerKW":null,"startTime":"2026-10-16T12:10:00Z"}]}}}}"#).unwrap().unwrap();
+    assert_eq!(
+        persist_charging_session_chart(&db.pool, left, None, &null_power.chart_data)
+            .await
+            .unwrap(),
+        0
+    );
+    db.cleanup().await;
+}

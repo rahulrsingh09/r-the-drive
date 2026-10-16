@@ -532,6 +532,43 @@ const CHARGING_SESSION_SUBSCRIPTION: &str = r#"subscription chargingSession($veh
   }
 }"#;
 
+struct ReconnectPolicy {
+    initial: u64,
+    maximum: u64,
+    next: u64,
+}
+
+impl ReconnectPolicy {
+    fn new(config: &Config) -> Self {
+        let initial = config.rivian_ws_reconnect_initial_seconds.max(1);
+        Self {
+            initial,
+            maximum: config.rivian_ws_reconnect_max_seconds.max(initial),
+            next: initial,
+        }
+    }
+
+    fn renewed(&mut self) {
+        self.next = self.initial;
+    }
+
+    fn wait(&mut self, jitter: bool) -> u64 {
+        let delay = if jitter {
+            jittered_backoff_secs(self.next)
+        } else {
+            self.next
+        };
+        self.next = next_backoff_secs(self.next, self.maximum);
+        delay
+    }
+}
+
+enum ReconnectState {
+    Credentials,
+    Connect(RivianTokenBundle),
+    Backoff(u64),
+}
+
 pub async fn run_ws_loop(
     vehicle_id: Uuid,
     rivian_veh_id: String,
@@ -541,108 +578,71 @@ pub async fn run_ws_loop(
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     config: Config,
 ) {
-    let initial_backoff = config.rivian_ws_reconnect_initial_seconds.max(1);
-    let max_backoff = config.rivian_ws_reconnect_max_seconds.max(initial_backoff);
-    let mut backoff_secs = initial_backoff;
-    let mut subscription_health = VehicleStateSubscriptionHealth::default();
-    if subscription_health.disabled_count() > 0 {
-        tracing::info!(
-            vehicle_id = %vehicle_id,
-            disabled_fields = subscription_health.disabled_count(),
-            "Rivian WS starting with known-unsupported VehicleState fields disabled"
-        );
-    }
-
+    let mut retry = ReconnectPolicy::new(&config);
+    let mut health = VehicleStateSubscriptionHealth::default();
+    let mut state = ReconnectState::Credentials;
     loop {
-        let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
-            vehicle_id, &pool, &age_key,
-        )
-        .await
-        {
-            Ok((_, tokens)) => tokens,
-            Err(error) => {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
-                tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)) => {}
-                    _ = shutdown.recv() => { break; }
-                }
-                backoff_secs = next_backoff_secs(backoff_secs, max_backoff);
-                continue;
-            }
-        };
-        let subscription_query = subscription_health.build_query();
-        match connect_and_subscribe(
-            &vehicle_id,
-            &rivian_veh_id,
-            &tokens,
-            &tx,
-            &mut shutdown,
-            WsSubscription {
-                query: &subscription_query,
-                disabled_field_count: subscription_health.disabled_count(),
-            },
-        )
-        .await
-        {
-            Ok(WsLoopEnd::Shutdown) => {
-                tracing::info!(vehicle_id = %vehicle_id, "WS connection closed gracefully");
-                break;
-            }
-            Ok(WsLoopEnd::ConnectionTtlExpired) => {
-                tracing::info!(
-                    vehicle_id = %vehicle_id,
-                    "Rivian WS connection TTL expired; renewing subscription"
-                );
-                backoff_secs = initial_backoff;
-            }
-            Err(e) => {
-                if let Some(rejection) = e.downcast_ref::<RivianSubscriptionRejection>() {
-                    let healed = subscription_health
-                        .record_rejection(&vehicle_id, &rejection.invalid_fields);
-                    if healed {
-                        tracing::warn!(
-                            vehicle_id = %vehicle_id,
-                            disabled_fields = subscription_health.disabled_count(),
-                            "Rivian WS subscription query degraded after schema rejection"
-                        );
-                        let _ = tx
-                            .send(WsInboundEvent {
-                                kind: WsInboundKind::Control,
-                                received_at: Utc::now(),
-                                raw: json!({
-                                    "type": "ws_schema_degraded",
-                                    "disabled_vehicle_state_fields": subscription_health.disabled_count(),
-                                    "invalid_fields": rejection.invalid_fields,
-                                })
-                                .to_string(),
-                                message_type: Some("ws_schema_degraded".into()),
-                                telemetry: None,
-                                charging_session: None,
-                                battery_cell_type: None,
-                            })
-                            .await;
+        state = match state {
+            ReconnectState::Credentials => {
+                match crate::ingestion::rivian_poll::load_vehicle_tokens(
+                    vehicle_id, &pool, &age_key,
+                )
+                .await
+                {
+                    Ok((_, tokens)) => ReconnectState::Connect(tokens),
+                    Err(error) => {
+                        tracing::warn!(%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
+                        ReconnectState::Backoff(retry.wait(false))
                     }
                 }
-                let delay = jittered_backoff_secs(backoff_secs);
-                tracing::warn!(vehicle_id = %vehicle_id, err = %e, backoff = delay, "WS error, reconnecting");
-                let _ = tx
-                    .send(WsInboundEvent {
-                        kind: WsInboundKind::Control,
-                        received_at: Utc::now(),
-                        raw: json!({"type": "reconnect", "backoff_seconds": delay}).to_string(),
-                        message_type: Some("reconnect".into()),
-                        telemetry: None,
-                        charging_session: None,
-                        battery_cell_type: None,
-                    })
-                    .await;
-                tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(delay)) => {}
-                    _ = shutdown.recv() => { break; }
-                }
-                backoff_secs = next_backoff_secs(backoff_secs, max_backoff);
             }
-        }
+            ReconnectState::Connect(tokens) => {
+                let query = health.build_query();
+                let result = connect_and_subscribe(
+                    &vehicle_id,
+                    &rivian_veh_id,
+                    &tokens,
+                    &tx,
+                    &mut shutdown,
+                    WsSubscription {
+                        query: &query,
+                        disabled_field_count: health.disabled_count(),
+                    },
+                )
+                .await;
+                match result {
+                    Ok(WsLoopEnd::Shutdown) => return,
+                    Ok(WsLoopEnd::ConnectionTtlExpired) => {
+                        tracing::info!(%vehicle_id, "Rivian WS connection TTL expired; renewing subscription");
+                        retry.renewed();
+                        ReconnectState::Credentials
+                    }
+                    Err(error) => {
+                        if let Some(rejection) = error.downcast_ref::<RivianSubscriptionRejection>()
+                        {
+                            if health.record_rejection(&vehicle_id, &rejection.invalid_fields) {
+                                let _ = tx.send(WsInboundEvent::control(json!({"type":"ws_schema_degraded","disabled_vehicle_state_fields":health.disabled_count(),"invalid_fields":rejection.invalid_fields}))).await;
+                            }
+                        }
+                        let delay = retry.wait(true);
+                        tracing::warn!(%vehicle_id, err=%error, backoff=delay, "WS error, reconnecting");
+                        let _ = tx
+                            .send(WsInboundEvent::control(
+                                json!({"type":"reconnect","backoff_seconds":delay}),
+                            ))
+                            .await;
+                        ReconnectState::Backoff(delay)
+                    }
+                }
+            }
+            ReconnectState::Backoff(seconds) => {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {},
+                    _ = shutdown.recv() => return,
+                }
+                ReconnectState::Credentials
+            }
+        };
     }
 }
 
@@ -702,6 +702,104 @@ async fn connect_and_subscribe(
     .await
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionState {
+    Initializing,
+    AwaitingAck,
+    Subscribing,
+    Streaming,
+}
+
+enum FrameAction {
+    Publish(Box<WsInboundEvent>),
+    Reply(Message),
+    Renew,
+    Rejected(RivianSubscriptionRejection),
+    NoSubscriptions(String),
+    Closed,
+    Ignore,
+}
+
+impl WsInboundEvent {
+    fn control(value: Value) -> Self {
+        Self::raw_control(value.to_string())
+    }
+
+    fn raw_control(raw: String) -> Self {
+        let value = serde_json::from_str(&raw).unwrap_or_default();
+        Self {
+            kind: WsInboundKind::Control,
+            received_at: Utc::now(),
+            raw,
+            message_type: message_type(&value),
+            telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
+        }
+    }
+}
+
+fn streaming_action(frame: Option<Result<Message, WsError>>, vehicle_id: Uuid) -> FrameAction {
+    match frame {
+        Some(Ok(Message::Text(text))) => {
+            let value: Value = serde_json::from_str(&text).unwrap_or_default();
+            let kind = message_type(&value);
+            if matches!(kind.as_deref(), Some("error") | Some("complete")) {
+                return if value.get("id").and_then(Value::as_str) == Some("2") {
+                    FrameAction::Publish(Box::new(WsInboundEvent::raw_control(text.to_string())))
+                } else {
+                    FrameAction::Rejected(RivianSubscriptionRejection {
+                        reason: truncate_ws_message(&text),
+                        invalid_fields: rejected_vehicle_state_fields(&value),
+                    })
+                };
+            }
+            let mut event = classify_text_message(&text, vehicle_id).unwrap_or_else(|error| {
+                tracing::warn!(%vehicle_id, err=%error, "parse error");
+                WsInboundEvent::raw_control(text.to_string())
+            });
+            event.message_type = kind;
+            FrameAction::Publish(Box::new(event))
+        }
+        Some(Ok(Message::Ping(data))) => FrameAction::Reply(Message::Pong(data)),
+        Some(Ok(Message::Close(frame))) if is_rivian_connection_ttl_expired(frame.as_ref()) => {
+            crate::services::ingestion_capture::record(
+                vehicle_id,
+                crate::services::ingestion_capture::Kind::LegacyConnection,
+                json!({
+                    "message_type": "connection_ttl_expired",
+                    "close_code": frame.as_ref().map(|f| u16::from(f.code)),
+                    "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
+                }),
+            );
+            FrameAction::Renew
+        }
+        Some(Ok(Message::Close(frame))) if is_rivian_no_active_subscriptions(frame.as_ref()) => {
+            FrameAction::NoSubscriptions(
+                frame
+                    .map(|f| f.reason.to_string())
+                    .unwrap_or_else(|| "no active subscriptions".into()),
+            )
+        }
+        Some(Ok(Message::Close(_))) | None => FrameAction::Closed,
+        // Preserve the legacy stream contract: transport errors await EOF/recovery.
+        Some(Err(_)) | Some(Ok(_)) => FrameAction::Ignore,
+    }
+}
+
+fn subscription_frames(vehicle_id: &str, subscription: WsSubscription<'_>) -> [(Value, Value); 2] {
+    [
+        (
+            json!({"id":"1","type":"subscribe","payload":{"operationName":"vehicleState","query":subscription.query,"variables":{"vehicleID":vehicle_id}}}),
+            json!({"type":"subscribe","disabled_vehicle_state_fields":subscription.disabled_field_count}),
+        ),
+        (
+            json!({"id":"2","type":"subscribe","payload":{"operationName":"chargingSession","query":CHARGING_SESSION_SUBSCRIPTION,"variables":{"vehicleID":vehicle_id}}}),
+            json!({"type":"subscribe","subscription_id":"2","operation":"chargingSession"}),
+        ),
+    ]
+}
+
 async fn drive_socket<S>(
     ws: &mut S,
     vehicle_id: &Uuid,
@@ -716,267 +814,94 @@ where
         + futures::Stream<Item = Result<Message, WsError>>
         + Unpin,
 {
-    let _ = tx
-        .send(WsInboundEvent {
-            kind: WsInboundKind::Control,
-            received_at: Utc::now(),
-            raw: json!({"type": "connection_open"}).to_string(),
-            message_type: Some("connection_open".into()),
-            telemetry: None,
-            charging_session: None,
-            battery_cell_type: None,
-        })
-        .await;
-
-    // connection_init
-    ws.send(Message::Text(
-        json!({
-            "type": "connection_init",
-            "payload": {
-                "client-name": "com.rivian.ios.consumer-apollo-ios",
-                "client-version": "1.13.0-1494",
-                "dc-cid": format!("m-ios-{}", uuid::Uuid::new_v4()),
-                "u-sess": &tokens.user_session_token
-            }
-        })
-        .to_string()
-        .into(),
-    ))
-    .await?;
-    let _ = tx
-        .send(WsInboundEvent {
-            kind: WsInboundKind::Control,
-            received_at: Utc::now(),
-            raw: json!({"type": "connection_init"}).to_string(),
-            message_type: Some("connection_init".into()),
-            telemetry: None,
-            charging_session: None,
-            battery_cell_type: None,
-        })
-        .await;
-
-    // Wait for connection_ack; handle PING frames that may arrive before ack
+    let mut state = ConnectionState::Initializing;
     loop {
-        match ws.next().await {
-            Some(Ok(Message::Text(t))) => {
-                let v: Value = serde_json::from_str(&t).unwrap_or_default();
-                let message_type = message_type(&v);
+        state = match state {
+            ConnectionState::Initializing => {
                 let _ = tx
-                    .send(WsInboundEvent {
-                        kind: WsInboundKind::Control,
-                        received_at: Utc::now(),
-                        raw: t.to_string(),
-                        message_type: message_type.clone(),
-                        telemetry: None,
-                        charging_session: None,
-                        battery_cell_type: None,
-                    })
+                    .send(WsInboundEvent::control(json!({"type":"connection_open"})))
                     .await;
-                if v.get("type").and_then(|x| x.as_str()) == Some("connection_ack") {
-                    break;
+                ws.send(Message::Text(
+                    json!({
+                        "type":"connection_init",
+                        "payload":{
+                            "client-name":"com.rivian.ios.consumer-apollo-ios",
+                            "client-version":"1.13.0-1494",
+                            "dc-cid":format!("m-ios-{}", Uuid::new_v4()),
+                            "u-sess":tokens.user_session_token,
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await?;
+                let _ = tx
+                    .send(WsInboundEvent::control(json!({"type":"connection_init"})))
+                    .await;
+                ConnectionState::AwaitingAck
+            }
+            ConnectionState::AwaitingAck => match ws.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    let event = WsInboundEvent::raw_control(text.to_string());
+                    let acknowledged = event.message_type.as_deref() == Some("connection_ack");
+                    let _ = tx.send(event).await;
+                    if acknowledged {
+                        ConnectionState::Subscribing
+                    } else {
+                        tracing::warn!(%vehicle_id, message=%truncate_ws_message(&text), "Rivian WS message before ack");
+                        ConnectionState::AwaitingAck
+                    }
                 }
-                tracing::warn!(
-                    vehicle_id = %vehicle_id,
-                    message = %truncate_ws_message(&t),
-                    "Rivian WS message before ack"
-                );
-            }
-            Some(Ok(Message::Ping(data))) => {
-                ws.send(Message::Pong(data)).await?;
-            }
-            Some(Ok(_)) => {}
-            _ => anyhow::bail!("connection closed before ack"),
-        }
-    }
-
-    // Subscribe
-    let sub = json!({
-        "id": "1",
-        "type": "subscribe",
-        "payload": {
-            "operationName": "vehicleState",
-            "query": subscription.query,
-            "variables": { "vehicleID": rivian_veh_id }
-        }
-    });
-    ws.send(Message::Text(sub.to_string().into())).await?;
-    let _ = tx
-        .send(WsInboundEvent {
-            kind: WsInboundKind::Control,
-            received_at: Utc::now(),
-            raw:
-                json!({"type": "subscribe", "disabled_vehicle_state_fields": subscription.disabled_field_count})
-                    .to_string(),
-            message_type: Some("subscribe".into()),
-            telemetry: None,
-            charging_session: None,
-            battery_cell_type: None,
-        })
-        .await;
-
-    let charging_sub = json!({
-        "id": "2",
-        "type": "subscribe",
-        "payload": {
-            "operationName": "chargingSession",
-            "query": CHARGING_SESSION_SUBSCRIPTION,
-            "variables": { "vehicleID": rivian_veh_id }
-        }
-    });
-    ws.send(Message::Text(charging_sub.to_string().into()))
-        .await?;
-    let _ = tx
-        .send(WsInboundEvent {
-            kind: WsInboundKind::Control,
-            received_at: Utc::now(),
-            raw:
-                json!({"type": "subscribe", "subscription_id": "2", "operation": "chargingSession"})
-                    .to_string(),
-            message_type: Some("subscribe".into()),
-            telemetry: None,
-            charging_session: None,
-            battery_cell_type: None,
-        })
-        .await;
-
-    loop {
-        tokio::select! {
-            _ = shutdown.recv() => { return Ok(WsLoopEnd::Shutdown); }
-            msg = ws.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        let value: Value = serde_json::from_str(&text).unwrap_or_default();
-                        let message_type = message_type(&value);
-                        if matches!(message_type.as_deref(), Some("error") | Some("complete")) {
-                            if value.get("id").and_then(Value::as_str) == Some("2") {
-                                let _ = tx.send(WsInboundEvent {
-                                    kind: WsInboundKind::Control,
-                                    received_at: Utc::now(),
-                                    raw: text.to_string(),
-                                    message_type,
-                                    telemetry: None,
-                                    charging_session: None,
-                                    battery_cell_type: None,
-                                }).await;
-                                continue;
-                            }
-                            // Rivian sometimes rejects a single field by name in the error body.
-                            // Surface the full message so we can diagnose which field is at fault
-                            // rather than silently downgrading to a degraded subscription.
-                            let reason = truncate_ws_message(&text);
-                            let invalid_fields = rejected_vehicle_state_fields(&value);
-                            tracing::error!(
-                                vehicle_id = %vehicle_id,
-                                message_type = message_type.as_deref().unwrap_or("unknown"),
-                                message = %reason,
-                                invalid_fields = ?invalid_fields,
-                                "Rivian WS subscription rejected by VehicleState schema"
-                            );
-                            let _ = tx.send(WsInboundEvent {
-                                kind: WsInboundKind::Control,
-                                received_at: Utc::now(),
-                                raw: json!({
-                                    "type": "ws_schema_rejected",
-                                    "reason": reason,
-                                    "invalid_fields": invalid_fields,
-                                }).to_string(),
-                                message_type: Some("ws_schema_rejected".into()),
-                                telemetry: None,
-                                charging_session: None,
-                                battery_cell_type: None,
-                            }).await;
-                            return Err(RivianSubscriptionRejection {
-                                reason,
-                                invalid_fields,
-                            }
-                            .into());
-                        }
-                        match classify_text_message(&text, *vehicle_id) {
-                            Ok(inbound) => {
-                                let _ = tx.send(WsInboundEvent {
-                                    received_at: Utc::now(),
-                                    raw: text.to_string(),
-                                    message_type,
-                                    ..inbound
-                                }).await;
-                            }
-                            Err(e) => {
-                                tracing::warn!(vehicle_id = %vehicle_id, err = %e, "parse error");
-                                let _ = tx.send(WsInboundEvent {
-                                    kind: WsInboundKind::Control,
-                                    received_at: Utc::now(),
-                                    raw: text.to_string(),
-                                    message_type,
-                                    telemetry: None,
-                                    charging_session: None,
-                                    battery_cell_type: None,
-                                }).await;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Ping(data))) => {
-                        ws.send(Message::Pong(data)).await?;
-                    }
-                    Some(Ok(Message::Close(frame))) => {
-                        let ttl_expired = is_rivian_connection_ttl_expired(frame.as_ref());
-                        if ttl_expired {
-                            tracing::info!(
-                                vehicle_id = %vehicle_id,
-                                close_code = frame.as_ref().map(|f| f.code.to_string()),
-                                close_reason = frame.as_ref().map(|f| f.reason.to_string()),
-                                "Rivian WS close frame"
-                            );
-                            crate::services::ingestion_capture::record(
-                                *vehicle_id,
-                                crate::services::ingestion_capture::Kind::LegacyConnection,
-                                json!({
-                                    "message_type": "connection_ttl_expired",
-                                    "close_code": frame.as_ref().map(|f| u16::from(f.code)),
-                                    "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
-                                }),
-                            );
-                            return Ok(WsLoopEnd::ConnectionTtlExpired);
-                        }
-                        if is_rivian_no_active_subscriptions(frame.as_ref()) {
-                            let reason = frame
-                                .as_ref()
-                                .map(|f| f.reason.to_string())
-                                .unwrap_or_else(|| "no active subscriptions".into());
-                            let _ = tx.send(WsInboundEvent {
-                                kind: WsInboundKind::Control,
-                                received_at: Utc::now(),
-                                raw: json!({
-                                    "type": "ws_no_active_subscriptions",
-                                    "reason": reason,
-                                }).to_string(),
-                                message_type: Some("ws_no_active_subscriptions".into()),
-                                telemetry: None,
-                                charging_session: None,
-                                battery_cell_type: None,
-                            }).await;
-                            tracing::warn!(
-                                vehicle_id = %vehicle_id,
-                                close_code = frame.as_ref().map(|f| f.code.to_string()),
-                                close_reason = %reason,
-                                "Rivian WS subscription closed (4410) — reconnecting"
-                            );
-                            anyhow::bail!("Rivian WS subscription closed: {reason}");
-                        }
-                        tracing::warn!(
-                            vehicle_id = %vehicle_id,
-                            close_code = frame.as_ref().map(|f| f.code.to_string()),
-                            close_reason = frame.as_ref().map(|f| f.reason.to_string()),
-                            "Rivian WS close frame"
-                        );
-                        anyhow::bail!("WS closed");
-                    }
-                    None => {
-                        anyhow::bail!("WS closed");
-                    }
-                    _ => {}
+                Some(Ok(Message::Ping(data))) => {
+                    ws.send(Message::Pong(data)).await?;
+                    ConnectionState::AwaitingAck
                 }
+                Some(Ok(_)) => ConnectionState::AwaitingAck,
+                _ => anyhow::bail!("connection closed before ack"),
+            },
+            ConnectionState::Subscribing => {
+                for (request, diagnostic) in subscription_frames(
+                    rivian_veh_id,
+                    WsSubscription {
+                        query: subscription.query,
+                        disabled_field_count: subscription.disabled_field_count,
+                    },
+                ) {
+                    ws.send(Message::Text(request.to_string().into())).await?;
+                    let _ = tx.send(WsInboundEvent::control(diagnostic)).await;
+                }
+                ConnectionState::Streaming
             }
-        }
+            ConnectionState::Streaming => {
+                let frame = tokio::select! {
+                    _ = shutdown.recv() => return Ok(WsLoopEnd::Shutdown),
+                    frame = ws.next() => frame,
+                };
+                match streaming_action(frame, *vehicle_id) {
+                    FrameAction::Publish(event) => {
+                        let _ = tx.send(*event).await;
+                    }
+                    FrameAction::Reply(frame) => ws.send(frame).await?,
+                    FrameAction::Renew => return Ok(WsLoopEnd::ConnectionTtlExpired),
+                    FrameAction::Closed => anyhow::bail!("WS closed"),
+                    FrameAction::Ignore => {}
+                    FrameAction::NoSubscriptions(reason) => {
+                        let _ = tx
+                            .send(WsInboundEvent::control(
+                                json!({"type":"ws_no_active_subscriptions","reason":reason}),
+                            ))
+                            .await;
+                        anyhow::bail!("Rivian WS subscription closed: {reason}");
+                    }
+                    FrameAction::Rejected(rejection) => {
+                        tracing::error!(%vehicle_id, message=%rejection.reason, invalid_fields=?rejection.invalid_fields, "Rivian WS subscription rejected by VehicleState schema");
+                        let _ = tx.send(WsInboundEvent::control(json!({"type":"ws_schema_rejected","reason":rejection.reason,"invalid_fields":rejection.invalid_fields}))).await;
+                        return Err(rejection.into());
+                    }
+                }
+                ConnectionState::Streaming
+            }
+        };
     }
 }
 
