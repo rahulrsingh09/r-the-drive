@@ -51,7 +51,24 @@ mod transport;
 
 static BASELINE_FORWARD_DROP_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 
-pub use transport::{gql_request, AuthError};
+pub use transport::AuthError;
+
+/// Stable transport adapter; production requests always use the private policy transport.
+pub async fn gql_request<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::Client,
+    url: &str,
+    tokens: &RivianTokenBundle,
+    operation: &str,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<T> {
+    #[cfg(test)]
+    if let Some(result) = contract_tests::scripted_request(url, operation, query, &variables) {
+        crate::services::outbound_policy::require_telemetry_query(query)?;
+        return Ok(serde_json::from_value(result?)?);
+    }
+    transport::gql_request(client, url, tokens, operation, query, variables).await
+}
 
 // ── URL constants ────────────────────────────────────────────────────────────
 
@@ -2767,14 +2784,14 @@ mod tests {
         }
     }
 
-    struct DisposableDatabase {
+    pub(super) struct DisposableDatabase {
         admin: PgPool,
         name: String,
-        pool: PgPool,
+        pub(super) pool: PgPool,
     }
 
     impl DisposableDatabase {
-        async fn new() -> Self {
+        pub(super) async fn new() -> Self {
             let base_url =
                 std::env::var("DATABASE_URL").expect("DATABASE_URL for ignored DB tests");
             let admin_url = replace_database_name(&base_url, "postgres");
@@ -2799,11 +2816,11 @@ mod tests {
             Self { admin, name, pool }
         }
 
-        async fn cleanup(self) {
+        pub(super) async fn cleanup(self) {
             self.pool.close().await;
             self.admin
                 .execute(sqlx::AssertSqlSafe(format!(
-                    "DROP DATABASE \"{}\"",
+                    "DROP DATABASE \"{}\" WITH (FORCE)",
                     self.name
                 )))
                 .await
@@ -2819,7 +2836,7 @@ mod tests {
         format!("{prefix}/{name}")
     }
 
-    async fn seed_vehicle(pool: &PgPool) -> uuid::Uuid {
+    pub(super) async fn seed_vehicle(pool: &PgPool) -> uuid::Uuid {
         let user_id: uuid::Uuid = sqlx::query_scalar(
             "INSERT INTO panda.users (email, password_hash) VALUES ($1, 'test-only') RETURNING id",
         )
@@ -3447,3 +3464,7 @@ mod tests {
         assert_eq!(infer_is_rivian_network(Some("rivian")), Some(true));
     }
 }
+
+#[cfg(test)]
+#[path = "rivian_poll/contract_tests.rs"]
+mod contract_tests;

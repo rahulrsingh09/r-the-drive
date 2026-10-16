@@ -690,6 +690,32 @@ async fn connect_and_subscribe(
         }
         Err(e) => return Err(e.into()),
     };
+    drive_socket(
+        &mut ws,
+        vehicle_id,
+        rivian_veh_id,
+        tokens,
+        tx,
+        shutdown,
+        subscription,
+    )
+    .await
+}
+
+async fn drive_socket<S>(
+    ws: &mut S,
+    vehicle_id: &Uuid,
+    rivian_veh_id: &str,
+    tokens: &RivianTokenBundle,
+    tx: &mpsc::Sender<WsInboundEvent>,
+    shutdown: &mut tokio::sync::broadcast::Receiver<()>,
+    subscription: WsSubscription<'_>,
+) -> anyhow::Result<WsLoopEnd>
+where
+    S: futures::Sink<Message, Error = WsError>
+        + futures::Stream<Item = Result<Message, WsError>>
+        + Unpin,
+{
     let _ = tx
         .send(WsInboundEvent {
             kind: WsInboundKind::Control,
@@ -1387,3 +1413,7 @@ mod tests {
         assert_eq!(next_backoff_secs(900, 900), 900);
     }
 }
+
+#[cfg(test)]
+#[path = "ws_client/contract_tests.rs"]
+mod contract_tests;
