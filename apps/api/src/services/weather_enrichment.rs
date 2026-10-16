@@ -665,3 +665,234 @@ mod tests {
         assert_eq!(pick_closest_temp(&payload, target), Some(24.0));
     }
 }
+
+#[cfg(test)]
+mod history_weather_contract_tests {
+    use super::*;
+    use chrono::TimeZone;
+    use serde_json::json;
+
+    fn start() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap()
+    }
+    fn trip(seconds: i64) -> TripInfo {
+        TripInfo {
+            id: Uuid::new_v4(),
+            vehicle_id: Uuid::new_v4(),
+            started_at: start(),
+            ended_at: start() + chrono::Duration::seconds(seconds),
+            start_lat: Some(30.26721),
+            start_lng: Some(-97.74311),
+        }
+    }
+
+    #[test]
+    fn history_weather_sparse_targets_and_day_boundary() {
+        for (seconds, expected) in [
+            (0, vec![0]),
+            (1, vec![0, 1]),
+            (900, vec![0, 900]),
+            (901, vec![0, 900, 901]),
+        ] {
+            assert_eq!(
+                build_targets(&trip(seconds), &[], false)
+                    .iter()
+                    .map(|t| t.elapsed_seconds)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert_eq!(build_targets(&trip(86_400), &[], false).len(), 97);
+        let mut missing = trip(900);
+        missing.start_lng = None;
+        assert!(build_targets(&missing, &[], false).is_empty());
+        let route = [
+            RoutePoint {
+                ts: start(),
+                lat: 10.,
+                lng: 20.,
+            },
+            RoutePoint {
+                ts: start() + chrono::Duration::seconds(1800),
+                lat: 11.,
+                lng: 21.,
+            },
+        ];
+        let targets = build_targets(&trip(1800), &route, false);
+        assert_eq!(
+            targets
+                .iter()
+                .map(|t| (t.provider_lat, t.provider_lng))
+                .collect::<Vec<_>>(),
+            vec![(10., 20.), (10., 20.), (11., 21.)]
+        );
+    }
+
+    #[test]
+    fn history_weather_raw_nearest_window_ties_and_nonfinite_values() {
+        let raw = [
+            RawOutsideTemp {
+                ts: start(),
+                outside_temp_c: -5.,
+            },
+            RawOutsideTemp {
+                ts: start() + chrono::Duration::seconds(900),
+                outside_temp_c: 25.,
+            },
+        ];
+        assert_eq!(
+            nearest_raw_temp(&raw, start() + chrono::Duration::seconds(450)),
+            Some(-5.)
+        );
+        assert_eq!(
+            nearest_raw_temp(&raw[..1], start() + chrono::Duration::seconds(451)),
+            None
+        );
+        assert_eq!(nearest_raw_temp(&[], start()), None);
+        let invalid = [RawOutsideTemp {
+            ts: start(),
+            outside_temp_c: f64::NAN,
+        }];
+        assert!(nearest_raw_temp(&invalid, start()).unwrap().is_nan());
+    }
+
+    #[test]
+    fn history_weather_payload_nulls_malformed_times_ties_and_zip_boundary() {
+        let payload = json!({"hourly":{"time":["bad","2026-07-14T11:00","2026-07-14T12:00","2026-07-14T13:00","2026-07-14T14:00"],"temperature_2m":[900,10,null,30]}});
+        assert_eq!(pick_closest_temp(&payload, start()), Some(10.));
+        assert_eq!(
+            pick_closest_temp(&payload, start() + chrono::Duration::seconds(1)),
+            Some(30.)
+        );
+        assert_eq!(
+            pick_closest_temp(&payload, start() + chrono::Duration::hours(3)),
+            None
+        );
+        assert_eq!(pick_closest_temp(&json!({}), start()), None);
+        assert_eq!(
+            pick_closest_temp(
+                &json!({"hourly":{"time":["2026-07-14T12:00"],"temperature_2m":["12"]}}),
+                start()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn history_weather_average_preserves_celsius_and_elapsed_weighting() {
+        assert_eq!(time_weighted_average(&[]), None);
+        assert_eq!(time_weighted_average(&[(start(), -12.5)]), Some(-12.5));
+        assert_eq!(
+            time_weighted_average(&[(start(), 10.), (start(), 20.)]),
+            Some(10.)
+        );
+        assert_eq!(
+            time_weighted_average(&[
+                (start(), 10.),
+                (start() + chrono::Duration::seconds(900), 20.),
+                (start() + chrono::Duration::seconds(1800), 40.)
+            ]),
+            Some(22.5)
+        );
+        assert_eq!(
+            time_weighted_average(&[
+                (start(), 10.),
+                (start() - chrono::Duration::seconds(1), 20.)
+            ]),
+            Some(10.)
+        );
+    }
+
+    #[test]
+    fn history_weather_coordinate_validation_stays_at_provider_boundary() {
+        for (lat, lng) in [(0., 0.), (91., 181.)] {
+            let mut input = trip(0);
+            input.start_lat = Some(lat);
+            input.start_lng = Some(lng);
+            let targets = build_targets(&input, &[], false);
+            assert_eq!(
+                (targets[0].provider_lat, targets[0].provider_lng),
+                (lat, lng)
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    async fn history_weather_database_join_cache_and_error_contracts() {
+        let fixture = crate::authorization_test_support::Fixture::new().await;
+        let pool = &fixture.state.pool;
+        connections::ensure_defaults(pool).await.unwrap();
+        let owner = fixture.user("admin").await;
+        let vehicle = fixture.vehicle(owner, "history-weather").await;
+        let other_vehicle = fixture.vehicle(owner, "history-weather-other").await;
+        let id:Uuid=sqlx::query_scalar("INSERT INTO panda.trips (vehicle_id,started_at,ended_at,start_lat,start_lng,distance_miles,energy_wh) VALUES ($1,$2,$2+interval '15 minutes',30.26721,-97.74311,12.5,5000) RETURNING id").bind(vehicle).bind(start()).fetch_one(pool).await.unwrap();
+        let other:Uuid=sqlx::query_scalar("INSERT INTO panda.trips (vehicle_id,started_at,ended_at) VALUES ($1,$2,$2) RETURNING id").bind(vehicle).bind(start()).fetch_one(pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.telemetry (vehicle_id,ts,trip_id,latitude,longitude,outside_temp_c) VALUES ($1,$2,$3,10,20,18),($1,$2+interval '15 minutes',$3,11,21,22),($4,$2,$3,40,50,99)").bind(vehicle).bind(start()).bind(other).bind(other_vehicle).execute(pool).await.unwrap();
+        let settings = connections::load(pool, connections::OPEN_METEO)
+            .await
+            .unwrap();
+        let outcome = enrich_trip(pool, &reqwest::Client::new(), "", &settings, id)
+            .await
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            EnrichTripOutcome::Complete {
+                provider_called: false
+            }
+        ));
+        let result:(f64,String,i64)=sqlx::query_as("SELECT outside_temp_c,outside_temp_source,(SELECT count(*) FROM panda.trip_weather_samples WHERE trip_id=$1) FROM panda.trips WHERE id=$1").bind(id).fetch_one(pool).await.unwrap();
+        assert_eq!(result, (20., "vehicle".into(), 0));
+        let missing:Uuid=sqlx::query_scalar("INSERT INTO panda.trips (vehicle_id,started_at,ended_at) VALUES ($1,$2,$2) RETURNING id").bind(other_vehicle).bind(start()+chrono::Duration::days(2)).fetch_one(pool).await.unwrap();
+        let unavailable = enrich_trip(pool, &reqwest::Client::new(), "", &settings, missing)
+            .await
+            .unwrap();
+        assert!(matches!(unavailable, EnrichTripOutcome::Unavailable));
+        sqlx::query("UPDATE panda.trips SET ended_at=started_at+interval '25 hours' WHERE id=$1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            enrich_trip(pool, &reqwest::Client::new(), "", &settings, id)
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            "trip exceeds weather sample bounds"
+        );
+        assert_eq!(
+            enrich_trip(pool, &reqwest::Client::new(), "", &settings, Uuid::new_v4())
+                .await
+                .err()
+                .unwrap()
+                .to_string(),
+            "trip not found"
+        );
+        enqueue(pool, id).await.unwrap();
+        sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='succeeded',attempts=3 WHERE trip_id=$1").bind(id).execute(pool).await.unwrap();
+        enqueue(pool, id).await.unwrap();
+        let job: (String, i32) = sqlx::query_as(
+            "SELECT status,attempts FROM panda.weather_enrichment_jobs WHERE trip_id=$1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(job, ("succeeded".into(), 3));
+        assert!(!process_next_job(pool, &reqwest::Client::new(), "")
+            .await
+            .unwrap());
+        let targets = build_targets(&trip(900), &[], false);
+        store_estimates(pool, id, vec![(targets[0].clone(), 5.)], 5., "open_meteo")
+            .await
+            .unwrap();
+        let duplicate = vec![(targets[0].clone(), 6.), (targets[0].clone(), 7.)];
+        assert!(store_estimates(pool, id, duplicate, 6., "mixed")
+            .await
+            .is_err());
+        let stored:(f64,String,i64)=sqlx::query_as("SELECT outside_temp_c,outside_temp_source,(SELECT count(*) FROM panda.trip_weather_samples WHERE trip_id=$1) FROM panda.trips WHERE id=$1").bind(id).fetch_one(pool).await.unwrap();
+        assert_eq!(stored, (5., "open_meteo".into(), 1));
+        fixture.cleanup().await;
+    }
+}

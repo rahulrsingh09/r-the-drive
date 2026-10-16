@@ -1283,3 +1283,382 @@ async fn upsert_charge_session_user_annotation(
 fn has_usable_coordinate_pair(lat: Option<f64>, lng: Option<f64>) -> bool {
     matches!((lat, lng), (Some(lat), Some(lng)) if !(lat == 0.0 && lng == 0.0))
 }
+
+#[cfg(test)]
+mod history_enrichment_contract_tests {
+    use super::*;
+    use crate::authorization_test_support::Fixture;
+    use chrono::TimeZone;
+
+    fn start() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap()
+    }
+    async fn history_fixture() -> Fixture {
+        let mut fixture = Fixture::new().await;
+        let options = fixture
+            .state
+            .pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .options([("search_path", "panda,timeseries,public")]);
+        fixture.state.pool.close().await;
+        fixture.state.pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        fixture
+    }
+    async fn trip(pool: &PgPool, vehicle: Uuid, at: DateTime<Utc>) -> Uuid {
+        sqlx::query_scalar("INSERT INTO panda.trips (vehicle_id,started_at,ended_at,distance_miles,energy_wh,route_preview) VALUES ($1,$2,$2+interval '30 minutes',12.5,5000,'[[1,2],[3,4]]') RETURNING id").bind(vehicle).bind(at).fetch_one(pool).await.unwrap()
+    }
+    async fn address(pool: &PgPool, lat: f64, lng: f64) -> Uuid {
+        sqlx::query_scalar("INSERT INTO panda.addresses (display_name,latitude,longitude) VALUES ('Synthetic address',$1,$2) RETURNING id").bind(lat).bind(lng).fetch_one(pool).await.unwrap()
+    }
+    async fn geofence(pool: &PgPool, owner: Uuid, addr: Uuid) -> Uuid {
+        sqlx::query_scalar("INSERT INTO panda.geofences (user_id,name,latitude,longitude,radius_m,address_id,is_home,is_work) VALUES ($1,'Synthetic place',30,-97,100,$2,true,false) RETURNING id").bind(owner).bind(addr).fetch_one(pool).await.unwrap()
+    }
+
+    #[test]
+    fn history_coordinate_contract_distinguishes_absence_from_legacy_invalids() {
+        for (lat, lng, expected) in [
+            (None, Some(1.), false),
+            (Some(1.), None, false),
+            (Some(0.), Some(0.), false),
+            (Some(0.), Some(1.), true),
+            (Some(91.), Some(181.), true),
+            (Some(f64::NAN), Some(f64::INFINITY), true),
+        ] {
+            assert_eq!(has_usable_coordinate_pair(lat, lng), expected);
+        }
+        assert_eq!(
+            MatchedLocation::none(),
+            MatchedLocation {
+                geofence_id: None,
+                address_id: None,
+                is_home: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    async fn history_addresses_batch_cache_miss_and_partial_stats() {
+        let fixture = history_fixture().await;
+        let pool = &fixture.state.pool;
+        let owner = fixture.user("admin").await;
+        let vehicle = fixture.vehicle(owner, "history-addresses").await;
+        let other = fixture.vehicle(owner, "history-addresses-other").await;
+        let cached = address(pool, 30., -97.).await;
+        let other_trip = trip(pool, other, start()).await;
+        sqlx::query("UPDATE panda.trips SET start_lat=30,start_lng=-97 WHERE id=$1")
+            .bind(other_trip)
+            .execute(pool)
+            .await
+            .unwrap();
+        for i in 0..101 {
+            let id = trip(pool, vehicle, start() + chrono::Duration::hours(i)).await;
+            sqlx::query("UPDATE panda.trips SET start_lat=30,start_lng=-97,end_lat=40,end_lng=-100 WHERE id=$1").bind(id).execute(pool).await.unwrap();
+        }
+        let client = Client::new();
+        assert_eq!(
+            resolve_address_id(pool, &client, 30., -97.).await,
+            Some(cached)
+        );
+        assert_eq!(resolve_address_id(pool, &client, 0., 0.).await, None);
+        assert_eq!(resolve_address_id(pool, &client, 40., -100.).await, None);
+        let stats = backfill_trip_addresses(pool, &client, Some(vehicle))
+            .await
+            .unwrap();
+        assert_eq!(
+            stats,
+            BackfillStats {
+                scanned: 100,
+                filled: 100,
+                failed: 100,
+                skipped: 0
+            }
+        );
+        let written:i64=sqlx::query_scalar("SELECT count(*) FROM panda.trip_user_annotations WHERE user_id=$1 AND start_address_id=$2").bind(owner).bind(cached).fetch_one(pool).await.unwrap();
+        assert_eq!(written, 100);
+        let untouched: Option<Uuid> =
+            sqlx::query_scalar("SELECT start_address_id FROM panda.trips WHERE id=$1")
+                .bind(other_trip)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(untouched, None);
+        let again = backfill_trip_addresses(pool, &client, Some(vehicle))
+            .await
+            .unwrap();
+        assert_eq!(
+            again,
+            BackfillStats {
+                scanned: 100,
+                filled: 0,
+                failed: 100,
+                skipped: 0
+            }
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    async fn history_geofences_follow_membership_owner_and_preserve_existing_fields() {
+        let fixture = history_fixture().await;
+        let pool = &fixture.state.pool;
+        let owner = fixture.user("admin").await;
+        let stranger = fixture.user("user").await;
+        let vehicle = fixture.vehicle(owner, "history-geofences").await;
+        let cached = address(pool, 30., -97.).await;
+        let own = geofence(pool, owner, cached).await;
+        let foreign = geofence(pool, stranger, cached).await;
+        let id = trip(pool, vehicle, start()).await;
+        sqlx::query("UPDATE panda.trips SET start_lat=30,start_lng=-97,end_lat=30,end_lng=-97,end_geofence_id=$2 WHERE id=$1").bind(id).bind(foreign).execute(pool).await.unwrap();
+        let stats = backfill_trip_geofence_matches(pool, Some(vehicle))
+            .await
+            .unwrap();
+        assert_eq!(
+            stats,
+            BackfillStats {
+                scanned: 1,
+                filled: 1,
+                failed: 0,
+                skipped: 0
+            }
+        );
+        let row:(Uuid,Uuid,Uuid)=sqlx::query_as("SELECT start_geofence_id,end_geofence_id,start_address_id FROM panda.trips WHERE id=$1").bind(id).fetch_one(pool).await.unwrap();
+        assert_eq!(row, (own, foreign, cached));
+        let annotation:(Uuid,Uuid)=sqlx::query_as("SELECT start_geofence_id,end_geofence_id FROM panda.trip_user_annotations WHERE trip_id=$1 AND user_id=$2").bind(id).bind(owner).fetch_one(pool).await.unwrap();
+        assert_eq!(annotation, (own, own));
+        sqlx::query("DELETE FROM panda.vehicle_memberships WHERE vehicle_id=$1")
+            .bind(vehicle)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE panda.trips SET start_geofence_id=NULL WHERE id=$1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            backfill_trip_geofence_matches(pool, Some(vehicle))
+                .await
+                .unwrap(),
+            BackfillStats {
+                scanned: 1,
+                filled: 0,
+                failed: 1,
+                skipped: 0
+            }
+        );
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    async fn history_interrupted_trip_sparse_coordinates_and_batch_boundary() {
+        let fixture = history_fixture().await;
+        let pool = &fixture.state.pool;
+        let owner = fixture.user("admin").await;
+        let vehicle = fixture.vehicle(owner, "history-coordinates").await;
+        let other = fixture.vehicle(owner, "history-coordinates-other").await;
+        sqlx::query("INSERT INTO timeseries.telemetry (vehicle_id,ts,latitude,longitude) VALUES ($1,$3+interval '10 minutes',30,-97),($2,$3,40,-100),($1,$3+interval '40 minutes 1 second',31,-98)").bind(vehicle).bind(other).bind(start()).execute(pool).await.unwrap();
+        assert_eq!(
+            nearest_telemetry_fix(pool, vehicle, start()).await.unwrap(),
+            Some((30., -97.))
+        );
+        assert_eq!(
+            nearest_telemetry_fix(pool, vehicle, start() + chrono::Duration::minutes(30))
+                .await
+                .unwrap(),
+            None
+        );
+        for _ in 0..501 {
+            let id = trip(pool, vehicle, start()).await;
+            sqlx::query("UPDATE panda.trips SET start_lat=99,end_lat=0,end_lng=0 WHERE id=$1")
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            backfill_trip_coordinates(pool, Some(vehicle))
+                .await
+                .unwrap(),
+            BackfillStats {
+                scanned: 500,
+                filled: 500,
+                failed: 0,
+                skipped: 0
+            }
+        );
+        assert_eq!(
+            backfill_trip_coordinates(pool, Some(vehicle))
+                .await
+                .unwrap(),
+            BackfillStats {
+                scanned: 1,
+                filled: 1,
+                failed: 0,
+                skipped: 0
+            }
+        );
+        let unchanged:i64=sqlx::query_scalar("SELECT count(*) FROM panda.trips WHERE vehicle_id=$1 AND start_lat=30 AND start_lng=-97 AND end_lat=0 AND end_lng=0 AND distance_miles=12.5 AND energy_wh=5000 AND route_preview='[[1,2],[3,4]]'").bind(vehicle).fetch_one(pool).await.unwrap();
+        assert_eq!(unchanged, 501);
+        let id = trip(pool, vehicle, start() + chrono::Duration::days(2)).await;
+        assert_eq!(
+            backfill_trip_coordinates(pool, Some(vehicle))
+                .await
+                .unwrap(),
+            BackfillStats {
+                scanned: 1,
+                filled: 0,
+                failed: 0,
+                skipped: 1
+            }
+        );
+        let day = report_trip_enrichment_gaps(pool, Some(vehicle))
+            .await
+            .unwrap();
+        assert_eq!(day[0].total_trips, 1);
+        assert_eq!(
+            day[0].missing_outside_temp_unrecoverable_no_start_coordinates,
+            1
+        );
+        let session:Uuid=sqlx::query_scalar("INSERT INTO panda.charge_sessions (vehicle_id,started_at,source) VALUES ($1,$2,'telemetry') RETURNING id").bind(vehicle).bind(start()).fetch_one(pool).await.unwrap();
+        assert_eq!(
+            backfill_charge_session_coordinates(pool, Some(vehicle))
+                .await
+                .unwrap()
+                .filled,
+            1
+        );
+        sqlx::query("UPDATE panda.charge_sessions SET location_override_mode='none',location_lat=NULL,location_lng=NULL WHERE id=$1").bind(session).execute(pool).await.unwrap();
+        assert_eq!(
+            backfill_charge_session_coordinates(pool, Some(vehicle))
+                .await
+                .unwrap()
+                .scanned,
+            0
+        );
+        assert_eq!(
+            backfill_charge_session_locations(pool, &Client::new(), Some(vehicle))
+                .await
+                .unwrap()
+                .scanned,
+            0
+        );
+        assert!(sqlx::query("DELETE FROM panda.trips WHERE id=$1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .is_ok());
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    async fn history_weather_queue_and_lookup_error_contracts() {
+        let fixture = history_fixture().await;
+        let pool = &fixture.state.pool;
+        let owner = fixture.user("admin").await;
+        let vehicle = fixture.vehicle(owner, "history-queue").await;
+        for i in 0..501 {
+            trip(pool, vehicle, start() + chrono::Duration::hours(i)).await;
+        }
+        let other = fixture.vehicle(owner, "history-queue-other").await;
+        trip(pool, other, start()).await;
+        assert_eq!(
+            enqueue_trip_weather_enrichment(pool, Some(vehicle))
+                .await
+                .unwrap(),
+            BackfillStats {
+                scanned: 501,
+                filled: 501,
+                failed: 0,
+                skipped: 0
+            }
+        );
+        assert_eq!(
+            enqueue_trip_weather_enrichment(pool, Some(vehicle))
+                .await
+                .unwrap(),
+            BackfillStats {
+                scanned: 501,
+                filled: 0,
+                failed: 0,
+                skipped: 501
+            }
+        );
+        sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='failed',attempts=4,last_error='synthetic'").execute(pool).await.unwrap();
+        assert_eq!(
+            enqueue_trip_weather_enrichment(pool, Some(vehicle))
+                .await
+                .unwrap()
+                .filled,
+            501
+        );
+        let reset:i64=sqlx::query_scalar("SELECT count(*) FROM panda.weather_enrichment_jobs WHERE status='pending' AND attempts=0 AND last_error IS NULL").fetch_one(pool).await.unwrap();
+        assert_eq!(reset, 501);
+        let id = trip(pool, vehicle, start() - chrono::Duration::days(1)).await;
+        sqlx::query("UPDATE panda.trips SET start_lat=30,start_lng=-97 WHERE id=$1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            backfill_trip_outside_temps_with_lookup(
+                pool,
+                Some(vehicle),
+                |_, _, _| async { None },
+                None
+            )
+            .await
+            .unwrap(),
+            BackfillStats {
+                scanned: 1,
+                filled: 0,
+                failed: 1,
+                skipped: 0
+            }
+        );
+        assert_eq!(
+            backfill_trip_outside_temps_with_lookup(
+                pool,
+                Some(vehicle),
+                |lat, lng, at| {
+                    assert_eq!(
+                        (lat, lng, at),
+                        (30., -97., start() - chrono::Duration::days(1))
+                    );
+                    async { Some(-12.5) }
+                },
+                Some(Duration::ZERO)
+            )
+            .await
+            .unwrap()
+            .filled,
+            1
+        );
+        assert_eq!(
+            backfill_trip_outside_temps_with_lookup(
+                pool,
+                Some(vehicle),
+                |_, _, _| async { panic!("populated value must not be queried") },
+                None
+            )
+            .await
+            .unwrap()
+            .scanned,
+            0
+        );
+        pool.close().await;
+        assert!(enqueue_trip_weather_enrichment(pool, Some(vehicle))
+            .await
+            .is_err());
+        fixture.cleanup().await;
+    }
+}

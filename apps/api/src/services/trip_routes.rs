@@ -163,3 +163,79 @@ mod tests {
         assert_eq!(preview.last(), Some(&[-73.01999, 40.01999]));
     }
 }
+
+#[cfg(test)]
+mod history_route_contract_tests {
+    use super::*;
+
+    #[test]
+    fn history_preview_small_routes_keep_legacy_validation_and_axis_order() {
+        assert!(build_route_preview(&[]).is_empty());
+        assert_eq!(
+            build_route_preview(&[
+                (0., 1.),
+                (0., 1.),
+                (1., 0.),
+                (91., 181.),
+                (0., 0.),
+                (f64::INFINITY, 2.)
+            ]),
+            vec![[1., 0.], [0., 1.], [181., 91.]]
+        );
+        let points = (0..256).map(|i| (40., i as f64 / 100.)).collect::<Vec<_>>();
+        assert_eq!(build_route_preview(&points).len(), 256);
+    }
+
+    #[test]
+    fn history_segment_projection_clamps_and_handles_closed_segments() {
+        assert_eq!(squared_segment_distance((3., 4.), (0., 0.), (0., 0.)), 25.);
+        assert_eq!(squared_segment_distance((-1., 1.), (0., 0.), (2., 0.)), 2.);
+        assert_eq!(squared_segment_distance((3., 1.), (0., 0.), (2., 0.)), 2.);
+        assert_eq!(
+            simplify_indices(&[(0., 0.), (1., 1.), (2., 0.)], 1.),
+            vec![0, 2]
+        );
+        assert_eq!(
+            simplify_indices(&[(0., 0.), (1., 1.), (2., 0.)], 0.5),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn history_preview_dense_contract_fingerprints() {
+        for count in [257, 512, 2000] {
+            let points = (0..count)
+                .map(|i| {
+                    let x = i as f64;
+                    (40. + x * 0.00001, -73. + (x * 0.13).sin() * 0.01)
+                })
+                .collect::<Vec<_>>();
+            let preview = build_route_preview(&points);
+            let indices = preview
+                .iter()
+                .map(|p| {
+                    points
+                        .iter()
+                        .position(|&(lat, lng)| *p == [lng, lat])
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let hash = indices.iter().fold(14695981039346656037_u64, |h, i| {
+                (h ^ *i as u64).wrapping_mul(1099511628211)
+            });
+            eprintln!(
+                "history route count={count} retained={} index_hash={hash}",
+                preview.len()
+            );
+            let expected = match count {
+                257 => (34, 7204542128003175544_u64),
+                512 => (65, 10178286179853151389_u64),
+                2000 => (250, 3291865739160210349_u64),
+                _ => unreachable!(),
+            };
+            assert_eq!((preview.len(), hash), expected);
+            assert_eq!(indices.first(), Some(&0));
+            assert_eq!(indices.last(), Some(&(count - 1)));
+        }
+    }
+}
