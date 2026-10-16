@@ -21,6 +21,21 @@ pub struct ReconcileStats {
     pub ambiguous: u64,
 }
 
+#[derive(sqlx::FromRow)]
+struct ChargeHistorySampleAssignment {
+    source_at: chrono::DateTime<chrono::Utc>,
+    segment_index: i32,
+    sessions: Vec<Uuid>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ChargeHistoryRepairJournal {
+    before_images: serde_json::Value,
+    after_images: serde_json::Value,
+    reference_mappings: serde_json::Value,
+    reverted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Attach previously unassociated Parallax graph points only when their source
 /// timestamp belongs to exactly one closed canonical session. The persisted
 /// checked marker and batch limit keep startup work bounded; the cursor records
@@ -31,13 +46,17 @@ pub async fn reconcile_unassociated_parallax_samples(
     limit: i64,
 ) -> Result<ReconcileStats> {
     let mut tx = pool.begin().await?;
-    let rows = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, i32)>(
-        r#"SELECT source_at,segment_index
-           FROM timeseries.parallax_charge_curve_points
-           WHERE vehicle_id=$1 AND charge_session_id IS NULL
-             AND (reconciliation_checked_at IS NULL
-                  OR reconciliation_checked_at<now()-interval '1 hour')
-           ORDER BY reconciliation_checked_at NULLS FIRST,source_at,segment_index LIMIT $2"#,
+    let rows = sqlx::query_as::<_, ChargeHistorySampleAssignment>(
+        r#"SELECT p.source_at, p.segment_index,
+                  ARRAY(SELECT s.id FROM panda.charge_sessions s
+                        WHERE s.vehicle_id=$1 AND s.ended_at IS NOT NULL
+                          AND s.started_at<=p.source_at AND s.ended_at>=p.source_at
+                        ORDER BY s.started_at LIMIT 2) AS sessions
+           FROM timeseries.parallax_charge_curve_points p
+           WHERE p.vehicle_id=$1 AND p.charge_session_id IS NULL
+             AND (p.reconciliation_checked_at IS NULL
+                  OR p.reconciliation_checked_at<now()-interval '1 hour')
+           ORDER BY p.reconciliation_checked_at NULLS FIRST,p.source_at,p.segment_index LIMIT $2"#,
     )
     .bind(vehicle_id)
     .bind(limit.clamp(1, 1000))
@@ -48,46 +67,40 @@ pub async fn reconcile_unassociated_parallax_samples(
         scanned: rows.len() as u64,
         ..ReconcileStats::default()
     };
-    for (source_at, segment_index) in &rows {
-        let matches = sqlx::query_scalar::<_, Uuid>(
-            r#"SELECT id FROM panda.charge_sessions
-               WHERE vehicle_id=$1 AND ended_at IS NOT NULL
-                 AND started_at<=$2 AND ended_at>=$2
-               ORDER BY started_at LIMIT 2"#,
-        )
-        .bind(vehicle_id)
-        .bind(source_at)
-        .fetch_all(&mut *tx)
-        .await?;
-        match matches.as_slice() {
-            [session_id] => {
-                stats.attached += sqlx::query(
-                    r#"UPDATE timeseries.parallax_charge_curve_points
-                       SET charge_session_id=$1
-                       WHERE vehicle_id=$2 AND source_at=$3 AND segment_index=$4
-                         AND charge_session_id IS NULL"#,
-                )
-                .bind(session_id)
-                .bind(vehicle_id)
-                .bind(source_at)
-                .bind(segment_index)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected();
+    for sample in &rows {
+        let attached = match sample.sessions.as_slice() {
+            [session_id] => sqlx::query(
+                "UPDATE timeseries.parallax_charge_curve_points
+                 SET charge_session_id=$1,reconciliation_checked_at=now()
+                 WHERE vehicle_id=$2 AND source_at=$3 AND segment_index=$4
+                   AND charge_session_id IS NULL",
+            )
+            .bind(session_id)
+            .bind(vehicle_id)
+            .bind(sample.source_at)
+            .bind(sample.segment_index)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected(),
+            matches => {
+                stats.ambiguous += u64::from(matches.len() > 1);
+                0
             }
-            [_, ..] => stats.ambiguous += 1,
-            [] => {}
+        };
+        stats.attached += attached;
+        if attached == 0 {
+            sqlx::query(
+                "UPDATE timeseries.parallax_charge_curve_points SET reconciliation_checked_at=now()
+                 WHERE vehicle_id=$1 AND source_at=$2 AND segment_index=$3",
+            )
+            .bind(vehicle_id)
+            .bind(sample.source_at)
+            .bind(sample.segment_index)
+            .execute(&mut *tx)
+            .await?;
         }
-        sqlx::query(
-            "UPDATE timeseries.parallax_charge_curve_points SET reconciliation_checked_at=now() WHERE vehicle_id=$1 AND source_at=$2 AND segment_index=$3",
-        )
-        .bind(vehicle_id)
-        .bind(source_at)
-        .bind(segment_index)
-        .execute(&mut *tx)
-        .await?;
     }
-    if let Some((last_source_at, last_segment_index)) = rows.last() {
+    if let Some(last) = rows.last() {
         sqlx::query(
             r#"INSERT INTO panda.charge_session_repair_cursor(vehicle_id,cursor_ts,cursor_segment_index)
                VALUES($1,$2,$3) ON CONFLICT(vehicle_id) DO UPDATE SET
@@ -102,8 +115,8 @@ pub async fn reconcile_unassociated_parallax_samples(
                updated_at=now()"#,
         )
         .bind(vehicle_id)
-        .bind(last_source_at)
-        .bind(last_segment_index)
+        .bind(last.source_at)
+        .bind(last.segment_index)
         .execute(&mut *tx)
         .await?;
     }
@@ -122,15 +135,15 @@ pub async fn reconcile_unassociated_parallax_samples(
 
 pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     let mut tx = pool.begin().await?;
-    let row = sqlx::query_as::<_, (serde_json::Value, serde_json::Value, serde_json::Value, Option<chrono::DateTime<chrono::Utc>>)>(
+    let journal = sqlx::query_as::<_, ChargeHistoryRepairJournal>(
         "SELECT before_images,after_images,reference_mappings,reverted_at FROM panda.charge_session_repair_journal WHERE id=$1 FOR UPDATE",
     ).bind(journal_id).fetch_optional(&mut *tx).await?
      .ok_or_else(|| anyhow::anyhow!("repair journal entry not found"))?;
-    if row.3.is_some() {
+    if journal.reverted_at.is_some() {
         anyhow::bail!("repair has already been rolled back");
     }
-    let survivor = parse_mapping_uuid(&row.2, "survivor_id")?;
-    let duplicate = parse_mapping_uuid(&row.2, "duplicate_id")?;
+    let survivor = parse_mapping_uuid(&journal.reference_mappings, "survivor_id")?;
+    let duplicate = parse_mapping_uuid(&journal.reference_mappings, "duplicate_id")?;
 
     let unchanged: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(
@@ -158,9 +171,9 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
                  WHERE p.charge_session_id=$1)=jsonb_array_length(COALESCE($4->'parallax_curve_keys','[]'::jsonb))"#,
     )
     .bind(survivor)
-    .bind(&row.1)
+    .bind(&journal.after_images)
     .bind(duplicate)
-    .bind(&row.2)
+    .bind(&journal.reference_mappings)
     .fetch_one(&mut *tx)
     .await?;
     if !unchanged {
@@ -170,7 +183,7 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     }
 
     sqlx::query("INSERT INTO panda.charge_sessions SELECT (jsonb_populate_record(NULL::panda.charge_sessions,$1->'duplicate')).*")
-        .bind(&row.0).execute(&mut *tx).await?;
+        .bind(&journal.before_images).execute(&mut *tx).await?;
     sqlx::query(
         r#"WITH original AS (SELECT (jsonb_populate_record(NULL::panda.charge_sessions,$2->'survivor')).*)
            UPDATE panda.charge_sessions s SET
@@ -198,21 +211,21 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
              parallax_charger_status=o.parallax_charger_status,duration_minutes=o.duration_minutes,
              source=o.source,data_confidence=o.data_confidence,rivian_session_id=o.rivian_session_id
            FROM original o WHERE s.id=$1"#,
-    ).bind(survivor).bind(&row.0).execute(&mut *tx).await?;
+    ).bind(survivor).bind(&journal.before_images).execute(&mut *tx).await?;
 
     sqlx::query("UPDATE timeseries.telemetry SET charge_session_id=$1 WHERE vehicle_id=(SELECT vehicle_id FROM panda.charge_sessions WHERE id=$1) AND ts IN (SELECT value::timestamptz FROM jsonb_array_elements_text($2->'telemetry_ts'))")
-        .bind(duplicate).bind(&row.2).execute(&mut *tx).await?;
+        .bind(duplicate).bind(&journal.reference_mappings).execute(&mut *tx).await?;
     sqlx::query("UPDATE panda.rivian_charge_curve_points SET charge_session_id=$1 WHERE ts IN (SELECT value::timestamptz FROM jsonb_array_elements_text($2->'rivian_curve_ts')) AND charge_session_id=$3")
-        .bind(duplicate).bind(&row.2).bind(survivor).execute(&mut *tx).await?;
+        .bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
     sqlx::query("UPDATE panda.rivian_charge_payloads SET charge_session_id=$1 WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text($2->'payload_ids')) AND charge_session_id=$3")
-        .bind(duplicate).bind(&row.2).bind(survivor).execute(&mut *tx).await?;
+        .bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
     sqlx::query("UPDATE panda.rivian_parallax_events SET charge_session_id=$1 WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text($2->'parallax_event_ids')) AND charge_session_id=$3")
-        .bind(duplicate).bind(&row.2).bind(survivor).execute(&mut *tx).await?;
+        .bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
     sqlx::query(
         r#"UPDATE timeseries.parallax_charge_curve_points p SET charge_session_id=$1
            FROM jsonb_to_recordset($2->'parallax_curve_keys') AS k(source_at timestamptz,segment_index integer)
            WHERE p.source_at=k.source_at AND p.segment_index=k.segment_index AND p.charge_session_id=$3"#,
-    ).bind(duplicate).bind(&row.2).bind(survivor).execute(&mut *tx).await?;
+    ).bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
 
     sqlx::query(
         "DELETE FROM panda.charge_session_user_annotations WHERE charge_session_id IN ($1,$2)",
@@ -222,7 +235,7 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     .execute(&mut *tx)
     .await?;
     sqlx::query("INSERT INTO panda.charge_session_user_annotations SELECT (jsonb_populate_recordset(NULL::panda.charge_session_user_annotations,$1->'annotations')).*")
-        .bind(&row.0).execute(&mut *tx).await?;
+        .bind(&journal.before_images).execute(&mut *tx).await?;
     sqlx::query(
         "DELETE FROM panda.charge_session_external_aliases WHERE charge_session_id IN ($1,$2)",
     )
@@ -231,7 +244,7 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     .execute(&mut *tx)
     .await?;
     sqlx::query("INSERT INTO panda.charge_session_external_aliases SELECT (jsonb_populate_recordset(NULL::panda.charge_session_external_aliases,$1->'aliases')).*")
-        .bind(&row.0).execute(&mut *tx).await?;
+        .bind(&journal.before_images).execute(&mut *tx).await?;
     sqlx::query("UPDATE panda.charge_session_repair_journal SET reverted_at=now() WHERE id=$1")
         .bind(journal_id)
         .execute(&mut *tx)
@@ -468,29 +481,36 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
                ORDER BY t.ts LIMIT 1) stop
            WHERE s.vehicle_id=$1 AND s.ended_at IS NULL"#,
     ).bind(vehicle_id).fetch_all(&mut *tx).await?;
-    for (session_id, ended_at) in closed {
-        let repair_key = format!("definitive-tail-close:{session_id}:{ended_at}");
-        let applied = sqlx::query_scalar::<_, bool>(
-            r#"INSERT INTO panda.charge_session_repair_journal
-                   (vehicle_id,repair_key,reason,revision,before_images,reference_mappings)
-               SELECT $1,$2,'first_definitive_terminal_event','startup-v2',
-                      jsonb_build_object('survivor',to_jsonb(s)),
-                      jsonb_build_object('session_id',s.id,'ended_at',$4::timestamptz)
-               FROM panda.charge_sessions s WHERE s.id=$3 AND s.vehicle_id=$1
-               ON CONFLICT (vehicle_id,repair_key) DO NOTHING RETURNING true"#,
-        )
-        .bind(vehicle_id)
-        .bind(&repair_key)
-        .bind(session_id)
-        .bind(ended_at)
-        .fetch_optional(&mut *tx)
-        .await?
-        .unwrap_or(false);
-        if applied {
-            sqlx::query("UPDATE panda.charge_sessions SET ended_at=$2,duration_minutes=(EXTRACT(EPOCH FROM ($2-started_at))/60)::integer WHERE id=$1 AND ended_at IS NULL")
-                .bind(session_id).bind(ended_at).execute(&mut *tx).await?;
-            stats.closed += 1;
-        }
+    if !closed.is_empty() {
+        let sessions: Vec<_> = closed.iter().map(|(id, _)| *id).collect();
+        let ends: Vec<_> = closed.iter().map(|(_, end)| *end).collect();
+        let keys: Vec<_> = closed
+            .iter()
+            .map(|(id, end)| format!("definitive-tail-close:{id}:{end}"))
+            .collect();
+        stats.closed = sqlx::query_scalar::<_, i64>(
+            r#"WITH closures AS MATERIALIZED (
+                   SELECT * FROM unnest($2::uuid[], $3::timestamptz[], $4::text[]) WITH ORDINALITY
+                       AS proposed(session_id, ended_at, repair_key, position)
+               ), journaled AS (
+                   INSERT INTO panda.charge_session_repair_journal
+                       (vehicle_id,repair_key,reason,revision,before_images,reference_mappings)
+                   SELECT $1,c.repair_key,'first_definitive_terminal_event','startup-v2',
+                          jsonb_build_object('survivor',to_jsonb(s)),
+                          jsonb_build_object('session_id',s.id,'ended_at',c.ended_at)
+                   FROM closures c JOIN panda.charge_sessions s ON s.id=c.session_id AND s.vehicle_id=$1
+                   ORDER BY c.position
+                   ON CONFLICT (vehicle_id,repair_key) DO NOTHING
+                   RETURNING reference_mappings
+               ), closed AS (
+               UPDATE panda.charge_sessions s
+               SET ended_at=(j.reference_mappings->>'ended_at')::timestamptz,
+                   duration_minutes=(EXTRACT(EPOCH FROM ((j.reference_mappings->>'ended_at')::timestamptz-s.started_at))/60)::integer
+               FROM journaled j
+               WHERE s.id=(j.reference_mappings->>'session_id')::uuid AND s.ended_at IS NULL
+               RETURNING s.id
+               ) SELECT COUNT(*)::bigint FROM journaled"#,
+        ).bind(vehicle_id).bind(&sessions).bind(&ends).bind(&keys).fetch_one(&mut *tx).await? as u64;
     }
 
     tx.commit().await?;

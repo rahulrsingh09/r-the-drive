@@ -174,23 +174,12 @@ pub fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Op
 }
 
 pub fn normalize_grouping_key(raw: Option<&str>) -> Option<String> {
-    let raw = raw?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    let mut pieces = raw
+    let keys: std::collections::BTreeSet<_> = raw?
         .split(',')
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if pieces.is_empty() {
-        return None;
-    }
-    pieces.sort_unstable();
-    pieces.dedup();
-    Some(pieces.join(","))
+        .filter(|key| !key.is_empty())
+        .collect();
+    (!keys.is_empty()).then(|| keys.into_iter().collect::<Vec<_>>().join(","))
 }
 
 fn parse_data_source_alias(data_source: &str) -> Option<(ExternalAliasKind, String)> {
@@ -218,55 +207,118 @@ fn infer_alias_kind_from_id(external_id: &str) -> ExternalAliasKind {
     }
 }
 
-pub fn parse_summary_aliases(
-    summary: &ChargeSessionSummaryPayload,
-) -> Vec<ChargeSessionExternalAlias> {
-    let grouping_key = normalize_grouping_key(
-        summary
+struct ChargeHistorySummaryEvidence {
+    aliases: Vec<ChargeSessionExternalAlias>,
+    grouping_key: Option<String>,
+    charger_type: Option<&'static str>,
+    rivian_network: Option<bool>,
+}
+
+impl ChargeHistorySummaryEvidence {
+    fn from_summary(summary: &ChargeSessionSummaryPayload) -> Self {
+        let grouping_key = normalize_grouping_key(
+            summary
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.transaction_id_grouping_key.as_deref()),
+        );
+        let mut aliases: Vec<_> = summary
             .meta
             .as_ref()
-            .and_then(|meta| meta.transaction_id_grouping_key.as_deref()),
-    );
-    let mut aliases = Vec::<ChargeSessionExternalAlias>::new();
-
-    if let Some(data_sources) = summary
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.data_sources.as_ref())
-    {
-        for data_source in data_sources {
-            if let Some((alias_kind, external_id)) = parse_data_source_alias(data_source) {
+            .and_then(|meta| meta.data_sources.as_ref())
+            .into_iter()
+            .flatten()
+            .filter_map(|source| parse_data_source_alias(source))
+            .map(|(alias_kind, external_id)| ChargeSessionExternalAlias {
+                external_id,
+                alias_kind,
+                transaction_id_grouping_key: grouping_key.clone(),
+            })
+            .collect();
+        if let Some(id) = summary
+            .transaction_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            if !aliases.iter().any(|alias| alias.external_id == id) {
                 aliases.push(ChargeSessionExternalAlias {
-                    external_id,
-                    alias_kind,
+                    external_id: id.to_owned(),
+                    alias_kind: infer_alias_kind_from_id(id),
                     transaction_id_grouping_key: grouping_key.clone(),
                 });
             }
         }
-    }
-
-    if let Some(transaction_id) = summary.transaction_id.as_ref().map(|value| value.trim()) {
-        if !transaction_id.is_empty()
-            && !aliases
-                .iter()
-                .any(|alias| alias.external_id == transaction_id)
-        {
-            aliases.push(ChargeSessionExternalAlias {
-                external_id: transaction_id.to_string(),
-                alias_kind: infer_alias_kind_from_id(transaction_id),
-                transaction_id_grouping_key: grouping_key.clone(),
-            });
+        aliases.sort_by_key(|alias| (alias.alias_kind.rank(), alias.external_id.clone()));
+        // Adjacent-only deduplication preserves historical cross-kind alias output.
+        aliases.dedup_by(|left, right| left.external_id == right.external_id);
+        Self {
+            aliases,
+            grouping_key,
+            charger_type: normalize_api_charger_type(summary.charger_type.as_deref()).or_else(
+                || infer_api_charger_type(summary.vendor.as_deref(), summary.is_home_charger),
+            ),
+            rivian_network: infer_is_rivian_network(summary.vendor.as_deref()),
         }
     }
 
-    aliases.sort_by(|left, right| {
-        left.alias_kind
-            .rank()
-            .cmp(&right.alias_kind.rank())
-            .then_with(|| left.external_id.cmp(&right.external_id))
-    });
-    aliases.dedup_by(|left, right| left.external_id == right.external_id);
-    aliases
+    async fn find_match(
+        &self,
+        pool: &PgPool,
+        vehicle_id: Uuid,
+        summary: &ChargeSessionSummaryPayload,
+    ) -> Result<Option<MatchRow>> {
+        for stage in [
+            ChargeHistoryMatchStage::Alias,
+            ChargeHistoryMatchStage::Grouping,
+            ChargeHistoryMatchStage::Overlap,
+            ChargeHistoryMatchStage::Nearby,
+        ] {
+            let matched = match stage {
+                ChargeHistoryMatchStage::Alias => {
+                    find_session_by_external_alias(pool, vehicle_id, &self.aliases).await?
+                }
+                ChargeHistoryMatchStage::Grouping => {
+                    find_session_by_grouping_key(
+                        pool,
+                        vehicle_id,
+                        self.grouping_key.as_deref(),
+                        summary.start_instant,
+                    )
+                    .await?
+                }
+                ChargeHistoryMatchStage::Overlap => {
+                    find_overlapping_session(
+                        pool,
+                        vehicle_id,
+                        summary.start_instant,
+                        summary.end_instant,
+                    )
+                    .await?
+                }
+                ChargeHistoryMatchStage::Nearby => {
+                    find_time_window_session(pool, vehicle_id, summary.start_instant).await?
+                }
+            };
+            if matched.is_some() {
+                return Ok(matched);
+            }
+        }
+        Ok(None)
+    }
+}
+
+enum ChargeHistoryMatchStage {
+    Alias,
+    Grouping,
+    Overlap,
+    Nearby,
+}
+
+pub fn parse_summary_aliases(
+    summary: &ChargeSessionSummaryPayload,
+) -> Vec<ChargeSessionExternalAlias> {
+    ChargeHistorySummaryEvidence::from_summary(summary).aliases
 }
 
 pub fn preferred_external_alias(
@@ -928,39 +980,8 @@ pub async fn reconcile_completed_session_summary(
     insert_policy: UnmatchedInsertPolicy,
     payload_ref: Option<ChargeSessionPayloadRef>,
 ) -> Result<Option<Uuid>> {
-    let is_rivian_network = infer_is_rivian_network(summary.vendor.as_deref());
-    let normalized_charger_type = normalize_api_charger_type(summary.charger_type.as_deref())
-        .or_else(|| infer_api_charger_type(summary.vendor.as_deref(), summary.is_home_charger));
-    let aliases = parse_summary_aliases(summary);
-    let preferred_external_id =
-        preferred_external_alias(&aliases).map(|alias| alias.external_id.as_str());
-    let grouping_key = normalize_grouping_key(
-        summary
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.transaction_id_grouping_key.as_deref()),
-    );
-
-    let matched =
-        if let Some(existing) = find_session_by_external_alias(pool, vehicle_id, &aliases).await? {
-            Some(existing)
-        } else if let Some(existing) = find_session_by_grouping_key(
-            pool,
-            vehicle_id,
-            grouping_key.as_deref(),
-            summary.start_instant,
-        )
-        .await?
-        {
-            Some(existing)
-        } else if let Some(existing) =
-            find_overlapping_session(pool, vehicle_id, summary.start_instant, summary.end_instant)
-                .await?
-        {
-            Some(existing)
-        } else {
-            find_time_window_session(pool, vehicle_id, summary.start_instant).await?
-        };
+    let evidence = ChargeHistorySummaryEvidence::from_summary(summary);
+    let matched = evidence.find_match(pool, vehicle_id, summary).await?;
 
     let session_id = if let Some(existing) = matched {
         update_session_from_summary(
@@ -968,8 +989,8 @@ pub async fn reconcile_completed_session_summary(
             existing.id,
             existing.source.as_deref(),
             summary,
-            normalized_charger_type,
-            is_rivian_network,
+            evidence.charger_type,
+            evidence.rivian_network,
         )
         .await?;
         Some(existing.id)
@@ -978,9 +999,9 @@ pub async fn reconcile_completed_session_summary(
             pool,
             vehicle_id,
             summary,
-            normalized_charger_type,
-            is_rivian_network,
-            preferred_external_id,
+            evidence.charger_type,
+            evidence.rivian_network,
+            preferred_external_alias(&evidence.aliases).map(|alias| alias.external_id.as_str()),
         )
         .await?
     } else {
@@ -988,8 +1009,8 @@ pub async fn reconcile_completed_session_summary(
     };
 
     if let Some(session_id) = session_id {
-        if !aliases.is_empty() {
-            upsert_external_aliases(pool, session_id, &aliases, payload_ref).await?;
+        if !evidence.aliases.is_empty() {
+            upsert_external_aliases(pool, session_id, &evidence.aliases, payload_ref).await?;
             finalize_charge_session_aliases(pool, session_id).await?;
         }
     }
@@ -1054,31 +1075,158 @@ struct RestartSplitPairRow {
     right_id: Uuid,
 }
 
-#[derive(Debug, Default)]
-struct UnionFind {
-    parent: Vec<usize>,
+struct ChargeHistoryComponents {
+    links: Vec<Vec<usize>>,
+    windows: Vec<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
-impl UnionFind {
-    fn new(size: usize) -> Self {
+impl ChargeHistoryComponents {
+    fn new(
+        sessions: &[CanonicalSessionRow],
+        aliases: &[CanonicalAliasRow],
+        restarts: &[RestartSplitPairRow],
+    ) -> Self {
+        let indexes: std::collections::HashMap<_, _> = sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| (session.id, index))
+            .collect();
+        let mut graph = Self {
+            links: vec![Vec::new(); sessions.len()],
+            windows: sessions
+                .iter()
+                .map(|s| (session_window_start(s), session_window_end(s)))
+                .collect(),
+        };
+        let mut owners = std::collections::HashMap::new();
+        for alias in aliases {
+            let index = indexes[&alias.charge_session_id];
+            for key in [
+                (false, Some(alias.external_id.as_str())),
+                (true, alias.transaction_id_grouping_key.as_deref()),
+            ] {
+                if let (kind, Some(key)) = key {
+                    if let Some(&other) = owners.get(&(kind, key)) {
+                        graph.connect(index, other);
+                    } else {
+                        owners.insert((kind, key), index);
+                    }
+                }
+            }
+        }
+        for pair in restarts {
+            if let (Some(&left), Some(&right)) =
+                (indexes.get(&pair.left_id), indexes.get(&pair.right_id))
+            {
+                graph.connect(left, right);
+            }
+        }
+        graph
+    }
+
+    fn connect(&mut self, left: usize, right: usize) {
+        self.links[left].push(right);
+        self.links[right].push(left);
+    }
+
+    fn into_clusters(self, sessions: &[CanonicalSessionRow]) -> Vec<Vec<CanonicalSessionRow>> {
+        let mut visited = vec![false; sessions.len()];
+        let mut clusters = Vec::new();
+        for seed in 0..sessions.len() {
+            if visited[seed] {
+                continue;
+            }
+            let mut pending = vec![seed];
+            let mut members = Vec::new();
+            visited[seed] = true;
+            while let Some(index) = pending.pop() {
+                members.push(index);
+                let (start, end) = self.windows[index];
+                // Discover overlap edges on demand without storing a quadratic graph.
+                for (other, &(other_start, other_end)) in self.windows.iter().enumerate() {
+                    if !visited[other] && start <= other_end && other_start <= end {
+                        visited[other] = true;
+                        pending.push(other);
+                    }
+                }
+                for &other in &self.links[index] {
+                    if !visited[other] {
+                        visited[other] = true;
+                        pending.push(other);
+                    }
+                }
+            }
+            members.sort_unstable();
+            clusters.push(members.into_iter().map(|i| sessions[i].clone()).collect());
+        }
+        clusters
+    }
+}
+
+#[derive(Default)]
+struct ChargeHistoryWindow {
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+}
+
+impl ChargeHistoryWindow {
+    fn include(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) {
+        self.start = Some(self.start.map_or(start, |old| old.min(start)));
+        self.end = Some(self.end.map_or(end, |old| old.max(end)));
+    }
+}
+
+struct ChargeHistoryClusterEvidence {
+    local: ChargeHistoryWindow,
+    api: ChargeHistoryWindow,
+    source: &'static str,
+    preferred_external_id: Option<String>,
+}
+
+impl ChargeHistoryClusterEvidence {
+    fn collect(
+        sessions: &[CanonicalSessionRow],
+        aliases: &std::collections::HashMap<Uuid, Vec<CanonicalAliasRow>>,
+    ) -> Self {
+        let mut all = ChargeHistoryWindow::default();
+        let mut telemetry = ChargeHistoryWindow::default();
+        let mut api = ChargeHistoryWindow::default();
+        let mut preferred: Option<&CanonicalAliasRow> = None;
+        for session in sessions {
+            let end = session.ended_at.unwrap_or(session.started_at);
+            all.include(session.started_at, end);
+            if is_telemetry_backed(session.source.as_deref()) {
+                telemetry.include(session.started_at, end);
+            }
+            if has_api_evidence(session) {
+                api.include(
+                    session.api_started_at.unwrap_or(session.started_at),
+                    session.api_ended_at.unwrap_or(end),
+                );
+            }
+            for alias in aliases.get(&session.id).into_iter().flatten() {
+                let rank = |a: &CanonicalAliasRow| {
+                    (alias_rank_from_str(&a.alias_kind), a.external_id.clone())
+                };
+                if preferred.is_none_or(|old| rank(alias) < rank(old)) {
+                    preferred = Some(alias);
+                }
+            }
+        }
+        let source = match (telemetry.start.is_some(), api.start.is_some()) {
+            (true, true) => CHARGE_SESSION_SOURCE_TELEMETRY_AND_API,
+            (true, false) => CHARGE_SESSION_SOURCE_TELEMETRY,
+            _ => CHARGE_SESSION_SOURCE_RIVIAN_API,
+        };
         Self {
-            parent: (0..size).collect(),
-        }
-    }
-
-    fn find(&mut self, index: usize) -> usize {
-        if self.parent[index] != index {
-            let root = self.find(self.parent[index]);
-            self.parent[index] = root;
-        }
-        self.parent[index]
-    }
-
-    fn union(&mut self, left: usize, right: usize) {
-        let left_root = self.find(left);
-        let right_root = self.find(right);
-        if left_root != right_root {
-            self.parent[right_root] = left_root;
+            local: if telemetry.start.is_some() {
+                telemetry
+            } else {
+                all
+            },
+            api,
+            source,
+            preferred_external_id: preferred.map(|alias| alias.external_id.clone()),
         }
     }
 }
@@ -1440,142 +1588,23 @@ pub async fn canonicalize_charge_sessions(
         .fetch_all(pool)
         .await?;
 
-        let mut session_indexes = std::collections::HashMap::<Uuid, usize>::new();
-        for (index, session) in sessions.iter().enumerate() {
-            session_indexes.insert(session.id, index);
-        }
-
-        let mut union_find = UnionFind::new(sessions.len());
-        let mut aliases_by_external = std::collections::HashMap::<String, Vec<Uuid>>::new();
-        let mut aliases_by_grouping = std::collections::HashMap::<String, Vec<Uuid>>::new();
+        let components = ChargeHistoryComponents::new(&sessions, &aliases, &restart_pairs);
         let mut aliases_by_session =
             std::collections::HashMap::<Uuid, Vec<CanonicalAliasRow>>::new();
         for alias in aliases {
-            aliases_by_external
-                .entry(alias.external_id.clone())
-                .or_default()
-                .push(alias.charge_session_id);
-            if let Some(grouping_key) = alias.transaction_id_grouping_key.clone() {
-                aliases_by_grouping
-                    .entry(grouping_key)
-                    .or_default()
-                    .push(alias.charge_session_id);
-            }
             aliases_by_session
                 .entry(alias.charge_session_id)
                 .or_default()
                 .push(alias);
         }
-
-        for ids in aliases_by_external.values() {
-            if let Some((&first, rest)) = ids.split_first() {
-                for &other in rest {
-                    union_find.union(session_indexes[&first], session_indexes[&other]);
-                }
-            }
-        }
-        for ids in aliases_by_grouping.values() {
-            if let Some((&first, rest)) = ids.split_first() {
-                for &other in rest {
-                    union_find.union(session_indexes[&first], session_indexes[&other]);
-                }
-            }
-        }
-        for pair in restart_pairs {
-            if let (Some(&left), Some(&right)) = (
-                session_indexes.get(&pair.left_id),
-                session_indexes.get(&pair.right_id),
-            ) {
-                union_find.union(left, right);
-            }
-        }
-        for left_index in 0..sessions.len() {
-            for right_index in (left_index + 1)..sessions.len() {
-                if session_window_start(&sessions[left_index])
-                    <= session_window_end(&sessions[right_index])
-                    && session_window_start(&sessions[right_index])
-                        <= session_window_end(&sessions[left_index])
-                {
-                    union_find.union(left_index, right_index);
-                }
-            }
-        }
-
-        let mut clusters = std::collections::HashMap::<usize, Vec<CanonicalSessionRow>>::new();
-        for session in sessions {
-            let root = union_find.find(session_indexes[&session.id]);
-            clusters.entry(root).or_default().push(session);
-        }
-
-        for cluster_sessions in clusters.into_values() {
+        for cluster_sessions in components.into_clusters(&sessions) {
             if cluster_sessions.len() < 2 {
                 continue;
             }
-
             let canonical =
                 choose_canonical_session(&cluster_sessions, &aliases_by_session).clone();
-            let has_telemetry = cluster_sessions
-                .iter()
-                .any(|session| is_telemetry_backed(session.source.as_deref()));
-            let has_api = cluster_sessions.iter().any(has_api_evidence);
-            let canonical_started_at = if has_telemetry {
-                cluster_sessions
-                    .iter()
-                    .filter(|session| is_telemetry_backed(session.source.as_deref()))
-                    .map(|session| session.started_at)
-                    .min()
-                    .unwrap_or(canonical.started_at)
-            } else {
-                cluster_sessions
-                    .iter()
-                    .map(|session| session.started_at)
-                    .min()
-                    .unwrap_or(canonical.started_at)
-            };
-            let canonical_ended_at = if has_telemetry {
-                cluster_sessions
-                    .iter()
-                    .filter(|session| is_telemetry_backed(session.source.as_deref()))
-                    .map(|session| session.ended_at.unwrap_or(session.started_at))
-                    .max()
-                    .or(canonical.ended_at)
-            } else {
-                cluster_sessions
-                    .iter()
-                    .map(|session| session.ended_at.unwrap_or(session.started_at))
-                    .max()
-                    .or(canonical.ended_at)
-            };
-            let api_started_at = cluster_sessions
-                .iter()
-                .filter(|session| has_api_evidence(session))
-                .map(|session| session.api_started_at.unwrap_or(session.started_at))
-                .min();
-            let api_ended_at = cluster_sessions
-                .iter()
-                .filter(|session| has_api_evidence(session))
-                .map(|session| {
-                    session
-                        .api_ended_at
-                        .unwrap_or(session.ended_at.unwrap_or(session.started_at))
-                })
-                .max();
-            let source = if has_telemetry && has_api {
-                CHARGE_SESSION_SOURCE_TELEMETRY_AND_API
-            } else if has_telemetry {
-                CHARGE_SESSION_SOURCE_TELEMETRY
-            } else {
-                CHARGE_SESSION_SOURCE_RIVIAN_API
-            };
-            let preferred_external_id = cluster_sessions
-                .iter()
-                .flat_map(|session| aliases_by_session.get(&session.id).into_iter().flatten())
-                .min_by(|left, right| {
-                    alias_rank_from_str(&left.alias_kind)
-                        .cmp(&alias_rank_from_str(&right.alias_kind))
-                        .then_with(|| left.external_id.cmp(&right.external_id))
-                })
-                .map(|alias| alias.external_id.clone());
+            let evidence =
+                ChargeHistoryClusterEvidence::collect(&cluster_sessions, &aliases_by_session);
 
             for duplicate in cluster_sessions
                 .iter()
@@ -1858,13 +1887,13 @@ pub async fn canonicalize_charge_sessions(
                 "#,
             )
             .bind(canonical.id)
-            .bind(canonical_started_at)
-            .bind(canonical_ended_at)
-            .bind(api_started_at)
-            .bind(api_ended_at)
-            .bind(source)
-            .bind(confidence_for_source(source))
-            .bind(preferred_external_id.as_deref())
+            .bind(evidence.local.start.unwrap_or(canonical.started_at))
+            .bind(evidence.local.end.or(canonical.ended_at))
+            .bind(evidence.api.start)
+            .bind(evidence.api.end)
+            .bind(evidence.source)
+            .bind(confidence_for_source(evidence.source))
+            .bind(evidence.preferred_external_id.as_deref())
             .execute(pool)
             .await?;
             finalize_charge_session_aliases(pool, canonical.id).await?;

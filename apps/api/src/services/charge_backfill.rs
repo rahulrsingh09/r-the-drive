@@ -41,45 +41,49 @@ pub enum ChargeBackfillError {
     Other(#[from] anyhow::Error),
 }
 
+#[derive(sqlx::FromRow)]
+struct ChargeHistoryStatusRow {
+    history_backfilled_at: Option<chrono::DateTime<chrono::Utc>>,
+    status: Option<String>,
+    rivian_session_count: Option<i32>,
+    local_session_count: i64,
+    missing_source_count: i64,
+}
+
 pub async fn get_status(
     pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Result<ChargeBackfillStatus, ChargeBackfillError> {
-    #[allow(clippy::type_complexity)]
-    let row: Option<(
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-        Option<i32>,
-        i64,
-        i64,
-    )> = sqlx::query_as(
-        "SELECT v.history_backfilled_at, v.history_backfill_status, v.history_session_count,
-                    COUNT(cs.id),
-                    COUNT(*) FILTER (WHERE cs.source IS NULL)
-             FROM panda.vehicles v
-             LEFT JOIN panda.charge_sessions cs ON cs.vehicle_id = v.id
-             WHERE v.id = $1
-             GROUP BY v.history_backfilled_at, v.history_backfill_status, v.history_session_count",
+    let row = sqlx::query_as::<_, ChargeHistoryStatusRow>(
+        "SELECT v.history_backfilled_at, v.history_backfill_status AS status,
+                v.history_session_count AS rivian_session_count,
+                COUNT(cs.id) AS local_session_count,
+                COUNT(*) FILTER (WHERE cs.source IS NULL) AS missing_source_count
+         FROM panda.vehicles v
+         LEFT JOIN panda.charge_sessions cs ON cs.vehicle_id = v.id
+         WHERE v.id = $1
+         GROUP BY v.history_backfilled_at, v.history_backfill_status, v.history_session_count",
     )
     .bind(vehicle_id)
     .fetch_optional(pool)
     .await?;
-
-    let (
-        history_backfilled_at,
-        status,
-        rivian_session_count,
-        local_session_count,
-        missing_source_count,
-    ) = row.unwrap_or((None, None, None, 0, 0));
-
-    Ok(ChargeBackfillStatus {
-        vehicle_id,
-        history_backfilled_at,
-        status,
-        rivian_session_count,
-        local_session_count,
-        missing_source_count,
+    Ok(match row {
+        Some(row) => ChargeBackfillStatus {
+            vehicle_id,
+            history_backfilled_at: row.history_backfilled_at,
+            status: row.status,
+            rivian_session_count: row.rivian_session_count,
+            local_session_count: row.local_session_count,
+            missing_source_count: row.missing_source_count,
+        },
+        None => ChargeBackfillStatus {
+            vehicle_id,
+            history_backfilled_at: None,
+            status: None,
+            rivian_session_count: None,
+            local_session_count: 0,
+            missing_source_count: 0,
+        },
     })
 }
 
@@ -150,41 +154,65 @@ pub async fn run_claimed(
     age_key: &str,
     claimed: ClaimedChargeBackfill,
 ) -> Result<usize, ChargeBackfillError> {
-    let result = run_claimed_inner(pool, client, age_key, &claimed).await;
-    match &result {
+    execute_charge_history_backfill(pool, claimed.vehicle_id, async {
+        let identity = age_key
+            .parse::<age::x25519::Identity>()
+            .map_err(|e| anyhow::anyhow!("age key parse failed: {e}"))?;
+        let tokens = session_store::decrypt_tokens(&claimed.encrypted_tokens, &identity)
+            .map_err(|e| anyhow::anyhow!("token decrypt failed: {e}"))?;
+        rivian_poll::fetch_charge_history_full(
+            &claimed.rivian_vehicle_id,
+            claimed.vehicle_id,
+            pool,
+            client,
+            &tokens,
+        )
+        .await
+        .map_err(ChargeBackfillError::Other)?;
+        Ok(())
+    })
+    .await
+}
+
+async fn execute_charge_history_backfill(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    fetch: impl std::future::Future<Output = Result<(), ChargeBackfillError>>,
+) -> Result<usize, ChargeBackfillError> {
+    let outcome: Result<usize, ChargeBackfillError> = async {
+        fetch.await?;
+        canonicalize_charge_sessions(pool, Some(vehicle_id)).await?;
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)::int8 FROM panda.charge_sessions WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(count as usize)
+    }
+    .await;
+    match outcome {
         Ok(count) => {
             sqlx::query(
-                "UPDATE panda.vehicles
-                 SET history_backfill_status = 'done',
-                     history_backfilled_at = now(),
-                     history_session_count = $2,
-                     updated_at = now()
+                "UPDATE panda.vehicles SET history_backfill_status = 'done',
+                     history_backfilled_at = now(), history_session_count = $2, updated_at = now()
                  WHERE id = $1",
             )
-            .bind(claimed.vehicle_id)
-            .bind(*count as i32)
+            .bind(vehicle_id)
+            .bind(count as i32)
             .execute(pool)
             .await?;
+            Ok(count)
         }
         Err(error) => {
-            tracing::warn!(
-                vehicle_id = %claimed.vehicle_id,
-                error = %error,
-                "charge history backfill failed"
-            );
+            tracing::warn!(vehicle_id = %vehicle_id, error = %error, "charge history backfill failed");
+            // A status write must not replace the original fetch/reconciliation error.
             let _ = sqlx::query(
-                "UPDATE panda.vehicles
-                 SET history_backfill_status = 'error',
-                     updated_at = now()
-                 WHERE id = $1",
-            )
-            .bind(claimed.vehicle_id)
-            .execute(pool)
-            .await;
+                "UPDATE panda.vehicles SET history_backfill_status = 'error', updated_at = now() WHERE id = $1",
+            ).bind(vehicle_id).execute(pool).await;
+            Err(error)
         }
     }
-
-    result
 }
 
 pub async fn run(
@@ -223,42 +251,6 @@ pub async fn spawn(
         ok: true,
         status: "running",
     })
-}
-
-async fn run_claimed_inner(
-    pool: &PgPool,
-    client: &reqwest::Client,
-    age_key: &str,
-    claimed: &ClaimedChargeBackfill,
-) -> Result<usize, ChargeBackfillError> {
-    let identity = age_key
-        .parse::<age::x25519::Identity>()
-        .map_err(|e| anyhow::anyhow!("age key parse failed: {e}"))?;
-    let tokens = session_store::decrypt_tokens(&claimed.encrypted_tokens, &identity)
-        .map_err(|e| anyhow::anyhow!("token decrypt failed: {e}"))?;
-
-    rivian_poll::fetch_charge_history_full(
-        &claimed.rivian_vehicle_id,
-        claimed.vehicle_id,
-        pool,
-        client,
-        &tokens,
-    )
-    .await
-    .map_err(ChargeBackfillError::Other)?;
-
-    canonicalize_charge_sessions(pool, Some(claimed.vehicle_id))
-        .await
-        .map_err(ChargeBackfillError::Other)?;
-
-    let canonical_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::int8 FROM panda.charge_sessions WHERE vehicle_id = $1",
-    )
-    .bind(claimed.vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(canonical_count as usize)
 }
 
 #[cfg(test)]
@@ -320,6 +312,77 @@ mod charge_history_backfill_contract {
             (status.local_session_count, status.missing_source_count),
             (2, 1)
         );
+        cleanup(pool, admin, name).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL; synthetic fetch only"]
+    async fn charge_history_completion_records_counts_and_preserves_failure_types() {
+        let (pool, admin, name) = database().await;
+        let v = vehicle(&pool, 50).await;
+        let other = vehicle(&pool, 51).await;
+        sqlx::query("INSERT INTO panda.vehicle_credentials(vehicle_id,encrypted_tokens,token_created_at) VALUES($1,$2,now())")
+            .bind(v).bind(vec![0u8]).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,ended_at) VALUES($1,$3,'2026-08-06T10:00Z','2026-08-06T11:00Z'),($2,$3,'2026-08-06T10:10Z','2026-08-06T10:40Z')")
+            .bind(id(5001)).bind(id(5002)).bind(v).execute(&pool).await.unwrap();
+        let _ = claim(&pool, v).await.unwrap();
+        assert_eq!(
+            execute_charge_history_backfill(&pool, v, async { Ok(()) })
+                .await
+                .unwrap(),
+            1
+        );
+        let status = get_status(&pool, v).await.unwrap();
+        assert_eq!(status.status.as_deref(), Some("done"));
+        assert!(status.history_backfilled_at.is_some());
+        assert_eq!(
+            (
+                status.rivian_session_count,
+                status.local_session_count,
+                status.missing_source_count
+            ),
+            (Some(1), 1, 0)
+        );
+        assert!(get_status(&pool, other).await.unwrap().status.is_none());
+
+        let _ = claim(&pool, v).await.unwrap();
+        let error = execute_charge_history_backfill(&pool, v, async {
+            Err(ChargeBackfillError::Other(anyhow::anyhow!(
+                "synthetic fetch failure"
+            )))
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ChargeBackfillError::Other(_)));
+        assert_eq!(error.to_string(), "synthetic fetch failure");
+        let status = get_status(&pool, v).await.unwrap();
+        assert_eq!(status.status.as_deref(), Some("error"));
+        assert!(status.history_backfilled_at.is_none());
+        assert_eq!(status.rivian_session_count, None);
+
+        let _ = claim(&pool, v).await.unwrap();
+        sqlx::query("ALTER TABLE panda.vehicles ADD CONSTRAINT fixture_reject_done CHECK (history_backfill_status IS DISTINCT FROM 'done')").execute(&pool).await.unwrap();
+        assert!(matches!(
+            execute_charge_history_backfill(&pool, v, async { Ok(()) }).await,
+            Err(ChargeBackfillError::Database(_))
+        ));
+        assert_eq!(
+            get_status(&pool, v).await.unwrap().status.as_deref(),
+            Some("running")
+        );
+        sqlx::query("ALTER TABLE panda.vehicles DROP CONSTRAINT fixture_reject_done")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE panda.vehicles ADD CONSTRAINT fixture_reject_error CHECK (history_backfill_status IS DISTINCT FROM 'error')").execute(&pool).await.unwrap();
+        let error = execute_charge_history_backfill(&pool, v, async {
+            Err(ChargeBackfillError::Other(anyhow::anyhow!(
+                "original error survives status failure"
+            )))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "original error survives status failure");
         cleanup(pool, admin, name).await;
     }
 }

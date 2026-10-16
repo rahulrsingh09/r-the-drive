@@ -161,61 +161,44 @@ async fn run_until_complete(pool: &PgPool, config: BackfillConfig) -> Result<Wor
 }
 
 async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResult> {
-    let initial_pending = pending_count(pool).await?;
-    if initial_pending == 0 {
+    let mut remaining_estimate = pending_count(pool).await?;
+    if remaining_estimate != 0 {
+        ensure_pending_index(pool).await?;
+        mark_started(pool).await?;
+        tracing::info!(
+            pending = remaining_estimate,
+            "charge_payload_identity_backfill_started"
+        );
+        loop {
+            let (rows_filled, identities_inserted) = process_batch(pool, config.batch_size).await?;
+            if rows_filled != 0 {
+                remaining_estimate = remaining_estimate.saturating_sub(rows_filled);
+                tracing::info!(
+                    rows_filled,
+                    identities_inserted,
+                    remaining_estimate,
+                    "charge_payload_identity_backfill_progress"
+                );
+                tokio::time::sleep(config.pause).await;
+            }
+            // A short claim may mean locked rows, so only an exact count ends the run.
+            if rows_filled == 0 || rows_filled < config.batch_size {
+                if pending_count(pool).await? == 0 {
+                    break;
+                }
+                if rows_filled == 0 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
         mark_complete(pool).await?;
         reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
-        return Ok(WorkerResult::Complete);
+        tracing::info!("charge_payload_identity_backfill_complete");
+    } else {
+        mark_complete(pool).await?;
+        reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
     }
-
-    ensure_pending_index(pool).await?;
-    mark_started(pool).await?;
-    let mut remaining_estimate = initial_pending;
-    tracing::info!(
-        pending = initial_pending,
-        "charge_payload_identity_backfill_started"
-    );
-
-    loop {
-        let (rows_filled, identities_inserted) = process_batch(pool, config.batch_size).await?;
-        if rows_filled == 0 {
-            // Confirm completion exactly once at the boundary. A concurrent
-            // writer may have claimed part of the original snapshot, so an
-            // estimate alone must never mark the job complete.
-            if pending_count(pool).await? == 0 {
-                mark_complete(pool).await?;
-                reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
-                tracing::info!("charge_payload_identity_backfill_complete");
-                return Ok(WorkerResult::Complete);
-            }
-
-            // Another writer may briefly hold the remaining rows. SKIP LOCKED
-            // keeps the API responsive; the next pass will claim them.
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            continue;
-        }
-
-        remaining_estimate = remaining_estimate.saturating_sub(rows_filled);
-        tracing::info!(
-            rows_filled,
-            identities_inserted,
-            remaining_estimate,
-            "charge_payload_identity_backfill_progress"
-        );
-        tokio::time::sleep(config.pause).await;
-
-        if rows_filled < config.batch_size {
-            // A short batch is the other normal completion boundary. Confirm
-            // it exactly once, while still retrying if SKIP LOCKED observed
-            // rows held by another writer.
-            if pending_count(pool).await? == 0 {
-                mark_complete(pool).await?;
-                reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
-                tracing::info!("charge_payload_identity_backfill_complete");
-                return Ok(WorkerResult::Complete);
-            }
-        }
-    }
+    Ok(WorkerResult::Complete)
 }
 
 async fn ensure_pending_index(pool: &PgPool) -> Result<()> {
@@ -263,60 +246,61 @@ async fn ensure_pending_index(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+#[derive(sqlx::FromRow)]
+struct ChargeHistoryFilledPayload {
+    id: uuid::Uuid,
+    vehicle_id: uuid::Uuid,
+    operation: String,
+    rivian_transaction_id: Option<String>,
+    rivian_vehicle_id: Option<String>,
+    payload_fingerprint: Vec<u8>,
+}
+
 async fn process_batch(pool: &PgPool, batch_size: i64) -> Result<(i64, i64)> {
     let mut transaction = pool.begin().await?;
-    let (rows_filled, identities_inserted): (i64, i64) = sqlx::query_as(
-        r#"WITH pending AS MATERIALIZED (
-               SELECT id, vehicle_id, operation, rivian_transaction_id,
-                      rivian_vehicle_id, payload
+    let filled = sqlx::query_as::<_, ChargeHistoryFilledPayload>(
+        r#"WITH claim AS MATERIALIZED (
+               SELECT id, payload
                FROM panda.rivian_charge_payloads
                WHERE payload_fingerprint IS NULL
-               ORDER BY captured_at ASC, id ASC
-               FOR UPDATE SKIP LOCKED
-               LIMIT $1
-           ), hashed AS MATERIALIZED (
-               SELECT pending.*,
-                      panda.charge_payload_fingerprint(pending.payload) AS fingerprint
-               FROM pending
-           ), updated AS (
-               UPDATE panda.rivian_charge_payloads payload
-               SET payload_fingerprint = hashed.fingerprint
-               FROM hashed
-               WHERE payload.id = hashed.id
-                 AND payload.payload_fingerprint IS NULL
-               RETURNING payload.id, payload.vehicle_id, payload.operation,
-                         payload.rivian_transaction_id, payload.rivian_vehicle_id,
-                         payload.payload_fingerprint
-           ), inserted AS (
-               INSERT INTO panda.rivian_charge_payload_identities (
-                   identity_key,
-                   vehicle_id,
-                   operation,
-                   payload_fingerprint,
-                   canonical_payload_id
-               )
-               SELECT panda.charge_payload_identity_key(
-                          updated.vehicle_id,
-                          updated.operation,
-                          updated.rivian_transaction_id,
-                          updated.rivian_vehicle_id,
-                          updated.payload_fingerprint
-                      ),
-                      updated.vehicle_id,
-                      updated.operation,
-                      updated.payload_fingerprint,
-                      updated.id
-               FROM updated
-               ON CONFLICT (identity_key) DO NOTHING
-               RETURNING 1
+               ORDER BY captured_at, id
+               FOR UPDATE SKIP LOCKED LIMIT $1
+           ), fingerprints AS MATERIALIZED (
+               SELECT id, panda.charge_payload_fingerprint(payload) AS fingerprint FROM claim
            )
-           SELECT
-               (SELECT COUNT(*) FROM updated)::bigint,
-               (SELECT COUNT(*) FROM inserted)::bigint"#,
-    )
-    .bind(batch_size)
-    .fetch_one(&mut *transaction)
-    .await?;
+           UPDATE panda.rivian_charge_payloads payload
+           SET payload_fingerprint = fingerprints.fingerprint
+           FROM fingerprints
+           WHERE payload.id = fingerprints.id AND payload.payload_fingerprint IS NULL
+           RETURNING payload.id, payload.vehicle_id, payload.operation,
+                     payload.rivian_transaction_id, payload.rivian_vehicle_id, payload.payload_fingerprint"#,
+    ).bind(batch_size).fetch_all(&mut *transaction).await?;
+    let rows_filled = filled.len() as i64;
+    let ids: Vec<_> = filled.iter().map(|p| p.id).collect();
+    let vehicles: Vec<_> = filled.iter().map(|p| p.vehicle_id).collect();
+    let operations: Vec<_> = filled.iter().map(|p| p.operation.as_str()).collect();
+    let transactions: Vec<_> = filled
+        .iter()
+        .map(|p| p.rivian_transaction_id.as_deref())
+        .collect();
+    let upstream_vehicles: Vec<_> = filled
+        .iter()
+        .map(|p| p.rivian_vehicle_id.as_deref())
+        .collect();
+    let fingerprints: Vec<_> = filled
+        .iter()
+        .map(|p| p.payload_fingerprint.as_slice())
+        .collect();
+    let identities_inserted = sqlx::query(
+        r#"INSERT INTO panda.rivian_charge_payload_identities
+               (identity_key, vehicle_id, operation, payload_fingerprint, canonical_payload_id)
+           SELECT panda.charge_payload_identity_key(vehicle_id, operation, transaction_id, upstream_vehicle, fingerprint),
+                  vehicle_id, operation, fingerprint, id
+           FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::bytea[])
+               AS batch(id, vehicle_id, operation, transaction_id, upstream_vehicle, fingerprint)
+           ON CONFLICT (identity_key) DO NOTHING"#,
+    ).bind(&ids).bind(&vehicles).bind(&operations).bind(&transactions).bind(&upstream_vehicles).bind(&fingerprints)
+     .execute(&mut *transaction).await?.rows_affected() as i64;
 
     sqlx::query(
         "UPDATE panda.charge_payload_identity_backfill_status
