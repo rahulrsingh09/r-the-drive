@@ -55,6 +55,9 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Trace battery, efficiency and parked-energy evidence | [Energy views](./architecture/rewrite-energy-views.md) |
 | Maintain dashboard, chart, theme and preference workflows | [Personalization](./architecture/rewrite-personalization.md) |
 | Follow places, pricing profiles and geocoder scheduling | [Places and profiles](./architecture/rewrite-places-profiles.md) |
+| Maintain telemetry merging, storage and vehicle-state history | [Telemetry workflows](./architecture/telemetry-workflows.md) |
+| Follow vehicle enrollment, invitations and artwork selection | [Vehicle workflows](./architecture/rewrite-vehicle-workflows.md) |
+| Maintain external connection settings, cache and activity records | [External connections](./architecture/rewrite-external-integrations.md) |
 | Trace frontend request, map, and render failures | [Frontend error observability](./architecture/frontend-error-observability.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
 | Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |

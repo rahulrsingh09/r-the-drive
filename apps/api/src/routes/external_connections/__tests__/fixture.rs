@@ -203,24 +203,22 @@ pub(super) fn id(n: u128) -> Uuid {
 }
 
 pub(super) fn freeze(name: &str, raw: &Value, expected: &str) {
-    let dir = std::env::var("EXTERNAL_CONTRACT_ARTIFACT_DIR").unwrap();
-    std::fs::write(
-        format!("{dir}/{name}-raw.json"),
-        serde_json::to_vec_pretty(raw).unwrap(),
-    )
-    .unwrap();
     let mut normalized = raw.clone();
     normalize_clocks(&mut normalized);
-    std::fs::write(
-        format!("{dir}/{name}.json"),
-        serde_json::to_vec_pretty(&normalized).unwrap(),
-    )
-    .unwrap();
+    if let Ok(dir) = std::env::var("EXTERNAL_CONTRACT_ARTIFACT_DIR") {
+        std::fs::write(
+            format!("{dir}/{name}-raw.json"),
+            serde_json::to_vec_pretty(raw).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            format!("{dir}/{name}.json"),
+            serde_json::to_vec_pretty(&normalized).unwrap(),
+        )
+        .unwrap();
+    }
     let expected: Value = serde_json::from_str(expected).unwrap();
-    assert!(
-        normalized == expected,
-        "frozen {name} contract differs; full outputs saved outside the repository"
-    );
+    assert!(normalized == expected, "frozen {name} contract differs");
 }
 
 fn normalize_clocks(value: &mut Value) {

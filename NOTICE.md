@@ -31,6 +31,9 @@ with durable retries and session pins during history maintenance.
 Trip, charging, metric and energy views use new query and projection workflows.
 Dashboard, chart, theme, settings, place and pricing-profile operations use
 new mutation and reconciliation stages behind the retained public interfaces.
+Telemetry projection, duplicate suppression, storage and state-history rotation
+use typed policies. Vehicle enrollment, invitation and artwork selection, plus
+external connection settings, cache traversal and activity recording, use new stages.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
