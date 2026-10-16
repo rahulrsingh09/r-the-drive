@@ -776,3 +776,7 @@ mod tests {
         assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("RETURNING id"));
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/places_profiles/contracts.rs"]
+mod places_profiles_contracts;

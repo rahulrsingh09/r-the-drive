@@ -299,3 +299,7 @@ fn user_agent(settings: &external_connections::ConnectionSettingsRow) -> String 
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "R (self-hosted Rivian telemetry)".into())
 }
+
+#[cfg(test)]
+#[path = "__tests__/places_profiles/scheduler.rs"]
+mod places_profiles_contracts;
