@@ -21,6 +21,12 @@ domain clients bind methods to the same authenticated instance.
 the existing class, singleton, URL configuration, and type exports. The
 `api.ts` and package facades, consumers, and `themeClient.ts` are unchanged.
 
+Schedule and live-session wire types live in `apiTypes.ts`, so response decoders
+do not depend on the transport implementation. The transport facade re-exports
+those types for existing callers. Architecture budgets bound the endpoint catalog,
+decoder catalog and session executor individually. The existing toast-dispatch
+exception follows the executor's new filename without increasing its match limit.
+
 Execution proceeds through these stages:
 
 1. Check the existing rate-limit class cooldown.

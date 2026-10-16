@@ -25,7 +25,7 @@ import type {
   AccountInvitation,
   TripTag,
 } from '@panda/types';
-import type { LiveSession } from './apiClientTransport';
+import type { LiveSession } from './apiTypes';
 import { liveFields } from './chargingSessionFields';
 
 export function normalizeTrip(raw: unknown): Trip {

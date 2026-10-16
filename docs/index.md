@@ -39,6 +39,10 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Maintain dashboard import, layout, and expression validation | [Dashboard configuration](./architecture/rewrite-dashboard-configuration.md) |
 | Trace requests, session renewal, and response validation | [API client](./architecture/rewrite-api-client.md) |
 | Maintain recovery-file validation and safe extraction | [Recovery validation](./architecture/rewrite-recovery-validation.md) |
+| Understand trip lifecycle and closure-motion decisions | [Trip domain](./architecture/rewrite-trip-domain.md) |
+| Maintain charge reconciliation, identity, and repair | [Charge history](./architecture/rewrite-charge-history.md) |
+| Trace route, location, and weather enrichment | [History enrichment](./architecture/rewrite-history-enrichment.md) |
+| Maintain provider polling, connections, and shutdown | [Provider orchestration](./architecture/rewrite-provider-orchestration.md) |
 | Trace frontend request, map, and render failures | [Frontend error observability](./architecture/frontend-error-observability.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
 | Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |

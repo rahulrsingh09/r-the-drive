@@ -14,6 +14,9 @@ script, documentation, removal of an unused layout and publication cleanup.
 Further changes replace dashboard data, editing and configuration internals,
 the API request pipeline, telemetry processing helpers and recovery validation.
 They also correct session, charge-timestamp and recovery-file handling defects.
+Additional replacements cover trip lifecycle, charge-history reconciliation,
+history enrichment and provider connection orchestration, with corrections for
+connection cancellation, diagnostic text handling and OTA response decoding.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 

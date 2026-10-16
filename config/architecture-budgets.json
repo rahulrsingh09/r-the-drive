@@ -1,15 +1,57 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1933, "maxBytes": 101666 },
-    "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
-    "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 485, "maxBytes": 18642 },
-    "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
-    "apps/api/src/routes/vehicles.rs": { "maxLines": 5676, "maxBytes": 201797 },
-    "apps/api/src/routes/charging.rs": { "maxLines": 2260, "maxBytes": 85127 },
-    "apps/api/src/routes/trips.rs": { "maxLines": 1835, "maxBytes": 65589 },
-    "apps/api/src/services/backups.rs": { "maxLines": 2675, "maxBytes": 98964 },
-    "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2419, "maxBytes": 83235 }
+    "apps/web/src/features/settings/SettingsPage.tsx": {
+      "maxLines": 1933,
+      "maxBytes": 101666
+    },
+    "apps/web/src/components/settings/BackupSection.tsx": {
+      "maxLines": 1700,
+      "maxBytes": 71666
+    },
+    "apps/web/src/components/layout/AppLayout.tsx": {
+      "maxLines": 485,
+      "maxBytes": 18642
+    },
+    "apps/web/src/components/dashboard/DashboardPageShell.tsx": {
+      "maxLines": 485,
+      "maxBytes": 18178
+    },
+    "apps/api/src/routes/vehicles.rs": {
+      "maxLines": 5676,
+      "maxBytes": 201797
+    },
+    "apps/api/src/routes/charging.rs": {
+      "maxLines": 2260,
+      "maxBytes": 85127
+    },
+    "apps/api/src/routes/trips.rs": {
+      "maxLines": 1835,
+      "maxBytes": 65589
+    },
+    "apps/api/src/services/backups.rs": {
+      "maxLines": 2675,
+      "maxBytes": 98964
+    },
+    "apps/api/src/services/charge_sessions.rs": {
+      "maxLines": 1949,
+      "maxBytes": 73563
+    },
+    "packages/hooks/src/api/transport.ts": {
+      "maxLines": 2419,
+      "maxBytes": 83235
+    },
+    "packages/hooks/src/api/apiClientTransport.ts": {
+      "maxLines": 840,
+      "maxBytes": 29447
+    },
+    "packages/hooks/src/api/clients.ts": {
+      "maxLines": 1926,
+      "maxBytes": 49943
+    },
+    "packages/hooks/src/api/normalization.ts": {
+      "maxLines": 616,
+      "maxBytes": 22277
+    }
   },
   "orchestration": {
     "maxLines": 500,
@@ -69,19 +111,32 @@
       "apps/web/src/components/settings/ExternalConnectionsSection.tsx": "Existing external-connection policy surface; split with settings ownership work.",
       "packages/hooks/src/useVehicleStatus.ts": "Existing vehicle-status orchestration hook; split with status transport ownership work.",
       "apps/api/src/services/authentication_settings.rs": "OIDC settings precedence and lockout policy boundary; split only with database-backed settings coverage.",
-      "apps/api/src/services/oidc.rs": "OIDC protocol verification boundary; split only with confidential-provider integration coverage."
+      "apps/api/src/services/oidc.rs": "OIDC protocol verification boundary; split only with confidential-provider integration coverage.",
+      "packages/hooks/src/api/apiClientTransport.ts": "Session execution boundary extracted from the existing transport facade; exact size ratchet applies.",
+      "packages/hooks/src/api/clients.ts": "Typed endpoint adapter catalog extracted from the existing transport facade; exact size ratchet applies.",
+      "packages/hooks/src/api/normalization.ts": "Pure response decoder catalog extracted from the existing transport facade; exact size ratchet applies."
     }
   },
   "patterns": {
     "windowAlert": {
       "pattern": "window\\.alert\\s*\\(",
-      "directories": ["apps/web/src", "packages/ui/src", "packages/hooks/src", "packages/dashboards/src"],
+      "directories": [
+        "apps/web/src",
+        "packages/ui/src",
+        "packages/hooks/src",
+        "packages/dashboards/src"
+      ],
       "maxMatches": 0,
       "message": "Production web source must not use window.alert"
     },
     "windowConfirm": {
       "pattern": "window\\.confirm\\s*\\(",
-      "directories": ["apps/web/src", "packages/ui/src", "packages/hooks/src", "packages/dashboards/src"],
+      "directories": [
+        "apps/web/src",
+        "packages/ui/src",
+        "packages/hooks/src",
+        "packages/dashboards/src"
+      ],
       "allow": [
         "apps/web/src/features/settings/SettingsPage.tsx",
         "apps/web/src/components/settings/BackupSection.tsx",
@@ -120,12 +175,17 @@
     },
     "directToastDispatch": {
       "pattern": "new\\s+CustomEvent\\s*\\(\\s*['\\\"]panda:toast['\\\"]",
-      "directories": ["apps/web/src", "packages/hooks/src", "packages/ui/src", "packages/dashboards/src"],
+      "directories": [
+        "apps/web/src",
+        "packages/hooks/src",
+        "packages/ui/src",
+        "packages/dashboards/src"
+      ],
       "allow": [
         "apps/web/src/components/feedback/toast.ts",
         "apps/web/src/components/settings/BackupSection.tsx",
         "apps/web/src/components/users/UserManagementPage.tsx",
-        "packages/hooks/src/api/transport.ts"
+        "packages/hooks/src/api/apiClientTransport.ts"
       ],
       "maxMatches": 4,
       "message": "Toast events must be emitted through the shared toast module"
