@@ -34,25 +34,17 @@ impl CostProfile {
     }
 
     pub fn is_effective_at(&self, started_at: DateTime<Utc>) -> bool {
-        let local_date = self
+        let day = self
             .timezone
             .as_deref()
-            .and_then(|value| value.parse::<Tz>().ok())
-            .map(|tz| started_at.with_timezone(&tz).date_naive())
-            .unwrap_or_else(|| started_at.date_naive());
+            .and_then(|name| name.parse::<Tz>().ok())
+            .map_or_else(
+                || started_at.date_naive(),
+                |tz| started_at.with_timezone(&tz).date_naive(),
+            );
 
-        if let Some(effective_from) = self.effective_from {
-            if local_date < effective_from {
-                return false;
-            }
-        }
-        if let Some(effective_to) = self.effective_to {
-            if local_date > effective_to {
-                return false;
-            }
-        }
-
-        true
+        self.effective_from.is_none_or(|first| day >= first)
+            && self.effective_to.is_none_or(|last| day <= last)
     }
 }
 
@@ -106,9 +98,7 @@ pub fn validate_tou_periods(periods: &[TouPeriod]) -> Result<(), String> {
     Ok(())
 }
 
-/// Calculate the cost of a charging session against a given profile.
-///
-/// Returns `None` if the profile is missing or the inputs are insufficient.
+/// Calculate a profile amount, including its fee, when the start date is eligible.
 pub fn compute_cost(
     profile: &CostProfile,
     energy_added_kwh: Option<f64>,
@@ -120,116 +110,59 @@ pub fn compute_cost(
     if !profile.is_effective_at(started_at) {
         return None;
     }
-
-    let session_fee = profile.session_fee;
-    let rate = profile.rate;
-
-    let cost = match profile.billing_type.as_str() {
-        "per_kwh" => {
-            let added = energy_added_kwh.unwrap_or(0.0);
-            let used = energy_used_kwh.unwrap_or(0.0);
-            let kwh = f64::max(added, used);
-            if kwh <= 0.0 {
-                return None;
-            }
-            rate * kwh + session_fee
-        }
-        "per_minute" => rate * duration_minutes as f64 + session_fee,
-        "free" => 0.0,
-        "flat" => rate + session_fee,
+    let quantity = match profile.billing_type.as_str() {
+        "per_kwh" => BillableQuantity::Energy(billed_energy(energy_added_kwh, energy_used_kwh)?),
+        "per_minute" => BillableQuantity::Minutes(duration_minutes),
+        "flat" => BillableQuantity::Session,
+        "free" => BillableQuantity::Free,
         "tou" => {
-            compute_tou_cost(
-                profile,
-                energy_added_kwh,
-                energy_used_kwh,
-                duration_minutes,
-                started_at,
-                ended_at,
-            )? + session_fee
+            let energy = billed_energy(energy_added_kwh, energy_used_kwh)?;
+            let timezone = profile_timezone(profile)?;
+            let window = SessionWindow::new(timezone, started_at, ended_at, duration_minutes)?;
+            let schedule = DailySchedule::new(timezone, profile.tou_periods())?;
+            BillableQuantity::Scheduled(window.price(&schedule, energy)?)
         }
         _ => return None,
     };
-
-    Some(cost)
+    Some(quantity.price(profile.rate, profile.session_fee))
 }
 
-fn compute_tou_cost(
-    profile: &CostProfile,
-    energy_added_kwh: Option<f64>,
-    energy_used_kwh: Option<f64>,
-    duration_minutes: i32,
-    started_at: DateTime<Utc>,
-    ended_at: Option<DateTime<Utc>>,
-) -> Option<f64> {
-    let total_kwh = f64::max(
-        energy_added_kwh.unwrap_or(0.0),
-        energy_used_kwh.unwrap_or(0.0),
-    );
-    if total_kwh <= 0.0 {
-        return None;
-    }
+enum BillableQuantity {
+    Energy(f64),
+    Minutes(i32),
+    Session,
+    Free,
+    Scheduled(f64),
+}
 
-    let tz: Tz = profile.timezone.as_deref().unwrap_or("UTC").parse().ok()?;
-    let end_utc =
-        ended_at.unwrap_or_else(|| started_at + Duration::minutes(duration_minutes.max(0) as i64));
-    if end_utc <= started_at {
-        return None;
-    }
-
-    let local_start = started_at.with_timezone(&tz);
-    let local_end = end_utc.with_timezone(&tz);
-    let periods = profile.tou_periods();
-    if periods.is_empty() {
-        return None;
-    }
-
-    let mut overlap_minutes = 0.0;
-    let mut weighted_rate = 0.0;
-    let mut day = local_start.date_naive();
-    let end_day = local_end.date_naive();
-
-    while day <= end_day {
-        for period in &periods {
-            let Some(period_start_local) = resolve_local_datetime(tz, day, period.start_minute)
-            else {
-                continue;
-            };
-            let Some(period_end_local) = resolve_local_datetime(tz, day, period.end_minute) else {
-                continue;
-            };
-
-            let overlap_start = std::cmp::max(period_start_local, local_start);
-            let overlap_end = std::cmp::min(period_end_local, local_end);
-            if overlap_end <= overlap_start {
-                continue;
-            }
-
-            let minutes = (overlap_end - overlap_start).num_seconds() as f64 / 60.0;
-            overlap_minutes += minutes;
-            weighted_rate += minutes * period.rate;
+impl BillableQuantity {
+    fn price(self, rate: f64, fee: f64) -> f64 {
+        match self {
+            Self::Energy(kwh) => rate * kwh + fee,
+            Self::Minutes(minutes) => rate * minutes as f64 + fee,
+            Self::Session => rate + fee,
+            Self::Free => 0.0,
+            Self::Scheduled(amount) => amount + fee,
         }
-
-        let Some(next_day) = day.succ_opt() else {
-            break;
-        };
-        day = next_day;
     }
-
-    if overlap_minutes <= 0.0 {
-        return None;
-    }
-
-    Some(total_kwh * (weighted_rate / overlap_minutes))
 }
 
-/// Compute TOU cost from actual per-interval energy readings instead of
-/// time-weighting the session window. This is the accurate path when telemetry
-/// is available: if a 15-hour session window spans paid and free periods but
-/// actual charging only occurred during free hours, the cost is $0.
-///
-/// Each `TimedEnergyPoint` carries the UTC timestamp of the interval and the
-/// kWh delivered during that interval (e.g. one 1-minute telemetry bucket).
-/// Returns `None` only when `readings` is empty or TOU periods are missing.
+fn billed_energy(added: Option<f64>, used: Option<f64>) -> Option<f64> {
+    let energy = f64::max(added.unwrap_or(0.0), used.unwrap_or(0.0));
+    if energy <= 0.0 {
+        None
+    } else {
+        Some(energy)
+    }
+}
+
+fn profile_timezone(profile: &CostProfile) -> Option<Tz> {
+    profile.timezone.as_deref().unwrap_or("UTC").parse().ok()
+}
+
+/// Price measured intervals using their local minute and the first matching period.
+/// Empty readings, missing periods or an invalid timezone return `None`.
+/// The caller owns effective-date selection and the readings' session boundaries.
 pub fn compute_tou_cost_from_readings(
     profile: &CostProfile,
     readings: &[TimedEnergyPoint],
@@ -237,52 +170,114 @@ pub fn compute_tou_cost_from_readings(
     if readings.is_empty() {
         return None;
     }
-    let tz: Tz = profile.timezone.as_deref().unwrap_or("UTC").parse().ok()?;
-    let periods = profile.tou_periods();
-    if periods.is_empty() {
-        return None;
-    }
-
-    let total: f64 = readings
+    let schedule = DailySchedule::new(profile_timezone(profile)?, profile.tou_periods())?;
+    let amount: f64 = readings
         .iter()
-        .map(|r| {
-            let local = r.ts.with_timezone(&tz);
-            let minute_of_day = local.hour() * 60 + local.minute();
-            // Find the TOU period that contains this minute of the day.
-            let rate = periods
-                .iter()
-                .find(|p| {
-                    (p.start_minute as u32) <= minute_of_day
-                        && minute_of_day < (p.end_minute as u32)
-                })
-                .map(|p| p.rate)
-                .unwrap_or(0.0);
-            r.kwh * rate
-        })
+        .map(|point| point.kwh * schedule.rate_at(point.ts))
         .sum();
-
-    Some(total + profile.session_fee)
+    Some(amount + profile.session_fee)
 }
 
-fn resolve_local_datetime(
-    tz: Tz,
-    day: NaiveDate,
-    minute_of_day: u16,
-) -> Option<chrono::DateTime<Tz>> {
-    let minute_of_day = minute_of_day.min(24 * 60);
-    let hour = (minute_of_day / 60) as u32;
-    let minute = (minute_of_day % 60) as u32;
+struct DailySchedule {
+    timezone: Tz,
+    periods: Vec<TouPeriod>,
+}
 
-    let naive = if hour == 24 {
-        day.succ_opt()?.and_hms_opt(0, 0, 0)?
+impl DailySchedule {
+    fn new(timezone: Tz, periods: Vec<TouPeriod>) -> Option<Self> {
+        if periods.is_empty() {
+            None
+        } else {
+            Some(Self { timezone, periods })
+        }
+    }
+
+    fn rate_at(&self, timestamp: DateTime<Utc>) -> f64 {
+        let local = timestamp.with_timezone(&self.timezone);
+        let minute = local.hour() * 60 + local.minute();
+        self.periods
+            .iter()
+            .find(|period| {
+                u32::from(period.start_minute) <= minute && minute < u32::from(period.end_minute)
+            })
+            .map_or(0.0, |period| period.rate)
+    }
+
+    fn intervals_on(&self, day: NaiveDate) -> impl Iterator<Item = TariffInterval> + '_ {
+        self.periods.iter().filter_map(move |period| {
+            Some(TariffInterval {
+                start: local_boundary(self.timezone, day, period.start_minute)?,
+                end: local_boundary(self.timezone, day, period.end_minute)?,
+                rate: period.rate,
+            })
+        })
+    }
+}
+
+struct TariffInterval {
+    start: DateTime<Tz>,
+    end: DateTime<Tz>,
+    rate: f64,
+}
+
+struct SessionWindow {
+    start: DateTime<Tz>,
+    end: DateTime<Tz>,
+}
+
+impl SessionWindow {
+    fn new(
+        timezone: Tz,
+        start: DateTime<Utc>,
+        end: Option<DateTime<Utc>>,
+        duration_minutes: i32,
+    ) -> Option<Self> {
+        let end =
+            end.unwrap_or_else(|| start + Duration::minutes(i64::from(duration_minutes.max(0))));
+        if end <= start {
+            return None;
+        }
+        Some(Self {
+            start: start.with_timezone(&timezone),
+            end: end.with_timezone(&timezone),
+        })
+    }
+
+    fn overlap_minutes(&self, interval: &TariffInterval) -> Option<f64> {
+        let start = self.start.max(interval.start);
+        let end = self.end.min(interval.end);
+        (end > start).then(|| (end - start).num_seconds() as f64 / 60.0)
+    }
+
+    fn price(&self, schedule: &DailySchedule, energy: f64) -> Option<f64> {
+        let days = std::iter::successors(Some(self.start.date_naive()), |day| day.succ_opt())
+            .take_while(|day| *day <= self.end.date_naive());
+        let mut minutes = 0.0;
+        let mut rate_minutes = 0.0;
+        for interval in days.flat_map(|day| schedule.intervals_on(day)) {
+            if let Some(overlap) = self.overlap_minutes(&interval) {
+                minutes += overlap;
+                rate_minutes += overlap * interval.rate;
+            }
+        }
+        if minutes <= 0.0 {
+            None
+        } else {
+            Some(energy * (rate_minutes / minutes))
+        }
+    }
+}
+
+fn local_boundary(timezone: Tz, day: NaiveDate, minute: u16) -> Option<DateTime<Tz>> {
+    let minute = minute.min(24 * 60);
+    let (day, minute) = if minute == 24 * 60 {
+        (day.succ_opt()?, 0)
     } else {
-        day.and_hms_opt(hour, minute, 0)?
+        (day, minute)
     };
-
-    tz.from_local_datetime(&naive)
-        .single()
-        .or_else(|| tz.from_local_datetime(&naive).earliest())
-        .or_else(|| tz.from_local_datetime(&naive).latest())
+    let naive = day.and_hms_opt(u32::from(minute / 60), u32::from(minute % 60), 0)?;
+    // Earliest occurrence preserves repeated-hour allocation; nonexistent boundaries are skipped.
+    timezone.from_local_datetime(&naive).earliest()
 }
 
 #[cfg(test)]

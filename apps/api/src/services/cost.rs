@@ -84,86 +84,86 @@ pub fn apply_cost_inputs(
     inputs: &CostInputs,
     profile: Option<&CostProfile>,
 ) -> ChargeCostComputation {
-    if inputs.cost_override_mode == "free" {
-        return ChargeCostComputation {
-            cost_profile_id: None,
-            cost_method: String::from("user_free"),
-            cost_usd: Some(0.0),
-        };
-    }
-    if inputs.cost_override_mode == "manual" {
-        return ChargeCostComputation {
-            cost_profile_id: None,
-            cost_method: String::from("user_manual"),
-            cost_usd: inputs.cost_override_usd,
-        };
-    }
-    if inputs.network_cost_mode.as_deref() == Some("free") {
-        return ChargeCostComputation {
-            cost_profile_id: None,
-            cost_method: String::from("network_free"),
-            cost_usd: Some(0.0),
-        };
-    }
-    if inputs.is_free_session == Some(true) {
-        return ChargeCostComputation {
-            cost_profile_id: None,
-            cost_method: String::from("rivian_free_session"),
-            cost_usd: Some(0.0),
-        };
-    }
-    let is_paid_network_session =
-        inputs.is_rivian_network == Some(true) && inputs.is_home != Some(true);
-    let authoritative_paid_total = is_paid_network_session
-        .then_some(inputs.rivian_paid_total)
-        .flatten();
+    CostBasis::select(inputs, profile).evaluate(inputs)
+}
 
-    let cost_usd = authoritative_paid_total.or_else(|| {
-        profile.and_then(|p| {
-            // For TOU billing, prefer actual measured readings over time-weighting.
-            // Time-weighting spreads energy uniformly across the session window
-            // (including idle time before/after charging), which attributes cost
-            // to periods when the car wasn't actually drawing power.
-            if p.billing_type == "tou" && !inputs.timed_kwh_readings.is_empty() {
-                compute_tou_cost_from_readings(p, &inputs.timed_kwh_readings)
-            } else {
-                compute_cost(
-                    p,
-                    inputs.energy_added_kwh,
-                    inputs.energy_used_kwh,
-                    inputs.duration_minutes,
-                    inputs.started_at,
-                    inputs.ended_at,
-                )
+enum CostBasis<'profile> {
+    Fixed {
+        method: &'static str,
+        amount: Option<f64>,
+    },
+    Provider {
+        amount: f64,
+        profile_id: Option<Uuid>,
+    },
+    Profile(&'profile CostProfile),
+    Unknown,
+}
+
+impl<'profile> CostBasis<'profile> {
+    fn select(inputs: &CostInputs, profile: Option<&'profile CostProfile>) -> Self {
+        let fixed = match inputs.cost_override_mode.as_str() {
+            "free" => Some(("user_free", Some(0.0))),
+            "manual" => Some(("user_manual", inputs.cost_override_usd)),
+            _ if inputs.network_cost_mode.as_deref() == Some("free") => {
+                Some(("network_free", Some(0.0)))
             }
-        })
-    });
+            _ if inputs.is_free_session == Some(true) => Some(("rivian_free_session", Some(0.0))),
+            _ => None,
+        };
+        if let Some((method, amount)) = fixed {
+            return Self::Fixed { method, amount };
+        }
+        if inputs.is_rivian_network == Some(true) && inputs.is_home != Some(true) {
+            if let Some(amount) = inputs.rivian_paid_total {
+                return Self::Provider {
+                    amount,
+                    profile_id: profile.map(|profile| profile.id),
+                };
+            }
+        }
+        profile.map_or(Self::Unknown, Self::Profile)
+    }
 
-    let resolved_profile_id = profile.map(|p| p.id);
-    let cost_method = if authoritative_paid_total.is_some() {
-        String::from("rivian_paid_total")
-    } else if resolved_profile_id.is_some() && cost_usd.is_some() {
-        String::from("profile")
-    } else if resolved_profile_id.is_some() {
-        String::from("profile_pending")
-    } else {
-        String::from("unknown")
-    };
-
-    ChargeCostComputation {
-        cost_profile_id: resolved_profile_id,
-        cost_method,
-        cost_usd,
+    fn evaluate(self, inputs: &CostInputs) -> ChargeCostComputation {
+        let (cost_profile_id, method, cost_usd) = match self {
+            Self::Fixed { method, amount } => (None, method, amount),
+            Self::Provider { amount, profile_id } => {
+                (profile_id, "rivian_paid_total", Some(amount))
+            }
+            Self::Unknown => (None, "unknown", None),
+            Self::Profile(profile) => {
+                let amount =
+                    if profile.billing_type == "tou" && !inputs.timed_kwh_readings.is_empty() {
+                        compute_tou_cost_from_readings(profile, &inputs.timed_kwh_readings)
+                    } else {
+                        compute_cost(
+                            profile,
+                            inputs.energy_added_kwh,
+                            inputs.energy_used_kwh,
+                            inputs.duration_minutes,
+                            inputs.started_at,
+                            inputs.ended_at,
+                        )
+                    };
+                let method = if amount.is_some() {
+                    "profile"
+                } else {
+                    "profile_pending"
+                };
+                (Some(profile.id), method, amount)
+            }
+        };
+        ChargeCostComputation {
+            cost_profile_id,
+            cost_method: method.into(),
+            cost_usd,
+        }
     }
 }
 
-/// Resolve the applicable cost profile for a charging session.
-///
-/// `explicit_id`  — if the session already has a profile pinned, use it.
-/// `geofence_id`  — geofence matched at session location (may carry a profile).
-/// `vehicle_id`   — fallback: the vehicle's default profile.
-///
-/// Returns `None` if no profile is found at any tier.
+/// Resolve an effective pinned, geofence-linked, or vehicle-owner default profile.
+/// Explicit and geofence IDs retain the caller's authorization boundary.
 pub async fn resolve_profile(
     pool: &PgPool,
     explicit_id: Option<Uuid>,
@@ -171,59 +171,60 @@ pub async fn resolve_profile(
     vehicle_id: Uuid,
     started_at: DateTime<Utc>,
 ) -> Result<Option<CostProfile>> {
-    // Tier 1: explicit override
-    if let Some(id) = explicit_id {
-        if let Some(p) = fetch_profile(pool, id).await? {
-            if p.is_effective_at(started_at) {
-                return Ok(Some(p));
-            }
+    let sources = [
+        ProfileSource::Pinned(explicit_id),
+        ProfileSource::Geofence(geofence_id),
+        ProfileSource::VehicleOwner(vehicle_id),
+    ];
+    for source in sources {
+        let Some(id) = source.profile_id(pool).await? else {
+            continue;
+        };
+        let Some(profile) = fetch_profile(pool, id).await? else {
+            continue;
+        };
+        if profile.is_effective_at(started_at) {
+            return Ok(Some(profile));
         }
     }
+    Ok(None)
+}
 
-    // Tier 2: geofence-linked profile
-    if let Some(gf_id) = geofence_id {
-        let profile_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT cost_profile_id FROM panda.geofences WHERE id = $1")
-                .bind(gf_id)
-                .fetch_optional(pool)
-                .await?
-                .flatten();
+enum ProfileSource {
+    Pinned(Option<Uuid>),
+    Geofence(Option<Uuid>),
+    VehicleOwner(Uuid),
+}
 
-        if let Some(id) = profile_id {
-            if let Some(p) = fetch_profile(pool, id).await? {
-                if p.is_effective_at(started_at) {
-                    return Ok(Some(p));
-                }
-            }
-        }
-    }
-
-    // Tier 3: vehicle default
-    let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
-    let profile_id: Option<Uuid> = if let Some(owner_id) = owner_id {
-        sqlx::query_scalar(
-            "SELECT default_cost_profile_id
+impl ProfileSource {
+    async fn profile_id(self, pool: &PgPool) -> Result<Option<Uuid>> {
+        match self {
+            Self::Pinned(id) => Ok(id),
+            Self::Geofence(None) => Ok(None),
+            Self::Geofence(Some(id)) => Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+                "SELECT cost_profile_id FROM panda.geofences WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .flatten()),
+            Self::VehicleOwner(vehicle_id) => {
+                let Some(owner_id) = get_vehicle_owner_id(pool, vehicle_id).await? else {
+                    return Ok(None);
+                };
+                Ok(sqlx::query_scalar::<_, Option<Uuid>>(
+                    "SELECT default_cost_profile_id
              FROM panda.vehicle_user_settings
              WHERE vehicle_id = $1 AND user_id = $2",
-        )
-        .bind(vehicle_id)
-        .bind(owner_id)
-        .fetch_optional(pool)
-        .await?
-        .flatten()
-    } else {
-        None
-    };
-
-    if let Some(id) = profile_id {
-        if let Some(p) = fetch_profile(pool, id).await? {
-            if p.is_effective_at(started_at) {
-                return Ok(Some(p));
+                )
+                .bind(vehicle_id)
+                .bind(owner_id)
+                .fetch_optional(pool)
+                .await?
+                .flatten())
             }
         }
     }
-
-    Ok(None)
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -316,6 +317,28 @@ pub async fn recompute_charge_session_cost(
     pool: &PgPool,
     session_id: Uuid,
 ) -> Result<Option<ChargeCostComputation>> {
+    let Some(session) = load_cost_session(pool, session_id).await? else {
+        return Ok(None);
+    };
+    let profile = resolve_profile(
+        pool,
+        session.cost_profile_id,
+        session.geofence_id,
+        session.vehicle_id,
+        session.started_at,
+    )
+    .await?;
+    let readings = collect_cost_evidence(pool, &session).await;
+    let inputs = session.computation_inputs(readings);
+    let result = apply_cost_inputs(&inputs, profile.as_ref());
+    persist_cost_result(pool, &session, &result).await?;
+    Ok(Some(result))
+}
+
+async fn load_cost_session(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> Result<Option<ChargeSessionCostRow>> {
     let session = sqlx::query_as::<_, ChargeSessionCostRow>(
         r#"SELECT cs.id, cs.vehicle_id, cs.geofence_id, cs.cost_profile_id, cs.started_at, cs.ended_at,
                   duration_minutes, kwh_added, energy_added_wh, energy_used_wh,
@@ -331,31 +354,43 @@ pub async fn recompute_charge_session_cost(
     .bind(session_id)
     .fetch_optional(pool)
     .await?;
+    Ok(session)
+}
 
-    let Some(session) = session else {
-        return Ok(None);
-    };
+impl ChargeSessionCostRow {
+    fn computation_inputs(&self, timed_kwh_readings: Vec<TimedEnergyPoint>) -> CostInputs {
+        let duration_minutes = self.duration_minutes.unwrap_or_else(|| {
+            self.ended_at
+                .map(|end| ((end - self.started_at).num_seconds() / 60) as i32)
+                .unwrap_or(0)
+                .max(0)
+        });
+        CostInputs {
+            is_rivian_network: self.is_rivian_network,
+            is_home: self.is_home,
+            is_free_session: self.is_free_session,
+            network_cost_mode: self.network_cost_mode.clone(),
+            cost_override_mode: self.cost_override_mode.clone(),
+            cost_override_usd: self.cost_override_usd,
+            rivian_paid_total: self.rivian_paid_total,
+            energy_added_kwh: self
+                .energy_added_wh
+                .map(|wh| wh / 1000.0)
+                .or(self.kwh_added),
+            energy_used_kwh: self.energy_used_wh.map(|wh| wh / 1000.0),
+            duration_minutes,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            timed_kwh_readings,
+        }
+    }
+}
 
-    let profile = resolve_profile(
-        pool,
-        session.cost_profile_id,
-        session.geofence_id,
-        session.vehicle_id,
-        session.started_at,
-    )
-    .await?;
-
-    let duration_minutes = session.duration_minutes.unwrap_or_else(|| {
-        session
-            .ended_at
-            .map(|ended_at| ((ended_at - session.started_at).num_seconds() / 60) as i32)
-            .unwrap_or(0)
-            .max(0)
-    });
-
-    // Fetch per-interval telemetry readings so TOU cost reflects actual
-    // charging activity rather than the session window as a whole.
-    let timed_kwh_readings = if let Some(ended_at) = session.ended_at {
+async fn collect_cost_evidence(
+    pool: &PgPool,
+    session: &ChargeSessionCostRow,
+) -> Vec<TimedEnergyPoint> {
+    if let Some(ended_at) = session.ended_at {
         match fetch_session_energy_readings(
             pool,
             session.vehicle_id,
@@ -378,29 +413,14 @@ pub async fn recompute_charge_session_cost(
         }
     } else {
         vec![]
-    };
+    }
+}
 
-    let inputs = CostInputs {
-        is_rivian_network: session.is_rivian_network,
-        is_home: session.is_home,
-        is_free_session: session.is_free_session,
-        network_cost_mode: session.network_cost_mode,
-        cost_override_mode: session.cost_override_mode,
-        cost_override_usd: session.cost_override_usd,
-        rivian_paid_total: session.rivian_paid_total,
-        energy_added_kwh: session
-            .energy_added_wh
-            .map(|wh| wh / 1000.0)
-            .or(session.kwh_added),
-        energy_used_kwh: session.energy_used_wh.map(|wh| wh / 1000.0),
-        duration_minutes,
-        started_at: session.started_at,
-        ended_at: session.ended_at,
-        timed_kwh_readings,
-    };
-
-    let result = apply_cost_inputs(&inputs, profile.as_ref());
-
+async fn persist_cost_result(
+    pool: &PgPool,
+    session: &ChargeSessionCostRow,
+    result: &ChargeCostComputation,
+) -> Result<()> {
     sqlx::query(
         r#"UPDATE panda.charge_sessions
            SET cost_profile_id = $2,
@@ -451,7 +471,7 @@ pub async fn recompute_charge_session_cost(
         .await?;
     }
 
-    Ok(Some(result))
+    Ok(())
 }
 
 async fn fetch_profile(pool: &PgPool, id: Uuid) -> Result<Option<CostProfile>> {
