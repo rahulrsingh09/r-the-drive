@@ -282,3 +282,19 @@ async fn jobs_weather_ordered_claims_and_failed_status_writes() {
     evidence("weather-write-failures", &json!(rows));
     f.cleanup().await;
 }
+
+#[test]
+fn jobs_retry_decision_preserves_caps_and_provider_precedence() {
+    for (attempts, retry_after, expected) in [
+        (0, 0, 60),
+        (1, 0, 120),
+        (5, 0, 1920),
+        (8, 0, 15360),
+        (99, 0, 15360),
+        (1, -1, 120),
+        (1, 900, 900),
+        (1, i64::MAX, 86400),
+    ] {
+        assert_eq!(super::jobs::retry_seconds(attempts, retry_after), expected);
+    }
+}

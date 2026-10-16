@@ -34,23 +34,7 @@ pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> 
             }
         };
         loop {
-            reconcile_locations(&pool, &client).await;
-            let addresses = backfill_trip_addresses(&pool, &client, None).await;
-            let weather = enqueue_trip_weather_enrichment(&pool, None).await;
-            match (addresses, weather) {
-                (Ok(addresses), Ok(weather)) => info!(
-                    address_scanned = addresses.scanned,
-                    address_filled = addresses.filled,
-                    weather_scanned = weather.scanned,
-                    weather_queued = weather.filled,
-                    "trip_enrichment.reconciler_complete"
-                ),
-                (addresses, weather) => warn!(
-                    address_error = ?addresses.err(),
-                    weather_error = ?weather.err(),
-                    "trip_enrichment.reconciler_failed"
-                ),
-            }
+            jobs::cycle(&pool, &client).await;
             tokio::time::sleep(RECONCILIATION_INTERVAL).await;
         }
     })
@@ -59,19 +43,9 @@ pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> 
 /// Fill missing coordinates, then saved-place matches, for trips and charge
 /// sessions. Each step logs its own failure so one bad step cannot starve the
 /// others; the address pass that follows picks up any trips still unresolved.
+#[cfg(test)]
 async fn reconcile_locations(pool: &PgPool, client: &Client) {
-    if let Err(error) = backfill_trip_coordinates(pool, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_trip_coordinates_failed");
-    }
-    if let Err(error) = backfill_trip_geofence_matches(pool, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_trip_geofences_failed");
-    }
-    if let Err(error) = backfill_charge_session_coordinates(pool, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_charge_coordinates_failed");
-    }
-    if let Err(error) = backfill_charge_session_locations(pool, client, None).await {
-        warn!(error = %error, "trip_enrichment.reconciler_charge_locations_failed");
-    }
+    jobs::locations(pool, client).await;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -887,57 +861,9 @@ pub async fn backfill_charge_session_coordinates(
     pool: &PgPool,
     vehicle_id: Option<Uuid>,
 ) -> Result<BackfillStats> {
-    let sessions = sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>)>(
-        r#"SELECT id, vehicle_id, started_at
-           FROM panda.charge_sessions
-           WHERE ($1::uuid IS NULL OR vehicle_id = $1)
-             AND location_override_mode = 'automatic'
-             AND (location_lat IS NULL OR location_lng IS NULL)
-           ORDER BY started_at DESC
-           LIMIT $2"#,
-    )
-    .bind(vehicle_id)
-    .bind(RECONCILIATION_COORDINATE_BATCH_SIZE)
-    .fetch_all(pool)
-    .await?;
-
-    let mut stats = BackfillStats {
-        scanned: sessions.len(),
-        ..BackfillStats::default()
-    };
-
-    for (session_id, session_vehicle_id, started_at) in sessions {
-        let Some((lat, lng)) = nearest_telemetry_fix(pool, session_vehicle_id, started_at).await?
-        else {
-            stats.skipped += 1;
-            continue;
-        };
-
-        sqlx::query(
-            r#"UPDATE panda.charge_sessions
-               SET location_lat = $2,
-                   location_lng = $3,
-                   source_location_lat = COALESCE(source_location_lat, $2),
-                   source_location_lng = COALESCE(source_location_lng, $3)
-               WHERE id = $1
-                 AND location_override_mode = 'automatic'
-                 AND (location_lat IS NULL OR location_lng IS NULL)"#,
-        )
-        .bind(session_id)
-        .bind(lat)
-        .bind(lng)
-        .execute(pool)
-        .await?;
-        stats.filled += 1;
-    }
-
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        skipped = stats.skipped,
-        "trip_enrichment.charge_coordinates.complete"
-    );
+    let stats = jobs::charge_coordinates(pool, vehicle_id).await?;
+    info!(vehicle_id=?vehicle_id, scanned=stats.scanned, filled=stats.filled,
+        skipped=stats.skipped, "trip_enrichment.charge_coordinates.complete");
     Ok(stats)
 }
 
@@ -1466,7 +1392,7 @@ mod history_enrichment_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn history_addresses_batch_cache_miss_and_partial_stats() {
         let fixture = history_fixture().await;
         let pool = &fixture.state.pool;
@@ -1528,7 +1454,7 @@ mod history_enrichment_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn history_geofences_follow_membership_owner_and_preserve_existing_fields() {
         let fixture = history_fixture().await;
         let pool = &fixture.state.pool;
@@ -1581,7 +1507,7 @@ mod history_enrichment_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn history_interrupted_trip_sparse_coordinates_and_batch_boundary() {
         let fixture = history_fixture().await;
         let pool = &fixture.state.pool;
@@ -1687,7 +1613,7 @@ mod history_enrichment_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn history_weather_queue_and_lookup_error_contracts() {
         let fixture = history_fixture().await;
         let pool = &fixture.state.pool;
@@ -1789,7 +1715,7 @@ mod history_enrichment_contract_tests {
         fixture.cleanup().await;
     }
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn history_charge_geofences_page_equal_timestamps_without_skipping_writes() {
         let fixture = history_fixture().await;
         let pool = &fixture.state.pool;
@@ -1867,7 +1793,7 @@ mod history_address_record_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn synthetic_address_cache_upsert_retains_coordinates_and_null_identity_semantics() {
         let fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let pool = &fixture.state.pool;
@@ -1926,3 +1852,6 @@ mod history_address_record_tests {
 #[cfg(test)]
 #[path = "__tests__/reconciliation_jobs.rs"]
 mod job_tests;
+
+#[path = "trip_enrichment/jobs.rs"]
+mod jobs;

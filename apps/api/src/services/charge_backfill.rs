@@ -91,61 +91,7 @@ pub async fn claim(
     pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Result<ClaimedChargeBackfill, ChargeBackfillError> {
-    let claimed: Option<(String, Vec<u8>)> = sqlx::query_as(
-        "UPDATE panda.vehicles v
-         SET history_backfill_status = 'running',
-             history_backfilled_at = NULL,
-             history_session_count = NULL,
-             updated_at = now()
-         FROM panda.vehicle_credentials c
-         WHERE v.id = $1
-           AND c.vehicle_id = v.id
-                     AND (
-                                 COALESCE(v.history_backfill_status, '') <> 'running'
-                                 OR v.updated_at < now() - ($2::int * interval '1 minute')
-                             )
-         RETURNING v.rivian_vehicle_id, c.encrypted_tokens",
-    )
-    .bind(vehicle_id)
-    .bind(BACKFILL_STALE_AFTER_MINUTES as i32)
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some((rivian_vehicle_id, encrypted_tokens)) = claimed {
-        return Ok(ClaimedChargeBackfill {
-            vehicle_id,
-            rivian_vehicle_id,
-            encrypted_tokens,
-        });
-    }
-
-    let current_status: Option<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as(
-            "SELECT history_backfill_status, updated_at FROM panda.vehicles WHERE id = $1",
-        )
-        .bind(vehicle_id)
-        .fetch_optional(pool)
-        .await?;
-
-    let is_fresh_running = current_status
-        .and_then(|(status, updated_at)| {
-            status.map(|s| {
-                s == "running"
-                    && updated_at
-                        .map(|ts| {
-                            ts > chrono::Utc::now()
-                                - chrono::Duration::minutes(BACKFILL_STALE_AFTER_MINUTES)
-                        })
-                        .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-
-    if is_fresh_running {
-        Err(ChargeBackfillError::AlreadyRunning)
-    } else {
-        Err(ChargeBackfillError::CredentialsNotFound)
-    }
+    jobs::claim(pool, vehicle_id).await
 }
 
 pub async fn run_claimed(
@@ -230,23 +176,8 @@ pub async fn spawn(
     age_key: String,
     vehicle_id: Uuid,
 ) -> Result<ChargeBackfillStart, ChargeBackfillError> {
-    let claimed = claim(&pool, vehicle_id).await?;
-    tokio::spawn(async move {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
-
-        match run_claimed(&pool, &client, &age_key, claimed).await {
-            Ok(count) => {
-                tracing::info!(vehicle_id=%vehicle_id, count, "charge history backfill complete");
-            }
-            Err(error) => {
-                tracing::warn!(vehicle_id=%vehicle_id, error=%error, "charge history backfill task failed");
-            }
-        }
-    });
-
+    let task = jobs::BackfillTask::admit(pool, age_key, vehicle_id).await?;
+    drop(task.launch());
     Ok(ChargeBackfillStart {
         ok: true,
         status: "running",
@@ -260,7 +191,7 @@ mod charge_history_backfill_contract {
     use serde_json::json;
 
     #[tokio::test]
-    #[ignore = "requires a disposable TimescaleDB DATABASE_URL; never contacts a provider"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL; never contacts a provider"]
     async fn charge_history_claim_status_retry_and_local_errors() {
         let (pool, admin, name) = database().await;
         let v = vehicle(&pool, 20).await;
@@ -314,7 +245,7 @@ mod charge_history_backfill_contract {
     }
 
     #[tokio::test]
-    #[ignore = "requires a disposable TimescaleDB DATABASE_URL; synthetic fetch only"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL; synthetic fetch only"]
     async fn charge_history_completion_records_counts_and_preserves_failure_types() {
         let (pool, admin, name) = database().await;
         let v = vehicle(&pool, 50).await;
@@ -388,3 +319,6 @@ mod charge_history_backfill_contract {
 #[cfg(test)]
 #[path = "__tests__/charge_backfill_jobs.rs"]
 mod job_tests;
+
+#[path = "charge_backfill/jobs.rs"]
+mod jobs;

@@ -80,15 +80,15 @@ impl Fixture {
                 'trip_delete',has_table_privilege(current_user,'panda.trips','DELETE'),
                 'telemetry_truncate',has_table_privilege(current_user,'timeseries.telemetry','TRUNCATE'))",
         ).fetch_one(&pool).await.unwrap();
-        let directory = std::path::Path::new("/review")
-            .join(std::env::var("JOBS_EVIDENCE").unwrap())
-            .join("installations");
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join(format!("{database}.json")),
-            serde_json::to_string_pretty(&installation).unwrap(),
-        )
-        .unwrap();
+        if let Some(directory) = evidence_directory() {
+            let directory = directory.join("installations");
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(format!("{database}.json")),
+                serde_json::to_string_pretty(&installation).unwrap(),
+            )
+            .unwrap();
+        }
         Self {
             admin,
             state: State { pool },
@@ -239,14 +239,6 @@ pub async fn snapshot(pool: &PgPool, extra: Value) -> Value {
     result
 }
 pub fn evidence(name: &str, raw: &Value) {
-    let run = std::env::var("JOBS_EVIDENCE").unwrap();
-    let directory = std::path::Path::new("/review").join(&run);
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(
-        directory.join(format!("{name}-raw.json")),
-        serde_json::to_string_pretty(raw).unwrap() + "\n",
-    )
-    .unwrap();
     let mut normalized = raw.clone();
     fn normalize(value: &mut Value) {
         match value {
@@ -285,20 +277,27 @@ pub fn evidence(name: &str, raw: &Value) {
     }
     normalize(&mut normalized);
     let text = serde_json::to_string_pretty(&normalized).unwrap() + "\n";
-    std::fs::write(directory.join(format!("{name}.json")), &text).unwrap();
+    if let Some(directory) = evidence_directory() {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("{name}-raw.json")),
+            serde_json::to_string_pretty(raw).unwrap() + "\n",
+        )
+        .unwrap();
+        std::fs::write(directory.join(format!("{name}.json")), &text).unwrap();
+    }
     let expected = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/services/__tests__/enrichment_jobs")
         .join(format!("{name}.json"));
-    if expected.exists() {
-        assert_eq!(
-            text,
-            std::fs::read_to_string(expected).unwrap(),
-            "{name} full state changed"
-        );
-    } else {
-        assert!(
-            run.starts_with("baseline-capture"),
-            "missing frozen fixture {name}"
-        );
-    }
+    assert_eq!(
+        text,
+        std::fs::read_to_string(expected).unwrap(),
+        "{name} full state changed"
+    );
+}
+
+fn evidence_directory() -> Option<std::path::PathBuf> {
+    std::env::var("JOBS_EVIDENCE")
+        .ok()
+        .map(|run| std::path::Path::new("/review").join(run))
 }

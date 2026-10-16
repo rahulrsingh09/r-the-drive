@@ -107,90 +107,11 @@ pub async fn enqueue(pool: &PgPool, trip_id: Uuid) -> Result<()> {
 }
 
 async fn process_next_job(pool: &PgPool, client: &reqwest::Client, age_key: &str) -> Result<bool> {
-    weather::recover_interrupted_jobs(pool).await?;
-    let settings = match connections::require_enabled(pool, connections::OPEN_METEO).await {
-        Ok(settings) => settings,
-        Err(crate::errors::AppError::ExternalConnectionDisabled(_)) => return Ok(false),
-        Err(error) => return Err(error.into()),
-    };
-
-    let request_count: i32 = sqlx::query_scalar(
-        r#"SELECT CASE WHEN usage_date = (now() AT TIME ZONE 'UTC')::date THEN request_count ELSE 0 END
-           FROM panda.external_connection_activity WHERE connection_id = $1"#,
-    )
-    .bind(connections::OPEN_METEO)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or(0);
-    if request_count >= DAILY_REQUEST_BUDGET {
-        return Ok(false);
-    }
-
-    let trip_id = sqlx::query_scalar::<_, Uuid>(
-        r#"UPDATE panda.weather_enrichment_jobs SET
-             status = 'running', attempts = attempts + 1, updated_at = now()
-           WHERE trip_id = (
-             SELECT trip_id FROM panda.weather_enrichment_jobs
-             WHERE status IN ('pending', 'failed') AND attempts < 5 AND next_attempt_at <= now()
-             ORDER BY next_attempt_at, created_at
-             FOR UPDATE SKIP LOCKED LIMIT 1
-           )
-           RETURNING trip_id"#,
-    )
-    .fetch_optional(pool)
-    .await?;
-    let Some(trip_id) = trip_id else {
+    let Some(job) = jobs::WeatherJob::claim(pool).await? else {
         return Ok(false);
     };
-
-    match enrich_trip(pool, client, age_key, &settings, trip_id).await {
-        Ok(EnrichTripOutcome::Complete { provider_called }) => {
-            sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='succeeded', last_error=NULL, completed_at=now(), updated_at=now() WHERE trip_id=$1")
-                .bind(trip_id).execute(pool).await?;
-            if provider_called {
-                connections::record_success(pool, connections::OPEN_METEO).await;
-            }
-        }
-        Ok(EnrichTripOutcome::Unavailable) => {
-            sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='unavailable', last_error=NULL, completed_at=now(), updated_at=now() WHERE trip_id=$1")
-                .bind(trip_id).execute(pool).await?;
-        }
-        Err(error) => {
-            if error.downcast_ref::<WeatherPausedError>().is_some() {
-                sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='pending', attempts=GREATEST(attempts-1, 0), next_attempt_at=now(), last_error=NULL, updated_at=now() WHERE trip_id=$1")
-                    .bind(trip_id).execute(pool).await?;
-                return Ok(true);
-            }
-            if error.downcast_ref::<WeatherBusyError>().is_some() {
-                sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='pending', attempts=GREATEST(attempts-1,0), next_attempt_at=now()+interval '1 minute', last_error=NULL, updated_at=now() WHERE trip_id=$1")
-                    .bind(trip_id).execute(pool).await?;
-                return Ok(true);
-            }
-            if error.downcast_ref::<WeatherBudgetError>().is_some() {
-                sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='failed', attempts=GREATEST(attempts-1, 0), next_attempt_at=date_trunc('day', now()) + interval '1 day', last_error='Daily weather request budget reached', updated_at=now() WHERE trip_id=$1")
-                    .bind(trip_id).execute(pool).await?;
-                return Ok(true);
-            }
-            connections::record_failure(pool, connections::OPEN_METEO, &error.to_string()).await;
-            let attempts: i32 = sqlx::query_scalar(
-                "SELECT attempts FROM panda.weather_enrichment_jobs WHERE trip_id=$1",
-            )
-            .bind(trip_id)
-            .fetch_one(pool)
-            .await?;
-            let exponential_backoff = 60_i64
-                .saturating_mul(2_i64.pow(attempts.min(8) as u32))
-                .min(21_600);
-            let retry_after = error
-                .downcast_ref::<WeatherFetchError>()
-                .and_then(|error| error.retry_after_seconds)
-                .unwrap_or(0);
-            let backoff_seconds = exponential_backoff.max(retry_after).min(86_400);
-            sqlx::query("UPDATE panda.weather_enrichment_jobs SET status='failed', next_attempt_at=now()+make_interval(secs=>$2), last_error='Weather provider request failed', updated_at=now() WHERE trip_id=$1")
-                .bind(trip_id).bind(backoff_seconds as f64).execute(pool).await?;
-            tracing::warn!(trip_id = %trip_id, attempts, "weather_enrichment.trip_failed");
-        }
-    }
+    let outcome = enrich_trip(pool, client, age_key, &job.settings, job.trip_id).await;
+    job.finish(pool, outcome).await?;
     Ok(true)
 }
 
@@ -554,7 +475,7 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
-    #[ignore = "requires disposable TimescaleDB DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn authorization_weather_estimates_preserve_driving_history_and_sensor_priority() {
         use super::{enrich_trip, store_estimates, EnrichTripOutcome, TargetSample};
         use crate::services::external_connections as connections;
@@ -902,7 +823,7 @@ mod history_weather_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn history_weather_database_join_cache_and_error_contracts() {
         let fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let pool = &fixture.state.pool;
@@ -1042,7 +963,7 @@ mod history_weather_plan_tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    #[ignore = "requires unique restricted JOBS_DATABASE_URL"]
     async fn streamed_sparse_plan_preserves_vehicle_and_trip_joins() {
         let mut fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let options = fixture.state.pool.connect_options().as_ref().clone();
@@ -1158,3 +1079,6 @@ pub(super) mod job_fixture;
 #[cfg(test)]
 #[path = "__tests__/weather_jobs.rs"]
 mod job_tests;
+
+#[path = "weather_enrichment/jobs.rs"]
+mod jobs;
