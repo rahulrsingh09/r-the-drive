@@ -47,7 +47,12 @@ pub fn read_bounded_json<T: serde::de::DeserializeOwned>(
 #[derive(Clone, Copy)]
 struct CatalogSeed<'a> {
     field: &'a str,
-    sender: &'a tokio::sync::mpsc::Sender<BackupCatalogSnapshot>,
+    sender: &'a tokio::sync::mpsc::Sender<ReplayRecord>,
+}
+
+struct ReplayRecord {
+    snapshot: BackupCatalogSnapshot,
+    committed: tokio::sync::oneshot::Sender<()>,
 }
 impl<'de> DeserializeSeed<'de> for CatalogSeed<'_> {
     type Value = ();
@@ -96,8 +101,15 @@ impl<'de> Visitor<'de> for CatalogSeed<'_> {
             // An archive's availability claim is inert. The target catalog is
             // merged last and access independently verifies the actual object.
             restore_jobs::mark_source_artifact_availability(&mut record, None);
+            let (committed, receipt) = tokio::sync::oneshot::channel();
             self.sender
-                .blocking_send(record)
+                .blocking_send(ReplayRecord {
+                    snapshot: record,
+                    committed,
+                })
+                .map_err(|_| S::Error::custom("catalog import cancelled"))?;
+            receipt
+                .blocking_recv()
                 .map_err(|_| S::Error::custom("catalog import cancelled"))?;
         }
         Ok(())
@@ -113,11 +125,11 @@ impl<'de> DeserializeSeed<'de> for ArraySeed<'_> {
 }
 
 pub async fn merge(pool: &sqlx::PgPool, path: &Path, maximum: u64) -> anyhow::Result<()> {
-    for field in ["runs", "artifacts", "restore_requests"] {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let path = path.to_owned();
-        let task = tokio::task::spawn_blocking(move || {
-            let file = File::open(path)?;
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<ReplayRecord>(1);
+    let path = path.to_owned();
+    let task = tokio::task::spawn_blocking(move || {
+        for field in ["runs", "artifacts", "restore_requests"] {
+            let file = File::open(&path)?;
             anyhow::ensure!(
                 file.metadata()?.len() <= maximum,
                 "operational history exceeds its byte limit"
@@ -132,12 +144,13 @@ pub async fn merge(pool: &sqlx::PgPool, path: &Path, maximum: u64) -> anyhow::Re
             }
             .deserialize(&mut de)?;
             de.end()?;
-            Ok::<_, anyhow::Error>(())
-        });
-        while let Some(record) = receiver.recv().await {
-            restore_jobs::merge_catalog_snapshot(pool, &record).await?;
         }
-        task.await??;
+        Ok::<_, anyhow::Error>(())
+    });
+    while let Some(record) = receiver.recv().await {
+        restore_jobs::merge_catalog_snapshot(pool, &record.snapshot).await?;
+        let _ = record.committed.send(());
     }
+    task.await??;
     Ok(())
 }

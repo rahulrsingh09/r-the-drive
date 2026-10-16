@@ -28,6 +28,11 @@ use panda_api::{
 
 const MAX_AUTH_HEADER_BYTES: usize = 512;
 
+#[path = "restore_execution/activation.rs"]
+mod activation;
+#[path = "restore_execution/rollback.rs"]
+mod rollback;
+
 #[cfg(test)]
 #[path = "__tests__/restore_execution_contracts.rs"]
 mod execution_contracts;
@@ -313,49 +318,7 @@ async fn read_host_restore_state(config: &Config) -> anyhow::Result<HostRestoreS
 }
 
 async fn activate_host_restore(config: &Config) -> anyhow::Result<()> {
-    let mut state = read_host_restore_state(config).await?;
-    if state.activated {
-        return Ok(());
-    }
-    if state.activation_started {
-        anyhow::bail!("host restore activation was interrupted; run host-rollback before retrying");
-    }
-    state.activation_started = true;
-    fs::write(
-        host_restore_state_path(config),
-        serde_json::to_vec_pretty(&state)?,
-    )
-    .await?;
-    terminate_database_sessions(config).await?;
-    swap_databases(config, &state.candidate_database, &state.previous_database).await?;
-    let artwork = match activate_artwork(
-        config,
-        &state.staging.join("vehicle-image-cache"),
-        state.job_id,
-    )
-    .await
-    {
-        Ok(artwork) => artwork,
-        Err(error) => {
-            rollback_databases(config, &state.previous_database, &state.candidate_database).await?;
-            return Err(error);
-        }
-    };
-    state.artwork_destination = Some(artwork.destination);
-    state.artwork_previous = Some(artwork.previous);
-    state.activated = true;
-    if let Err(error) = fs::write(
-        host_restore_state_path(config),
-        serde_json::to_vec_pretty(&state)?,
-    )
-    .await
-    {
-        rollback_databases(config, &state.previous_database, &state.candidate_database).await?;
-        rollback_artwork(&artwork_activation_from_state(&state)?).await?;
-        return Err(error.into());
-    }
-    println!("host restore candidate activated");
-    Ok(())
+    activation::host(config).await
 }
 
 fn artwork_activation_from_state(state: &HostRestoreState) -> anyhow::Result<ArtworkActivation> {
@@ -862,129 +825,7 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
     checkpoint.updated_at = Utc::now();
     restore_jobs::write(config, &checkpoint).await?;
 
-    restore_jobs::update(
-        config,
-        job_id,
-        RestorePhase::StoppingApplication,
-        68,
-        "Candidate is ready; stopping Panda API and ingestion workers",
-    )
-    .await?;
-    fs::write(restore_marker_path(), job_id.to_string()).await?;
-    stop_api_process().await?;
-    terminate_database_sessions(config).await?;
-
-    restore_jobs::update(
-        config,
-        job_id,
-        RestorePhase::SwappingDatabase,
-        74,
-        "Atomically activating the validated database candidate",
-    )
-    .await?;
-    swap_databases(
-        config,
-        &prepared.candidate_database,
-        &prepared.previous_database,
-    )
-    .await?;
-    if let Err(error) = inject_restore_fault("database_swapped") {
-        return Err(rollback_activated_candidate(config, job_id, &prepared, None, error).await);
-    }
-
-    if let Err(error) = restore_jobs::update(
-        config,
-        job_id,
-        RestorePhase::RestoringSettings,
-        70,
-        "Restoring sanitized backup settings",
-    )
-    .await
-    {
-        return Err(
-            rollback_activated_candidate(config, job_id, &prepared, None, error.into()).await,
-        );
-    }
-
-    if let Err(error) = restore_jobs::update(
-        config,
-        job_id,
-        RestorePhase::RestoringArtwork,
-        78,
-        "Restoring vehicle artwork",
-    )
-    .await
-    {
-        return Err(
-            rollback_activated_candidate(config, job_id, &prepared, None, error.into()).await,
-        );
-    }
-    let artwork = match activate_artwork(config, &staging.join("vehicle-image-cache"), job_id).await
-    {
-        Ok(artwork) => artwork,
-        Err(error) => {
-            return Err(rollback_activated_candidate(config, job_id, &prepared, None, error).await);
-        }
-    };
-
-    if let Err(error) = restore_jobs::update(
-        config,
-        job_id,
-        RestorePhase::StartingApplication,
-        86,
-        "Starting Panda with restored data",
-    )
-    .await
-    {
-        return Err(rollback_activated_candidate(
-            config,
-            job_id,
-            &prepared,
-            Some(&artwork),
-            error.into(),
-        )
-        .await);
-    }
-    if let Err(error) = fs::remove_file(restore_marker_path()).await {
-        return Err(rollback_activated_candidate(
-            config,
-            job_id,
-            &prepared,
-            Some(&artwork),
-            error.into(),
-        )
-        .await);
-    }
-
-    if let Err(error) = restore_jobs::update(
-        config,
-        job_id,
-        RestorePhase::VerifyingHealth,
-        92,
-        "Waiting for migrations and application health",
-    )
-    .await
-    {
-        return Err(rollback_activated_candidate(
-            config,
-            job_id,
-            &prepared,
-            Some(&artwork),
-            error.into(),
-        )
-        .await);
-    }
-    let verification = inject_restore_fault("artwork_activated")
-        .and_then(|_| inject_restore_fault("health_verification"));
-    let verification = match verification {
-        Ok(()) => verify_api_state(config).await,
-        Err(error) => Err(error),
-    };
-    if let Err(error) = verification {
-        return Err(
-            rollback_activated_candidate(config, job_id, &prepared, Some(&artwork), error).await,
-        );
-    }
+    let artwork = activation::runtime(config, job_id, &prepared, &staging).await?;
     finalize_artwork(&artwork).await;
     let _ = fs::remove_dir_all(&staging).await;
     if let Err(error) = drop_database(config, &prepared.previous_database).await {
@@ -1009,45 +850,7 @@ async fn rollback_activated_candidate(
     artwork: Option<&ArtworkActivation>,
     cause: anyhow::Error,
 ) -> anyhow::Error {
-    let rollback_result = async {
-        if let Ok(mut rollback_job) = restore_jobs::read(config, job_id).await {
-            rollback_job.phase = RestorePhase::RollingBack;
-            rollback_job.message =
-                "Activation failed; restoring the previous database and artwork".into();
-            rollback_job.rollback_state = restore_jobs::RollbackState::InProgress;
-            rollback_job.updated_at = Utc::now();
-            restore_jobs::write(config, &rollback_job).await?;
-        }
-        fs::write(restore_marker_path(), job_id.to_string()).await?;
-        let _ = stop_api_process().await;
-        rollback_databases(
-            config,
-            &prepared.previous_database,
-            &prepared.candidate_database,
-        )
-        .await?;
-        if let Some(artwork) = artwork {
-            rollback_artwork(artwork).await?;
-        }
-        let _ = fs::remove_file(restore_marker_path()).await;
-        wait_for_api_health(config).await?;
-        if let Ok(mut rollback_job) = restore_jobs::read(config, job_id).await {
-            rollback_job.rollback_state = restore_jobs::RollbackState::Succeeded;
-            rollback_job.retryable = true;
-            rollback_job.updated_at = Utc::now();
-            restore_jobs::write(config, &rollback_job).await?;
-        }
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-    match rollback_result {
-        Ok(()) => anyhow::anyhow!(
-            "restored candidate activation failed and was rolled back: {cause}"
-        ),
-        Err(rollback_error) => anyhow::anyhow!(
-            "restored candidate activation failed ({cause}); automatic rollback also failed: {rollback_error}"
-        ),
-    }
+    rollback::runtime(config, job_id, prepared, artwork, cause).await
 }
 
 fn inject_restore_fault(phase: &str) -> anyhow::Result<()> {
