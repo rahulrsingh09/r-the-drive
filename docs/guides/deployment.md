@@ -1,17 +1,65 @@
 ---
 title: Deployment and updates
-description: Deploy, update, inspect, stop, and recover the standard Panda stack.
+description: Choose a host, deploy, update, inspect, stop, and recover R:The Drive.
 slug: /operations/deployment-and-updates/
 sidebar_label: Deployment and updates
 ---
 
 # Deployment and updates
 
-The standard self-hosted stack runs TimescaleDB, Redis, and one unified Panda container containing the API, web app, nginx origin, and backup tools. Only the unified app is published to the host, on `127.0.0.1:8080` by default. `PANDA_HOST_BIND_ADDRESS` explicitly overrides the host interface.
+The standard self-hosted stack runs TimescaleDB, Redis, and one unified R:The Drive container containing the API, web app, nginx origin, and backup tools. Only the unified app is published to the host, on `127.0.0.1:8080` by default. `PANDA_HOST_BIND_ADDRESS` explicitly overrides the host interface.
 
 Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of the app and restrict direct port `8080` access with your host firewall. Never publish the API listener, database, or Redis directly.
 
-## Initial deployment
+## Deployment options and moving hosts
+
+The [setup script](../../scripts/deploy.py) uses Docker Compose on the **current
+host**. It does not create a server or select a cloud provider. Run it on the
+Docker host itself; remote Docker contexts are unsupported because setup and
+first-owner registration use the host's local application endpoint.
+
+| Deployment path | What is included | What you configure |
+| --- | --- | --- |
+| Setup script on your Docker host | Source build or digest-pinned image pull, local services, persistent volumes, passwords, keys and first-owner setup | The host, persistent storage, authenticated HTTPS gateway, domain/TLS and off-host backups |
+| Manual Compose installation | The same application, database and Redis service definitions | Configuration, image selection, key provisioning, gateway and owner setup |
+| Northflank controller template | Deployment checks and controlled promotion for an already configured Northflank installation | Repository/infrastructure identifiers, existing services and storage, secrets, protected controller configuration, review evidence and gateway |
+
+The separate [`scripts/northflank_deploy.py`](../../scripts/northflank_deploy.py)
+controller is not invoked by the installer. Its checked-in repository and
+infrastructure settings are templates, not a ready-to-run deployment for this
+repository. Do not run it against another installation without adapting and
+validating its configuration. There is no `--provider` option or general cloud
+provisioning script.
+
+You can use the same installer for a fresh installation on another host meeting
+the [prerequisites](./prerequisites.md). For a managed container platform, adapt
+the service networking, TimescaleDB/PostgreSQL and Redis connections, persistent
+storage, external keys and authenticated gateway to that platform. The existing
+installer does not perform that conversion or select a hosting plan.
+
+To move an **existing R:The Drive installation**, plan and test a restore rather
+than rerunning fresh setup over its data. Preserve the deployment configuration
+and compatible image version, verify a database backup, and transfer the
+required persistent files and external keys securely. A raw database backup
+needs its original AGE identity to decrypt saved credentials. Recovery packages
+exclude credentials and installation keys, so that route requires reconnecting
+providers. Follow [backup and restore](./backup-and-restore.md) and
+[key custody](../runbooks/key-custody.md), stop collection on the old host for the
+final transfer, and verify the new installation before switching the gateway.
+The helper does not automate host migration.
+
+## Initial deployment with the helper
+
+Follow the [four-step installation guide](./getting-started.md). The helper
+generates `.env`, `.deploy/settings.json` and `.deploy/compose.json`, then starts
+the stack and registers the owner locally. It retains these files and all
+volumes on failure; `python3 scripts/deploy.py start` resumes startup using the
+saved settings.
+
+## Manual initial deployment
+
+These steps are an alternative to the helper. Do not overwrite the configuration
+or omit the generated key overlay of an installation created by the helper.
 
 1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords, your exact public HTTPS `ALLOWED_ORIGINS` value, and a one-time `PANDA_SETUP_TOKEN` of at least 32 bytes.
 2. Provision the complete external RSA/AGE bundle using the [key-custody runbook](../runbooks/key-custody.md), and set `PANDA_IMAGE` to the reviewed digest built from the tested source. Existing DB-backed installs must export and migrate their original keys first. With injected key values, start the stack; mounted key files also require the `docker-compose.keys.yml` overlay. The example uses Docker-managed volumes, so no host preparation script is required:
@@ -34,7 +82,7 @@ Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of 
 
 New installations use Docker-managed volumes:
 
-| Docker volume       | Container path | Contents                                           |
+| Compose volume key  | Container path | Contents                                           |
 | ------------------- | -------------- | -------------------------------------------------- |
 | `panda-db`      | `/db`          | PostgreSQL data                                    |
 | `panda-redis`   | `/data`        | Redis append-only state                            |
@@ -43,6 +91,12 @@ New installations use Docker-managed volumes:
 
 External key files are deliberately outside these volumes. Back them up separately
 and restore the same AGE identity with raw database backups.
+
+Compose prefixes these volume keys with the project name. With the quick start's
+`--project r-the-drive`, database storage is `r-the-drive_panda-db`, for example.
+The helper also creates the separate external volume `r-the-drive-keys` and
+mounts it read-only at `/run/secrets/app`. A volume on the same host is not an
+off-host disaster-recovery copy.
 
 Do not delete Docker volumes during updates. Copy recovery packages off-host for disaster recovery. Existing installations that omit the four `*_SOURCE` variables continue using their existing `PANDA_DATA_DIR` bind paths.
 
@@ -58,6 +112,34 @@ same universal Compose file and Docker-managed volumes; no Synology-specific
 Compose file or generator is required.
 
 ## Logs and updates
+
+For a **helper installation**, use this shell function from the repository root
+so every command retains the saved project and key overlay:
+
+```bash
+drive_compose() {
+  docker compose \
+    --project-name "$(python3 -c 'import json; print(json.load(open(".deploy/settings.json"))["project"])')" \
+    --env-file .env \
+    -f compose/docker-compose.yml -f .deploy/compose.json "$@"
+}
+
+drive_compose ps
+drive_compose logs -f panda
+```
+
+Before updating, verify backups and read the migration notes below. For an
+image-based update, set `PANDA_IMAGE` in `.env` to the reviewed new image digest,
+then use `drive_compose pull` and `drive_compose up -d --wait`.
+For a source-built installation, build the reviewed source with
+`compose/Dockerfile`, give the image a new local tag, set `PANDA_IMAGE` to that
+tag, and use `drive_compose up -d --wait`. The helper's `start` command does not
+rebuild source or select a new application version for you.
+Keep the image record in `.deploy/settings.json` aligned with your chosen image.
+Do not rerun `setup` for an upgrade.
+
+For a **manual installation**, the equivalent base commands are below. Retain
+any key overlay and project name you selected during manual setup:
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml logs -f
@@ -107,6 +189,10 @@ Redis 8 can read the tested Redis 7 append-only snapshot format. Preserve a copy
 
 ## Build from source
 
+The helper already builds from source unless you pass `--image`. For a manual
+Compose installation, use the build overlay below, retaining your key overlay
+and project name:
+
 ```bash
 PANDA_IMAGE=panda:local docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-compose.build.yml up -d --build
 ```
@@ -118,6 +204,9 @@ by default. Set `PARALLAX_ENABLED=false` only for emergency rollback; production
 and development no longer launch a separate collector process or container.
 
 ## Stopping and recovery
+
+For a helper installation, use `drive_compose down` with the function above.
+For a manual installation, retain your chosen overlays and project name:
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml down

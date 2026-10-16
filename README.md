@@ -26,6 +26,25 @@ R:The Drive is a private, self-hosted application for understanding your Rivian.
 
 The application displays the readings Rivian makes available. Sleeping vehicles and unavailable signals can leave gaps; missing readings are not presented as measured values.
 
+## Where it deploys
+
+**The setup script installs on the machine where you run it, using Docker Compose. It does not deploy to Northflank by default.** “Your server” means a host you provide and manage. For a remote server, connect to that server first, then run the four steps below there.
+
+The stack contains the web application and API, a TimescaleDB/PostgreSQL database, and Redis. The script does not create a cloud server, choose a hosting plan, or configure your domain and HTTPS gateway.
+
+| Setting | Default | Why |
+| --- | --- | --- |
+| Hosting | Docker on the current host; remote Docker contexts are rejected | Keeps setup and owner registration on the same host without requiring a cloud account or provider API. |
+| Application image | Build this checkout locally | Installs the source you selected. `--image registry/image@sha256:DIGEST` can use an existing reviewed build instead. |
+| Network | Application at `127.0.0.1:8080`; database and Redis ports are not published | Keeps direct access private, behind your authenticated HTTPS gateway. `--port` changes the local application port. |
+| HTTPS address | Required `--origin`; no default domain | Uses your own gateway address. The script does not provision TLS or gateway access policies. |
+| Storage | Persistent Docker volumes, with keys in a separate `<project>-keys` volume | Keeps history across container restarts and keeps encryption/signing keys separate from database storage. Backups still need an off-host copy. |
+| Project name | This guide selects `r-the-drive`; omitting `--project` uses `vehicle-history` | Namespaces the installation's containers and volumes. Choose it before first setup. |
+
+**Can you use another host?** Yes: the same installer can set up a fresh installation on another host that meets the Docker and gateway prerequisites. Moving an existing R:The Drive installation also requires a planned transfer of its data, configuration and keys; rerunning setup does not migrate them.
+
+Northflank has a separate checked-in [deployment controller](./scripts/northflank_deploy.py), but it is an unconfigured template for an existing deployment, with repository and infrastructure settings that must be adapted. It is not called by the setup script. There is no `--provider` switch or automatic cloud provisioning. See [deployment options and moving hosts](./docs/guides/deployment.md#deployment-options-and-moving-hosts).
+
 ## Deploy in four steps
 
 The [setup script](./scripts/deploy.py) builds the application, generates database and cache passwords, provisions signing and encryption keys, starts the services and guides you through first-owner setup.
