@@ -5,13 +5,14 @@ use axum::{
     http::Request,
 };
 use serde_json::{json, Value};
-use sqlx::{Connection, Executor, PgPool};
+use sqlx::{Executor, PgPool};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 use tower::ServiceExt;
 
+mod cursor;
 mod fixture;
 use fixture::DatabaseFixture;
 
@@ -263,8 +264,6 @@ async fn state(pool: &PgPool) -> AppState {
 
 struct TestApp {
     router: axum::Router,
-    pool: PgPool,
-    isolate_statements: bool,
 }
 
 async fn request(
@@ -274,15 +273,6 @@ async fn request(
     path: &str,
     body: Option<String>,
 ) -> Value {
-    if app.isolate_statements {
-        app.pool
-            .acquire()
-            .await
-            .unwrap()
-            .clear_cached_statements()
-            .await
-            .unwrap();
-    }
     let mut request = Request::builder().method(method).uri(path);
     if let Some(token) = token {
         request = request.header("authorization", format!("Bearer {token}"));
@@ -389,8 +379,6 @@ async fn metrics_workflow_http_database_contract() {
         .collect::<Vec<_>>();
     let app = TestApp {
         router: crate::routes::build_router(state.clone()),
-        pool: fixture.pool.clone(),
-        isolate_statements: true,
     };
     let before = persisted(&fixture.pool).await;
     let mut cases = Vec::new();
@@ -583,7 +571,7 @@ async fn metrics_workflow_http_database_contract() {
     );
     cases.push(json!({"case":"persistence before and after","before":before,"after":after}));
     fixture.cleanup().await;
-    compare("http", &json!(cases), include_str!("http.json"));
+    compare("http", &json!(cases), &cursor::corrected_http());
 }
 
 #[tokio::test]
@@ -602,8 +590,6 @@ async fn metrics_workflow_stream_interruption_contract() {
         crate::middleware::auth::issue_access_token(id(1), Some(id(10)), &state.jwt_keys).unwrap();
     let app = TestApp {
         router: crate::routes::build_router(state.clone()),
-        pool: fixture.pool.clone(),
-        isolate_statements: false,
     };
     let before = persisted(&fixture.pool).await;
     let mut lock = fixture.pool.begin().await.unwrap();
@@ -678,8 +664,6 @@ async fn metrics_workflow_large_cursor_contract() {
         crate::middleware::auth::issue_access_token(id(1), Some(id(10)), &state.jwt_keys).unwrap();
     let app = TestApp {
         router: crate::routes::build_router(state),
-        pool: fixture.pool.clone(),
-        isolate_statements: true,
     };
     let before:Value=sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(t) ORDER BY ts) FROM (SELECT ts,power_kw FROM timeseries.telemetry WHERE vehicle_id=$1 AND ts >= '2026-01-02Z') t").bind(id(10)).fetch_one(&fixture.pool).await.unwrap();
     let mut cases = Vec::new();

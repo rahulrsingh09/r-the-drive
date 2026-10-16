@@ -70,6 +70,8 @@ impl Cursor {
     ) -> Result<(), AppError> {
         loop {
             let rows = sqlx::query("FETCH FORWARD 10000 FROM metric_points")
+                // The cursor's scalar or weighted row shape changes between metric queries.
+                .persistent(false)
                 .fetch_all(&mut *conn)
                 .await?;
             if rows.is_empty() {

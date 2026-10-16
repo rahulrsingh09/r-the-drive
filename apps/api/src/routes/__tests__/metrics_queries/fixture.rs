@@ -84,6 +84,13 @@ impl DatabaseFixture {
         self.pool.close().await;
         self.admin
             .execute(sqlx::AssertSqlSafe(format!(
+                "ALTER DATABASE {} ALLOW_CONNECTIONS false",
+                self.database
+            )))
+            .await
+            .unwrap();
+        self.admin
+            .execute(sqlx::AssertSqlSafe(format!(
                 "DROP DATABASE {} WITH (FORCE)",
                 self.database
             )))

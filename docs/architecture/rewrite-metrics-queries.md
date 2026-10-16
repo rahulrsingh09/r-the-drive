@@ -26,6 +26,13 @@ separate three decisions:
   standalone versus batch framing. The existing two-chunk channel, 64 KiB buffer,
   10,000-row fetch size, cancellation and admission cleanup remain unchanged.
 
+Cursor `DECLARE` and `FETCH` statements are nonpersistent. The same fetch text
+can return scalar columns for one metric and weighted-efficiency columns for the
+next; caching its prepared row metadata would reuse the first cursor's shape.
+Only these cursor statements opt out of caching. Other queries retain the normal
+connection statement cache. Deploying this correction requires the usual process
+restart so existing connections cannot retain an earlier cached fetch statement.
+
 The compiler consolidates the earlier independent scalar, raw, aggregate,
 telemetry and filtered-trip SQL branches. The weighted efficiency calculation and
 trip-tag predicate remain the shared implementations. The catalog entries,
@@ -82,11 +89,17 @@ The tests marked ignored require the explicit disposable database URL and must
 be run with `--include-ignored` or `--ignored`; merely compiling them provides no
 DB evidence.
 
-HTTP fixtures clear SQL statement caches between isolated requests on one
-restricted application connection. Batches retain normal cache reuse within each
-request. This isolates a retained baseline limitation: cached PostgreSQL cursor
-metadata can cause mixed scalar/weighted series to abort with a missing-column
-error. The replacement does not correct that behavior. Another retained race can
+HTTP fixtures reuse one restricted application connection without clearing its
+statement cache. A regression alternates scalar, weighted and telemetry series,
+then mixed batches, three times while checking the backend PID stays unchanged.
+It compares complete singular responses and batch wire fragments with the frozen
+pre-correction responses and verifies that persisted history remains unchanged.
+The original `http.json` remains intact; `http-cursor-corrections.json` records
+exactly four previously interrupted batch responses that now complete. The test
+checks their original inputs before applying those explicit expected corrections.
+Each corrected batch is also checked against its individual metric selections.
+
+Another retained race can
 make a blocked singular metric query return either the observed database-timeout
 500 response or the application-deadline 503 response; the test admits exactly
 those two complete captured responses.
