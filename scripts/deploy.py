@@ -32,22 +32,27 @@ def private_write(path, content):
         output.write(content)
 
 
-def docker(args, *, capture=False):
+def docker(args, *, capture=False, input_text=None):
     environment = {key: value for key, value in os.environ.items() if key in (
         'PATH', 'HOME', 'DOCKER_CONFIG', 'DOCKER_CONTEXT', 'DOCKER_HOST',
         'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY')}
+    # Provisioning SQL can contain credentials. Never inherit stdout/stderr for
+    # commands receiving private input, including their failure diagnostics.
+    private = capture or input_text is not None
     result = subprocess.run(['docker', *args], cwd=ROOT, env=environment,
-                            text=True, stdout=subprocess.PIPE if capture else None,
-                            stderr=subprocess.PIPE if capture else None)
+                            text=True, input=input_text,
+                            stdout=subprocess.PIPE if private else None,
+                            stderr=subprocess.PIPE if private else None)
     if result.returncode:
         raise RuntimeError('Docker operation failed. Existing files, keys and data were retained.')
     return result.stdout.strip() if capture else ''
 
 
-def compose(settings, args):
+def compose(settings, args, *, capture=False, input_text=None):
     return docker(['compose', '--project-name', settings['project'], '--env-file', str(ROOT / '.env'),
                    '-f', str(ROOT / 'compose/docker-compose.yml'),
-                   '-f', str(ROOT / '.deploy/compose.json'), *args])
+                   '-f', str(ROOT / '.deploy/compose.json'), *args],
+                  capture=capture, input_text=input_text)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -67,10 +72,12 @@ def local_api(port, path, *, origin=None, body=None):
 
 
 def configuration(project, origin, port, image):
-    settings = {'project': project, 'origin': origin_url(origin), 'port': port, 'image': image}
+    settings = {'project': project, 'origin': origin_url(origin), 'port': port, 'image': image,
+                'database_provisioning': 1}
     values = {
         'PANDA_IMAGE': image, 'PANDA_ENV': 'production',
-        'POSTGRES_PASSWORD': secrets.token_urlsafe(48), 'REDIS_PASSWORD': secrets.token_urlsafe(48),
+        'POSTGRES_USER': 'panda', 'POSTGRES_PASSWORD': secrets.token_urlsafe(48),
+        'REDIS_PASSWORD': secrets.token_urlsafe(48),
         'PANDA_SETUP_TOKEN': secrets.token_urlsafe(48), 'ALLOWED_ORIGINS': settings['origin'],
         'PANDA_HOST_BIND_ADDRESS': '127.0.0.1', 'PANDA_ORIGIN_PORT': str(port),
         'PANDA_BIND_ADDRESS': '127.0.0.1', 'ALLOW_INSECURE_LAN_HTTP_AUTH': 'false', 'TZ': 'UTC',
@@ -81,8 +88,14 @@ def configuration(project, origin, port, image):
         'environment': {'JWT_SECRET_FILE': '/run/secrets/app/keys/jwt_private.pem',
                         'JWT_PUBLIC_KEY_FILE': '/run/secrets/app/keys/jwt_public.pem',
                         'AGE_ENCRYPTION_KEY_FILE': '/run/secrets/app/keys/age_key.txt'},
-        'volumes': ['custody:/run/secrets/app:ro']}},
-        'volumes': {'custody': {'external': True, 'name': project + '-keys'}}}
+        'volumes': ['custody:/run/secrets/app:ro']},
+        'timescaledb': {
+            'environment': {'POSTGRES_USER': 'panda_bootstrap', 'POSTGRES_PASSWORD': '',
+                            'POSTGRES_PASSWORD_FILE': '/run/secrets/database_bootstrap'},
+            'secrets': ['database_bootstrap'],
+            'healthcheck': {'test': ['CMD', 'pg_isready', '-U', 'panda_bootstrap', '-d', 'panda']}}},
+        'volumes': {'custody': {'external': True, 'name': project + '-keys'}},
+        'secrets': {'database_bootstrap': {'file': str(ROOT / '.deploy/database-bootstrap-password')}}}
     return settings, values, overlay
 
 
@@ -120,6 +133,7 @@ def prepare(project, origin, port, image=None):
     private_write(ROOT / '.deploy/settings.json', json.dumps(settings) + '\n')
     private_write(ROOT / '.deploy/compose.json', json.dumps(overlay) + '\n')
     private_write(ROOT / '.env', ''.join(f'{key}={value}\n' for key, value in values.items()))
+    private_write(ROOT / '.deploy/database-bootstrap-password', secrets.token_urlsafe(48) + '\n')
     key_volume = project + '-keys'
     docker(['volume', 'create', '--label', 'com.docker.compose.project=' + project, key_volume], capture=True)
     mount = 'type=volume,source=' + key_volume + ',target=/custody'
@@ -132,7 +146,47 @@ def prepare(project, origin, port, image=None):
     return settings
 
 
+def provision_database(settings):
+    """Prepare a managed fresh database before the restricted app migrates it.
+
+    Also used by isolated acceptance. This does not adopt an older installation,
+    reset existing passwords, alter existing role privileges, or run migrations.
+    """
+    if settings.get('database_provisioning') != 1:
+        raise ValueError('This installation predates separate database provisioning. '
+                         'Retain its data and keys; review the deployment guide before conversion.')
+    secret = ROOT / '.deploy/database-bootstrap-password'
+    if secret.is_symlink() or not secret.is_file() or secret.stat().st_mode & 0o077:
+        raise ValueError('The owner-only database bootstrap secret is missing or has unsafe permissions. '
+                         'Existing installation data was retained.')
+    values = dict(line.split('=', 1) for line in (ROOT / '.env').read_text().splitlines() if '=' in line)
+    password = values.get('POSTGRES_PASSWORD', '')
+    if values.get('POSTGRES_USER') != 'panda' or not re.fullmatch(r'[A-Za-z0-9_-]{64,}', password):
+        raise ValueError('Managed database credentials do not match the saved installation format.')
+    if 'DATABASE_URL' in values or 'POSTGRES_PASSWORD_FILE' in values:
+        raise ValueError('Managed installation database overrides require an explicit operator review.')
+    compose(settings, ['up', '-d', '--wait', '--wait-timeout', '600', 'timescaledb'])
+    # Read the bootstrap password in the DB container, not into the app's env,
+    # process arguments, Compose interpolation environment, or Python output.
+    bootstrap = ('PGPASSWORD="$(cat /run/secrets/database_bootstrap)" '
+                 'exec psql -X -q -h timescaledb -U panda_bootstrap -d panda '
+                 '-v ON_ERROR_STOP=1')
+    sql = (Path(__file__).resolve().parent / 'provision_database.sql').read_text()
+    compose(settings, ['exec', '-T', 'timescaledb', '/bin/sh', '-c', bootstrap],
+            input_text="\\set app_password '" + password + "'\n" + sql)
+    # The service address exercises host password authentication; PostgreSQL's
+    # local/loopback trust rules would accept even an incorrect saved password.
+    verify = ('IFS= read -r PGPASSWORD; export PGPASSWORD; '
+              'exec psql -X -q -t -A -h timescaledb -U panda -d panda -v ON_ERROR_STOP=1')
+    result = compose(settings, ['exec', '-T', 'timescaledb', '/bin/sh', '-c', verify],
+                     capture=True, input_text=password + "\nSELECT current_user;\n")
+    if result != 'panda':
+        raise RuntimeError('Restricted application database login could not be verified. '
+                           'Existing installation data was retained.')
+
+
 def start(settings):
+    provision_database(settings)
     compose(settings, ['up', '-d', '--wait', '--wait-timeout', '600'])
     deadline = time.monotonic() + 180
     while True:

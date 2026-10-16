@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -11,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -37,6 +39,7 @@ class DeploymentTests(unittest.TestCase):
     def write_configuration(self):
         (self.root / '.deploy').mkdir(mode=0o700)
         deploy.private_write(self.root / '.env', ''.join(f'{k}={v}\n' for k, v in self.values.items()))
+        deploy.private_write(self.root / '.deploy/database-bootstrap-password', 'synthetic-bootstrap-only\n')
 
     def test_private_files_refuse_overwrite(self):
         path = self.root / 'private'
@@ -62,6 +65,88 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue(all(len(secret) >= 64 for secret in secrets))
         self.assertEqual(self.overlay['services']['panda']['volumes'], ['custody:/run/secrets/app:ro'])
         self.assertTrue(self.overlay['volumes']['custody']['external'])
+        self.assertEqual(self.values['POSTGRES_USER'], 'panda')
+        database = self.overlay['services']['timescaledb']
+        self.assertEqual(database['environment']['POSTGRES_USER'], 'panda_bootstrap')
+        self.assertEqual(database['environment']['POSTGRES_PASSWORD'], '')
+        self.assertNotIn('database_bootstrap', self.overlay['services']['panda'].get('secrets', []))
+
+    def test_provisioning_precedes_application_and_password_is_only_stdin(self):
+        self.write_configuration()
+        with patch.object(deploy, 'compose', side_effect=['', '', 'panda']) as compose:
+            deploy.provision_database(self.settings)
+        calls = compose.call_args_list
+        self.assertEqual(calls[0][0][1][-1], 'timescaledb')
+        self.assertIn('panda_bootstrap', calls[1][0][1][-1])
+        self.assertIn('-h timescaledb', calls[2][0][1][-1])
+        self.assertIn('CREATE EXTENSION IF NOT EXISTS earthdistance', calls[1][1]['input_text'])
+        self.assertIn('CREATE ROLE panda LOGIN NOSUPERUSER', calls[1][1]['input_text'])
+        self.assertIn(self.values['POSTGRES_PASSWORD'], calls[1][1]['input_text'])
+        self.assertEqual(calls[2][1]['input_text'],
+                         self.values['POSTGRES_PASSWORD'] + '\nSELECT current_user;\n')
+        for call in calls:
+            self.assertNotIn(self.values['POSTGRES_PASSWORD'], repr(call[0]))
+            self.assertNotIn('synthetic-bootstrap-only', repr(call))
+
+    def test_legacy_installation_is_not_automatically_adopted(self):
+        self.write_configuration()
+        self.settings.pop('database_provisioning')
+        with patch.object(deploy, 'compose') as compose, self.assertRaises(ValueError):
+            deploy.provision_database(self.settings)
+        compose.assert_not_called()
+        self.assertIn('PANDA_SETUP_TOKEN=', (self.root / '.env').read_text())
+
+    def test_unsafe_or_missing_bootstrap_file_is_rejected_before_start(self):
+        self.write_configuration()
+        secret = self.root / '.deploy/database-bootstrap-password'
+        for mode in (0o644, 0o640):
+            secret.chmod(mode)
+            with patch.object(deploy, 'compose') as compose, self.assertRaises(ValueError):
+                deploy.provision_database(self.settings)
+            compose.assert_not_called()
+        secret.unlink()
+        with patch.object(deploy, 'compose') as compose, self.assertRaises(ValueError):
+            deploy.provision_database(self.settings)
+        compose.assert_not_called()
+
+    def test_invalid_app_credentials_never_reach_database_commands(self):
+        self.write_configuration()
+        for assignment in ['POSTGRES_USER=other', 'POSTGRES_PASSWORD=bad\nvalue',
+                           'DATABASE_URL=postgres://unexpected', 'POSTGRES_PASSWORD_FILE=/unexpected']:
+            original = (self.root / '.env').read_text()
+            (self.root / '.env').write_text(original + assignment + '\n')
+            with patch.object(deploy, 'compose') as compose, self.assertRaises(ValueError):
+                deploy.provision_database(self.settings)
+            compose.assert_not_called()
+            (self.root / '.env').write_text(original)
+
+    def test_failed_provisioning_never_starts_app_or_prompts(self):
+        self.write_configuration()
+        before = (self.root / '.env').read_bytes()
+        for outcome in [RuntimeError('provisioning failed'), 'unexpected_user']:
+            responses = ['', outcome] if isinstance(outcome, Exception) else ['', '', outcome]
+            with patch.object(deploy, 'compose', side_effect=responses) as compose, \
+                    patch.object(deploy, 'local_api') as api, patch('builtins.input') as prompt, \
+                    self.assertRaises(RuntimeError):
+                deploy.start(self.settings)
+            self.assertTrue(all(call[0][1][0] != 'up' or call[0][1][-1] == 'timescaledb'
+                                for call in compose.call_args_list))
+            api.assert_not_called()
+            prompt.assert_not_called()
+            self.assertEqual((self.root / '.env').read_bytes(), before)
+
+    def test_private_docker_input_is_captured_and_failure_is_sanitized(self):
+        private_input = 'synthetic-private-input'
+        output = io.StringIO()
+        result = subprocess.CompletedProcess([], 1, private_input, private_input)
+        with patch.object(deploy.subprocess, 'run', return_value=result) as run, \
+                contextlib.redirect_stdout(output), self.assertRaises(RuntimeError) as error:
+            deploy.docker(['exec', '-i', 'synthetic'], input_text=private_input)
+        self.assertEqual(run.call_args[1]['input'], private_input)
+        self.assertEqual(run.call_args[1]['stdout'], subprocess.PIPE)
+        self.assertEqual(run.call_args[1]['stderr'], subprocess.PIPE)
+        self.assertNotIn(private_input, repr(run.call_args[0]))
+        self.assertNotIn(private_input, str(error.exception) + output.getvalue())
 
     def test_existing_installation_is_not_overwritten(self):
         self.write_configuration()
@@ -86,7 +171,8 @@ class DeploymentTests(unittest.TestCase):
         self.write_configuration()
         for payload in [{}, [], {'setup_required': 'false'},
                         {'setup_required': True, 'setup_proof_required': False}]:
-            with self.subTest(payload=payload), patch.object(deploy, 'compose'), \
+            with self.subTest(payload=payload), patch.object(deploy, 'provision_database'), \
+                    patch.object(deploy, 'compose'), \
                     patch.object(deploy, 'local_api', return_value=payload), \
                     patch('builtins.input') as prompt, self.assertRaises(RuntimeError):
                 deploy.start(self.settings)
@@ -97,6 +183,7 @@ class DeploymentTests(unittest.TestCase):
         self.write_configuration()
         output = io.StringIO()
         with patch.object(deploy, 'compose') as compose, \
+                patch.object(deploy, 'provision_database') as provision, \
                 patch.object(deploy, 'local_api', side_effect=[
                     {'setup_required': True, 'setup_proof_required': True, 'setup_proof_available': True},
                     {'access_token': 'synthetic'},
@@ -105,16 +192,18 @@ class DeploymentTests(unittest.TestCase):
                 patch.object(deploy.getpass, 'getpass', return_value='synthetic-password-only'), \
                 contextlib.redirect_stdout(output):
             deploy.start(self.settings)
-        self.assertEqual(api.call_args_list[1].kwargs['body']['setup_token'], self.values['PANDA_SETUP_TOKEN'])
+        self.assertEqual(api.call_args_list[1][1]['body']['setup_token'], self.values['PANDA_SETUP_TOKEN'])
         self.assertNotIn('PANDA_SETUP_TOKEN=', (self.root / '.env').read_text())
         self.assertEqual(stat.S_IMODE((self.root / '.env').stat().st_mode), 0o600)
         self.assertEqual(compose.call_count, 2)
+        provision.assert_called_once_with(self.settings)
         for secret in [self.values['PANDA_SETUP_TOKEN'], 'synthetic-password-only', 'owner@example.test']:
             self.assertNotIn(secret, output.getvalue())
 
     def test_unconfirmed_owner_creation_retains_proof(self):
         self.write_configuration()
-        with patch.object(deploy, 'compose'), patch.object(deploy, 'local_api', side_effect=[
+        with patch.object(deploy, 'provision_database'), patch.object(deploy, 'compose'), \
+                patch.object(deploy, 'local_api', side_effect=[
                 {'setup_required': True, 'setup_proof_required': True, 'setup_proof_available': True},
                 {}, {'setup_required': True}]), patch('builtins.input', return_value='owner@example.test'), \
                 patch.object(deploy.getpass, 'getpass', return_value='synthetic-password-only'), \
@@ -143,6 +232,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn('ports', services['redis'])
         self.assertNotIn('ports', services['timescaledb'])
         self.assertEqual(app['environment']['POSTGRES_PASSWORD'], self.values['POSTGRES_PASSWORD'])
+        self.assertEqual(app['environment']['POSTGRES_USER'], 'panda')
+        self.assertNotIn('POSTGRES_PASSWORD_FILE', app['environment'])
+        self.assertNotIn('secrets', app)
+        database = services['timescaledb']
+        self.assertEqual(database['environment']['POSTGRES_USER'], 'panda_bootstrap')
+        self.assertEqual(database['environment']['POSTGRES_PASSWORD'], '')
+        self.assertEqual(database['secrets'][0]['source'], 'database_bootstrap')
+        self.assertNotIn('synthetic-bootstrap-only', result.stdout)
 
     def test_local_registration_never_follows_redirects(self):
         requests = []
@@ -169,6 +266,84 @@ class DeploymentTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+@unittest.skipUnless(os.environ.get('PANDA_TEST_INSTALLER_DATABASE') == '1',
+                     'requires explicitly enabled disposable Docker Compose database')
+class DatabaseProvisioningTests(unittest.TestCase):
+    """Real role/extension/rollback checks on this test's unique database only."""
+
+    def test_fresh_resume_and_incompatible_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = 'panda-installer-test-' + uuid.uuid4().hex[:12]
+            with patch.object(deploy, 'ROOT', root):
+                settings, values, overlay = deploy.configuration(
+                    project, 'https://fixture.example.test', 18880, 'synthetic:unused')
+                (root / '.deploy').mkdir(mode=0o700)
+                (root / 'compose').mkdir()
+                shutil.copyfile(SOURCE / 'compose/docker-compose.yml', root / 'compose/docker-compose.yml')
+                overlay['services']['timescaledb']['mem_limit'] = '1g'
+                overlay['services']['timescaledb']['command'] = [
+                    'postgres', '-c', 'shared_buffers=128MB', '-c', 'max_connections=40',
+                    '-c', 'max_worker_processes=8', '-c', 'timescaledb.max_background_workers=4']
+                deploy.private_write(root / '.env', ''.join(f'{k}={v}\n' for k, v in values.items()))
+                deploy.private_write(root / '.deploy/compose.json', json.dumps(overlay))
+                deploy.private_write(root / '.deploy/database-bootstrap-password',
+                                     deploy.secrets.token_urlsafe(48) + '\n')
+
+                def admin(sql):
+                    command = ('PGPASSWORD="$(cat /run/secrets/database_bootstrap)" '
+                               'exec psql -X -q -t -A -h timescaledb -U panda_bootstrap '
+                               '-d panda -v ON_ERROR_STOP=1')
+                    return deploy.compose(settings, ['exec', '-T', 'timescaledb', '/bin/sh', '-c', command],
+                                          capture=True, input_text=sql)
+
+                try:
+                    deploy.compose(settings, ['up', '-d', '--wait', '--wait-timeout', '600', 'timescaledb'])
+                    interrupted = (SOURCE / 'scripts/provision_database.sql').read_text().replace(
+                        'COMMIT;', 'SELECT 1 / 0;\nCOMMIT;')
+                    with self.assertRaises(RuntimeError):
+                        admin("\\set app_password '" + values['POSTGRES_PASSWORD'] + "'\n" + interrupted)
+                    self.assertEqual(admin("SELECT count(*) FROM pg_roles WHERE rolname='panda';"), '0')
+                    self.assertEqual(admin(
+                        "SELECT count(*) FROM pg_namespace WHERE nspname IN ('panda','timeseries');"), '0')
+                    deploy.provision_database(settings)
+                    self.assertEqual(admin(
+                        "SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication "
+                        "OR rolbypassrls OR rolinherit FROM pg_roles WHERE rolname='panda';"), 'f')
+                    self.assertEqual(admin(
+                        "SELECT string_agg(extname || ':' || nspname, ',' ORDER BY extname) "
+                        "FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace "
+                        "WHERE extname IN ('pgcrypto','timescaledb','cube','earthdistance');"),
+                        'cube:panda,earthdistance:panda,pgcrypto:public,timescaledb:public')
+                    before = admin("SELECT oid::text || rolpassword FROM pg_authid WHERE rolname='panda';")
+                    # Simulate existing application data and a revoked permission.
+                    admin("SET ROLE panda; CREATE TABLE panda.installer_fixture (id integer); "
+                          "INSERT INTO panda.installer_fixture VALUES (42); "
+                          "REVOKE DELETE, TRUNCATE ON panda.installer_fixture FROM panda;")
+                    deploy.provision_database(settings)
+                    self.assertEqual(admin("SELECT oid::text || rolpassword FROM pg_authid WHERE rolname='panda';"),
+                                     before)
+                    self.assertEqual(admin("SELECT id FROM panda.installer_fixture;"), '42')
+                    self.assertEqual(admin(
+                        "SELECT has_table_privilege('panda','panda.installer_fixture','DELETE');"), 'f')
+                    # A failed saved-login check must not silently rotate the role.
+                    env = (root / '.env').read_text()
+                    (root / '.env').write_text(env.replace(values['POSTGRES_PASSWORD'], 'x' * 64))
+                    with self.assertRaises(RuntimeError):
+                        deploy.provision_database(settings)
+                    (root / '.env').write_text(env)
+                    self.assertEqual(admin("SELECT oid::text || rolpassword FROM pg_authid WHERE rolname='panda';"),
+                                     before)
+                    # Drift is refused, not corrected by altering a pre-existing role.
+                    admin("ALTER ROLE panda CREATEDB;")
+                    with self.assertRaises(RuntimeError):
+                        deploy.provision_database(settings)
+                    self.assertEqual(admin("SELECT rolcreatedb FROM pg_roles WHERE rolname='panda';"), 't')
+                    self.assertEqual(admin("SELECT id FROM panda.installer_fixture;"), '42')
+                finally:
+                    deploy.compose(settings, ['down', '-v', '--remove-orphans'])
 
 
 if __name__ == '__main__':

@@ -32,32 +32,37 @@ You will need Docker Compose v2, Git, Python 3, and a trusted host with persiste
    python3 scripts/deploy.py --project r-the-drive --origin https://vehicle.example.com
    ```
 
-3. Enter the first-owner email and a new password when prompted. The helper builds the image, generates database/cache credentials, provisions external RSA/AGE keys, starts healthy services and registers the owner locally. It removes the one-time proof after confirming setup is complete.
+3. Enter the first-owner email and a new password when prompted. The helper builds the image, generates separate database bootstrap, application and cache credentials, provisions external RSA/AGE keys, starts healthy services and registers the owner locally. It removes the one-time proof after confirming setup is complete.
 
 4. Open your gateway address, sign in and connect your Rivian account. Securely back up the `r-the-drive-keys` Docker volume separately using the [key-custody runbook](../runbooks/key-custody.md).
 
-Generated configuration is ignored by Git, with owner-only permissions. Keys stay in a dedicated external volume mounted read-only in the app. The application port binds to loopback; database and Redis ports are not published.
+Generated configuration is ignored by Git, with owner-only permissions. Keys stay in a dedicated external volume mounted read-only in the app. The bootstrap password stays in `.deploy/database-bootstrap-password`, mounted only in the database container. The application port binds to loopback; database and Redis ports are not published.
 
-Use `python3 scripts/deploy.py start` to retry startup or owner creation. The helper refuses an existing installation during setup and never deletes data or regenerates existing keys. If preparation stopped before key generation, inspect the retained state before retrying. See the [configuration guide](./configuration.md) for manual configuration and the [deployment guide](./deployment.md) for updates.
+Use `python3 scripts/deploy.py start` to retry database provisioning, startup or owner creation. A retry verifies the saved application login and existing provisioning state without replacing passwords, roles or data. The helper refuses an existing installation during setup and never deletes data or regenerates existing keys. If preparation stopped before key generation or a required private file is missing, inspect the retained state before retrying. Installations created before separate database provisioning require an operator-reviewed conversion; `start` does not adopt them automatically. See the [deployment guide](./deployment.md#database-bootstrap-and-runtime-roles).
 
 ## Installer defaults and options
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| Command | `setup` | Creates a fresh installation. `start` resumes the configuration saved in `.deploy/settings.json`. |
-| `--origin` | Required for setup | Exact HTTPS gateway address, without a path, query or fragment. No domain, TLS certificate or access policy is created. |
-| `--project` | `vehicle-history` | Namespaces Docker resources. The quick start explicitly selects `r-the-drive`, including its `r-the-drive-keys` volume. |
-| `--port` | `8080` | Publishes the application on `127.0.0.1` at this port; accepts ports `1024`–`65535`. Match your gateway's forwarding port to it. |
-| `--image` | Build this checkout as `<project>:local` | Alternatively pull an existing reviewed image pinned as `registry/image@sha256:DIGEST`. The script does not publish an image. |
+| Option      | Default                                  | Purpose                                                                                                                          |
+| ----------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Command     | `setup`                                  | Creates a fresh installation. `start` resumes the configuration saved in `.deploy/settings.json`.                                |
+| `--origin`  | Required for setup                       | Exact HTTPS gateway address, without a path, query or fragment. No domain, TLS certificate or access policy is created.          |
+| `--project` | `vehicle-history`                        | Namespaces Docker resources. The quick start explicitly selects `r-the-drive`, including its `r-the-drive-keys` volume.          |
+| `--port`    | `8080`                                   | Publishes the application on `127.0.0.1` at this port; accepts ports `1024`–`65535`. Match your gateway's forwarding port to it. |
+| `--image`   | Build this checkout as `<project>:local` | Alternatively pull an existing reviewed image pinned as `registry/image@sha256:DIGEST`. The script does not publish an image.    |
 
 These options configure **initial setup**. `start` reads saved settings; passing
 new setup flags to `start` does not reconfigure the installation.
 
 The helper explicitly enables production mode, sets the allowed HTTPS origin,
 disables insecure LAN HTTP authentication, and uses UTC. It generates distinct
-database and Redis passwords and a one-time owner-setup proof. The dedicated
+database bootstrap, application and Redis passwords and a one-time owner-setup proof. The dedicated
 key volume keeps signing and encryption keys out of database storage and is
 mounted read-only in the app.
+
+The helper starts TimescaleDB first. A separate bootstrap role installs the
+required database extensions, then the restricted application role applies the
+normal migrations and starts with production history protection enabled.
+Bootstrap credentials are never included in the application's environment.
 
 Docker Compose keeps this installation path independent of a hosting provider's
 API. It starts the app, TimescaleDB/PostgreSQL and Redis on the same host, with

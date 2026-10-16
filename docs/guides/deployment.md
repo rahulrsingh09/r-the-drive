@@ -18,11 +18,11 @@ host**. It does not create a server or select a cloud provider. Run it on the
 Docker host itself; remote Docker contexts are unsupported because setup and
 first-owner registration use the host's local application endpoint.
 
-| Deployment path | What is included | What you configure |
-| --- | --- | --- |
-| Setup script on your Docker host | Source build or digest-pinned image pull, local services, persistent volumes, passwords, keys and first-owner setup | The host, persistent storage, authenticated HTTPS gateway, domain/TLS and off-host backups |
-| Manual Compose installation | The same application, database and Redis service definitions | Configuration, image selection, key provisioning, gateway and owner setup |
-| Northflank controller template | Deployment checks and controlled promotion for an already configured Northflank installation | Repository/infrastructure identifiers, existing services and storage, secrets, protected controller configuration, review evidence and gateway |
+| Deployment path                  | What is included                                                                                                    | What you configure                                                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setup script on your Docker host | Source build or digest-pinned image pull, local services, persistent volumes, passwords, keys and first-owner setup | The host, persistent storage, authenticated HTTPS gateway, domain/TLS and off-host backups                                                     |
+| Manual Compose installation      | The same application, database and Redis service definitions                                                        | Configuration, image selection, key provisioning, gateway and owner setup                                                                      |
+| Northflank controller template   | Deployment checks and controlled promotion for an already configured Northflank installation                        | Repository/infrastructure identifiers, existing services and storage, secrets, protected controller configuration, review evidence and gateway |
 
 The separate [`scripts/northflank_deploy.py`](../../scripts/northflank_deploy.py)
 controller is not invoked by the installer. Its checked-in repository and
@@ -51,43 +51,74 @@ The helper does not automate host migration.
 ## Initial deployment with the helper
 
 Follow the [four-step installation guide](./getting-started.md). The helper
-generates `.env`, `.deploy/settings.json` and `.deploy/compose.json`, then starts
+generates `.env`, `.deploy/settings.json`, `.deploy/compose.json` and the private
+`.deploy/database-bootstrap-password` file, provisions the database, then starts
 the stack and registers the owner locally. It retains these files and all
 volumes on failure; `python3 scripts/deploy.py start` resumes startup using the
 saved settings.
+
+## Database bootstrap and runtime roles
+
+The helper's generated overlay initializes TimescaleDB as `panda_bootstrap`.
+Its password is a database-only Compose secret. It is not stored in `.env`,
+passed in command arguments, or mounted in the application. Keep the private
+file and overlay with the installation's configuration backups.
+
+Before application startup, `scripts/deploy.py` calls its shared
+`provision_database(settings)` function. This creates a restricted `panda`
+login and installs `pgcrypto` and `timescaledb` in `public`, and `cube` and
+`earthdistance` in `panda`. The application owns its database and schemas, but
+has no superuser, role-creation, database-creation, replication or row-security
+bypass privileges and inherits no other role. It uses its separate `.env`
+password for migrations and runtime. Production startup continues to revoke
+destructive history privileges and verify that those revocations take effect.
+
+Provisioning commits role, schema and extension creation together. A retry
+validates the existing role, ownership, extension locations and saved application
+login; it does not rotate credentials, recreate data, change existing role
+privileges, or restore revoked history permissions. A mismatched or legacy
+installation fails closed and keeps its files and volumes.
+
+Do not fix an older installation by disabling history protection or merely
+changing the bootstrap role to `NOSUPERUSER`: fresh migration also requires
+privileged extension installation. Before converting an existing installation,
+verify its backups and keys, inventory database ownership and extensions, and
+prepare a reviewed role/ownership migration for that database. This helper only
+provisions its own fresh installations and does not automate that conversion.
 
 ## Manual initial deployment
 
 These steps are an alternative to the helper. Do not overwrite the configuration
 or omit the generated key overlay of an installation created by the helper.
 
-1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords, your exact public HTTPS `ALLOWED_ORIGINS` value, and a one-time `PANDA_SETUP_TOKEN` of at least 32 bytes.
-2. Provision the complete external RSA/AGE bundle using the [key-custody runbook](../runbooks/key-custody.md), and set `PANDA_IMAGE` to the reviewed digest built from the tested source. Existing DB-backed installs must export and migrate their original keys first. With injected key values, start the stack; mounted key files also require the `docker-compose.keys.yml` overlay. The example uses Docker-managed volumes, so no host preparation script is required:
+1. Prefer the helper for a fresh production installation. For a manually managed database, provision the separate bootstrap and restricted application roles and extensions described above before application startup. The base Compose file alone initializes `POSTGRES_USER` as a PostgreSQL superuser; passing that same role to the production application is rejected by history protection.
+2. Copy `compose/.env.example` to `.env`. Set the restricted application's database credentials separately from the database service's bootstrap credentials, using a database-only overlay or your platform's secret configuration. Set a separate strong Redis password, your exact public HTTPS `ALLOWED_ORIGINS` value, and a one-time `PANDA_SETUP_TOKEN` of at least 32 bytes. Never put bootstrap credentials in the application's `env_file`.
+3. Provision the complete external RSA/AGE bundle using the [key-custody runbook](../runbooks/key-custody.md), and set `PANDA_IMAGE` to the reviewed digest built from the tested source. Existing DB-backed installs must export and migrate their original keys first. Start with your database credential overlay; mounted key files also require the `docker-compose.keys.yml` overlay:
 
    ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml up -d
+   docker compose --env-file .env -f compose/docker-compose.yml -f compose.local.yml up -d
    ```
 
-3. Verify it:
+4. Verify it with the same overlay:
 
    ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml ps
+   docker compose --env-file .env -f compose/docker-compose.yml -f compose.local.yml ps
    curl http://localhost:8080/health
    ```
 
-4. Configure an authenticated gateway that forwards to port `8080` and supports WebSockets.
-5. Open the HTTPS address and create the first owner account.
+5. Configure an authenticated gateway that forwards to port `8080` and supports WebSockets.
+6. Open the HTTPS address and create the first owner account.
 
 ## Persistent files
 
 New installations use Docker-managed volumes:
 
-| Compose volume key  | Container path | Contents                                           |
-| ------------------- | -------------- | -------------------------------------------------- |
-| `panda-db`      | `/db`          | PostgreSQL data                                    |
-| `panda-redis`   | `/data`        | Redis append-only state                            |
-| `panda-backups` | `/backups`     | Downloadable recovery packages                     |
-| `panda-cache`   | `/data/cache`  | Application cache files, including vehicle artwork |
+| Compose volume key | Container path | Contents                                           |
+| ------------------ | -------------- | -------------------------------------------------- |
+| `panda-db`         | `/db`          | PostgreSQL data                                    |
+| `panda-redis`      | `/data`        | Redis append-only state                            |
+| `panda-backups`    | `/backups`     | Downloadable recovery packages                     |
+| `panda-cache`      | `/data/cache`  | Application cache files, including vehicle artwork |
 
 External key files are deliberately outside these volumes. Back them up separately
 and restore the same AGE identity with raw database backups.
