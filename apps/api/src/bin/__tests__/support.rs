@@ -155,26 +155,27 @@ impl Fixture {
 }
 
 pub fn freeze(name: &str, actual: Value, expected: &[u8]) {
-    let directory = std::path::PathBuf::from(std::env::var("MAINTENANCE_ARTIFACT_DIR").unwrap());
-    std::fs::write(
-        directory.join(format!("{name}-raw.json")),
-        serde_json::to_string_pretty(&actual).unwrap(),
-    )
-    .unwrap();
+    let directory = std::env::var_os("MAINTENANCE_ARTIFACT_DIR").map(std::path::PathBuf::from);
+    if let Some(directory) = &directory {
+        std::fs::write(
+            directory.join(format!("{name}-raw.json")),
+            serde_json::to_string_pretty(&actual).unwrap(),
+        )
+        .unwrap();
+    }
     let mut actual = actual;
     let mut ids = std::collections::BTreeMap::new();
     collect_generated_ids(&actual, &mut ids);
     normalize(&mut actual, &mut ids);
-    std::fs::write(
-        directory.join(format!("{name}-actual.json")),
-        serde_json::to_string_pretty(&actual).unwrap(),
-    )
-    .unwrap();
+    if let Some(directory) = &directory {
+        std::fs::write(
+            directory.join(format!("{name}-actual.json")),
+            serde_json::to_string_pretty(&actual).unwrap(),
+        )
+        .unwrap();
+    }
     let expected: Value = serde_json::from_reader(flate2::read::GzDecoder::new(expected)).unwrap();
-    assert!(
-        actual == expected,
-        "frozen {name} contract differs; complete evidence retained"
-    );
+    assert!(actual == expected, "frozen {name} contract differs");
 }
 fn collect_generated_ids(value: &Value, ids: &mut std::collections::BTreeMap<String, String>) {
     match value {

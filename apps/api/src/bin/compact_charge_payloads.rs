@@ -213,3 +213,7 @@ mod interruption_contracts;
 #[cfg(test)]
 #[path = "__tests__/support.rs"]
 mod contract_support;
+
+#[cfg(test)]
+#[path = "__tests__/evidence_contracts.rs"]
+mod evidence_contracts;

@@ -76,7 +76,10 @@ Tests in `apps/api/src/bin/__tests__` retain full process stdout/stderr/status a
 complete rows from fourteen related tables. Losslessly compressed fixtures hold
 the frozen expectations. Only generated UUIDs and clocks are normalized;
 annotation ordering is made stable after UUID normalization. Raw evidence is
-written outside the checkout.
+written outside the checkout when `MAINTENANCE_ARTIFACT_DIR` is supplied.
+That evidence directory is optional; the complete frozen-value assertions always
+run. Ordinary tests need no evidence environment variables. Ignored database
+tests still require an explicitly configured disposable database.
 
 The original implementation passed these expectations before replacement.
 Fixtures create new disposable databases, bootstrap extensions separately, apply
