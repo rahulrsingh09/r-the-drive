@@ -1,19 +1,22 @@
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
-pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
-    let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .after_connect(|connection, _| {
-            Box::pin(async move {
-                // The application-owned schema contains cube/earthdistance.
-                // Keep built-ins first and temporary types last; public retains
-                // the existing TimescaleDB helpers. Migration pools stay separate.
-                sqlx::query("SET search_path = pg_catalog, panda, public, pg_temp")
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
+/// Shared runtime connection settings; callers retain their own pool limits.
+/// Migration and restore connections keep their separate initialization.
+pub fn application_pool_options() -> PgPoolOptions {
+    PgPoolOptions::new().after_connect(|connection, _| {
+        Box::pin(async move {
+            // Resolve trusted geospatial extensions before temporary types.
+            sqlx::query("SET search_path = pg_catalog, panda, public, pg_temp")
+                .execute(connection)
+                .await?;
+            Ok(())
         })
+    })
+}
+
+pub async fn create_pool(database_url: &str) -> anyhow::Result<PgPool> {
+    let pool = application_pool_options()
+        .max_connections(20)
         .connect(database_url)
         .await?;
     Ok(pool)

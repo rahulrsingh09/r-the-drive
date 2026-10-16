@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use panda_api::db::pool::application_pool_options;
 use panda_api::services::trip_enrichment::{
     backfill_charge_session_geofence_matches, backfill_trip_geofence_matches,
 };
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
 
@@ -16,7 +17,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = PgPoolOptions::new()
+    let pool = application_pool_options()
         .max_connections(5)
         .connect(&database_url)
         .await?;

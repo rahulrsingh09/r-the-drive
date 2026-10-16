@@ -22,6 +22,9 @@ The migration pool is separate and retains its explicit `public` search path.
 Application connections opened before migration and connections added later
 receive the same application configuration. This changes no schema, extension
 ownership, role attribute or history privilege.
+Geospatial backfill, repair and reporting tools use the same
+`application_pool_options` initializer while retaining their own connection
+limits and `DATABASE_URL` handling.
 
 Qualifying scalar calls can work with earthdistance 1.2, whose SQL bodies bind
 their dependencies at creation. Retained 1.1 installations also have nested

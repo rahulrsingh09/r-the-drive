@@ -4,8 +4,8 @@
 //!   DATABASE_URL=... cargo run --bin report_trip_enrichment_gaps -- [--vehicle <uuid>]
 
 use anyhow::{anyhow, Context, Result};
+use panda_api::db::pool::application_pool_options;
 use panda_api::services::trip_enrichment::report_trip_enrichment_gaps;
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy)]
@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = PgPoolOptions::new()
+    let pool = application_pool_options()
         .max_connections(3)
         .connect(&database_url)
         .await?;

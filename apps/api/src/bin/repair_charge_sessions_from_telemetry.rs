@@ -7,18 +7,18 @@
 //!   cargo run --bin repair_charge_sessions_from_telemetry
 
 use anyhow::Result;
+use panda_api::db::pool::application_pool_options;
 use panda_api::{
     db::vehicles::get_vehicle_owner_id, services::charge_sessions::canonicalize_charge_sessions,
     services::cost::recompute_charge_session_cost, services::geofences::match_geofence,
 };
-use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = PgPoolOptions::new()
+    let pool = application_pool_options()
         .max_connections(5)
         .connect(&database_url)
         .await?;

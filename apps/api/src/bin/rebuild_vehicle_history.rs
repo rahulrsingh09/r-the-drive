@@ -14,6 +14,7 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
+use panda_api::db::pool::application_pool_options;
 use panda_api::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::trip_detector::{
@@ -33,7 +34,7 @@ use panda_api::{
     },
 };
 use reqwest::Client;
-use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
+use sqlx::{FromRow, PgPool};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -76,7 +77,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
-    let pool = PgPoolOptions::new()
+    let pool = application_pool_options()
         .max_connections(5)
         .connect(&database_url)
         .await?;

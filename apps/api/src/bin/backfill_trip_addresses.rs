@@ -9,12 +9,12 @@
 //!   DATABASE_URL=... cargo run --bin backfill_trip_addresses -- [--vehicle <uuid>]
 
 use anyhow::{anyhow, Context, Result};
+use panda_api::db::pool::application_pool_options;
 use panda_api::services::trip_enrichment::{
     backfill_charge_session_coordinates, backfill_charge_session_locations,
     backfill_trip_addresses, backfill_trip_coordinates,
 };
 use reqwest::Client;
-use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use uuid::Uuid;
 
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = PgPoolOptions::new()
+    let pool = application_pool_options()
         .max_connections(3)
         .connect(&database_url)
         .await?;
