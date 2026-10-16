@@ -28,10 +28,13 @@ still identifies a shared address row; an address without an OSM identifier gets
 a new row. Place profile removal detaches the link without deleting the profile.
 
 On updates, the same transaction assigns the resulting profile, including null,
-to linked sessions whose override mode is `automatic`. Selection remains by
-geofence ID and override mode, including linked sessions on different vehicles.
-Manual and free overrides are excluded. The shared cost service remains the
-pricing authority.
+to linked sessions whose override mode is `automatic` and whose vehicle the
+place owner currently manages or owns. This includes authorized shared vehicles
+but excludes vehicles after that user's membership is removed or demoted to
+viewer. Manual and free overrides are excluded. The shared cost service remains
+the pricing authority and independently rejects profiles whose owners no longer
+manage the vehicle. Editing a personal place or profile therefore cannot reprice
+a revoked vehicle directly or supply its rate to a later authorized recomputation.
 
 A successful commit produces `CommittedPlace`, containing the place ID and
 sessions to reprice. Its finishing stage reprices those sessions sequentially and

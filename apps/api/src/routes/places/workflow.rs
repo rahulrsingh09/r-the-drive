@@ -130,6 +130,7 @@ impl PlaceMutation {
                 let recompute = sqlx::query_scalar::<_, Uuid>(SYNC_LINKED_SESSION_COST_PROFILE_SQL)
                     .bind(id)
                     .bind(cost_profile_id)
+                    .bind(self.owner)
                     .fetch_all(&mut *tx)
                     .await?;
                 CommittedPlace { id, recompute }

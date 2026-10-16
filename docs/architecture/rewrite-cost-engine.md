@@ -69,9 +69,13 @@ timezone falls back to UTC for this date comparison.
 
 Lookups remain lazy: selecting a valid earlier candidate avoids later queries.
 The owner is the earliest owner membership selected by the existing vehicle
-helper. Viewer preferences do not replace that owner's default. Explicit profile
-and geofence IDs are trusted inputs to this internal seam; authorization remains
-the responsibility of its existing callers.
+helper. Viewer preferences do not replace that owner's default. Every candidate
+profile must belong to a current owner or manager of the vehicle. A profile from
+a removed member or a member demoted to viewer is skipped, including pinned and
+geofence-linked profiles; resolution continues to the owner's eligible default.
+If no eligible effective profile exists, the existing unknown-cost fallback
+applies. This recheck prevents a former manager's later profile edits from
+changing the vehicle's cost when an authorized caller requests recomputation.
 
 The service converts stored Wh totals to kWh before pricing. An available
 `energy_added_wh` takes precedence over `kwh_added`, including when its value is

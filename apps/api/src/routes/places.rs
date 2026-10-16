@@ -19,9 +19,14 @@ use crate::{
     services::cost::recompute_charge_session_cost,
 };
 
-const SYNC_LINKED_SESSION_COST_PROFILE_SQL: &str = "UPDATE panda.charge_sessions
+const SYNC_LINKED_SESSION_COST_PROFILE_SQL: &str = "UPDATE panda.charge_sessions cs
         SET cost_profile_id=$2
       WHERE geofence_id=$1 AND cost_override_mode='automatic'
+        AND EXISTS (
+            SELECT 1 FROM panda.vehicle_memberships vm
+            WHERE vm.vehicle_id=cs.vehicle_id AND vm.user_id=$3
+              AND vm.role IN ('owner', 'manager')
+        )
       RETURNING id";
 
 pub fn router() -> Router<AppState> {

@@ -163,7 +163,7 @@ impl<'profile> CostBasis<'profile> {
 }
 
 /// Resolve an effective pinned, geofence-linked, or vehicle-owner default profile.
-/// Explicit and geofence IDs retain the caller's authorization boundary.
+/// Profile owners must still manage the vehicle when its cost is resolved.
 pub async fn resolve_profile(
     pool: &PgPool,
     explicit_id: Option<Uuid>,
@@ -183,6 +183,19 @@ pub async fn resolve_profile(
         let Some(profile) = fetch_profile(pool, id).await? else {
             continue;
         };
+        let can_manage = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                SELECT 1 FROM panda.vehicle_memberships
+                WHERE vehicle_id=$1 AND user_id=$2 AND role IN ('owner', 'manager')
+            )",
+        )
+        .bind(vehicle_id)
+        .bind(profile.user_id)
+        .fetch_one(pool)
+        .await?;
+        if !can_manage {
+            continue;
+        }
         if profile.is_effective_at(started_at) {
             return Ok(Some(profile));
         }

@@ -80,7 +80,29 @@ fn assert_snapshot(name: &str, rows: &[Value], expected: &str) {
         )
         .unwrap();
     }
-    let expected: Vec<Value> = serde_json::from_str(expected).unwrap();
+    let mut expected: Vec<Value> = serde_json::from_str(expected).unwrap();
+    if name == "database" {
+        let owner_default = expected
+            .iter()
+            .find(|row| row["name"] == "owner default")
+            .unwrap()["profile"]
+            .clone();
+        let mut corrected = 0;
+        for row in &mut expected {
+            if matches!(
+                row["name"].as_str(),
+                Some(
+                    "linked foreign geofence trusted by seam"
+                        | "explicit foreign profile trusted by seam"
+                )
+            ) {
+                assert_eq!(row["profile"]["user_id"], id(2).to_string());
+                row["profile"] = owner_default.clone();
+                corrected += 1;
+            }
+        }
+        assert_eq!(corrected, 2);
+    }
     assert_eq!(rows.len(), expected.len(), "{name} snapshot row count");
     for (index, (actual, expected)) in rows.iter().zip(expected.iter()).enumerate() {
         assert_eq!(actual, expected, "{name} complete row {index}");

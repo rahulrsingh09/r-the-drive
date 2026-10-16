@@ -10,6 +10,8 @@ use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 use tower::ServiceExt;
 #[path = "database.rs"]
 mod database;
+#[path = "revocation.rs"]
+mod revocation;
 
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
@@ -787,7 +789,8 @@ async fn complete_http_and_persistence_contract() {
         .unwrap();
     }
     if std::env::var_os("PLACES_CAPTURE").is_none() {
-        let expected: Value = serde_json::from_str(include_str!("http.json")).unwrap();
+        let mut expected: Value = serde_json::from_str(include_str!("http.json")).unwrap();
+        revocation::retain_unauthorized_session_costs(&mut expected);
         assert_eq!(json!(events), expected);
     }
 }
