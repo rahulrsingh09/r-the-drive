@@ -39,6 +39,7 @@ The stack contains the web application and API, a TimescaleDB/PostgreSQL databas
 | Network | Application at `127.0.0.1:8080`; database and Redis ports are not published | Keeps direct access private, behind your authenticated HTTPS gateway. `--port` changes the local application port. |
 | HTTPS address | Required `--origin`; no default domain | Uses your own gateway address. The script does not provision TLS or gateway access policies. |
 | Storage | Persistent Docker volumes, with keys in a separate `<project>-keys` volume | Keeps history across container restarts and keeps encryption/signing keys separate from database storage. Backups still need an off-host copy. |
+| Database access | Restricted application account; a separate bootstrap account installs required extensions | Lets setup prepare the database without giving the running application administrator privileges. The bootstrap password stays in an owner-only `.deploy` file and is mounted only by the database. |
 | Project name | This guide selects `r-the-drive`; omitting `--project` uses `vehicle-history` | Namespaces the installation's containers and volumes. Choose it before first setup. |
 
 **Can you use another host?** Yes: the same installer can set up a fresh installation on another host that meets the Docker and gateway prerequisites. Moving an existing R:The Drive installation also requires a planned transfer of its data, configuration and keys; rerunning setup does not migrate them.
@@ -47,7 +48,7 @@ Northflank has a separate checked-in [deployment controller](./scripts/northflan
 
 ## Deploy in four steps
 
-The [setup script](./scripts/deploy.py) builds the application, generates database and cache passwords, provisions signing and encryption keys, starts the services and guides you through first-owner setup.
+The [setup script](./scripts/deploy.py) builds the application, generates database and cache passwords, provisions signing and encryption keys, prepares the restricted database account and extensions, starts the services and guides you through first-owner setup.
 
 **Before you start:** use a trusted server with Git, Python 3, Docker Engine and Docker Compose v2, plus persistent storage and enough resources for a Rust/frontend source build. Configure an authenticated HTTPS gateway on that host forwarding to `http://127.0.0.1:8080`. Domain registration, TLS and gateway access policies are covered in the [secure deployment guide](./docs/guides/secure-deployment.md); the script does not provision them.
 

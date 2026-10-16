@@ -117,6 +117,7 @@ const sidebars: SidebarsConfig = {
         'architecture/rewrite-charge-history',
         'architecture/rewrite-history-enrichment',
         'architecture/rewrite-provider-orchestration',
+        'architecture/rewrite-durable-collector',
         'architecture/unification-baseline',
         'architecture/theming',
         'architecture/frontend-error-observability',

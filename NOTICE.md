@@ -17,6 +17,8 @@ They also correct session, charge-timestamp and recovery-file handling defects.
 Additional replacements cover trip lifecycle, charge-history reconciliation,
 history enrichment and provider connection orchestration, with corrections for
 connection cancellation, diagnostic text handling and OTA response decoding.
+Telemetry collection stages and charge restart reconstruction are also updated,
+along with consistent geospatial database connection settings.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
