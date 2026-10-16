@@ -197,6 +197,11 @@ and project name:
 PANDA_IMAGE=panda:local docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-compose.build.yml up -d --build
 ```
 
+The image assigns mode `0644` to its two root-owned nginx configuration files,
+so the runtime user (UID `1001`) can read them even when a restrictive checkout
+or archive umask makes the source files `0600`. This applies only to the bundled
+non-secret nginx configuration; external key and secret permissions are unchanged.
+
 Local development continues to use `pnpm dev:stack` and
 `compose/docker-compose.dev.yml`; production image consolidation does not
 change that workflow. Extended Parallax acquisition is enabled inside the API
