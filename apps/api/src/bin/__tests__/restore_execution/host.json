@@ -1,0 +1,52 @@
+[
+  {
+    "artifact_manifest": "unavailable",
+    "artwork": [
+      104,
+      111,
+      115,
+      116,
+      45,
+      97,
+      114,
+      116,
+      119,
+      111,
+      114,
+      107
+    ],
+    "finalize": false,
+    "progress": 0,
+    "report_error": "Application verification failed after candidate activation",
+    "report_status": "rolled_back",
+    "request_error": "Application verification failed after candidate activation; rollback succeeded",
+    "request_status": "failed",
+    "run_phase": "failed",
+    "run_status": "failed"
+  },
+  {
+    "artifact_manifest": "unavailable",
+    "artwork": [
+      104,
+      111,
+      115,
+      116,
+      45,
+      97,
+      114,
+      116,
+      119,
+      111,
+      114,
+      107
+    ],
+    "finalize": true,
+    "progress": 100,
+    "report_error": null,
+    "report_status": "completed",
+    "request_error": null,
+    "request_status": "completed",
+    "run_phase": "completed",
+    "run_status": "succeeded"
+  }
+]

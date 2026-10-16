@@ -1,0 +1,46 @@
+[
+  {
+    "body": "",
+    "status": 401
+  },
+  {
+    "body": "",
+    "status": 401
+  },
+  {
+    "body": "",
+    "status": 401
+  },
+  {
+    "body": "",
+    "status": 404
+  },
+  {
+    "body": "{\"id\":\"00000000-0000-0000-0000-000000000001\",\"artifact_id\":\"00000000-0000-0000-0000-000000000002\",\"phase\":\"preparing_candidate\",\"progress_percent\":25,\"message\":\"Synthetic candidate\",\"error_message\":null,\"created_at\":\"2020-01-01T00:00:00Z\",\"updated_at\":\"2020-01-01T00:00:00Z\",\"plan\":null,\"validation_report\":null,\"retryable\":true,\"rollback_state\":\"not_required\"}",
+    "status": 200
+  },
+  {
+    "body": "Invalid URL: Cannot parse `job_id` with value `malformed`: UUID parsing failed: invalid character: found `m` at 0",
+    "status": 400
+  },
+  {
+    "body": "",
+    "status": 401
+  },
+  {
+    "body": "",
+    "status": 401
+  },
+  {
+    "body": "",
+    "status": 401
+  },
+  {
+    "body": "",
+    "status": 404
+  },
+  {
+    "body": "",
+    "status": 409
+  }
+]

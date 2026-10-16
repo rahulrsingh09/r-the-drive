@@ -1,0 +1,620 @@
+[
+  {
+    "case": "complete",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "empty",
+    "error": null,
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "null",
+    "error": "invalid type: null, expected a recovery catalog object at line 1 column 4",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "array",
+    "error": "invalid type: sequence, expected a recovery catalog object at line 1 column 1",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "oversized",
+    "error": "operational history exceeds its byte limit",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "null-runs",
+    "error": "invalid type: null, expected a recovery catalog object at line 1 column 12",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "malformed",
+    "error": "EOF while parsing a list at line 1 column 9",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "duplicate",
+    "error": "duplicate catalog field at line 1 column 18",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "trailing",
+    "error": "trailing characters at line 1 column 13",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "unknown",
+    "error": null,
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  },
+  {
+    "case": "late-foreign-key",
+    "error": "Database error: error returned from database: insert or update on table \"backup_artifacts\" violates foreign key constraint \"backup_artifacts_run_id_fkey\" at line 2772",
+    "rows": {
+      "backup_artifacts": [
+        {
+          "checksum_sha256": "fixed-synthetic-checksum",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "file_name": "synthetic.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {
+            "nested": [
+              null,
+              0,
+              ""
+            ],
+            "restore_availability": "unavailable"
+          },
+          "run_id": "00000000-0000-0000-0000-000000000065",
+          "size_bytes": 0,
+          "storage_path": "synthetic/key",
+          "storage_type": "s3"
+        }
+      ],
+      "backup_restore_requests": [
+        {
+          "artifact_id": "00000000-0000-0000-0000-000000000066",
+          "confirmation_phrase": "RESTORE",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000067",
+          "notes": "",
+          "requested_at": "2020-01-01T00:00:00.123456+00:00",
+          "requested_by": null,
+          "status": "failed",
+          "updated_at": "2020-01-01T00:01:00+00:00"
+        }
+      ],
+      "backup_runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        },
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "error_message": "fixture failure",
+          "id": "00000000-0000-0000-0000-0000000000c9",
+          "phase": "failed",
+          "progress_percent": 99,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,115 @@
+[
+  {
+    "error": "restore fault injection triggered at timescale_pre_restore",
+    "phase": "timescale_pre_restore"
+  },
+  {
+    "error": "restore fault injection triggered at dump_restored",
+    "phase": "dump_restored"
+  },
+  {
+    "phase": null,
+    "role": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ],
+    "rows": {
+      "authentication_settings": [
+        {
+          "allowed_email_domains": [],
+          "auto_link_verified_email": false,
+          "auto_signup": false,
+          "button_label": "Sign in with SSO",
+          "client_id": null,
+          "client_secret_encrypted": null,
+          "id": true,
+          "issuer_url": null,
+          "last_validation_at": null,
+          "last_validation_fingerprint": null,
+          "oidc_auto_login": false,
+          "oidc_enabled": false,
+          "password_login_enabled": true,
+          "public_base_url": null,
+          "required_claim_name": null,
+          "required_claim_value": null,
+          "scopes": "openid email profile",
+          "token_auth_method": "auto",
+          "updated_at": "<clock>",
+          "updated_by": null
+        }
+      ],
+      "backup_settings": [],
+      "users": [
+        {
+          "auth_methods": "both",
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "default_vehicle_id": null,
+          "email": "synthetic@example.invalid",
+          "id": "00000000-0000-0000-0000-000000000301",
+          "is_disabled": false,
+          "password_hash": "fixture-only",
+          "role": "user",
+          "updated_at": "2020-01-01T00:00:00+00:00"
+        }
+      ],
+      "vehicles": [
+        {
+          "battery_capacity_wh": null,
+          "battery_cell_type": null,
+          "battery_config": null,
+          "charge_port_type": null,
+          "color": null,
+          "cost_profile_id": null,
+          "created_at": "2020-01-01T00:00:00+00:00",
+          "display_priority": 0,
+          "firmware_version": null,
+          "history_backfill_status": null,
+          "history_backfilled_at": null,
+          "history_session_count": null,
+          "home_geofence_id": null,
+          "home_latitude": null,
+          "home_longitude": null,
+          "id": "00000000-0000-0000-0000-000000000302",
+          "interior_color": null,
+          "max_vehicle_power_kw": null,
+          "model": "R1T",
+          "name": null,
+          "ota_release_notes_url": null,
+          "rivian_vehicle_id": "synthetic-vehicle",
+          "supported_features": null,
+          "target_tire_pressure_psi": 40,
+          "trim": null,
+          "updated_at": "2020-01-01T00:00:00+00:00",
+          "user_id": "00000000-0000-0000-0000-000000000301",
+          "vin": null,
+          "wheel_option": null
+        }
+      ]
+    },
+    "validation": {
+      "applied_transforms": [],
+      "foreign_keys_validated": true,
+      "migrations_applied": [],
+      "source_schema": {
+        "contract_version": "panda-schema-contract-v1",
+        "foreign_keys_validated": true,
+        "missing_relations": [],
+        "required_relations_present": true,
+        "schema_fingerprint": "38263b6bc74efb3dfacf07e13f8af22590c63d2213bb032fcbc7c2ad5b2272f1",
+        "telemetry_hypertable": true
+      },
+      "target_schema": {
+        "contract_version": "panda-schema-contract-v1",
+        "foreign_keys_validated": true,
+        "missing_relations": [],
+        "required_relations_present": true,
+        "schema_fingerprint": "38263b6bc74efb3dfacf07e13f8af22590c63d2213bb032fcbc7c2ad5b2272f1",
+        "telemetry_hypertable": true
+      }
+    }
+  }
+]

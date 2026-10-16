@@ -28,6 +28,10 @@ use panda_api::{
 
 const MAX_AUTH_HEADER_BYTES: usize = 512;
 
+#[cfg(test)]
+#[path = "__tests__/restore_execution_contracts.rs"]
+mod execution_contracts;
+
 #[derive(Clone)]
 struct AgentState {
     config: Config,
