@@ -4,6 +4,10 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[cfg(test)]
+#[path = "chart_registry/contract_tests.rs"]
+mod contract_tests;
+
 pub const BUNDLED_CHART_BASELINE_REVISION: i32 = 5;
 
 const BUNDLED_CHART_DEFAULTS: &str = include_str!("../../charts/defaults.json");

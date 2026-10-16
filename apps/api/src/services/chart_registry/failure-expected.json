@@ -1,0 +1,315 @@
+{
+  "code": "23514",
+  "constraint": "synthetic_seed_failure",
+  "message": "new row for relation \"charts\" violates check constraint \"synthetic_seed_failure\"",
+  "rows": [
+    {
+      "baselineRevision": 5,
+      "config": {
+        "axes": {
+          "x": {
+            "domain": {
+              "mode": "auto"
+            },
+            "scale": "linear"
+          },
+          "y": {
+            "domain": {
+              "mode": "auto"
+            },
+            "scale": "linear",
+            "unit": "kWh"
+          },
+          "y2": {
+            "domain": {
+              "mode": "auto"
+            },
+            "scale": "linear",
+            "unit": "mi"
+          }
+        },
+        "display": {
+          "curveSmoothness": "gentle",
+          "emptyTitle": "No battery capacity mileage data recorded yet",
+          "grid": true,
+          "legend": "auto",
+          "timeFilter": "raw",
+          "tooltip": true
+        },
+        "interaction": {
+          "connectGaps": true,
+          "panZoom": true,
+          "touchExplore": true
+        },
+        "placements": [
+          {
+            "dashboardSlug": "overview"
+          },
+          {
+            "dashboardSlug": "battery"
+          }
+        ],
+        "schemaVersion": 1,
+        "series": [
+          {
+            "color": {
+              "mode": "token",
+              "token": "accent"
+            },
+            "fill": true,
+            "id": "usable_kwh",
+            "label": "Usable Capacity",
+            "mark": "line",
+            "transforms": [],
+            "visibleInLegend": true,
+            "y": {
+              "field": "usable_kwh",
+              "sourceBindingId": "main"
+            },
+            "yAxis": "y"
+          },
+          {
+            "color": {
+              "mode": "token",
+              "token": "emerald"
+            },
+            "fill": false,
+            "id": "odometer_miles",
+            "label": "Mileage",
+            "mark": "line",
+            "transforms": [],
+            "visibleInLegend": true,
+            "y": {
+              "field": "odometer_miles",
+              "sourceBindingId": "main"
+            },
+            "yAxis": "y2"
+          }
+        ],
+        "sources": [
+          {
+            "filters": [],
+            "id": "main",
+            "inherit": {
+              "timeframe": true,
+              "vehicle": true
+            },
+            "params": {},
+            "sourceId": "battery.mileage"
+          }
+        ],
+        "timeframe": {
+          "mode": "dashboard"
+        },
+        "x": {
+          "field": {
+            "field": "timestamp",
+            "sourceBindingId": "main"
+          },
+          "kind": "time"
+        }
+      },
+      "createdAt": "seed-time",
+      "description": "Usable battery capacity over time with mileage on a secondary axis.",
+      "id": "generated:battery-capacity-mileage",
+      "isDefault": true,
+      "isEnabled": true,
+      "isLocked": false,
+      "name": "Battery Capacity by Mileage",
+      "ownerId": null,
+      "slug": "battery-capacity-mileage",
+      "updatedAt": "seed-time"
+    },
+    {
+      "baselineRevision": 5,
+      "config": {
+        "axes": {
+          "x": {
+            "domain": {
+              "mode": "auto"
+            },
+            "scale": "linear"
+          },
+          "y": {
+            "domain": {
+              "max": 100,
+              "min": 80,
+              "mode": "fixed"
+            },
+            "scale": "linear",
+            "unit": "%"
+          }
+        },
+        "display": {
+          "curveSmoothness": "gentle",
+          "emptyTitle": "No battery health history recorded yet",
+          "grid": true,
+          "legend": "hide",
+          "timeFilter": "raw",
+          "tooltip": true
+        },
+        "interaction": {
+          "connectGaps": false,
+          "panZoom": true,
+          "touchExplore": true
+        },
+        "placements": [
+          {
+            "dashboardSlug": "overview"
+          },
+          {
+            "dashboardSlug": "battery"
+          }
+        ],
+        "schemaVersion": 1,
+        "series": [
+          {
+            "color": {
+              "mode": "token",
+              "token": "accent"
+            },
+            "id": "capacity_pct",
+            "label": "Battery Health",
+            "mark": "line",
+            "transforms": [],
+            "visibleInLegend": true,
+            "y": {
+              "field": "capacity_pct",
+              "sourceBindingId": "main"
+            },
+            "yAxis": "y"
+          }
+        ],
+        "sources": [
+          {
+            "filters": [],
+            "id": "main",
+            "inherit": {
+              "timeframe": true,
+              "vehicle": true
+            },
+            "params": {},
+            "sourceId": "battery.degradation"
+          }
+        ],
+        "timeframe": {
+          "mode": "dashboard"
+        },
+        "x": {
+          "field": {
+            "field": "timestamp",
+            "sourceBindingId": "main"
+          },
+          "kind": "time"
+        }
+      },
+      "createdAt": "seed-time",
+      "description": "Estimated battery capacity percentage over time.",
+      "id": "generated:battery-degradation",
+      "isDefault": true,
+      "isEnabled": true,
+      "isLocked": false,
+      "name": "Battery Health",
+      "ownerId": null,
+      "slug": "battery-degradation",
+      "updatedAt": "seed-time"
+    },
+    {
+      "baselineRevision": 5,
+      "config": {
+        "axes": {
+          "x": {
+            "domain": {
+              "mode": "auto"
+            },
+            "scale": "linear"
+          },
+          "y": {
+            "domain": {
+              "max": 100,
+              "min": 0,
+              "mode": "fixed"
+            },
+            "scale": "linear",
+            "unit": "%"
+          }
+        },
+        "display": {
+          "curveSmoothness": "gentle",
+          "emptyTitle": "No charge level data for this period",
+          "grid": true,
+          "legend": "hide",
+          "timeFilter": "raw",
+          "tooltip": true
+        },
+        "interaction": {
+          "connectGaps": false,
+          "panZoom": true,
+          "touchExplore": true
+        },
+        "placements": [
+          {
+            "dashboardSlug": "overview"
+          },
+          {
+            "dashboardSlug": "charging"
+          }
+        ],
+        "schemaVersion": 1,
+        "series": [
+          {
+            "color": {
+              "mode": "token",
+              "token": "accent"
+            },
+            "fill": true,
+            "id": "battery_level",
+            "label": "State of Charge",
+            "mark": "step",
+            "transforms": [],
+            "visibleInLegend": true,
+            "y": {
+              "field": "battery_level",
+              "sourceBindingId": "main"
+            },
+            "yAxis": "y"
+          }
+        ],
+        "sources": [
+          {
+            "filters": [],
+            "id": "main",
+            "inherit": {
+              "timeframe": true,
+              "vehicle": true
+            },
+            "params": {
+              "metric": "battery_level"
+            },
+            "sourceId": "metrics.series"
+          }
+        ],
+        "timeframe": {
+          "mode": "dashboard"
+        },
+        "x": {
+          "field": {
+            "field": "timestamp",
+            "sourceBindingId": "main"
+          },
+          "kind": "time"
+        }
+      },
+      "createdAt": "seed-time",
+      "description": "State of charge from telemetry.",
+      "id": "generated:charge-level",
+      "isDefault": true,
+      "isEnabled": true,
+      "isLocked": false,
+      "name": "Charge Level",
+      "ownerId": null,
+      "slug": "charge-level",
+      "updatedAt": "seed-time"
+    }
+  ]
+}

@@ -5,6 +5,10 @@ use serde_json::Value;
 
 use crate::routes::metrics::is_series_metric;
 
+#[cfg(test)]
+#[path = "chart_validation/contract_tests.rs"]
+mod contract_tests;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChartDefinitionV1 {
