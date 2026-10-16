@@ -89,75 +89,93 @@ fn relative_path(root: &Path, path: &Path) -> Result<PathBuf, AppError> {
     Ok(path)
 }
 
-fn parent(
-    root: &Path,
-    path: &Path,
-    create: bool,
-    managed: bool,
-) -> Result<(Dir, String), AppError> {
-    let path = relative_path(root, path)?;
-    let mut parts = path
-        .iter()
-        .map(|p| {
-            p.to_str()
-                .ok_or_else(|| AppError::Validation("Invalid backup artifact path.".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let name = parts
-        .pop()
-        .ok_or_else(|| AppError::Validation("Missing backup artifact name.".into()))?;
-    validate_component(name)?;
-    if !name.ends_with(".rma.tar.gz") {
-        return Err(AppError::Validation(
-            "Not a recovery package artifact.".into(),
-        ));
-    }
-    for (index, part) in parts.iter().enumerate() {
-        if !(managed && index == 0 && matches!(*part, ".remote-staging" | ".restore-staging")) {
-            validate_component(part)?;
+struct ArtifactLocation {
+    parents: Vec<String>,
+    name: String,
+}
+
+impl ArtifactLocation {
+    fn admit(root: &Path, path: &Path, managed: bool) -> Result<Self, AppError> {
+        let path = relative_path(root, path)?;
+        let mut parts = path
+            .iter()
+            .map(|part| {
+                part.to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| AppError::Validation("Invalid backup artifact path.".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let name = parts
+            .pop()
+            .ok_or_else(|| AppError::Validation("Missing backup artifact name.".into()))?;
+        validate_component(&name)?;
+        if !name.ends_with(".rma.tar.gz") {
+            return Err(AppError::Validation(
+                "Not a recovery package artifact.".into(),
+            ));
         }
-    }
-    let mut dir = Dir::open_ambient_dir(root, ambient_authority())?;
-    for part in &parts {
-        if create {
-            match dir.create_dir(part) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e.into()),
+        for (index, part) in parts.iter().enumerate() {
+            if !(managed
+                && index == 0
+                && matches!(part.as_str(), ".remote-staging" | ".restore-staging"))
+            {
+                validate_component(part)?;
             }
         }
-        dir = dir.open_dir_nofollow(part)?;
+        Ok(Self {
+            parents: parts,
+            name,
+        })
     }
-    Ok((dir, name.to_owned()))
+
+    fn bind(self, root: &Path, create: bool) -> Result<ArtifactParent, AppError> {
+        let mut dir = Dir::open_ambient_dir(root, ambient_authority())?;
+        for part in self.parents {
+            if create {
+                match dir.create_dir(&part) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            dir = dir.open_dir_nofollow(part)?;
+        }
+        Ok(ArtifactParent {
+            dir,
+            name: self.name,
+        })
+    }
+}
+
+struct ArtifactParent {
+    dir: Dir,
+    name: String,
+}
+
+impl ArtifactParent {
+    fn regular_file(&self) -> Result<File, AppError> {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let file = self.dir.open_with(&self.name, &options)?;
+        if !file.metadata()?.is_file() {
+            return Err(AppError::Validation(
+                "Backup artifact is not a regular file.".into(),
+            ));
+        }
+        Ok(file.into_std())
+    }
 }
 
 pub fn open(root: &Path, path: &Path) -> Result<File, AppError> {
-    let (dir, name) = parent(root, path, false, false)?;
-    let mut options = OpenOptions::new();
-    options.read(true).follow(FollowSymlinks::No);
-    let file = dir.open_with(name, &options)?;
-    if !file.metadata()?.is_file() {
-        return Err(AppError::Validation(
-            "Backup artifact is not a regular file.".into(),
-        ));
-    }
-    Ok(file.into_std())
+    ArtifactLocation::admit(root, path, false)?
+        .bind(root, false)?
+        .regular_file()
 }
 
 pub fn remove(root: &Path, path: &Path) -> Result<(), AppError> {
-    let (dir, name) = parent(root, path, false, false)?;
-    // Refuse final symlinks as well as parent symlinks. remove_file itself does
-    // not follow a replacement symlink and the parent handle remains pinned.
-    let mut options = OpenOptions::new();
-    options.read(true).follow(FollowSymlinks::No);
-    let file = dir.open_with(&name, &options)?;
-    if !file.metadata()?.is_file() {
-        return Err(AppError::Validation(
-            "Backup artifact is not a regular file.".into(),
-        ));
-    }
-    drop(file);
-    dir.remove_file(name)?;
+    let artifact = ArtifactLocation::admit(root, path, false)?.bind(root, false)?;
+    drop(artifact.regular_file()?);
+    artifact.dir.remove_file(artifact.name)?;
     Ok(())
 }
 
@@ -165,19 +183,19 @@ pub fn remove_staged(root: &Path, id: uuid::Uuid) -> Result<(), AppError> {
     let path = root
         .join(".remote-staging")
         .join(format!("{id}.rma.tar.gz"));
-    let (dir, name) = parent(root, &path, false, true)?;
-    dir.remove_file(name)?;
+    let artifact = ArtifactLocation::admit(root, &path, true)?.bind(root, false)?;
+    artifact.dir.remove_file(artifact.name)?;
     Ok(())
 }
 
 pub fn create(root: &Path, path: &Path) -> Result<File, AppError> {
-    let (dir, name) = parent(root, path, true, false)?;
+    let artifact = ArtifactLocation::admit(root, path, false)?.bind(root, true)?;
     let mut options = OpenOptions::new();
     options
         .write(true)
         .create_new(true)
         .follow(FollowSymlinks::No);
-    Ok(dir.open_with(name, &options)?.into_std())
+    Ok(artifact.dir.open_with(artifact.name, &options)?.into_std())
 }
 
 /// A service-owned staging destination; callers choose a UUID, never a catalog
@@ -213,7 +231,10 @@ impl StagingFile {
     }
     fn new_at(root: &Path, directory: &str, name: String) -> Result<Self, AppError> {
         let path = root.join(directory).join(name);
-        let (dir, final_name) = parent(root, &path, true, true)?;
+        let ArtifactParent {
+            dir,
+            name: final_name,
+        } = ArtifactLocation::admit(root, &path, true)?.bind(root, true)?;
         let temporary = format!("{}.downloading", uuid::Uuid::new_v4());
         let mut options = OpenOptions::new();
         options
@@ -276,31 +297,22 @@ async fn copy_to_staging<R: tokio::io::AsyncRead + Unpin>(
     limits: &crate::config::RecoveryConfig,
 ) -> Result<PathBuf, AppError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let result = tokio::time::timeout(
+    tokio::time::timeout(
         std::time::Duration::from_secs(limits.restore_deadline_seconds),
         async {
             let mut file = tokio::fs::File::from_std(destination.file.try_clone()?);
-            let mut total = 0_u64;
-            let mut buffer = vec![0_u8; 64 * 1024];
+            let mut admission = TransferAdmission {
+                root,
+                limits,
+                total: 0,
+            };
+            let mut buffer = [0_u8; 64 * 1024];
             loop {
                 let length = reader.read(&mut buffer).await?;
                 if length == 0 {
                     break;
                 }
-                total = total.checked_add(length as u64).ok_or_else(|| {
-                    AppError::RecoveryTooLarge("Recovery download size overflowed.".into())
-                })?;
-                if total > limits.max_upload_bytes {
-                    return Err(AppError::RecoveryTooLarge(
-                        "Recovery download exceeds the configured compressed byte limit.".into(),
-                    ));
-                }
-                if fs2::available_space(root)? < limits.min_free_bytes.saturating_add(length as u64)
-                {
-                    return Err(AppError::RecoveryInsufficientStorage(
-                        "Recovery download would consume reserved free space.".into(),
-                    ));
-                }
+                admission.accept(length)?;
                 file.write_all(&buffer[..length]).await?;
             }
             file.flush().await?;
@@ -308,8 +320,36 @@ async fn copy_to_staging<R: tokio::io::AsyncRead + Unpin>(
             destination.publish()
         },
     )
-    .await;
-    result.map_err(|_| AppError::RecoveryDeadline("Recovery download deadline exceeded.".into()))?
+    .await
+    .map_err(|_| AppError::RecoveryDeadline("Recovery download deadline exceeded.".into()))?
+}
+
+struct TransferAdmission<'a> {
+    root: &'a Path,
+    limits: &'a crate::config::RecoveryConfig,
+    total: u64,
+}
+
+impl TransferAdmission<'_> {
+    fn accept(&mut self, length: usize) -> Result<(), AppError> {
+        let total = self.total.checked_add(length as u64).ok_or_else(|| {
+            AppError::RecoveryTooLarge("Recovery download size overflowed.".into())
+        })?;
+        if total > self.limits.max_upload_bytes {
+            return Err(AppError::RecoveryTooLarge(
+                "Recovery download exceeds the configured compressed byte limit.".into(),
+            ));
+        }
+        if fs2::available_space(self.root)?
+            < self.limits.min_free_bytes.saturating_add(length as u64)
+        {
+            return Err(AppError::RecoveryInsufficientStorage(
+                "Recovery download would consume reserved free space.".into(),
+            ));
+        }
+        self.total = total;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -464,48 +504,102 @@ mod tests {
 #[cfg(test)]
 mod recovery_admission_tests {
     use super::*;
-    use std::{io, pin::Pin, task::{Context, Poll}};
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+    };
     use tokio::io::{AsyncRead, ReadBuf};
 
-    struct PartialFailure { sent: bool }
+    struct PartialFailure {
+        sent: bool,
+    }
     impl AsyncRead for PartialFailure {
-        fn poll_read(mut self: Pin<&mut Self>, _: &mut Context<'_>, buffer: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-            if self.sent { Poll::Ready(Err(io::Error::other("synthetic reader failure"))) }
-            else { self.sent = true; buffer.put_slice(b"partial"); Poll::Ready(Ok(())) }
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buffer: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if self.sent {
+                Poll::Ready(Err(io::Error::other("synthetic reader failure")))
+            } else {
+                self.sent = true;
+                buffer.put_slice(b"partial");
+                Poll::Ready(Ok(()))
+            }
         }
     }
 
     #[tokio::test]
     async fn exact_byte_limit_names_and_empty_stream_are_preserved() {
         let root = tempfile::tempdir().unwrap();
-        let limits = crate::config::RecoveryConfig { max_upload_bytes: 7, min_free_bytes: 0, ..Default::default() };
+        let limits = crate::config::RecoveryConfig {
+            max_upload_bytes: 7,
+            min_free_bytes: 0,
+            ..Default::default()
+        };
         let id = uuid::Uuid::new_v4();
-        let path = stage_reader(root.path(), id, &mut &b"1234567"[..], &limits).await.unwrap();
-        assert_eq!(path, root.path().join(".remote-staging").join(format!("{id}.rma.tar.gz")));
+        let path = stage_reader(root.path(), id, &mut &b"1234567"[..], &limits)
+            .await
+            .unwrap();
+        assert_eq!(
+            path,
+            root.path()
+                .join(".remote-staging")
+                .join(format!("{id}.rma.tar.gz"))
+        );
         assert_eq!(std::fs::read(&path).unwrap(), b"1234567");
         remove_staged(root.path(), id).unwrap();
-        let path = stage_reader(root.path(), id, &mut tokio::io::empty(), &limits).await.unwrap();
+        let path = stage_reader(root.path(), id, &mut tokio::io::empty(), &limits)
+            .await
+            .unwrap();
         assert_eq!(std::fs::metadata(path).unwrap().len(), 0);
         let upload = StagingFile::upload(root.path(), id).unwrap();
         assert!(upload.file_name().starts_with("import-"));
-        assert!(upload.file_name().ends_with(&format!("-{}.rma.tar.gz", id.simple())));
+        assert!(upload
+            .file_name()
+            .ends_with(&format!("-{}.rma.tar.gz", id.simple())));
         assert_eq!(upload.path.parent().unwrap(), root.path().join("imports"));
     }
 
     #[tokio::test]
     async fn input_error_and_cancelled_copy_leave_no_partial_or_final_file() {
         let root = tempfile::tempdir().unwrap();
-        let limits = crate::config::RecoveryConfig { min_free_bytes: 0, ..Default::default() };
+        let limits = crate::config::RecoveryConfig {
+            min_free_bytes: 0,
+            ..Default::default()
+        };
         let id = uuid::Uuid::new_v4();
-        let error = stage_reader(root.path(), id, &mut PartialFailure { sent: false }, &limits).await.unwrap_err();
+        let error = stage_reader(
+            root.path(),
+            id,
+            &mut PartialFailure { sent: false },
+            &limits,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(error, AppError::Io(_)));
-        assert_eq!(std::fs::read_dir(root.path().join(".remote-staging")).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(root.path().join(".remote-staging"))
+                .unwrap()
+                .count(),
+            0
+        );
         let (mut source, mut writer) = tokio::io::duplex(64);
         use tokio::io::AsyncWriteExt;
         writer.write_all(b"partial").await.unwrap();
         let work = stage_reader(root.path(), id, &mut source, &limits);
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), work).await.is_err());
-        assert_eq!(std::fs::read_dir(root.path().join(".remote-staging")).unwrap().count(), 0);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), work)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_dir(root.path().join(".remote-staging"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -515,7 +609,20 @@ mod recovery_admission_tests {
         create(root.path(), relative).unwrap();
         assert!(open(root.path(), relative).is_ok());
         assert!(open(root.path(), &root.path().join(relative)).is_ok());
-        for prefix in ["com1.log", "LPT9", "nul.json", "a/b.", "a/b /x", "a/b?c", "a/b*c", "a/b|c", "a/b<c", "a/b>c", "a/b\"c", "a/.hidden"] {
+        for prefix in [
+            "com1.log",
+            "LPT9",
+            "nul.json",
+            "a/b.",
+            "a/b /x",
+            "a/b?c",
+            "a/b*c",
+            "a/b|c",
+            "a/b<c",
+            "a/b>c",
+            "a/b\"c",
+            "a/.hidden",
+        ] {
             assert!(validate_prefix(prefix).is_err(), "{prefix}");
         }
         assert_eq!(validate_prefix("  panda/prod///  ").unwrap(), "panda/prod");
@@ -543,7 +650,10 @@ mod recovery_admission_tests {
         let path = staged.path.clone();
         assert!(staged.publish().is_err());
         assert!(path.is_dir());
-        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
     }
 
     #[cfg(unix)]
