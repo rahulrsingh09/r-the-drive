@@ -1,8 +1,6 @@
-#[path = "support.rs"]
-mod support;
+use super::contract_support::*;
 use super::*;
 use serde_json::json;
-use support::*;
 
 #[tokio::test]
 #[ignore = "requires explicit isolated synthetic TimescaleDB and built maintenance binaries"]

@@ -1,3 +1,8 @@
+#[path = "maintenance_replay/snapshot_scan.rs"]
+mod snapshot_scan;
+use snapshot_scan::SnapshotScan;
+use uuid::Uuid;
+
 use anyhow::Result;
 use panda_api::ingestion::trip_detector::compute_trip_energy;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -16,61 +21,81 @@ async fn main() -> Result<()> {
 }
 
 async fn recompute_trip_energy(pool: &PgPool) -> Result<()> {
-    let trips = sqlx::query!(
+    let mut scan = SnapshotScan::open(
+        pool,
         r#"SELECT t.id, t.distance_miles, t.soc_start, t.soc_end, t.range_start_mi, t.range_end_mi,
                   t.efficiency_wh_per_mile,
                   v.battery_capacity_wh
            FROM panda.trips t
-           JOIN panda.vehicles v ON v.id = t.vehicle_id"#
+           JOIN panda.vehicles v ON v.id = t.vehicle_id"#,
+        None,
     )
-    .fetch_all(pool)
     .await?;
 
-    for trip in trips {
-        let distance = trip.distance_miles.unwrap_or(0.0);
-        let (energy_wh, strategy, efficiency_wh_per_mile) = match compute_trip_energy(
-            trip.soc_start,
-            trip.soc_end,
-            trip.battery_capacity_wh,
-            trip.range_start_mi,
-            trip.range_end_mi,
-            distance,
-            trip.efficiency_wh_per_mile,
-        ) {
-            Some((wh, strategy)) => {
-                let efficiency = if distance > 0.0 {
-                    Some(wh / distance)
-                } else {
-                    None
-                };
-                (Some(wh), Some(strategy.to_string()), efficiency)
-            }
-            None => {
-                let efficiency = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
-                    (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
-                        Some(((s0 - s1) / 100.0) * cap / distance)
-                    }
-                    _ => None,
-                };
-                (None, None, efficiency)
-            }
-        };
+    loop {
+        let trips = scan.next::<TripEnergyRow>().await?;
+        if trips.is_empty() {
+            break;
+        }
+        for trip in trips {
+            let distance = trip.distance_miles.unwrap_or(0.0);
+            let (energy_wh, strategy, efficiency_wh_per_mile) = match compute_trip_energy(
+                trip.soc_start,
+                trip.soc_end,
+                trip.battery_capacity_wh,
+                trip.range_start_mi,
+                trip.range_end_mi,
+                distance,
+                trip.efficiency_wh_per_mile,
+            ) {
+                Some((wh, strategy)) => {
+                    let efficiency = if distance > 0.0 {
+                        Some(wh / distance)
+                    } else {
+                        None
+                    };
+                    (Some(wh), Some(strategy.to_string()), efficiency)
+                }
+                None => {
+                    let efficiency = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh)
+                    {
+                        (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
+                            Some(((s0 - s1) / 100.0) * cap / distance)
+                        }
+                        _ => None,
+                    };
+                    (None, None, efficiency)
+                }
+            };
 
-        sqlx::query!(
-            r#"UPDATE panda.trips
+            sqlx::query!(
+                r#"UPDATE panda.trips
                SET energy_wh = $2,
                    energy_strategy = $3,
                    efficiency_wh_per_mile = COALESCE($4, efficiency_wh_per_mile)
                WHERE id = $1"#,
-            trip.id,
-            energy_wh,
-            strategy,
-            efficiency_wh_per_mile,
-        )
-        .execute(pool)
-        .await?;
+                trip.id,
+                energy_wh,
+                strategy,
+                efficiency_wh_per_mile,
+            )
+            .execute(pool)
+            .await?;
+        }
     }
-
+    scan.finish().await?;
     info!("trip energy recompute complete");
     Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct TripEnergyRow {
+    id: Uuid,
+    distance_miles: Option<f64>,
+    soc_start: Option<f64>,
+    soc_end: Option<f64>,
+    range_start_mi: Option<f64>,
+    range_end_mi: Option<f64>,
+    efficiency_wh_per_mile: Option<f64>,
+    battery_capacity_wh: Option<f64>,
 }

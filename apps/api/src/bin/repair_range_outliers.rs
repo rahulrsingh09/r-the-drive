@@ -99,130 +99,68 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+const RANGE_ASSESSMENT: &str = r#"
+    WITH eligible AS (
+        SELECT t.ts, t.vehicle_id, t.distance_to_empty_mi,
+               t.distance_to_empty_mi / t.battery_level * 100.0 AS raw_full_range,
+               (t.distance_to_empty_mi / 1.609344) / t.battery_level * 100.0 AS converted_full_range,
+               (CASE WHEN t.battery_capacity_wh > 1000.0
+                    THEN t.battery_capacity_wh / 1000.0 ELSE t.battery_capacity_wh END)
+                   * CASE WHEN upper(trim(v.model)) = 'R2' THEN $5::float8 ELSE $4::float8 END
+                   AS plausible_full_range
+        FROM timeseries.telemetry t
+        JOIN panda.vehicles v ON v.id = t.vehicle_id
+        WHERE t.distance_to_empty_mi IS NOT NULL
+          AND t.battery_level IS NOT NULL AND t.battery_level > 0
+          AND t.battery_capacity_wh IS NOT NULL AND t.battery_capacity_wh > 10000
+          AND ($1::uuid IS NULL OR t.vehicle_id = $1)
+          AND ($2::timestamptz IS NULL OR t.ts >= $2)
+          AND ($3::timestamptz IS NULL OR t.ts <= $3)
+    ), assessed AS (
+        SELECT ts, vehicle_id, distance_to_empty_mi,
+               CASE WHEN raw_full_range <= plausible_full_range THEN 0
+                    WHEN converted_full_range <= plausible_full_range THEN 1
+                    ELSE 2 END AS action
+        FROM eligible
+    )
+"#;
+
 async fn summarize(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<RepairSummary> {
     let (default_ceiling, r2_ceiling) = efficiency_ceilings();
-    let summary = sqlx::query_as::<_, RepairSummary>(
-        r#"
-        WITH scoped AS (
-            SELECT
-                t.distance_to_empty_mi,
-                t.battery_level,
-                t.battery_capacity_wh,
-                CASE
-                    WHEN t.battery_capacity_wh > 1000.0 THEN t.battery_capacity_wh / 1000.0
-                    ELSE t.battery_capacity_wh
-                END AS capacity_kwh,
-                -- Model values are canonical (migration 0024 constraint).
-                CASE WHEN upper(trim(v.model)) = 'R2' THEN $5::float8 ELSE $4::float8 END
-                    AS max_mi_per_kwh
-            FROM timeseries.telemetry t
-            JOIN panda.vehicles v ON v.id = t.vehicle_id
-            WHERE t.distance_to_empty_mi IS NOT NULL
-              AND t.battery_level IS NOT NULL
-              AND t.battery_level > 0
-              AND t.battery_capacity_wh IS NOT NULL
-              AND t.battery_capacity_wh > 10000
-              AND ($1::uuid IS NULL OR t.vehicle_id = $1)
-              AND ($2::timestamptz IS NULL OR t.ts >= $2)
-              AND ($3::timestamptz IS NULL OR t.ts <= $3)
-        ), assessed AS (
-            SELECT
-                distance_to_empty_mi,
-                battery_level,
-                capacity_kwh,
-                distance_to_empty_mi / battery_level * 100.0 AS raw_full_range,
-                (distance_to_empty_mi / 1.609344) / battery_level * 100.0 AS converted_full_range,
-                capacity_kwh * max_mi_per_kwh AS plausible_full_range
-            FROM scoped
-            WHERE capacity_kwh > 0
-        )
-        SELECT
-            COUNT(*) FILTER (
-                WHERE raw_full_range > plausible_full_range
-                  AND converted_full_range <= plausible_full_range
-            )::int8 AS converted_rows,
-            COUNT(*) FILTER (
-                WHERE raw_full_range > plausible_full_range
-                  AND converted_full_range > plausible_full_range
-            )::int8 AS nulled_rows,
-            COUNT(*) FILTER (
-                WHERE raw_full_range <= plausible_full_range
-            )::int8 AS untouched_rows
-        FROM assessed
-        "#,
-    )
-    .bind(scope.vehicle_id)
-    .bind(scope.from)
-    .bind(scope.to)
-    .bind(default_ceiling)
-    .bind(r2_ceiling)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(summary)
+    let statement = sqlx::AssertSqlSafe(format!(
+        "{RANGE_ASSESSMENT} SELECT COUNT(*) FILTER (WHERE action = 1)::int8 AS converted_rows,
+         COUNT(*) FILTER (WHERE action = 2)::int8 AS nulled_rows,
+         COUNT(*) FILTER (WHERE action = 0)::int8 AS untouched_rows FROM assessed"
+    ));
+    Ok(sqlx::query_as::<_, RepairSummary>(statement)
+        .bind(scope.vehicle_id)
+        .bind(scope.from)
+        .bind(scope.to)
+        .bind(default_ceiling)
+        .bind(r2_ceiling)
+        .fetch_one(pool)
+        .await?)
 }
 
 async fn apply_repairs(pool: &sqlx::PgPool, scope: &RepairScope) -> Result<u64> {
     let (default_ceiling, r2_ceiling) = efficiency_ceilings();
-    let result = sqlx::query(
-        r#"
-        WITH candidates AS (
-            SELECT
-                t.ts,
-                t.vehicle_id,
-                t.distance_to_empty_mi,
-                t.battery_level,
-                CASE
-                    WHEN t.battery_capacity_wh > 1000.0 THEN t.battery_capacity_wh / 1000.0
-                    ELSE t.battery_capacity_wh
-                END AS capacity_kwh,
-                -- Model values are canonical (migration 0024 constraint).
-                CASE WHEN upper(trim(v.model)) = 'R2' THEN $5::float8 ELSE $4::float8 END
-                    AS max_mi_per_kwh
-            FROM timeseries.telemetry t
-            JOIN panda.vehicles v ON v.id = t.vehicle_id
-            WHERE t.distance_to_empty_mi IS NOT NULL
-              AND t.battery_level IS NOT NULL
-              AND t.battery_level > 0
-              AND t.battery_capacity_wh IS NOT NULL
-              AND t.battery_capacity_wh > 10000
-              AND ($1::uuid IS NULL OR t.vehicle_id = $1)
-              AND ($2::timestamptz IS NULL OR t.ts >= $2)
-              AND ($3::timestamptz IS NULL OR t.ts <= $3)
-        ), repairs AS (
-            SELECT
-                ts,
-                vehicle_id,
-                CASE
-                    WHEN (distance_to_empty_mi / battery_level * 100.0) <= (capacity_kwh * max_mi_per_kwh)
-                        THEN NULL
-                    WHEN ((distance_to_empty_mi / 1.609344) / battery_level * 100.0) <= (capacity_kwh * max_mi_per_kwh)
-                        THEN distance_to_empty_mi / 1.609344
-                    ELSE 0.0
-                END AS repaired_miles
-            FROM candidates
-            WHERE capacity_kwh > 0
-        )
-        UPDATE timeseries.telemetry t
-        SET distance_to_empty_mi = CASE
-            WHEN repairs.repaired_miles = 0.0 THEN NULL
-            ELSE repairs.repaired_miles
-        END
-        FROM repairs
-        WHERE t.ts = repairs.ts
-          AND t.vehicle_id = repairs.vehicle_id
-          AND repairs.repaired_miles IS NOT NULL
-        "#,
-    )
-    .bind(scope.vehicle_id)
-    .bind(scope.from)
-    .bind(scope.to)
-    .bind(default_ceiling)
-    .bind(r2_ceiling)
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected())
+    let statement = sqlx::AssertSqlSafe(format!(
+        "{RANGE_ASSESSMENT} UPDATE timeseries.telemetry t
+         SET distance_to_empty_mi = CASE WHEN assessed.action = 1
+             THEN NULLIF(assessed.distance_to_empty_mi / 1.609344, 0.0) END
+         FROM assessed
+         WHERE t.ts = assessed.ts AND t.vehicle_id = assessed.vehicle_id
+           AND assessed.action <> 0"
+    ));
+    Ok(sqlx::query(statement)
+        .bind(scope.vehicle_id)
+        .bind(scope.from)
+        .bind(scope.to)
+        .bind(default_ceiling)
+        .bind(r2_ceiling)
+        .execute(pool)
+        .await?
+        .rows_affected())
 }
 
 #[cfg(test)]

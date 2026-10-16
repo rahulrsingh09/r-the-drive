@@ -171,7 +171,10 @@ pub fn freeze(name: &str, actual: Value, expected: &[u8]) {
     )
     .unwrap();
     let expected: Value = serde_json::from_reader(flate2::read::GzDecoder::new(expected)).unwrap();
-    assert!(actual == expected, "frozen {name} contract differs; complete evidence retained");
+    assert!(
+        actual == expected,
+        "frozen {name} contract differs; complete evidence retained"
+    );
 }
 fn collect_generated_ids(value: &Value, ids: &mut std::collections::BTreeMap<String, String>) {
     match value {
@@ -181,16 +184,22 @@ fn collect_generated_ids(value: &Value, ids: &mut std::collections::BTreeMap<Str
                     for row in rows {
                         if let Some(Value::String(id)) = row.get("id") {
                             if Uuid::parse_str(id).is_ok_and(|id| id.as_u128() > 1000000) {
-                                let next=format!("<generated-id-{}>", ids.len()+1);
+                                let next = format!("<generated-id-{}>", ids.len() + 1);
                                 ids.entry(id.clone()).or_insert(next);
                             }
                         }
                     }
                 }
             }
-            for child in map.values() { collect_generated_ids(child, ids); }
+            for child in map.values() {
+                collect_generated_ids(child, ids);
+            }
         }
-        Value::Array(array) => for child in array { collect_generated_ids(child, ids); },
+        Value::Array(array) => {
+            for child in array {
+                collect_generated_ids(child, ids);
+            }
+        }
         _ => {}
     }
 }
@@ -198,8 +207,14 @@ fn collect_generated_ids(value: &Value, ids: &mut std::collections::BTreeMap<Str
 fn normalize(value: &mut Value, ids: &mut std::collections::BTreeMap<String, String>) {
     match value {
         Value::Object(map) => {
-            for v in map.values_mut() { normalize(v, ids); }
-            for table in ["panda.charge_session_user_annotations", "panda.trip_user_annotations", "panda.charge_session_external_aliases"] {
+            for v in map.values_mut() {
+                normalize(v, ids);
+            }
+            for table in [
+                "panda.charge_session_user_annotations",
+                "panda.trip_user_annotations",
+                "panda.charge_session_external_aliases",
+            ] {
                 if let Some(Value::Array(rows)) = map.get_mut(table) {
                     rows.sort_by_cached_key(|row| row.to_string());
                 }
@@ -216,10 +231,11 @@ fn normalize(value: &mut Value, ids: &mut std::collections::BTreeMap<String, Str
                     let next = format!("<generated-id-{}>", ids.len() + 1);
                     *text = ids.entry(text.clone()).or_insert(next).clone();
                 }
-            } else if text.starts_with("2026-") && (text.contains('T') || text.contains(' ')) {
-                if DateTime::parse_from_rfc3339(text).is_ok() {
-                    *text = "<clock>".into();
-                }
+            } else if text.starts_with("2026-")
+                && (text.contains('T') || text.contains(' '))
+                && DateTime::parse_from_rfc3339(text).is_ok()
+            {
+                *text = "<clock>".into();
             }
             if text.contains(" INFO ") || text.contains(" WARN ") {
                 *text = text

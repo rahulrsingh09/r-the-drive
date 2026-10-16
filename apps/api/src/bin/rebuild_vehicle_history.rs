@@ -11,6 +11,12 @@
 //! Usage:
 //!   cargo run --bin rebuild_vehicle_history -- [--vehicle <uuid>]
 
+#[path = "maintenance_replay/charge_windows.rs"]
+mod charge_windows;
+#[path = "maintenance_replay/snapshot_scan.rs"]
+mod snapshot_scan;
+use snapshot_scan::SnapshotScan;
+
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
@@ -284,78 +290,8 @@ async fn insert_state_period(
 }
 
 async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
-    let repaired: i64 = sqlx::query_scalar(
-        r#"
-        WITH evidence AS (
-            SELECT
-                t.*,
-                LAG(t.ts) OVER (ORDER BY t.ts) AS prev_ts
-            FROM timeseries.telemetry t
-            WHERE t.vehicle_id = $1
-              AND (
-                  t.charger_state = 'charging'
-                  OR t.charger_status = 'chrgr_sts_connected_charging'
-                  OR COALESCE(t.time_to_end_of_charge_min, 0) > 0
-              )
-        ),
-        marked AS (
-            SELECT
-                *,
-                CASE
-                    WHEN prev_ts IS NULL OR ts - prev_ts > interval '2 hours' THEN 1
-                    ELSE 0
-                END AS new_segment
-            FROM evidence
-        ),
-        segmented AS (
-            SELECT
-                *,
-                SUM(new_segment) OVER (ORDER BY ts) AS segment_id
-            FROM marked
-        ),
-        windows AS (
-            SELECT
-                gen_random_uuid() AS id,
-                vehicle_id,
-                MIN(ts) AS started_at,
-                MAX(ts) AS ended_at,
-                (
-                    ARRAY_AGG(latitude ORDER BY ts) FILTER (
-                        WHERE latitude IS NOT NULL
-                          AND longitude IS NOT NULL
-                          AND NOT (latitude = 0 AND longitude = 0)
-                    )
-                )[1] AS location_lat,
-                (
-                    ARRAY_AGG(longitude ORDER BY ts) FILTER (
-                        WHERE latitude IS NOT NULL
-                          AND longitude IS NOT NULL
-                          AND NOT (latitude = 0 AND longitude = 0)
-                    )
-                )[1] AS location_lng,
-                (ARRAY_AGG(battery_level ORDER BY ts) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_start,
-                (ARRAY_AGG(battery_level ORDER BY ts DESC) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_end,
-                MAX(battery_limit) AS charge_limit,
-                AVG(battery_capacity_wh) FILTER (WHERE battery_capacity_wh IS NOT NULL) AS battery_capacity_wh,
-                MAX(ABS(power_kw)) FILTER (WHERE power_kw IS NOT NULL) AS max_charge_rate_kw,
-                EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts)))::int / 60 AS duration_minutes
-            FROM segmented
-            GROUP BY vehicle_id, segment_id
-        ),
-        candidates AS (
-            SELECT
-                *,
-                CASE
-                    WHEN soc_end > soc_start AND battery_capacity_wh > 0
-                    THEN (soc_end - soc_start) / 100.0 * battery_capacity_wh
-                END AS energy_added_wh
-            FROM windows
-            WHERE ended_at > started_at
-              AND duration_minutes >= 5
-              AND soc_end IS NOT NULL
-              AND soc_start IS NOT NULL
-              AND soc_end - soc_start >= 1.0
-        ),
+    let repaired: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(
+        charge_windows::reconstruction_query(r#"
         matched_existing AS (
             SELECT DISTINCT ON (c.id)
                 c.*,
@@ -527,8 +463,8 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
         )
         SELECT COUNT(DISTINCT id)::int8 AS repaired
         FROM stamped
-        "#,
-    )
+        "#, true),
+    ))
     .bind(vehicle_id)
     .fetch_one(pool)
     .await?;
@@ -540,7 +476,8 @@ async fn repair_charge_session_locations_for_vehicle(
     pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Result<u64> {
-    let sessions = sqlx::query_as::<_, ChargeLocationRow>(
+    let mut scan = SnapshotScan::open(
+        pool,
         r#"
         SELECT id, vehicle_id, location_lat, location_lng
         FROM panda.charge_sessions
@@ -549,70 +486,81 @@ async fn repair_charge_session_locations_for_vehicle(
           AND location_lat IS NOT NULL
           AND location_lng IS NOT NULL
         "#,
+        Some(vehicle_id),
     )
-    .bind(vehicle_id)
-    .fetch_all(pool)
     .await?;
 
     let mut repaired = 0u64;
 
-    for session in sessions {
-        let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
-        let matched = match (owner_id, session.location_lat, session.location_lng) {
-            (Some(user_id), Some(lat), Some(lon)) => {
-                match_geofence(pool, user_id, lat, lon).await?
-            }
-            _ => None,
-        };
+    loop {
+        let sessions = scan.next::<ChargeLocationRow>().await?;
+        if sessions.is_empty() {
+            break;
+        }
+        for session in sessions {
+            let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
+            let matched = match (owner_id, session.location_lat, session.location_lng) {
+                (Some(user_id), Some(lat), Some(lon)) => {
+                    match_geofence(pool, user_id, lat, lon).await?
+                }
+                _ => None,
+            };
 
-        let Some(matched) = matched else {
-            continue;
-        };
+            let Some(matched) = matched else {
+                continue;
+            };
 
-        let result = sqlx::query(
-            r#"
+            let result = sqlx::query(
+                r#"
             UPDATE panda.charge_sessions
             SET geofence_id = COALESCE(geofence_id, $2),
                 address_id  = COALESCE(address_id,  $3),
                 is_home     = COALESCE(is_home,     $4)
             WHERE id = $1
             "#,
-        )
-        .bind(session.id)
-        .bind(matched.id)
-        .bind(matched.address_id)
-        .bind(matched.is_home)
-        .execute(pool)
-        .await?;
+            )
+            .bind(session.id)
+            .bind(matched.id)
+            .bind(matched.address_id)
+            .bind(matched.is_home)
+            .execute(pool)
+            .await?;
 
-        repaired += result.rows_affected();
+            repaired += result.rows_affected();
+        }
     }
-
+    scan.finish().await?;
     Ok(repaired)
 }
 
 async fn repair_charge_session_costs_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
-    let session_ids = sqlx::query_scalar::<_, Uuid>(
+    let mut scan = SnapshotScan::open(
+        pool,
         r#"
         SELECT id
         FROM panda.charge_sessions
         WHERE vehicle_id = $1
         "#,
+        Some(vehicle_id),
     )
-    .bind(vehicle_id)
-    .fetch_all(pool)
     .await?;
 
     let mut repaired = 0u64;
-    for session_id in session_ids {
-        if recompute_charge_session_cost(pool, session_id)
-            .await
-            .is_ok()
-        {
-            repaired += 1;
+    loop {
+        let session_ids = scan.next::<(Uuid,)>().await?;
+        if session_ids.is_empty() {
+            break;
+        }
+        for (session_id,) in session_ids {
+            if recompute_charge_session_cost(pool, session_id)
+                .await
+                .is_ok()
+            {
+                repaired += 1;
+            }
         }
     }
-
+    scan.finish().await?;
     Ok(repaired)
 }
 
@@ -628,7 +576,8 @@ async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Clie
     let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
     let mut trip_det = TripDetectorState::new(vehicle_id);
     let mut trip_signals = TripSignalFusion::default();
-    let mut rows = sqlx::query_as::<_, ReplayTelemetryRow>(
+    let mut scan = SnapshotScan::open(
+        pool,
         r#"
         SELECT
             ts, vehicle_id,
@@ -641,35 +590,41 @@ async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Clie
         WHERE vehicle_id = $1
         ORDER BY ts
         "#,
+        Some(vehicle_id),
     )
-    .bind(vehicle_id)
-    .fetch(pool);
+    .await?;
 
     let mut inserted = 0u64;
-    while let Some(row) = rows.try_next().await? {
-        let event = row_to_event(row);
+    loop {
+        let rows = scan.next::<ReplayTelemetryRow>().await?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let event = row_to_event(row);
 
-        let trip_sample = trip_signals
-            .fuse_from(&event, replay_power_is_change_only(&event))
-            .0;
-        if let TripEvent::TripEnded { trip } = trip_det.process(&trip_sample) {
-            let distance = compute_distance_odometer_or_gps(
-                trip.start_odometer_mi,
-                trip.end_odometer_mi,
-                &trip.points,
-            );
-            if distance < MIN_TRIP_DISTANCE_MILES {
-                continue;
-            }
+            let trip_sample = trip_signals
+                .fuse_from(&event, replay_power_is_change_only(&event))
+                .0;
+            if let TripEvent::TripEnded { trip } = trip_det.process(&trip_sample) {
+                let distance = compute_distance_odometer_or_gps(
+                    trip.start_odometer_mi,
+                    trip.end_odometer_mi,
+                    &trip.points,
+                );
+                if distance < MIN_TRIP_DISTANCE_MILES {
+                    continue;
+                }
 
-            let was_inserted =
-                persist_replayed_trip(pool, owner_id, &trip, distance, client).await?;
-            if was_inserted {
-                inserted += 1;
+                let was_inserted =
+                    persist_replayed_trip(pool, owner_id, &trip, distance, client).await?;
+                if was_inserted {
+                    inserted += 1;
+                }
             }
         }
     }
-
+    scan.finish().await?;
     Ok(inserted)
 }
 
@@ -1009,3 +964,7 @@ struct TripRangeRow {
 #[cfg(test)]
 #[path = "__tests__/rebuild_contracts.rs"]
 mod rebuild_contracts;
+
+#[cfg(test)]
+#[path = "__tests__/support.rs"]
+mod contract_support;

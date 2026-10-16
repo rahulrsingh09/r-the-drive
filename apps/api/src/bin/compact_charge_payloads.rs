@@ -91,32 +91,29 @@ async fn main() -> Result<()> {
     }
 
     let result = sqlx::query(
-        r#"WITH ranked AS (
-               SELECT payload.id,
-                      payload.captured_at,
-                      ROW_NUMBER() OVER duplicate_group AS duplicate_rank,
-                      FIRST_VALUE(payload.id) OVER duplicate_group AS keeper_id,
-                      FIRST_VALUE(payload.captured_at) OVER duplicate_group AS keeper_captured_at
+        r#"WITH payloads AS MATERIALIZED (
+               SELECT payload.id, payload.captured_at,
+                      (session.id IS NOT NULL) AS linked,
+                      panda.charge_payload_identity_key(
+                          payload.vehicle_id, payload.operation, payload.rivian_transaction_id,
+                          payload.rivian_vehicle_id, payload.payload_fingerprint
+                      ) AS identity_key
                FROM panda.rivian_charge_payloads payload
                LEFT JOIN panda.charge_sessions session
                  ON session.id = payload.charge_session_id
                 AND session.vehicle_id = payload.vehicle_id
                WHERE ($1::uuid IS NULL OR payload.vehicle_id = $1)
-               WINDOW duplicate_group AS (
-                   PARTITION BY panda.charge_payload_identity_key(
-                                    payload.vehicle_id, payload.operation,
-                                    payload.rivian_transaction_id,
-                                    payload.rivian_vehicle_id,
-                                    payload.payload_fingerprint
-                                )
-                   ORDER BY (session.id IS NOT NULL) DESC,
-                            payload.captured_at ASC, payload.id ASC
-               )
+           ), keepers AS (
+               SELECT DISTINCT ON (identity_key) identity_key, id, captured_at
+               FROM payloads
+               ORDER BY identity_key, linked DESC, captured_at, id
            ), victims AS (
-               SELECT id, captured_at, keeper_id, keeper_captured_at
-               FROM ranked
-               WHERE duplicate_rank > 1
-               ORDER BY captured_at, id
+               SELECT payload.id, payload.captured_at,
+                      keeper.id AS keeper_id, keeper.captured_at AS keeper_captured_at
+               FROM payloads payload
+               JOIN keepers keeper USING (identity_key)
+               WHERE (payload.id, payload.captured_at) <> (keeper.id, keeper.captured_at)
+               ORDER BY payload.captured_at, payload.id
                LIMIT $2
            ), repointed_aliases AS (
                UPDATE panda.charge_session_external_aliases alias
@@ -212,3 +209,7 @@ mod process_contracts;
 #[cfg(test)]
 #[path = "__tests__/interruption_contracts.rs"]
 mod interruption_contracts;
+
+#[cfg(test)]
+#[path = "__tests__/support.rs"]
+mod contract_support;
