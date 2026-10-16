@@ -78,6 +78,38 @@ before a telemetry write succeeds. A checkpoint commit is not a claim that all
 later projections or raw telemetry have committed. The staged design preserves
 these limits rather than implying a single transaction across services.
 
+## Charge reconstruction
+
+The restart query retains its twelve-hour sample window, two-hour freshness
+requirement, active-session eligibility and metadata aggregation. It returns
+ordered power observations for the chosen session. `durable_charge_restart.rs`
+folds those observations using the detector's accepted-power rule: the opening
+frame anchors the clock without establishing a peak; subsequent accepted
+absolute power integrates over elapsed whole milliseconds. Missing, zero,
+nonfinite, over-300-kW, excessive AC spikes and backward observations do not move
+the accepted-power clock. The five-times-peak rule applies while the accepted
+peak is positive and below 50 kW.
+
+This replaces the previous SQL integral based on each row's predecessor power.
+For example, 12, 24 and 6 kW at one-minute intervals now reconstruct 500 Wh,
+matching uninterrupted detection, instead of 600 Wh. SQL-backed tests compare
+complete detector outputs after reconstruction and after continued charging.
+The reconstruction acceptance tests also compare against the live detector so
+changes to its thresholds must be considered at this boundary.
+
+Reconstruction remains limited to the information stored. An omitted accepted
+24-kW observation between stored 12- and 6-kW observations leaves 200 Wh
+reconstructable versus 500 Wh live. A late 24-kW observation arriving after the
+60-second sample is rejected live but its stored timestamp sorts it into the
+restart calculation, producing 500 Wh versus 400 Wh live. Parallax samples have
+no source discriminator in the shared telemetry row; a stamped 100-kW Parallax
+sample at 1,900 seconds reconstructs 52,777.78 Wh despite being bypassed live.
+These cases are exercised against the disposable database and remain unresolved.
+General restart parity requires a separately owned durable charge checkpoint or
+additional capture provenance/order; the integral correction does not change
+schemas, providers, suppression, arrival ordering or historical data. Metadata
+aggregation and the existing lookback truncation are also unchanged.
+
 ## Verification
 
 The ignored `durable_collector_tests` and `trip_capture::tests` suites use an

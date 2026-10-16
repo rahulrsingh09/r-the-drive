@@ -37,6 +37,7 @@ use crate::ingestion::trip_detector::TripDetectorState;
 #[cfg(test)]
 mod durable_collector_tests;
 
+mod durable_charge_restart;
 mod durable_processing;
 mod state_decisions;
 mod trip_capture;
@@ -184,15 +185,14 @@ struct ActiveChargeDetectorRow {
     session_id: Uuid,
     started_at: DateTime<Utc>,
     last_charge_ts: DateTime<Utc>,
-    last_power_ts: Option<DateTime<Utc>>,
     location_lat: Option<f64>,
     location_lng: Option<f64>,
     soc_start: Option<f64>,
     last_soc: Option<f64>,
     charge_limit: Option<f64>,
     battery_capacity_wh: Option<f64>,
-    energy_used_wh: Option<f64>,
-    peak_charge_kw: Option<f64>,
+    power_samples_ts: Vec<DateTime<Utc>>,
+    power_samples_kw: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1737,9 +1737,7 @@ async fn load_active_charge_snapshot(
                 t.battery_level,
                 t.battery_capacity_wh,
                 t.battery_limit,
-                t.power_kw,
-                LAG(t.ts) OVER (PARTITION BY t.charge_session_id ORDER BY t.ts) AS prev_ts,
-                LAG(ABS(t.power_kw)) OVER (PARTITION BY t.charge_session_id ORDER BY t.ts) AS prev_power_kw
+                t.power_kw
             FROM timeseries.telemetry t
             LEFT JOIN panda.charge_sessions cs
               ON cs.id = t.charge_session_id
@@ -1756,7 +1754,6 @@ async fn load_active_charge_snapshot(
                 charge_session_id AS session_id,
                 MIN(ts) AS started_at,
                 MAX(ts) AS last_charge_ts,
-                MAX(ts) FILTER (WHERE power_kw IS NOT NULL) AS last_power_ts,
                 (ARRAY_AGG(latitude ORDER BY ts) FILTER (
                     WHERE latitude IS NOT NULL
                       AND longitude IS NOT NULL
@@ -1771,14 +1768,8 @@ async fn load_active_charge_snapshot(
                 (ARRAY_AGG(battery_level ORDER BY ts DESC) FILTER (WHERE battery_level IS NOT NULL))[1] AS last_soc,
                 MAX(battery_limit) AS charge_limit,
                 (ARRAY_AGG(battery_capacity_wh ORDER BY ts DESC) FILTER (WHERE battery_capacity_wh IS NOT NULL))[1] AS battery_capacity_wh,
-                SUM(
-                    CASE
-                        WHEN prev_ts IS NULL OR prev_power_kw IS NULL THEN 0
-                        WHEN prev_power_kw <= 0 OR prev_power_kw > 300 THEN 0
-                        ELSE prev_power_kw * 1000.0 * (EXTRACT(EPOCH FROM (ts - prev_ts)) / 3600.0)
-                    END
-                ) AS energy_used_wh,
-                MAX(ABS(power_kw)) FILTER (WHERE power_kw IS NOT NULL AND ABS(power_kw) <= 300) AS peak_charge_kw
+                ARRAY_AGG(ts ORDER BY ts) AS power_samples_ts,
+                ARRAY_AGG(power_kw ORDER BY ts) AS power_samples_kw
             FROM active_samples
             GROUP BY charge_session_id
         )
@@ -1786,15 +1777,14 @@ async fn load_active_charge_snapshot(
             session_id,
             started_at,
             last_charge_ts,
-            last_power_ts,
             location_lat,
             location_lng,
             soc_start,
             last_soc,
             charge_limit,
             battery_capacity_wh,
-            energy_used_wh,
-            peak_charge_kw
+            power_samples_ts,
+            power_samples_kw
         FROM candidate_sessions
         WHERE last_charge_ts >= now() - ($3::int * interval '1 minute')
         ORDER BY last_charge_ts DESC
@@ -1809,6 +1799,10 @@ async fn load_active_charge_snapshot(
     .ok()
     .flatten()?;
 
+    let power = durable_charge_restart::ReconstructedChargePower::from_samples(
+        row.started_at,
+        row.power_samples_ts.into_iter().zip(row.power_samples_kw),
+    );
     Some(ActiveChargeSessionSnapshot {
         session_id: row.session_id,
         started_at: row.started_at,
@@ -1819,9 +1813,9 @@ async fn load_active_charge_snapshot(
         charge_limit: row.charge_limit,
         battery_capacity_wh: row.battery_capacity_wh,
         last_charge_ts: row.last_charge_ts,
-        last_power_ts: row.last_power_ts,
-        energy_used_wh: row.energy_used_wh.unwrap_or(0.0),
-        peak_charge_kw: row.peak_charge_kw.unwrap_or(0.0),
+        last_power_ts: Some(power.last_power_ts),
+        energy_used_wh: power.energy_used_wh,
+        peak_charge_kw: power.peak_charge_kw,
     })
 }
 

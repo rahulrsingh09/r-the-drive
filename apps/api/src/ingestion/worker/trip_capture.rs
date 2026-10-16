@@ -246,6 +246,13 @@ mod tests {
             self.pool.close().await;
             self.admin
                 .execute(sqlx::AssertSqlSafe(format!(
+                    "ALTER DATABASE \"{}\" ALLOW_CONNECTIONS false",
+                    self.name
+                )))
+                .await
+                .unwrap();
+            self.admin
+                .execute(sqlx::AssertSqlSafe(format!(
                     "DROP DATABASE \"{}\" WITH (FORCE)",
                     self.name
                 )))

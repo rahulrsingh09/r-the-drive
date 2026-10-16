@@ -53,6 +53,13 @@ impl CollectorFixture {
         self.pool.close().await;
         self.admin
             .execute(sqlx::AssertSqlSafe(format!(
+                "ALTER DATABASE \"{}\" ALLOW_CONNECTIONS false",
+                self.name
+            )))
+            .await
+            .unwrap();
+        self.admin
+            .execute(sqlx::AssertSqlSafe(format!(
                 "DROP DATABASE \"{}\" WITH (FORCE)",
                 self.name
             )))
@@ -188,6 +195,17 @@ async fn charge_restart_sql_characterization() {
     let db = CollectorFixture::new().await;
     for (name, powers) in [
         ("changing", vec![Some(12.0), Some(24.0), Some(6.0)]),
+        ("opening_only", vec![Some(12.0)]),
+        ("no_power", vec![None, None]),
+        ("negative", vec![Some(-12.0), Some(-24.0), Some(-6.0)]),
+        (
+            "exact_spike_and_ceiling",
+            vec![Some(300.0), Some(10.0), Some(50.0), Some(300.0)],
+        ),
+        (
+            "nonfinite",
+            vec![None, Some(f64::NAN), Some(f64::INFINITY), Some(12.0)],
+        ),
         ("missing", vec![Some(12.0), None, Some(24.0)]),
         ("zero", vec![Some(12.0), Some(0.0), Some(24.0)]),
         ("spike", vec![Some(0.0), Some(10.0), Some(60.0), Some(10.0)]),
@@ -198,6 +216,13 @@ async fn charge_restart_sql_characterization() {
             let mut event = db.event(i as i64 * 60);
             event.charger_state = Some(ChargerState::Charging);
             event.power_kw = *power;
+            event.battery_level = Some(20.0 + i as f64);
+            event.battery_capacity_wh = Some(135_000.0);
+            event.battery_limit = Some(80.0);
+            if i > 0 {
+                event.latitude = Some(30.0);
+                event.longitude = Some(-97.0);
+            }
             detector.process(&event);
             let id = detector.active_session_id().unwrap();
             ensure_active_charge_session(&db.pool, db.vehicle_id, id, &event)
@@ -221,6 +246,19 @@ async fn charge_restart_sql_characterization() {
         };
         assert_eq!(live.session_id, restart.session_id);
         println!("CHARGE_SQL {name}: live_wh={:?} restart_wh={:?} live_peak={:?} restart_peak={:?} last_power={:?}",live.energy_used_wh,restart.energy_used_wh,live.peak_charge_kw,restart.peak_charge_kw,snapshot.last_power_ts);
+        assert_eq!(
+            restart.energy_used_wh, live.energy_used_wh,
+            "{name}: SQL restart integral must match live detector"
+        );
+        assert_eq!(
+            restart.peak_charge_kw, live.peak_charge_kw,
+            "{name}: SQL restart peak must match accepted power"
+        );
+        assert_eq!(
+            format!("{restart:?}"),
+            format!("{live:?}"),
+            "{name}: completed session parity"
+        );
         sqlx::query("DELETE FROM timeseries.telemetry WHERE vehicle_id=$1")
             .bind(db.vehicle_id)
             .execute(&db.pool)
@@ -537,6 +575,11 @@ async fn canonical_charge_context_and_parallax_bypass_survive_partial_updates() 
     .await
     .unwrap();
     assert_eq!(state, "charging");
+    let rebuilt = load_active_charge_snapshot(&db.pool, db.vehicle_id)
+        .await
+        .unwrap();
+    assert!((rebuilt.energy_used_wh - 100_000.0 * 1900.0 / 3600.0).abs() < 0.000001);
+    println!("RESTART_LIMIT parallax_stamp: live_wh=0 restart_wh={}; stamped telemetry has no source discriminator", rebuilt.energy_used_wh);
     let mut end = db.event(1960);
     end.charger_state = Some(ChargerState::Done);
     let durable_processing::ProcessOutcome::ChargeEnded(session) =
@@ -777,5 +820,127 @@ async fn database_trace_preserves_intake_checkpoint_charge_projection_and_storag
         ]
     );
     drop(harness);
+    db.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+async fn charge_restart_continuation_uses_last_accepted_power_clock() {
+    let db = CollectorFixture::new().await;
+    let mut live = ChargeDetectorState::new(db.vehicle_id);
+    for (seconds, kw) in [
+        (0, Some(12.0)),
+        (60, Some(10.0)),
+        (120, Some(60.0)),
+        (180, None),
+        (240, Some(0.0)),
+    ] {
+        let mut event = db.event(seconds);
+        event.charger_state = Some(ChargerState::Charging);
+        event.power_kw = kw;
+        live.process(&event);
+        let id = live.active_session_id().unwrap();
+        ensure_active_charge_session(&db.pool, db.vehicle_id, id, &event)
+            .await
+            .unwrap();
+        write_telemetry(&db.pool, &event, None, Some(id))
+            .await
+            .unwrap();
+    }
+    let snapshot = load_active_charge_snapshot(&db.pool, db.vehicle_id)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.last_power_ts, Some(db.at + Duration::seconds(60)));
+    let mut resumed = ChargeDetectorState::from_snapshot(db.vehicle_id, snapshot);
+    let mut end = db.event(300);
+    end.charger_state = Some(ChargerState::Done);
+    end.power_kw = Some(10.0);
+    let ChargeEvent::SessionEnded(expected) = live.process(&end) else {
+        panic!("live end")
+    };
+    let ChargeEvent::SessionEnded(actual) = resumed.process(&end) else {
+        panic!("resumed end")
+    };
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    println!(
+        "CHARGE_SQL continuation: live_wh={:?} restart_wh={:?}",
+        expected.energy_used_wh, actual.energy_used_wh
+    );
+    db.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+async fn charge_restart_documents_unpersisted_sample_information_loss() {
+    let db = CollectorFixture::new().await;
+    let mut live = ChargeDetectorState::new(db.vehicle_id);
+    for (seconds, kw) in [(0, 12.0), (60, 24.0), (120, 6.0)] {
+        let mut event = db.event(seconds);
+        event.charger_state = Some(ChargerState::Charging);
+        event.power_kw = Some(kw);
+        live.process(&event);
+        let id = live.active_session_id().unwrap();
+        ensure_active_charge_session(&db.pool, db.vehicle_id, id, &event)
+            .await
+            .unwrap();
+        if seconds != 60 {
+            write_telemetry(&db.pool, &event, None, Some(id))
+                .await
+                .unwrap();
+        }
+    }
+    let snapshot = load_active_charge_snapshot(&db.pool, db.vehicle_id)
+        .await
+        .unwrap();
+    let mut resumed = ChargeDetectorState::from_snapshot(db.vehicle_id, snapshot);
+    let mut end = db.event(180);
+    end.charger_state = Some(ChargerState::Done);
+    let ChargeEvent::SessionEnded(expected) = live.process(&end) else {
+        panic!("live end")
+    };
+    let ChargeEvent::SessionEnded(actual) = resumed.process(&end) else {
+        panic!("resumed end")
+    };
+    assert_eq!(expected.energy_used_wh, Some(500.0));
+    assert_eq!(actual.energy_used_wh, Some(200.0));
+    println!("RESTART_LIMIT unpersisted_sample: live_wh={:?} restart_wh={:?}; ordered storage cannot recover an omitted accepted reading",expected.energy_used_wh,actual.energy_used_wh);
+    db.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+async fn charge_restart_documents_lost_arrival_order() {
+    let db = CollectorFixture::new().await;
+    let mut live = ChargeDetectorState::new(db.vehicle_id);
+    for (seconds, kw) in [(0, 12.0), (60, 12.0), (30, 24.0), (120, 12.0)] {
+        let mut event = db.event(seconds);
+        event.charger_state = Some(ChargerState::Charging);
+        event.power_kw = Some(kw);
+        live.process(&event);
+        let id = live.active_session_id().unwrap();
+        ensure_active_charge_session(&db.pool, db.vehicle_id, id, &event)
+            .await
+            .unwrap();
+        write_telemetry(&db.pool, &event, None, Some(id))
+            .await
+            .unwrap();
+    }
+    let snapshot = load_active_charge_snapshot(&db.pool, db.vehicle_id)
+        .await
+        .unwrap();
+    let mut resumed = ChargeDetectorState::from_snapshot(db.vehicle_id, snapshot);
+    let mut end = db.event(180);
+    end.charger_state = Some(ChargerState::Done);
+    let ChargeEvent::SessionEnded(expected) = live.process(&end) else {
+        panic!("live end")
+    };
+    let ChargeEvent::SessionEnded(actual) = resumed.process(&end) else {
+        panic!("resumed end")
+    };
+    assert_eq!(expected.energy_used_wh, Some(400.0));
+    assert_eq!(actual.energy_used_wh, Some(500.0));
+    assert_eq!(expected.peak_charge_kw, Some(12.0));
+    assert_eq!(actual.peak_charge_kw, Some(24.0));
+    println!("RESTART_LIMIT arrival_order: live_wh={:?} restart_wh={:?}, live_peak={:?} restart_peak={:?}; SQL timestamp order cannot recover original arrival order",expected.energy_used_wh,actual.energy_used_wh,expected.peak_charge_kw,actual.peak_charge_kw);
     db.finish().await;
 }
