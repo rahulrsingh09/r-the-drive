@@ -1005,3 +1005,7 @@ struct TripRangeRow {
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
 }
+
+#[cfg(test)]
+#[path = "__tests__/rebuild_contracts.rs"]
+mod rebuild_contracts;

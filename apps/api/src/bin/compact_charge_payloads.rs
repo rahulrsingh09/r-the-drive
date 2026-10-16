@@ -204,3 +204,11 @@ fn parse_args() -> Result<Args> {
         batch_size,
     })
 }
+
+#[cfg(test)]
+#[path = "__tests__/process_contracts.rs"]
+mod process_contracts;
+
+#[cfg(test)]
+#[path = "__tests__/interruption_contracts.rs"]
+mod interruption_contracts;
