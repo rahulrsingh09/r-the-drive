@@ -1226,3 +1226,7 @@ mod tests {
             .await;
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/personalization.rs"]
+mod personalization_contract;
