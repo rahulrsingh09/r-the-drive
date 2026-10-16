@@ -48,5 +48,11 @@ fn non_utf8_archive_names_are_rejected_without_lossy_renaming() {
     assert!(
         matches!(extract(&package, &destination, &limits()), Err(AppError::Validation(message)) if message.contains("encoding"))
     );
-    assert_eq!(std::fs::read_dir(destination).unwrap().count(), 0);
+    match std::fs::symlink_metadata(&destination) {
+        Ok(metadata) => {
+            assert!(metadata.is_dir());
+            assert_eq!(std::fs::read_dir(destination).unwrap().count(), 0);
+        }
+        Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
+    }
 }

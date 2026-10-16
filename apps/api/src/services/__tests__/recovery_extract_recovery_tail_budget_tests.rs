@@ -27,7 +27,13 @@ fn post_tar_expansion_is_bounded_and_padding_remains_compatible() {
             assert!(
                 matches!(error, AppError::RecoveryTooLarge(message) if message.contains("after tar end"))
             );
-            assert_eq!(std::fs::read_dir(destination).unwrap().count(), 0);
+            match std::fs::symlink_metadata(&destination) {
+                Ok(metadata) => {
+                    assert!(metadata.is_dir());
+                    assert_eq!(std::fs::read_dir(destination).unwrap().count(), 0);
+                }
+                Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
+            }
         }
     }
 }

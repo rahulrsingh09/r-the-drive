@@ -670,7 +670,7 @@ fn token_hash(token: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "restore_jobs_recovery_operations_tests.rs"]
+#[path = "__tests__/restore_jobs_recovery_operations_tests.rs"]
 pub(crate) mod recovery_operations_tests;
 
 #[cfg(test)]

@@ -19,6 +19,10 @@ history enrichment and provider connection orchestration, with corrections for
 connection cancellation, diagnostic text handling and OTA response decoding.
 Telemetry collection stages and charge restart reconstruction are also updated,
 along with consistent geospatial database connection settings.
+Backup admission, compatibility checks and restore journals use bounded
+validation, atomic journal publication and transactional catalog updates,
+with cancellation cleanup corrections. Charging price selection and interval
+pricing are also replaced while preserving their characterized outputs.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
