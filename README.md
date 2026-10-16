@@ -80,7 +80,7 @@ To retry startup or owner creation after a transient failure:
 python3 scripts/deploy.py start
 ```
 
-The installer retains data and keys on failure and rechecks the selected Docker host before retrying. Interrupted setup-proof cleanup uses a new private temporary file; any older temporary file is left untouched. If preparation stopped before key generation, inspect the retained state before retrying. See the [installation guide](./docs/guides/getting-started.md) for details and the [deployment guide](./docs/guides/deployment.md) for updates and other deployment paths.
+The installer retains data and keys on failure and rechecks the selected Docker host before retrying. If preparation stopped before key generation, inspect the retained state before retrying. See the [installation guide](./docs/guides/getting-started.md) for details and the [deployment guide](./docs/guides/deployment.md) for updates and other deployment paths.
 
 ## A look inside
 
