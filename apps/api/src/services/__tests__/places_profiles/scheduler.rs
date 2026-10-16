@@ -80,14 +80,77 @@ async fn admission_priority_and_cancellation_contract() {
     let _ = task.await;
     assert_eq!(
         s.interactive_waiters.load(Ordering::SeqCst),
-        1,
-        "baseline cancellation retains waiter accounting"
+        0,
+        "cancellation must release interactive waiter accounting"
     );
+    s.state.lock().await.next_allowed = Instant::now();
     assert!(tokio::time::timeout(
-        Duration::from_millis(60),
+        Duration::from_secs(1),
         s.acquire_slot(NominatimLane::BackgroundReverseGeocode)
     )
     .await
-    .is_err());
+    .is_ok());
 }
 use std::sync::Arc;
+
+#[tokio::test]
+async fn cancellation_while_waiting_for_state_unlock_releases_priority() {
+    let s = Arc::new(NominatimScheduler::new(0, 15000));
+    let lock = s.state.lock().await;
+    let queued = s.clone();
+    let task =
+        tokio::spawn(async move { queued.acquire_slot(NominatimLane::InteractiveSearch).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while s.interactive_waiters.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    drop(lock);
+    assert_eq!(s.interactive_waiters.load(Ordering::SeqCst), 0);
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        s.acquire_slot(NominatimLane::BackgroundReverseGeocode),
+    )
+    .await
+    .expect("cancelled interactive work must not starve background work");
+    assert_eq!(s.interactive_waiters.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn active_interactive_waiter_keeps_priority_and_releases_it_after_success() {
+    let s = Arc::new(NominatimScheduler::new(20, 15000));
+    let lock = s.state.lock().await;
+    let queued = s.clone();
+    let interactive =
+        tokio::spawn(async move { queued.acquire_slot(NominatimLane::InteractiveSearch).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while s.interactive_waiters.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(tokio::time::timeout(
+        Duration::from_millis(60),
+        s.acquire_slot(NominatimLane::BackgroundReverseGeocode),
+    )
+    .await
+    .is_err());
+    drop(lock);
+    tokio::time::timeout(Duration::from_secs(1), interactive)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.interactive_waiters.load(Ordering::SeqCst), 0);
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        s.acquire_slot(NominatimLane::BackgroundReverseGeocode),
+    )
+    .await
+    .unwrap();
+    assert_eq!(s.interactive_waiters.load(Ordering::SeqCst), 0);
+}

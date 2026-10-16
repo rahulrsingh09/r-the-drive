@@ -95,9 +95,13 @@ ms; other statuses and transport errors leave it unchanged. Retry-After HTTP dat
 remain unsupported. Search and reverse adapters, their different HTTP-error
 responses, bounded response readers, and outbound guards are retained.
 
-Cancellation behavior is preserved: an interactive acquisition canceled before
-its grant retains the waiter count and can continue delaying background work.
-This is characterized existing behavior, not a correctness fix in this change.
+An interactive acquisition owns a scoped waiter guard. Success and cancellation
+both release its count, including cancellation during a gate sleep or while waiting
+for the state mutex. Active interactive work retains priority; canceled work
+cannot leave background requests waiting permanently. This corrects the
+characterized waiter leak. The private outbound policy still rejects Nominatim
+before scheduler admission, so this is a latent scheduler correction and does
+not enable geocoding traffic.
 
 ## Frozen evidence and limits
 

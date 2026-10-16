@@ -35,6 +35,14 @@ struct NominatimScheduler {
     max_adaptive_extra_ms: u64,
 }
 
+struct InteractiveWaiter<'a>(&'a AtomicUsize);
+
+impl Drop for InteractiveWaiter<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl NominatimScheduler {
     fn new(base_interval_ms: u64, max_adaptive_extra_ms: u64) -> Self {
         Self {
@@ -49,9 +57,10 @@ impl NominatimScheduler {
     }
 
     async fn acquire_slot(&self, lane: NominatimLane) -> NominatimSlot {
-        if lane == NominatimLane::InteractiveSearch {
+        let _waiter = (lane == NominatimLane::InteractiveSearch).then(|| {
             self.interactive_waiters.fetch_add(1, Ordering::SeqCst);
-        }
+            InteractiveWaiter(&self.interactive_waiters)
+        });
         let mut progress = scheduling::QueueProgress::new(lane);
         loop {
             let decision = if lane == NominatimLane::BackgroundReverseGeocode
@@ -71,9 +80,6 @@ impl NominatimScheduler {
                     tokio::time::sleep(duration).await;
                 }
                 scheduling::Admission::Granted(interval) => {
-                    if lane == NominatimLane::InteractiveSearch {
-                        self.interactive_waiters.fetch_sub(1, Ordering::SeqCst);
-                    }
                     return progress.finish(interval);
                 }
             }
