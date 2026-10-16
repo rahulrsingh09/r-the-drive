@@ -34,6 +34,11 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Update or recover an installation | [Operations](./operations.md) |
 | Understand the repository structure | [Architecture overview](./architecture/overview.md) |
 | Build or change dashboards | [Dashboard architecture](./frontend/dashboard-architecture.md) |
+| Understand dashboard query planning and data publication | [Dashboard data plan](./architecture/dashboard-data-plan.md) |
+| Change dashboard editing and visibility behavior | [Dashboard session state](./architecture/dashboard-session-state.md) |
+| Maintain dashboard import, layout, and expression validation | [Dashboard configuration](./architecture/rewrite-dashboard-configuration.md) |
+| Trace requests, session renewal, and response validation | [API client](./architecture/rewrite-api-client.md) |
+| Maintain recovery-file validation and safe extraction | [Recovery validation](./architecture/rewrite-recovery-validation.md) |
 | Trace frontend request, map, and render failures | [Frontend error observability](./architecture/frontend-error-observability.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
 | Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |
