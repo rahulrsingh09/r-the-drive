@@ -4,8 +4,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard empty",
         Some(2),
-        "GET",
-        "/v1/dashboards",
+        ("GET", "/v1/dashboards"),
         Value::Null,
         &[],
         200,
@@ -14,8 +13,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "charts empty",
         Some(2),
-        "GET",
-        "/v1/charts",
+        ("GET", "/v1/charts"),
         Value::Null,
         &[],
         200,
@@ -24,8 +22,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "no auth",
         None,
-        "GET",
-        "/v1/dashboards",
+        ("GET", "/v1/dashboards"),
         Value::Null,
         &[],
         401,
@@ -34,8 +31,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard missing",
         Some(2),
-        "GET",
-        "/v1/dashboards/00000000-0000-0000-0000-000000000099",
+        ("GET", "/v1/dashboards/00000000-0000-0000-0000-000000000099"),
         Value::Null,
         &[],
         404,
@@ -44,8 +40,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard bad uuid",
         Some(2),
-        "GET",
-        "/v1/dashboards/nope",
+        ("GET", "/v1/dashboards/nope"),
         Value::Null,
         &[],
         400,
@@ -54,8 +49,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard invalid slug",
         Some(2),
-        "POST",
-        "/v1/dashboards",
+        ("POST", "/v1/dashboards"),
         json!({"slug":"Bad","name":"","config":{}}),
         &[],
         422,
@@ -64,8 +58,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.raw_step(
         "dashboard malformed",
         Some(2),
-        "POST",
-        "/v1/dashboards",
+        ("POST", "/v1/dashboards"),
         "{",
         &[],
         400,
@@ -74,8 +67,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.raw_step(
         "dashboard oversized",
         Some(2),
-        "POST",
-        "/v1/dashboards",
+        ("POST", "/v1/dashboards"),
         &"x".repeat(65537),
         &[],
         413,
@@ -84,22 +76,20 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard missing config",
         Some(2),
-        "POST",
-        "/v1/dashboards",
+        ("POST", "/v1/dashboards"),
         json!({"slug":"valid","name":"test"}),
         &[],
         422,
     )
     .await;
-    let response = h.step("dashboard create",Some(2),"POST","/v1/dashboards",json!({"slug":"mine","name":"Personal","description":"synthetic","config":{"widgets":[],"extra":true}}),&[],201).await;
+    let response = h.step("dashboard create",Some(2), ("POST", "/v1/dashboards"),json!({"slug":"mine","name":"Personal","description":"synthetic","config":{"widgets":[],"extra":true}}),&[],201).await;
     let id = response["body"]["id"].as_str().unwrap().to_owned();
     h.label(&id, "dashboard-mine");
     let path = format!("/v1/dashboards/{id}");
     h.step(
         "dashboard own",
         Some(2),
-        "GET",
-        &path,
+        ("GET", &path),
         Value::Null,
         &[],
         200,
@@ -108,8 +98,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard foreign read",
         Some(3),
-        "GET",
-        &path,
+        ("GET", &path),
         Value::Null,
         &[],
         403,
@@ -118,8 +107,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard foreign write",
         Some(3),
-        "PUT",
-        &path,
+        ("PUT", &path),
         json!({"name":"forbidden"}),
         &[],
         403,
@@ -128,8 +116,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard foreign delete",
         Some(3),
-        "DELETE",
-        &path,
+        ("DELETE", &path),
         Value::Null,
         &[],
         403,
@@ -138,8 +125,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard name-only update",
         Some(2),
-        "PUT",
-        &path,
+        ("PUT", &path),
         json!({"name":"Renamed","description":null}),
         &[],
         200,
@@ -148,8 +134,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard config update",
         Some(2),
-        "PUT",
-        &path,
+        ("PUT", &path),
         json!({"config":{"widgets":[]}}),
         &[],
         200,
@@ -159,8 +144,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         .step(
             "dashboard upsert existing",
             Some(2),
-            "POST",
-            "/v1/dashboards",
+            ("POST", "/v1/dashboards"),
             json!({"slug":"mine","name":"Upsert","config":{}}),
             &[],
             201,
@@ -177,8 +161,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         .step(
             "dashboard clone",
             Some(2),
-            "POST",
-            &format!("{path}/clone"),
+            ("POST", &format!("{path}/clone")),
             Value::Null,
             &[],
             201,
@@ -189,8 +172,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard duplicate clone",
         Some(2),
-        "POST",
-        &format!("{path}/clone"),
+        ("POST", &format!("{path}/clone")),
         Value::Null,
         &[],
         422,
@@ -199,8 +181,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard clone foreign",
         Some(3),
-        "POST",
-        &format!("{path}/clone"),
+        ("POST", &format!("{path}/clone")),
         Value::Null,
         &[],
         403,
@@ -209,8 +190,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard nonadmin lock",
         Some(2),
-        "POST",
-        &format!("/v1/admin/dashboards/{id}/lock"),
+        ("POST", &format!("/v1/admin/dashboards/{id}/lock")),
         json!({"locked":true}),
         &[],
         403,
@@ -219,8 +199,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard admin lock",
         Some(1),
-        "POST",
-        &format!("/v1/admin/dashboards/{id}/lock"),
+        ("POST", &format!("/v1/admin/dashboards/{id}/lock")),
         json!({"locked":true}),
         &[],
         200,
@@ -229,8 +208,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard locked write",
         Some(2),
-        "PUT",
-        &path,
+        ("PUT", &path),
         json!({"name":"no"}),
         &[],
         403,
@@ -239,8 +217,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard locked delete",
         Some(2),
-        "DELETE",
-        &path,
+        ("DELETE", &path),
         Value::Null,
         &[],
         403,
@@ -249,8 +226,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard admin edit",
         Some(0),
-        "PUT",
-        &format!("/v1/admin/dashboards/{id}"),
+        ("PUT", &format!("/v1/admin/dashboards/{id}")),
         json!({"name":"Admin edit","config":null}),
         &[],
         200,
@@ -259,8 +235,10 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard personal restore",
         Some(0),
-        "POST",
-        &format!("/v1/admin/dashboards/{id}/restore-default"),
+        (
+            "POST",
+            &format!("/v1/admin/dashboards/{id}/restore-default"),
+        ),
         Value::Null,
         &[],
         422,
@@ -269,8 +247,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard clone delete",
         Some(2),
-        "DELETE",
-        &format!("/v1/dashboards/{clone_id}"),
+        ("DELETE", &format!("/v1/dashboards/{clone_id}")),
         Value::Null,
         &[],
         204,
@@ -285,8 +262,7 @@ pub(super) async fn exercise(h: &mut Harness) {
             .step(
                 &format!("dashboard config {slug}"),
                 Some(2),
-                "POST",
-                "/v1/dashboards",
+                ("POST", "/v1/dashboards"),
                 json!({"slug":slug,"name":"","config":config}),
                 &[],
                 201,
@@ -325,8 +301,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard system fetch",
         Some(3),
-        "GET",
-        &format!("/v1/dashboards/{system}"),
+        ("GET", &format!("/v1/dashboards/{system}")),
         Value::Null,
         &[],
         200,
@@ -335,8 +310,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard system by slug",
         Some(2),
-        "GET",
-        "/v1/dashboards/by-slug/dashboard",
+        ("GET", "/v1/dashboards/by-slug/dashboard"),
         Value::Null,
         &[],
         200,
@@ -346,8 +320,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         .step(
             "dashboard override",
             Some(2),
-            "POST",
-            "/v1/dashboards",
+            ("POST", "/v1/dashboards"),
             json!({"slug":"dashboard","name":"Override","config":{"widgets":[]}}),
             &[],
             201,
@@ -357,8 +330,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard preference own",
         Some(2),
-        "GET",
-        "/v1/dashboards/by-slug/dashboard",
+        ("GET", "/v1/dashboards/by-slug/dashboard"),
         Value::Null,
         &[],
         200,
@@ -367,8 +339,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard preference foreign",
         Some(3),
-        "GET",
-        "/v1/dashboards/by-slug/dashboard",
+        ("GET", "/v1/dashboards/by-slug/dashboard"),
         Value::Null,
         &[],
         200,
@@ -377,8 +348,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard system denied",
         Some(2),
-        "PUT",
-        &format!("/v1/dashboards/{system}"),
+        ("PUT", &format!("/v1/dashboards/{system}")),
         json!({"name":"no"}),
         &[],
         403,
@@ -387,8 +357,10 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard restore",
         Some(0),
-        "POST",
-        &format!("/v1/admin/dashboards/{system}/restore-default"),
+        (
+            "POST",
+            &format!("/v1/admin/dashboards/{system}/restore-default"),
+        ),
         Value::Null,
         &[],
         200,
@@ -413,8 +385,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "dashboard list resolved",
         Some(2),
-        "GET",
-        "/v1/dashboards",
+        ("GET", "/v1/dashboards"),
         Value::Null,
         &[],
         200,
@@ -427,8 +398,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart slug validation",
         Some(2),
-        "POST",
-        "/v1/charts",
+        ("POST", "/v1/charts"),
         json!({"slug":"UPPER","name":"","config":{}}),
         &[],
         422,
@@ -437,8 +407,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart name validation",
         Some(2),
-        "POST",
-        "/v1/charts",
+        ("POST", "/v1/charts"),
         json!({"slug":"valid","name":" ","config":{}}),
         &[],
         422,
@@ -447,8 +416,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart invalid config",
         Some(2),
-        "POST",
-        "/v1/charts",
+        ("POST", "/v1/charts"),
         json!({"slug":"valid","name":"ok","config":{}}),
         &[],
         422,
@@ -457,8 +425,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.raw_step(
         "chart oversized",
         Some(2),
-        "POST",
-        "/v1/charts",
+        ("POST", "/v1/charts"),
         &"x".repeat(65537),
         &[],
         413,
@@ -468,8 +435,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         .step(
             "chart create",
             Some(2),
-            "POST",
-            "/v1/charts",
+            ("POST", "/v1/charts"),
             input.clone(),
             &[],
             201,
@@ -481,8 +447,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart duplicate",
         Some(2),
-        "POST",
-        "/v1/charts",
+        ("POST", "/v1/charts"),
         input.clone(),
         &[],
         409,
@@ -496,8 +461,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         h.step(
             &format!("chart foreign {method}"),
             Some(3),
-            method,
-            &path,
+            (method, &path),
             body,
             &[],
             403,
@@ -507,8 +471,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart empty name constraint",
         Some(2),
-        "PATCH",
-        &path,
+        ("PATCH", &path),
         json!({"name":"","description":null,"is_enabled":false}),
         &[],
         500,
@@ -517,8 +480,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart patch",
         Some(2),
-        "PATCH",
-        &path,
+        ("PATCH", &path),
         json!({"description":null,"is_enabled":false}),
         &[],
         200,
@@ -527,8 +489,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart put alias",
         Some(2),
-        "PUT",
-        &path,
+        ("PUT", &path),
         json!({"isEnabled":true}),
         &[],
         200,
@@ -537,8 +498,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart placements",
         Some(2),
-        "PATCH",
-        &format!("{path}/placements"),
+        ("PATCH", &format!("{path}/placements")),
         json!({"placements":[{"dashboardSlug":"battery"},{"dashboardSlug":"battery"}]}),
         &[],
         200,
@@ -547,8 +507,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart bad placements",
         Some(2),
-        "PATCH",
-        &format!("{path}/placements"),
+        ("PATCH", &format!("{path}/placements")),
         json!({"placements":vec![json!({"dashboardSlug":"battery"});21]}),
         &[],
         422,
@@ -557,8 +516,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart list",
         Some(2),
-        "GET",
-        "/v1/charts",
+        ("GET", "/v1/charts"),
         Value::Null,
         &[],
         200,
@@ -567,8 +525,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart effective",
         Some(2),
-        "GET",
-        "/v1/charts/effective",
+        ("GET", "/v1/charts/effective"),
         Value::Null,
         &[],
         200,
@@ -577,8 +534,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart effective filter",
         Some(2),
-        "GET",
-        "/v1/charts/effective?dashboard_slug=battery",
+        ("GET", "/v1/charts/effective?dashboard_slug=battery"),
         Value::Null,
         &[],
         200,
@@ -587,8 +543,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart effective empty",
         Some(2),
-        "GET",
-        "/v1/charts/effective?dashboard_slug=missing",
+        ("GET", "/v1/charts/effective?dashboard_slug=missing"),
         Value::Null,
         &[],
         200,
@@ -597,8 +552,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart source manifest",
         Some(2),
-        "GET",
-        "/v1/chart-sources",
+        ("GET", "/v1/chart-sources"),
         Value::Null,
         &[],
         200,
@@ -608,8 +562,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         .step(
             "chart clone",
             Some(2),
-            "POST",
-            &format!("{path}/clone"),
+            ("POST", &format!("{path}/clone")),
             json!({"slug":"chart-clone","name":"Clone"}),
             &[],
             201,
@@ -620,8 +573,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart duplicate clone",
         Some(2),
-        "POST",
-        &format!("{path}/clone"),
+        ("POST", &format!("{path}/clone")),
         json!({"slug":"chart-clone","name":"Clone"}),
         &[],
         409,
@@ -630,8 +582,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart no base reset",
         Some(2),
-        "POST",
-        &format!("{path}/reset"),
+        ("POST", &format!("{path}/reset")),
         Value::Null,
         &[],
         404,
@@ -640,8 +591,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart nonadmin lock",
         Some(2),
-        "PUT",
-        &format!("/v1/admin/charts/{id}/lock"),
+        ("PUT", &format!("/v1/admin/charts/{id}/lock")),
         json!({"locked":true}),
         &[],
         403,
@@ -650,8 +600,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart admin lock",
         Some(1),
-        "PATCH",
-        &format!("/v1/admin/charts/{id}/lock"),
+        ("PATCH", &format!("/v1/admin/charts/{id}/lock")),
         json!({"locked":true}),
         &[],
         200,
@@ -660,8 +609,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart locked patch",
         Some(2),
-        "PATCH",
-        &path,
+        ("PATCH", &path),
         json!({"name":"no"}),
         &[],
         403,
@@ -670,8 +618,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart admin patch",
         Some(0),
-        "PATCH",
-        &format!("/v1/admin/charts/{id}"),
+        ("PATCH", &format!("/v1/admin/charts/{id}")),
         json!({"name":"Admin"}),
         &[],
         200,
@@ -680,8 +627,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart delete",
         Some(2),
-        "DELETE",
-        &format!("/v1/charts/{clone}"),
+        ("DELETE", &format!("/v1/charts/{clone}")),
         Value::Null,
         &[],
         204,
@@ -693,8 +639,7 @@ pub(super) async fn exercise(h: &mut Harness) {
         .step(
             "chart override",
             Some(2),
-            "POST",
-            "/v1/charts",
+            ("POST", "/v1/charts"),
             json!({"slug":slug,"name":"Override","config":defaults[0]["definition"]}),
             &[],
             201,
@@ -705,8 +650,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart override effective",
         Some(2),
-        "GET",
-        "/v1/charts/effective",
+        ("GET", "/v1/charts/effective"),
         Value::Null,
         &[],
         200,
@@ -715,8 +659,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart override reset",
         Some(2),
-        "POST",
-        &format!("/v1/charts/{oid}/reset"),
+        ("POST", &format!("/v1/charts/{oid}/reset")),
         Value::Null,
         &[],
         200,
@@ -725,8 +668,7 @@ pub(super) async fn exercise(h: &mut Harness) {
     h.step(
         "chart system restore",
         Some(0),
-        "POST",
-        &format!("/v1/admin/charts/{sid}/restore"),
+        ("POST", &format!("/v1/admin/charts/{sid}/restore")),
         Value::Null,
         &[],
         200,

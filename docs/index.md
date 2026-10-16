@@ -49,6 +49,12 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Understand charging price selection and time-of-use calculations | [Charging costs](./architecture/rewrite-cost-engine.md) |
 | Follow companion telemetry decoding, persistence and forwarding | [Companion telemetry](./architecture/rewrite-parallax-core.md) |
 | Maintain chart validation and catalog reconciliation | [Chart contracts](./architecture/rewrite-chart-contracts.md) |
+| Maintain trip history, detail projections and tag assignment | [Trip query workflows](./architecture/rewrite-trip-queries.md) |
+| Follow charging summaries, curves and annotation updates | [Charging views](./architecture/rewrite-charging-views.md) |
+| Maintain metric query planning and streamed results | [Metric queries](./architecture/rewrite-metrics-queries.md) |
+| Trace battery, efficiency and parked-energy evidence | [Energy views](./architecture/rewrite-energy-views.md) |
+| Maintain dashboard, chart, theme and preference workflows | [Personalization](./architecture/rewrite-personalization.md) |
+| Follow places, pricing profiles and geocoder scheduling | [Places and profiles](./architecture/rewrite-places-profiles.md) |
 | Trace frontend request, map, and render failures | [Frontend error observability](./architecture/frontend-error-observability.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
 | Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |

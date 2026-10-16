@@ -28,6 +28,9 @@ have new internal stages. Browser schema initialization avoids dynamic code
 under the existing Content Security Policy.
 Charge detector state and completion records now commit with trip checkpoints,
 with durable retries and session pins during history maintenance.
+Trip, charging, metric and energy views use new query and projection workflows.
+Dashboard, chart, theme, settings, place and pricing-profile operations use
+new mutation and reconciliation stages behind the retained public interfaces.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 

@@ -204,7 +204,7 @@ pub(super) async fn network(
     vendor: String,
     payload: NetworkPreferenceUpdate,
 ) -> Result<serde_json::Value, AppError> {
-    require_vehicle_manager_access(pool, &auth, vehicle_id).await?;
+    require_vehicle_manager_access(pool, auth, vehicle_id).await?;
     let normalized = vendor.trim().to_lowercase();
     if normalized.is_empty() {
         return Err(AppError::Validation("network vendor required".into()));
