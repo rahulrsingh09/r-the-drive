@@ -45,6 +45,10 @@ use crate::{
 };
 
 #[cfg(test)]
+#[path = "vehicles/__tests__/contracts.rs"]
+mod workflow_contracts;
+
+#[cfg(test)]
 #[path = "vehicles_authorization_tests.rs"]
 mod authorization_tests;
 

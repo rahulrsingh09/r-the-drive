@@ -1,0 +1,2627 @@
+[
+  {
+    "case": "nonfinite-pressure",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "VALIDATION",
+            "message": "target_tire_pressure_psi must be a finite number"
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 422
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-one",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "nonfinite-pressure",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "VALIDATION",
+            "message": "target_tire_pressure_psi must be a finite number"
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 422
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-one",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "nonfinite-pressure",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "VALIDATION",
+            "message": "target_tire_pressure_psi must be a finite number"
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 422
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-one",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "member-partial-failure",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "INTERNAL",
+            "message": "Database error"
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 500
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-one",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "member-partial-retry",
+    "value": {
+      "response": {
+        "body": {
+          "invite_created": false,
+          "ok": true
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 200
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [
+          {
+            "created_at": "<generated-clock>",
+            "default_cost_profile_id": null,
+            "display_name": null,
+            "display_priority": 0,
+            "home_geofence_id": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-one",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "unregistered-member",
+    "value": {
+      "response": {
+        "body": {
+          "invite_created": true,
+          "invite_token": "<unregistered-invite-token>",
+          "ok": true
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 200
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [
+          {
+            "accepted_at": null,
+            "accepted_user_id": null,
+            "created_at": "<generated-clock>",
+            "expires_at": "<generated-expiry-14d>",
+            "id": "<unregistered-invite>",
+            "invited_by": "00000000-0000-0000-0000-000000000001",
+            "invitee_email": "unregistered@example.invalid",
+            "revoked_at": null,
+            "role": "viewer",
+            "token_hash": "<hash-of-unregistered-invite-token>",
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [
+          {
+            "created_at": "<generated-clock>",
+            "default_cost_profile_id": null,
+            "display_name": null,
+            "display_priority": 0,
+            "home_geofence_id": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-one",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "refresh-mismatch",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "VALIDATION",
+            "message": "selected Rivian vehicle does not match this local vehicle"
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 422
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [
+          {
+            "accepted_at": null,
+            "accepted_user_id": null,
+            "created_at": "<generated-clock>",
+            "expires_at": "<generated-expiry-14d>",
+            "id": "<unregistered-invite>",
+            "invited_by": "00000000-0000-0000-0000-000000000001",
+            "invitee_email": "unregistered@example.invalid",
+            "revoked_at": null,
+            "role": "viewer",
+            "token_hash": "<hash-of-unregistered-invite-token>",
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [
+          {
+            "created_at": "<generated-clock>",
+            "default_cost_profile_id": null,
+            "display_name": null,
+            "display_priority": 0,
+            "home_geofence_id": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "refresh-remote",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "refresh-missing-session",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "RIVIAN_CONNECT_SESSION_EXPIRED",
+            "message": "Your secure Rivian sign-in session expired. Start again from the account step."
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 409
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [
+          {
+            "accepted_at": null,
+            "accepted_user_id": null,
+            "created_at": "<generated-clock>",
+            "expires_at": "<generated-expiry-14d>",
+            "id": "<unregistered-invite>",
+            "invited_by": "00000000-0000-0000-0000-000000000001",
+            "invitee_email": "unregistered@example.invalid",
+            "revoked_at": null,
+            "role": "viewer",
+            "token_hash": "<hash-of-unregistered-invite-token>",
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [],
+        "vehicle_user_settings": [
+          {
+            "created_at": "<generated-clock>",
+            "default_cost_profile_id": null,
+            "display_name": null,
+            "display_priority": 0,
+            "home_geofence_id": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "refresh-remote",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "refresh-late-failure",
+    "value": {
+      "body": {
+        "error": {
+          "code": "INTERNAL",
+          "message": "Database error"
+        }
+      },
+      "cache_control": null,
+      "content_type": "application/json",
+      "status": 500
+    }
+  },
+  {
+    "case": "refresh-manager-retry",
+    "value": {
+      "response": {
+        "body": {
+          "connection_status": "connected_waiting_for_vehicle_data",
+          "ok": true,
+          "telemetry_error": "worker supervisor unavailable; retry telemetry start",
+          "telemetry_status": "delayed",
+          "vehicle_id": "00000000-0000-0000-0000-000000000065",
+          "vehicle_saved": true
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 200
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [
+          {
+            "accepted_at": null,
+            "accepted_user_id": null,
+            "created_at": "<generated-clock>",
+            "expires_at": "<generated-expiry-14d>",
+            "id": "<unregistered-invite>",
+            "invited_by": "00000000-0000-0000-0000-000000000001",
+            "invitee_email": "unregistered@example.invalid",
+            "revoked_at": null,
+            "role": "viewer",
+            "token_hash": "<hash-of-unregistered-invite-token>",
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [
+          {
+            "auth_reason_code": null,
+            "auth_state": "authorized",
+            "collector_heartbeat_at": null,
+            "consecutive_auth_failures": 0,
+            "is_online": false,
+            "last_auth_failure_at": null,
+            "last_charge_history_success_at": null,
+            "last_charge_history_sync_at": null,
+            "last_event_at": null,
+            "last_heartbeat_at": null,
+            "last_payload_at": null,
+            "last_persisted_at": null,
+            "last_seen_at": null,
+            "last_ws_heartbeat_received_at": null,
+            "last_ws_payload_received_at": null,
+            "last_ws_received_at": null,
+            "trip_persistence_error": null,
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065",
+            "worker_health": "starting",
+            "worker_health_msg": "Initializing Rivian telemetry collector"
+          }
+        ],
+        "vehicle_user_settings": [
+          {
+            "created_at": "<generated-clock>",
+            "default_cost_profile_id": null,
+            "display_name": null,
+            "display_priority": 0,
+            "home_geofence_id": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "refresh-remote",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  },
+  {
+    "case": "refresh-viewer-denied",
+    "value": {
+      "response": {
+        "body": {
+          "error": {
+            "code": "FORBIDDEN",
+            "message": "Forbidden"
+          }
+        },
+        "cache_control": null,
+        "content_type": "application/json",
+        "status": 403
+      },
+      "rows": {
+        "charging_schedules": [],
+        "departure_schedules": [],
+        "users": [
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "admin@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000005",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "admin",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "foreign@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000004",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "manager@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000002",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "owner@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000001",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "recipient@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000006",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          },
+          {
+            "auth_methods": "both",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "default_vehicle_id": null,
+            "email": "viewer@example.invalid",
+            "id": "00000000-0000-0000-0000-000000000003",
+            "is_disabled": false,
+            "password_hash": null,
+            "role": "user",
+            "updated_at": "2026-01-01T00:00:00+00:00"
+          }
+        ],
+        "vehicle_artwork_cache_state": [],
+        "vehicle_images": [],
+        "vehicle_invites": [
+          {
+            "accepted_at": null,
+            "accepted_user_id": null,
+            "created_at": "<generated-clock>",
+            "expires_at": "<generated-expiry-14d>",
+            "id": "<unregistered-invite>",
+            "invited_by": "00000000-0000-0000-0000-000000000001",
+            "invitee_email": "unregistered@example.invalid",
+            "revoked_at": null,
+            "role": "viewer",
+            "token_hash": "<hash-of-unregistered-invite-token>",
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_memberships": [
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000001-00000000-0000-0000-0000-000000000066>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vehicle_id": "00000000-0000-0000-0000-000000000066"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000002-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "manager",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000002",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000003-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000003",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "id": "<membership-00000000-0000-0000-0000-000000000004-00000000-0000-0000-0000-000000000067>",
+            "is_default": false,
+            "role": "owner",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vehicle_id": "00000000-0000-0000-0000-000000000067"
+          },
+          {
+            "created_at": "<generated-clock>",
+            "id": "<membership-00000000-0000-0000-0000-000000000006-00000000-0000-0000-0000-000000000065>",
+            "is_default": false,
+            "role": "viewer",
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicle_runtime_state": [
+          {
+            "auth_reason_code": null,
+            "auth_state": "authorized",
+            "collector_heartbeat_at": null,
+            "consecutive_auth_failures": 0,
+            "is_online": false,
+            "last_auth_failure_at": null,
+            "last_charge_history_success_at": null,
+            "last_charge_history_sync_at": null,
+            "last_event_at": null,
+            "last_heartbeat_at": null,
+            "last_payload_at": null,
+            "last_persisted_at": null,
+            "last_seen_at": null,
+            "last_ws_heartbeat_received_at": null,
+            "last_ws_payload_received_at": null,
+            "last_ws_received_at": null,
+            "trip_persistence_error": null,
+            "updated_at": "<generated-clock>",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065",
+            "worker_health": "starting",
+            "worker_health_msg": "Initializing Rivian telemetry collector"
+          }
+        ],
+        "vehicle_user_settings": [
+          {
+            "created_at": "<generated-clock>",
+            "default_cost_profile_id": null,
+            "display_name": null,
+            "display_priority": 0,
+            "home_geofence_id": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000006",
+            "vehicle_id": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "vehicles": [
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000065",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1T",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "refresh-remote",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000066",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R2",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-workflow-two",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000001",
+            "vin": null,
+            "wheel_option": null
+          },
+          {
+            "battery_capacity_wh": null,
+            "battery_cell_type": null,
+            "battery_config": null,
+            "charge_port_type": null,
+            "color": null,
+            "cost_profile_id": null,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "display_priority": 0,
+            "firmware_version": null,
+            "history_backfill_status": null,
+            "history_backfilled_at": null,
+            "history_session_count": null,
+            "home_geofence_id": null,
+            "home_latitude": null,
+            "home_longitude": null,
+            "id": "00000000-0000-0000-0000-000000000067",
+            "interior_color": null,
+            "max_vehicle_power_kw": null,
+            "model": "R1S",
+            "name": null,
+            "ota_release_notes_url": null,
+            "rivian_vehicle_id": "demo-foreign",
+            "supported_features": null,
+            "target_tire_pressure_psi": 40,
+            "trim": null,
+            "updated_at": "<generated-clock>",
+            "user_id": "00000000-0000-0000-0000-000000000004",
+            "vin": null,
+            "wheel_option": null
+          }
+        ],
+        "wallboxes": []
+      }
+    }
+  }
+]
