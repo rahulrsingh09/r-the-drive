@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -57,6 +58,81 @@ class Fake:
 
 
 class NativeDeploymentTests(unittest.TestCase):
+    def billing_adapter(self, pages):
+        class Pages:
+            def __init__(self):
+                self.requests = []
+
+            def open(self, request, timeout):
+                self.requests.append(request)
+                page = pages[len(self.requests) - 1]
+                if isinstance(page, Exception):
+                    raise page
+                return io.BytesIO(json.dumps(page).encode())
+
+        adapter = module.Adapter("synthetic-token")
+        adapter.opener = Pages()
+        return adapter
+
+    def billing_page(self, total=0, cursor=None):
+        return {"data": {"usage": [{"currency": "usd", "total": total}]},
+                "pagination": {"hasNextPage": cursor is not None, "count": 1,
+                               "cursor": cursor}}
+
+    def test_billing_reads_every_page_and_rejects_later_paid_usage(self):
+        for total in [0, 0.01]:
+            adapter = self.billing_adapter([self.billing_page(cursor="123"),
+                                            self.billing_page(total)])
+            snapshot = fixture()
+            snapshot["billing"] = adapter.request("/v1/billing/usage")
+            self.assertEqual(len(snapshot["billing"]["usage"]), 2)
+            self.assertEqual([r.full_url for r in adapter.opener.requests],
+                             ["https://api.northflank.com/v1/billing/usage",
+                              "https://api.northflank.com/v1/billing/usage?cursor=123"])
+            self.assertTrue(all(r.get_method() == "GET" and
+                                r.get_header("Authorization") == "Bearer synthetic-token"
+                                for r in adapter.opener.requests))
+            if total:
+                with self.assertRaisesRegex(Halt, "paid-usage"):
+                    free_policy(snapshot)
+            else:
+                free_policy(snapshot)
+
+    def test_incomplete_or_malformed_billing_fails_closed(self):
+        missing_flag = self.billing_page()
+        del missing_flag["pagination"]["hasNextPage"]
+        wrong_count = self.billing_page()
+        wrong_count["pagination"]["count"] = 2
+        for pages in [
+            [missing_flag], [wrong_count],
+            [self.billing_page(cursor="https://other.example/")],
+            [self.billing_page(cursor="")],
+            [self.billing_page(cursor="123"), self.billing_page(cursor="123")],
+        ]:
+            with self.subTest(pages=pages):
+                adapter = self.billing_adapter(pages)
+                with self.assertRaises(Halt):
+                    adapter.request("/v1/billing/usage")
+                self.assertEqual(len(adapter.opener.requests), len(pages))
+
+    def test_billing_read_error_is_not_retried_or_accepted_as_complete(self):
+        adapter = self.billing_adapter([self.billing_page(cursor="123"),
+            HTTPError("https://api.northflank.com/v1/billing/usage", 401,
+                      "private-response-secret", {}, None)])
+        with self.assertRaisesRegex(Halt, "^northflank-read-http-401$"):
+            adapter.request("/v1/billing/usage")
+        self.assertEqual(len(adapter.opener.requests), 2)
+
+    def test_billing_page_limit_and_other_pagination_remain_closed(self):
+        adapter = self.billing_adapter([self.billing_page(cursor=str(i)) for i in range(100)])
+        with self.assertRaisesRegex(Halt, "billing-page-limit"):
+            adapter.request("/v1/billing/usage")
+        self.assertEqual(len(adapter.opener.requests), 100)
+        adapter = self.billing_adapter([self.billing_page(cursor="123")])
+        with self.assertRaisesRegex(Halt, "incomplete-response"):
+            adapter.request(module.APP)
+        self.assertEqual(len(adapter.opener.requests), 1)
+
     def test_ci_accepts_only_genuine_protected_push_or_dispatch(self):
         class Metadata(module.Adapter):
             def __init__(self, event, branch=module.BRANCH):

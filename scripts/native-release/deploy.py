@@ -21,6 +21,26 @@ class NoRedirect(HTTPRedirectHandler):
         raise Halt("redirect-rejected")
 
 
+def read_billing_usage(fetch_page):
+    usage, seen = [], set()
+    cursor = None
+    for _ in range(100):
+        result = fetch_page(cursor)
+        pagination = result.get("pagination", {})
+        rows = result.get("data", {}).get("usage")
+        require(isinstance(rows, list) and type(pagination.get("hasNextPage")) is bool
+                and type(pagination.get("count")) is int
+                and pagination["count"] == len(rows), "invalid-billing-page")
+        usage.extend(rows)
+        if not pagination["hasNextPage"]:
+            return {"usage": usage}
+        cursor = pagination.get("cursor")
+        require(rows and isinstance(cursor, str) and re.fullmatch("[0-9]{1,20}", cursor)
+                and cursor not in seen, "invalid-billing-cursor")
+        seen.add(cursor)
+    raise Halt("billing-page-limit")
+
+
 class Adapter:
     def __init__(self, token):
         self.token = token
@@ -43,13 +63,19 @@ class Adapter:
                     "unapproved-cloud-write")
             host = "https://api.northflank.com"
             headers = {"Authorization": "Bearer " + self.token, "Content-Type": "application/json"}
-        req = Request(host + path, data=json.dumps(body).encode() if body else None,
-                      headers=headers, method="POST" if body else "GET")
-        try:
+        def fetch_page(cursor=None):
+            suffix = "?cursor=" + cursor if cursor is not None else ""
+            req = Request(host + path + suffix, data=json.dumps(body).encode() if body else None,
+                          headers=headers, method="POST" if body else "GET")
             with self.opener.open(req, timeout=30) as response:
                 data = response.read(2 * 1024 * 1024 + 1)
             require(len(data) <= 2 * 1024 * 1024, "response-too-large")
-            result = json.loads(data)
+            return json.loads(data)
+
+        try:
+            if not github and path == "/v1/billing/usage":
+                return read_billing_usage(fetch_page)
+            result = fetch_page()
             pagination = result.get("pagination", {})
             require(not pagination.get("hasNextPage") and not pagination.get("next")
                     and pagination.get("totalPages", 1) <= 1, "incomplete-response")

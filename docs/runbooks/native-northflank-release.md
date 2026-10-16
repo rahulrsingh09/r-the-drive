@@ -135,6 +135,9 @@ database and one app volume, plus one `nf-compute-20` job within the included jo
 allowance. The job has no schedule, no retries, a 720-second deadline and no volume.
 Workflows queue sequentially. Nothing scales resources or enables paid backups.
 The deployment step rejects changed resource allocation or nonzero reported usage.
+Billing checks read every page of usage before accepting a zero total. Missing,
+malformed or repeated cursors, failed reads and more than 100 pages stop the
+release; a charge on a later page is treated the same as one on the first.
 These checks do not promise future provider pricing.
 
 ## Backup and recovery
