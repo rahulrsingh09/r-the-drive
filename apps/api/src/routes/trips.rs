@@ -1833,3 +1833,7 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/trip_queries/contracts.rs"]
+mod query_contracts;
