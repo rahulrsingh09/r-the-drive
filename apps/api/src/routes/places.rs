@@ -156,108 +156,10 @@ async fn search_places(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<AddressRecord>>, AppError> {
-    let query = params.q.trim().to_lowercase();
-    if query.len() < 3 {
+    let Some(plan) = search::SearchPlan::new(params) else {
         return Ok(Json(Vec::new()));
-    }
-
-    let limit = params.limit.unwrap_or(5);
-    let persistent_cache_key = search_cache_key(&query, limit);
-
-    // The persistent key contains only a digest, never the address query.
-    // Redis is backed by an AOF volume in normal deployment and is cleared
-    // explicitly from External Connections.
-    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-        if let Ok(Some(payload)) = redis.get::<_, Option<String>>(&persistent_cache_key).await {
-            if let Ok(value) = serde_json::from_str::<Value>(&payload) {
-                let suggestions: Vec<AddressRecord> = value
-                    .as_array()
-                    .unwrap_or(&Vec::new())
-                    .iter()
-                    .filter_map(|v| value_to_address_record(v.clone()))
-                    .collect();
-                debug!(
-                    cache_hit = true,
-                    cache = "persistent",
-                    suggestion_count = suggestions.len(),
-                    "places.address_search_completed"
-                );
-                return Ok(Json(suggestions));
-            }
-        }
-    }
-
-    // --- in-process fallback cache (1 hour) ------------------------------
-    {
-        let cache = state.nominatim_cache.read().await;
-        if let Some((cached_at, value)) = cache.get(&query) {
-            if cached_at.elapsed() < Duration::from_secs(3600) {
-                let suggestions: Vec<AddressRecord> = value
-                    .as_array()
-                    .unwrap_or(&Vec::new())
-                    .iter()
-                    .filter_map(|v| value_to_address_record(v.clone()))
-                    .collect();
-                debug!(
-                    cache_hit = true,
-                    suggestion_count = suggestions.len(),
-                    "places.address_search_completed"
-                );
-                return Ok(Json(suggestions));
-            }
-        }
-    }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| {
-            AppError::Internal(anyhow!("address search client build failed: {error}"))
-        })?;
-    let rows =
-        crate::services::nominatim::search(&state.pool, &client, params.q.trim(), limit).await?;
-
-    // --- populate cache --------------------------------------------------
-    {
-        let mut cache = state.nominatim_cache.write().await;
-        // Evict expired entries to keep memory bounded
-        cache.retain(|_, (cached_at, _)| cached_at.elapsed() < Duration::from_secs(3600));
-        if cache.len() >= 500 {
-            if let Some(oldest) = cache
-                .iter()
-                .min_by_key(|(_, (cached_at, _))| *cached_at)
-                .map(|(key, _)| key.clone())
-            {
-                cache.remove(&oldest);
-            }
-        }
-        cache.insert(
-            query.clone(),
-            (
-                std::time::Instant::now(),
-                serde_json::Value::Array(rows.clone()),
-            ),
-        );
-    }
-
-    if let Ok(payload) = serde_json::to_string(&rows) {
-        if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-            let _: Result<(), _> = redis.set(&persistent_cache_key, payload).await;
-        }
-    }
-
-    let suggestions: Vec<AddressRecord> = rows
-        .into_iter()
-        .filter_map(value_to_address_record)
-        .collect();
-
-    debug!(
-        cache_hit = false,
-        suggestion_count = suggestions.len(),
-        "places.address_search_completed"
-    );
-
-    Ok(Json(suggestions))
+    };
+    plan.resolve(&state).await.map(Json)
 }
 
 fn search_cache_key(query: &str, limit: u8) -> String {
@@ -276,40 +178,11 @@ async fn create_place(
     State(state): State<AppState>,
     Json(body): Json<PlaceBody>,
 ) -> Result<Json<PlaceRecord>, AppError> {
-    validate_place_body(&body)?;
-
-    let mut tx = state.pool.begin().await?;
-    let address_id = upsert_address(&mut tx, &body.address).await?;
-    let cost_profile_id = upsert_cost_profile(
-        &mut tx,
-        auth.user_id,
-        None,
-        body.charging.as_ref(),
-        &body.name,
-    )
-    .await?;
-
-    let place_id = sqlx::query_scalar!(
-        r#"INSERT INTO panda.geofences
-           (user_id, name, latitude, longitude, radius_m, address_id, is_home, is_work, cost_profile_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           RETURNING id"#,
-        auth.user_id,
-        body.name,
-        body.address.latitude,
-        body.address.longitude,
-        body.radius_m.unwrap_or(75.0),
-        address_id,
-        body.is_home.unwrap_or(false),
-        body.is_work.unwrap_or(false),
-        cost_profile_id,
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-
-    get_place(auth, State(state), Path(place_id)).await
+    let committed = workflow::PlaceMutation::create(auth.user_id, body)?
+        .commit(&state.pool)
+        .await?;
+    let id = committed.finish(&state.pool).await?;
+    get_place(auth, State(state), Path(id)).await
 }
 
 async fn update_place(
@@ -318,74 +191,11 @@ async fn update_place(
     Path(id): Path<Uuid>,
     Json(body): Json<PlaceBody>,
 ) -> Result<Json<PlaceRecord>, AppError> {
-    validate_place_body(&body)?;
-
-    let existing = sqlx::query!(
-        "SELECT cost_profile_id FROM panda.geofences WHERE id = $1 AND user_id = $2",
-        id,
-        auth.user_id
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    let mut tx = state.pool.begin().await?;
-    let address_id = upsert_address(&mut tx, &body.address).await?;
-    let cost_profile_id = upsert_cost_profile(
-        &mut tx,
-        auth.user_id,
-        existing.cost_profile_id,
-        body.charging.as_ref(),
-        &body.name,
-    )
-    .await?;
-
-    let updated = sqlx::query!(
-        r#"UPDATE panda.geofences
-           SET name = $3,
-               latitude = $4,
-               longitude = $5,
-               radius_m = $6,
-               address_id = $7,
-               is_home = $8,
-               is_work = $9,
-               cost_profile_id = $10,
-               updated_at = now()
-           WHERE id = $1 AND user_id = $2"#,
-        id,
-        auth.user_id,
-        body.name,
-        body.address.latitude,
-        body.address.longitude,
-        body.radius_m.unwrap_or(75.0),
-        address_id,
-        body.is_home.unwrap_or(false),
-        body.is_work.unwrap_or(false),
-        cost_profile_id,
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    if updated.rows_affected() == 0 {
-        return Err(AppError::NotFound);
-    }
-
-    // Keep each linked automatic session's explicit profile synchronized with
-    // the place before recomputing. This also clears a removed place profile.
-    let sessions = sqlx::query_scalar::<_, Uuid>(SYNC_LINKED_SESSION_COST_PROFILE_SQL)
-        .bind(id)
-        .bind(cost_profile_id)
-        .fetch_all(&mut *tx)
+    let committed = workflow::PlaceMutation::update(&state.pool, auth.user_id, id, body)
+        .await?
+        .commit(&state.pool)
         .await?;
-
-    tx.commit().await?;
-
-    // Place pricing is an automatic policy. Explicit Free/Manual session
-    // overrides are excluded above and retain their precedence.
-    for session_id in sessions {
-        recompute_charge_session_cost(&state.pool, session_id).await?;
-    }
-
+    let id = committed.finish(&state.pool).await?;
     get_place(auth, State(state), Path(id)).await
 }
 
@@ -394,18 +204,7 @@ async fn delete_place(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let result = sqlx::query!(
-        "DELETE FROM panda.geofences WHERE id = $1 AND user_id = $2",
-        id,
-        auth.user_id
-    )
-    .execute(&state.pool)
-    .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound);
-    }
-
+    workflow::delete_owned_place(&state.pool, auth.user_id, id).await?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
@@ -780,3 +579,8 @@ mod tests {
 #[cfg(test)]
 #[path = "__tests__/places_profiles/contracts.rs"]
 mod places_profiles_contracts;
+
+#[path = "places/search.rs"]
+mod search;
+#[path = "places/workflow.rs"]
+mod workflow;

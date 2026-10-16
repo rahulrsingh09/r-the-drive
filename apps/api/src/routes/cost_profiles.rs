@@ -62,22 +62,10 @@ async fn list_profiles(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ProfileListResponse>, AppError> {
-    let rows = sqlx::query_as::<_, CostProfile>(
-        r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
-              timezone, tou_periods,
-                  effective_from, effective_to, created_at
-           FROM panda.cost_profiles
-           WHERE user_id = $1
-           ORDER BY name"#,
-    )
-    .bind(auth.user_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(AppError::from)?;
-
-    Ok(Json(ProfileListResponse {
-        cost_profiles: rows,
-    }))
+    let cost_profiles = workflow::ProfileSelection::All(auth.user_id)
+        .load(&state.pool)
+        .await?;
+    Ok(Json(ProfileListResponse { cost_profiles }))
 }
 
 async fn get_profile(
@@ -85,21 +73,13 @@ async fn get_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CostProfile>, AppError> {
-    let row = sqlx::query_as::<_, CostProfile>(
-        r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
-              timezone, tou_periods,
-                  effective_from, effective_to, created_at
-           FROM panda.cost_profiles
-           WHERE id = $1 AND user_id = $2"#,
-    )
-    .bind(id)
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
+    workflow::ProfileSelection::One {
+        owner: auth.user_id,
+        id,
+    }
+    .require(&state.pool)
     .await
-    .map_err(AppError::from)?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
+    .map(Json)
 }
 
 async fn create_profile(
@@ -107,38 +87,10 @@ async fn create_profile(
     State(state): State<AppState>,
     Json(body): Json<CreateProfileBody>,
 ) -> Result<Json<CostProfile>, AppError> {
-    let tou_periods = normalize_tou_periods(body.tou_periods.clone())?;
-    validate_profile_details(
-        &body.billing_type,
-        body.rate,
-        body.timezone.as_deref(),
-        &tou_periods,
-    )?;
-
-    let row = sqlx::query_as::<_, CostProfile>(
-        r#"INSERT INTO panda.cost_profiles
-           (user_id, name, billing_type, rate, session_fee, currency,
-            timezone, tou_periods, effective_from, effective_to)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
-                     timezone, tou_periods,
-                     effective_from, effective_to, created_at"#,
-    )
-    .bind(auth.user_id)
-    .bind(body.name)
-    .bind(body.billing_type)
-    .bind(body.rate)
-    .bind(body.session_fee.unwrap_or(0.0))
-    .bind(body.currency.as_deref().unwrap_or("USD"))
-    .bind(body.timezone)
-    .bind(tou_periods)
-    .bind(body.effective_from)
-    .bind(body.effective_to)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(AppError::from)?;
-
-    Ok(Json(row))
+    workflow::ProfileMutation::create(auth.user_id, body)?
+        .persist(&state.pool)
+        .await
+        .map(Json)
 }
 
 async fn update_profile(
@@ -147,72 +99,11 @@ async fn update_profile(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateProfileBody>,
 ) -> Result<Json<CostProfile>, AppError> {
-    let current = sqlx::query_as::<_, CostProfile>(
-        r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
-                  timezone, tou_periods,
-                  effective_from, effective_to, created_at
-           FROM panda.cost_profiles
-           WHERE id = $1 AND user_id = $2"#,
-    )
-    .bind(id)
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::from)?
-    .ok_or(AppError::NotFound)?;
-
-    let billing_type = body
-        .billing_type
-        .clone()
-        .unwrap_or_else(|| current.billing_type.clone());
-    let rate = body.rate.unwrap_or(current.rate);
-    let session_fee = body.session_fee.unwrap_or(current.session_fee);
-    let currency = body
-        .currency
-        .clone()
-        .unwrap_or_else(|| current.currency.clone());
-    let timezone = body.timezone.clone().or_else(|| current.timezone.clone());
-    let tou_periods = normalize_tou_periods(
-        body.tou_periods
-            .clone()
-            .or_else(|| Some(current.tou_periods.clone())),
-    )?;
-
-    validate_profile_details(&billing_type, rate, timezone.as_deref(), &tou_periods)?;
-
-    let row = sqlx::query_as::<_, CostProfile>(
-        r#"UPDATE panda.cost_profiles SET
-           name           = $3,
-           billing_type   = $4,
-           rate           = $5,
-           session_fee    = $6,
-           currency       = $7,
-           timezone       = $8,
-           tou_periods    = $9,
-           effective_from = $10,
-           effective_to   = $11
-           WHERE id = $1 AND user_id = $2
-           RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
-                     timezone, tou_periods,
-                     effective_from, effective_to, created_at"#,
-    )
-    .bind(id)
-    .bind(auth.user_id)
-    .bind(body.name.unwrap_or(current.name))
-    .bind(billing_type)
-    .bind(rate)
-    .bind(session_fee)
-    .bind(currency)
-    .bind(timezone)
-    .bind(tou_periods)
-    .bind(body.effective_from.or(current.effective_from))
-    .bind(body.effective_to.or(current.effective_to))
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(AppError::from)?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
+    workflow::ProfileMutation::update(&state.pool, auth.user_id, id, body)
+        .await?
+        .persist(&state.pool)
+        .await
+        .map(Json)
 }
 
 async fn delete_profile(
@@ -220,17 +111,12 @@ async fn delete_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let result = sqlx::query("DELETE FROM panda.cost_profiles WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(auth.user_id)
-        .execute(&state.pool)
-        .await
-        .map_err(AppError::from)?;
-
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound);
+    workflow::ProfileSelection::One {
+        owner: auth.user_id,
+        id,
     }
-
+    .delete(&state.pool)
+    .await?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
@@ -295,3 +181,6 @@ fn validate_profile_details(
 
     Ok(())
 }
+
+#[path = "cost_profiles/workflow.rs"]
+mod workflow;
