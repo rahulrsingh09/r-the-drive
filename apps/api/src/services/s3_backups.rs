@@ -429,3 +429,7 @@ pub async fn list(settings: &S3Settings) -> Result<Vec<RemoteObject>> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "__tests__/backup_workflows/s3.rs"]
+mod workflow_contracts;

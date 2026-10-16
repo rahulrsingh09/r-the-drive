@@ -1,0 +1,384 @@
+[
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/",
+        "query": {
+          "list-type": "2",
+          "prefix": "fixture"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "HEAD",
+        "path": "/bucket/fixture/old.rma.tar.gz",
+        "query": {},
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/",
+        "query": {
+          "continuation-token": "page-two",
+          "list-type": "2",
+          "prefix": "fixture"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "HEAD",
+        "path": "/bucket/fixture/new.rma.tar.gz",
+        "query": {},
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "HEAD",
+        "path": "/bucket/fixture/null.rma.tar.gz",
+        "query": {},
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "paginated stable selection",
+    "rows": [
+      {
+        "checksum_sha256": "new-sha",
+        "created_at": "2026-01-02T22:35:06Z",
+        "file_name": "new.rma.tar.gz",
+        "key": "fixture/new.rma.tar.gz",
+        "metadata": {
+          "panda-created-at": "2026-01-03T04:05:06+05:30",
+          "panda-format": "panda-recovery-v3",
+          "panda-sha256": "new-sha"
+        },
+        "size_bytes": 11
+      },
+      {
+        "checksum_sha256": "",
+        "created_at": "2026-01-02T22:35:06Z",
+        "file_name": "null.rma.tar.gz",
+        "key": "fixture/null.rma.tar.gz",
+        "metadata": {
+          "panda-created-at": "2026-01-03T04:05:06+05:30",
+          "panda-format": "panda-recovery-v3",
+          "panda-sha256": ""
+        },
+        "size_bytes": 0
+      },
+      {
+        "checksum_sha256": "old-sha",
+        "created_at": "2026-01-01T00:00:00Z",
+        "file_name": "old.rma.tar.gz",
+        "key": "fixture/old.rma.tar.gz",
+        "metadata": {
+          "panda-created-at": "invalid",
+          "panda-format": "panda-recovery-v3",
+          "panda-sha256": "old-sha"
+        },
+        "size_bytes": 8
+      }
+    ]
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/",
+        "query": {
+          "list-type": "2",
+          "prefix": "fixture"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "list failure",
+    "error": "S3 catalog listing failed: service error: unhandled error (InvalidRequest): Error { code: \"InvalidRequest\", message: \"synthetic rejection\" }"
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/",
+        "query": {
+          "list-type": "2",
+          "prefix": "fixture"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "HEAD",
+        "path": "/bucket/fixture/a.rma.tar.gz",
+        "query": {},
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "head failure",
+    "error": "S3 catalog metadata lookup failed: service error: unhandled error: Error"
+  },
+  {
+    "calls": [
+      {
+        "bytes": 23,
+        "metadata": {
+          "x-amz-meta-panda-created-at": "2026-01-01T00:00:00+00:00",
+          "x-amz-meta-panda-format": "panda-recovery-v3",
+          "x-amz-meta-panda-run-id": "00000000-0000-0000-0000-000000000000",
+          "x-amz-meta-panda-sha256": "fixed-checksum"
+        },
+        "method": "PUT",
+        "path": "/bucket/fixture/upload.rma.tar.gz",
+        "query": {
+          "x-id": "PutObject"
+        },
+        "sha256": "1ccb8853258c68b3773c7670398b04a04a78bdd295ea11c3d65107524689e94e"
+      }
+    ],
+    "case": "single upload metadata and bytes"
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/fixture/object.rma.tar.gz",
+        "query": {
+          "x-id": "GetObject"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "download",
+    "result": {
+      "bytes": "666978656420646f776e6c6f6164"
+    }
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/fixture/object.rma.tar.gz",
+        "query": {
+          "x-id": "GetObject"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "oversize download",
+    "result": {
+      "error": "S3 package exceeds the compressed byte limit"
+    }
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "GET",
+        "path": "/bucket/fixture/object.rma.tar.gz",
+        "query": {
+          "x-id": "GetObject"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "empty download",
+    "result": {
+      "bytes": ""
+    }
+  },
+  {
+    "calls": [],
+    "case": "prefix denied before transport",
+    "error": "S3 object is outside the configured package prefix"
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {
+          "x-amz-meta-panda-created-at": "2026-01-01T00:00:00+00:00",
+          "x-amz-meta-panda-format": "panda-recovery-v3",
+          "x-amz-meta-panda-run-id": "00000000-0000-0000-0000-000000000000",
+          "x-amz-meta-panda-sha256": "fixed-checksum"
+        },
+        "method": "POST",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploads": ""
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 67108864,
+        "metadata": {},
+        "method": "PUT",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "partNumber": "1",
+          "uploadId": "fixed-upload",
+          "x-id": "UploadPart"
+        },
+        "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351"
+      },
+      {
+        "bytes": 3,
+        "metadata": {},
+        "method": "PUT",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "partNumber": "2",
+          "uploadId": "fixed-upload",
+          "x-id": "UploadPart"
+        },
+        "sha256": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c"
+      },
+      {
+        "bytes": 215,
+        "metadata": {},
+        "method": "POST",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploadId": "fixed-upload"
+        },
+        "sha256": "5f8660c274cf748fb55ae731665194c18cd6fb309220df8c18fe31aff1d32dd8"
+      }
+    ],
+    "case": "multipart",
+    "result": {
+      "Ok": null
+    }
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {
+          "x-amz-meta-panda-created-at": "2026-01-01T00:00:00+00:00",
+          "x-amz-meta-panda-format": "panda-recovery-v3",
+          "x-amz-meta-panda-run-id": "00000000-0000-0000-0000-000000000000",
+          "x-amz-meta-panda-sha256": "fixed-checksum"
+        },
+        "method": "POST",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploads": ""
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 67108864,
+        "metadata": {},
+        "method": "PUT",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "partNumber": "1",
+          "uploadId": "fixed-upload",
+          "x-id": "UploadPart"
+        },
+        "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "DELETE",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploadId": "fixed-upload",
+          "x-id": "AbortMultipartUpload"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "part failure abort",
+    "result": {
+      "Err": "S3 multipart upload failed at part 1: service error: unhandled error (InvalidRequest): Error { code: \"InvalidRequest\", message: \"synthetic rejection\" }"
+    }
+  },
+  {
+    "calls": [
+      {
+        "bytes": 0,
+        "metadata": {
+          "x-amz-meta-panda-created-at": "2026-01-01T00:00:00+00:00",
+          "x-amz-meta-panda-format": "panda-recovery-v3",
+          "x-amz-meta-panda-run-id": "00000000-0000-0000-0000-000000000000",
+          "x-amz-meta-panda-sha256": "fixed-checksum"
+        },
+        "method": "POST",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploads": ""
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bytes": 67108864,
+        "metadata": {},
+        "method": "PUT",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "partNumber": "1",
+          "uploadId": "fixed-upload",
+          "x-id": "UploadPart"
+        },
+        "sha256": "3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351"
+      },
+      {
+        "bytes": 3,
+        "metadata": {},
+        "method": "PUT",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "partNumber": "2",
+          "uploadId": "fixed-upload",
+          "x-id": "UploadPart"
+        },
+        "sha256": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c"
+      },
+      {
+        "bytes": 215,
+        "metadata": {},
+        "method": "POST",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploadId": "fixed-upload"
+        },
+        "sha256": "5f8660c274cf748fb55ae731665194c18cd6fb309220df8c18fe31aff1d32dd8"
+      },
+      {
+        "bytes": 0,
+        "metadata": {},
+        "method": "DELETE",
+        "path": "/bucket/fixture/multipart.rma.tar.gz",
+        "query": {
+          "uploadId": "fixed-upload",
+          "x-id": "AbortMultipartUpload"
+        },
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "case": "complete failure abort",
+    "result": {
+      "Err": "could not complete S3 multipart upload: service error: unhandled error (InvalidRequest): Error { code: \"InvalidRequest\", message: \"synthetic rejection\" }"
+    }
+  }
+]

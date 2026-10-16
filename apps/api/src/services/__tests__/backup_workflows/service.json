@@ -1,0 +1,557 @@
+[
+  {
+    "case": "seed",
+    "state": {
+      "artifacts": [
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "1.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000065",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000001",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/1.rma.tar.gz",
+          "storage_type": "local"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "2.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/2.rma.tar.gz",
+          "storage_type": "local"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "3.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000067",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000003",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/3.rma.tar.gz",
+          "storage_type": "safety"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "4.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000068",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000004",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/4.rma.tar.gz",
+          "storage_type": "uploaded"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "5.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000069",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000005",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/5.rma.tar.gz",
+          "storage_type": "s3"
+        }
+      ],
+      "runs": [
+        {
+          "artifact_key": "<fixture-root>/backups/1.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000001",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/2.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000002",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/3.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000003",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/4.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000004",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/5.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000005",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        }
+      ]
+    }
+  },
+  {
+    "case": "retention minimum one",
+    "files": [
+      false,
+      true,
+      true
+    ],
+    "state": {
+      "artifacts": [
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "2.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/2.rma.tar.gz",
+          "storage_type": "local"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "3.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000067",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000003",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/3.rma.tar.gz",
+          "storage_type": "safety"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "4.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000068",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000004",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/4.rma.tar.gz",
+          "storage_type": "uploaded"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "5.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000069",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000005",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/5.rma.tar.gz",
+          "storage_type": "s3"
+        }
+      ],
+      "runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000001",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/2.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000002",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/3.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000003",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/4.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000004",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/5.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000005",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        }
+      ]
+    }
+  },
+  {
+    "case": "restart reconciles once",
+    "state": {
+      "artifacts": [
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "2.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/2.rma.tar.gz",
+          "storage_type": "local"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "3.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000067",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000003",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/3.rma.tar.gz",
+          "storage_type": "safety"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "4.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000068",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000004",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/4.rma.tar.gz",
+          "storage_type": "uploaded"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "5.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000069",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000005",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/5.rma.tar.gz",
+          "storage_type": "s3"
+        }
+      ],
+      "runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000001",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/2.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000002",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/3.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000003",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/4.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000004",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/5.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000005",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": null,
+          "completed_at": "<clock>",
+          "created_at": "<clock>",
+          "error_message": "Backup worker stopped before completion.",
+          "id": "00000000-0000-0000-0000-000000000006",
+          "phase": "failed",
+          "progress_percent": 10,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        }
+      ]
+    }
+  },
+  {
+    "case": "concurrent admission",
+    "error": "Conflict: A backup job is already running."
+  },
+  {
+    "case": "invalid settings fails durable run",
+    "error": "Validation error: Backup paths must contain ordinary relative path components.",
+    "state": {
+      "artifacts": [
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "2.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000066",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000002",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/2.rma.tar.gz",
+          "storage_type": "local"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "3.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000067",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000003",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/3.rma.tar.gz",
+          "storage_type": "safety"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "4.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000068",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000004",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/4.rma.tar.gz",
+          "storage_type": "uploaded"
+        },
+        {
+          "checksum_sha256": "fixture",
+          "created_at": "<clock>",
+          "file_name": "5.rma.tar.gz",
+          "id": "00000000-0000-0000-0000-000000000069",
+          "manifest": {},
+          "run_id": "00000000-0000-0000-0000-000000000005",
+          "size_bytes": 9,
+          "storage_path": "<fixture-root>/backups/5.rma.tar.gz",
+          "storage_type": "s3"
+        }
+      ],
+      "runs": [
+        {
+          "artifact_key": null,
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000001",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/2.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000002",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/3.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000003",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/4.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000004",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": "<fixture-root>/backups/5.rma.tar.gz",
+          "completed_at": null,
+          "created_at": "<clock>",
+          "error_message": null,
+          "id": "00000000-0000-0000-0000-000000000005",
+          "phase": "completed",
+          "progress_percent": 100,
+          "requested_by": null,
+          "started_at": null,
+          "status": "succeeded",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": null,
+          "completed_at": "<clock>",
+          "created_at": "<clock>",
+          "error_message": "Backup worker stopped before completion.",
+          "id": "00000000-0000-0000-0000-000000000006",
+          "phase": "failed",
+          "progress_percent": 10,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        },
+        {
+          "artifact_key": null,
+          "completed_at": "<clock>",
+          "created_at": "<clock>",
+          "error_message": "Validation error: Backup paths must contain ordinary relative path components.",
+          "id": "00000000-0000-0000-0000-000000000007",
+          "phase": "failed",
+          "progress_percent": 0,
+          "requested_by": null,
+          "started_at": null,
+          "status": "failed",
+          "trigger": "manual",
+          "updated_at": "<clock>"
+        }
+      ]
+    }
+  }
+]

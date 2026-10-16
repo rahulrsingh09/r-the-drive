@@ -2536,3 +2536,7 @@ mod tests {
 #[cfg(test)]
 #[path = "backups_recovery_operations_tests.rs"]
 mod recovery_operations_tests;
+
+#[cfg(test)]
+#[path = "__tests__/backup_workflows/service.rs"]
+mod workflow_contracts;
