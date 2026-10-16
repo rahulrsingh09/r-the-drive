@@ -1967,6 +1967,10 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 }
 
 #[cfg(test)]
+#[path = "external_connections/__tests__/contracts.rs"]
+mod contracts;
+
+#[cfg(test)]
 mod tests {
     use super::{
         active_endpoint, basemap_proxy_url, basemap_styles, carto_basemap_key_query,
@@ -2298,7 +2302,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable TimescaleDB DATABASE_URL and REDIS_URL"]
     async fn authorization_weather_configuration_is_admin_only_and_fail_closed() {
-        let fixture = crate::authorization_test_support::Fixture::new().await;
+        let fixture = super::contracts::fixture::Fixture::new().await;
         let pool = &fixture.state.pool;
         connections::ensure_defaults(pool).await.unwrap();
         let admin = fixture.user("admin").await;
@@ -2383,7 +2387,7 @@ mod tests {
         fixture.cleanup().await;
     }
 
-    fn basemap_settings(
+    pub(super) fn basemap_settings(
         mode: &str,
         provider: &str,
         has_key: bool,
