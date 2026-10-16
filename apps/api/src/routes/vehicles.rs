@@ -44,6 +44,11 @@ use crate::{
     },
 };
 
+#[path = "vehicles/diagnostics/lanes.rs"]
+mod lane_diagnostics;
+#[path = "vehicles/diagnostics/raw.rs"]
+mod raw_diagnostics;
+
 #[path = "vehicles/artwork.rs"]
 mod artwork;
 #[path = "vehicles/connection.rs"]
@@ -4182,38 +4187,9 @@ fn open_closures_json(closures: &[(&str, Option<bool>)]) -> serde_json::Value {
     )
 }
 
-const TELEMETRY_LANES: &[&str] = &[
-    "battery", "drive", "location", "climate", "charging", "health",
-];
-
-const TELEMETRY_LANES_QUERY: &str = r#"
-        SELECT date_bin(make_interval(secs => $4::double precision), t.ts, $2) AS bucket,
-               AVG(t.latitude) AS latitude,
-               AVG(t.longitude) AS longitude,
-               AVG(t.altitude_m) AS altitude_m,
-               AVG(t.speed_mph) AS speed_mph,
-               AVG(t.battery_level) AS battery_level,
-               AVG(t.battery_capacity_wh) AS battery_capacity_wh,
-               AVG(t.distance_to_empty_mi) AS distance_to_empty_mi,
-               AVG(t.battery_limit) AS battery_limit,
-               AVG(t.time_to_end_of_charge_min)::double precision AS time_to_end_of_charge_min,
-               AVG(t.cabin_temp_c) AS cabin_temp_c,
-               AVG(t.driver_temp_c) AS driver_temp_c,
-               AVG(t.outside_temp_c) AS outside_temp_c,
-               AVG(t.power_kw) AS power_kw,
-               AVG(t.regen_power_kw) AS regen_power_kw,
-               AVG(t.heading_deg) AS heading_deg,
-               AVG(t.odometer_miles) AS odometer_miles,
-               AVG(t.tire_fl_psi) AS tire_fl_psi,
-               AVG(t.tire_fr_psi) AS tire_fr_psi,
-               AVG(t.tire_rl_psi) AS tire_rl_psi,
-               AVG(t.tire_rr_psi) AS tire_rr_psi
-        FROM timeseries.telemetry t
-        WHERE t.vehicle_id = $1 AND t.ts >= $2 AND t.ts <= $3
-        GROUP BY bucket
-        ORDER BY bucket
-        LIMIT $5
-        "#;
+#[cfg(test)]
+static TELEMETRY_LANES_QUERY: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(lane_diagnostics::full_query);
 
 async fn telemetry_lanes(
     State(state): State<AppState>,
@@ -4223,184 +4199,23 @@ async fn telemetry_lanes(
 ) -> Result<Json<TelemetryLaneFrame>, AppError> {
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-
-    let requested_lanes = parse_telemetry_lanes(params.lanes.as_deref())?;
-    let to = params.to.unwrap_or_else(chrono::Utc::now);
-    let from = params
-        .from
-        .unwrap_or_else(|| to - chrono::Duration::hours(24));
-    validate_raw_time_bounds(Some(from), Some(to))?;
-    if to - from > chrono::Duration::days(90) {
-        return Err(AppError::Validation(
-            "telemetry lane windows cannot exceed 90 days".into(),
-        ));
-    }
-
-    let max_points = params.max_points.unwrap_or(256).clamp(64, 512);
-    let resolution_seconds =
-        resolve_telemetry_resolution(params.resolution.as_deref(), from, to, max_points)?;
-    let rows = sqlx::query_as::<_, TelemetryLaneRow>(TELEMETRY_LANES_QUERY)
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(resolution_seconds as f64)
-        .bind(max_points)
-        .fetch_all(&state.pool)
-        .await?;
-
-    let mut lanes = BTreeMap::new();
-    for lane in requested_lanes {
-        let data = match lane {
-            "battery" => telemetry_lane(
-                &rows,
-                &[
-                    ("battery_level", |row| row.battery_level),
-                    ("battery_capacity_wh", |row| row.battery_capacity_wh),
-                    ("distance_to_empty_mi", |row| row.distance_to_empty_mi),
-                    ("battery_limit", |row| row.battery_limit),
-                ],
-            ),
-            "drive" => telemetry_lane(
-                &rows,
-                &[
-                    ("speed_mph", |row| row.speed_mph),
-                    ("odometer_miles", |row| row.odometer_miles),
-                    ("power_kw", |row| row.power_kw),
-                    ("regen_power_kw", |row| row.regen_power_kw),
-                ],
-            ),
-            "location" => telemetry_lane(
-                &rows,
-                &[
-                    ("latitude", |row| row.latitude),
-                    ("longitude", |row| row.longitude),
-                    ("altitude_m", |row| row.altitude_m),
-                    ("heading_deg", |row| row.heading_deg),
-                ],
-            ),
-            "climate" => telemetry_lane(
-                &rows,
-                &[
-                    ("cabin_temp_c", |row| row.cabin_temp_c),
-                    ("driver_temp_c", |row| row.driver_temp_c),
-                    ("outside_temp_c", |row| row.outside_temp_c),
-                ],
-            ),
-            "charging" => telemetry_lane(
-                &rows,
-                &[
-                    ("time_to_end_of_charge_min", |row| {
-                        row.time_to_end_of_charge_min
-                    }),
-                    ("power_kw", |row| row.power_kw),
-                    ("regen_power_kw", |row| row.regen_power_kw),
-                ],
-            ),
-            "health" => telemetry_lane(
-                &rows,
-                &[
-                    ("tire_fl_psi", |row| row.tire_fl_psi),
-                    ("tire_fr_psi", |row| row.tire_fr_psi),
-                    ("tire_rl_psi", |row| row.tire_rl_psi),
-                    ("tire_rr_psi", |row| row.tire_rr_psi),
-                ],
-            ),
-            _ => unreachable!("lane names are validated before querying"),
-        };
-        lanes.insert(lane.to_string(), data);
-    }
-
-    Ok(Json(TelemetryLaneFrame {
-        vehicle_id: vid,
-        window: TelemetryLaneWindow {
-            from,
-            to,
-            resolution_seconds,
-            approximate: resolution_seconds > 1,
-        },
-        spine: rows.iter().map(|row| row.bucket).collect(),
-        lanes,
-        truncated: rows.len() >= max_points as usize,
-    }))
+    let plan = lane_diagnostics::LanePlan::compile(params)?;
+    Ok(Json(plan.read(&state.pool, vid).await?))
 }
 
+#[cfg(test)]
 fn parse_telemetry_lanes(value: Option<&str>) -> Result<Vec<&'static str>, AppError> {
-    let requested = value.unwrap_or("battery,drive");
-    if requested.len() > 256 || requested.chars().any(char::is_control) {
-        return Err(AppError::Validation(
-            "telemetry lane selector is invalid".into(),
-        ));
-    }
-    let mut lanes = Vec::new();
-    for lane in requested
-        .split(',')
-        .map(str::trim)
-        .filter(|lane| !lane.is_empty())
-    {
-        let Some(&known) = TELEMETRY_LANES.iter().find(|known| **known == lane) else {
-            return Err(AppError::Validation(format!(
-                "unknown telemetry lane: {lane}"
-            )));
-        };
-        if !lanes.contains(&known) {
-            lanes.push(known);
-        }
-    }
-    if lanes.is_empty() || lanes.len() > 4 {
-        return Err(AppError::Validation(
-            "select between 1 and 4 telemetry lanes".into(),
-        ));
-    }
-    Ok(lanes)
+    lane_diagnostics::names(value)
 }
 
+#[cfg(test)]
 fn resolve_telemetry_resolution(
     value: Option<&str>,
     from: chrono::DateTime<chrono::Utc>,
     to: chrono::DateTime<chrono::Utc>,
     max_points: i64,
 ) -> Result<i64, AppError> {
-    match value.unwrap_or("auto") {
-        "auto" => Ok(
-            ((to - from).num_seconds().max(1) as f64 / max_points as f64)
-                .ceil()
-                .max(1.0) as i64,
-        ),
-        "1m" => Ok(60),
-        "5m" => Ok(300),
-        "1h" => Ok(3600),
-        other => Err(AppError::Validation(format!(
-            "unsupported telemetry resolution: {other}"
-        ))),
-    }
-}
-
-type TelemetryLaneField = (&'static str, fn(&TelemetryLaneRow) -> Option<f64>);
-
-fn telemetry_lane(rows: &[TelemetryLaneRow], fields: &[TelemetryLaneField]) -> TelemetryLane {
-    let numeric = fields
-        .iter()
-        .map(|(name, value)| {
-            (
-                (*name).to_string(),
-                rows.iter().map(value).collect::<Vec<Option<f64>>>(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let coverage = numeric
-        .iter()
-        .map(|(name, values)| {
-            (
-                name.clone(),
-                values.iter().filter(|value| value.is_some()).count() as i64,
-            )
-        })
-        .collect();
-    TelemetryLane {
-        numeric,
-        coverage,
-        source: "bucketed_normalized_telemetry",
-    }
+    lane_diagnostics::resolution(value, from, to, max_points)
 }
 
 async fn raw_vehicle_data(
@@ -4411,123 +4226,8 @@ async fn raw_vehicle_data(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-    validate_raw_time_bounds(params.from, params.to)?;
-    let selected_fields = parse_raw_fields(params.fields.as_deref())?;
-    let selected_fields_csv = selected_fields
-        .iter()
-        .map(|field| (*field).to_string())
-        .collect::<Vec<_>>();
-    let per_page = params.per_page.or(params.limit).unwrap_or(25).clamp(1, 200);
-    let page = params.page.unwrap_or(1).max(1);
-    let offset = (page - 1).saturating_mul(per_page);
-    let search = params
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let where_clause =
-        raw_telemetry_where_clause(&selected_fields, params.populated_only.unwrap_or(false));
-
-    let samples = sqlx::query_as::<_, RawVehicleSampleRow>(
-        sqlx::AssertSqlSafe(format!(r#"
-        SELECT ts, latitude, longitude, altitude_m, speed_mph,
-               battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-               power_state, charger_state, charger_status, time_to_end_of_charge_min,
-               drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
-               hvac_active, power_kw, regen_power_kw, heading_deg, odometer_miles,
-               tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-               tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
-               tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
-               door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
-               door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
-               closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
-               ota_current_version, ota_available_version, ota_status, ota_current_status,
-               hv_thermal_event, twelve_volt_health, is_online
-        FROM timeseries.telemetry t
-        WHERE {where_clause}
-        ORDER BY t.ts DESC
-        LIMIT $5 OFFSET $6
-        "#))
-    )
-    .bind(vid)
-    .bind(params.from)
-    .bind(params.to)
-    .bind(search)
-    .bind(per_page)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(sqlx::AssertSqlSafe(format!(
-        r#"
-        SELECT min(ts) AS first_event_at,
-               max(ts) AS last_event_at,
-               count(*) AS sample_count,
-               count(odometer_miles) AS odometer_samples,
-               count(battery_level) AS battery_samples,
-               count(distance_to_empty_mi) AS range_samples,
-               count(outside_temp_c) AS outside_temp_samples,
-               count(power_kw) AS power_samples,
-               count(regen_power_kw) AS regen_samples,
-               greatest(count(tire_fl_psi), count(tire_fl_status)) AS tire_pressure_samples,
-               count(door_front_left_locked) AS lock_samples,
-               count(ota_status) AS software_samples
-        FROM timeseries.telemetry t
-        WHERE {where_clause}
-        "#
-    )))
-    .bind(vid)
-    .bind(params.from)
-    .bind(params.to)
-    .bind(search)
-    .fetch_one(&state.pool)
-    .await?;
-
-    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT COUNT(*)::BIGINT FROM timeseries.telemetry t WHERE {where_clause}",
-    )))
-    .bind(vid)
-    .bind(params.from)
-    .bind(params.to)
-    .bind(search)
-    .fetch_one(&state.pool)
-    .await?;
-
-    let field_coverage = sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(sqlx::AssertSqlSafe(
-        raw_field_coverage_query(&where_clause),
-    ))
-    .bind(vid)
-    .bind(params.from)
-    .bind(params.to)
-    .bind(search)
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(Json(serde_json::json!({
-        "vehicle_id": vid,
-        "coverage": {
-            "first_event_at": coverage.first_event_at,
-            "last_event_at": coverage.last_event_at,
-            "sample_count": coverage.sample_count,
-            "odometer_samples": coverage.odometer_samples,
-            "battery_samples": coverage.battery_samples,
-            "range_samples": coverage.range_samples,
-            "outside_temp_samples": coverage.outside_temp_samples,
-            "power_samples": coverage.power_samples,
-            "regen_samples": coverage.regen_samples,
-            "tire_pressure_samples": coverage.tire_pressure_samples,
-            "lock_samples": coverage.lock_samples,
-            "software_samples": coverage.software_samples
-        },
-        "samples": samples.into_iter().map(raw_sample_json).collect::<Vec<_>>(),
-        "total": total,
-        "limit": per_page,
-        "offset": offset,
-        "page": page,
-        "per_page": per_page,
-        "selected_fields": selected_fields_csv,
-        "field_coverage": field_coverage
-    })))
+    let plan = raw_diagnostics::RawPlan::compile(params)?;
+    Ok(Json(plan.read(&state.pool, vid).await?))
 }
 
 async fn raw_vehicle_events(
@@ -4664,132 +4364,19 @@ fn validate_raw_time_bounds(
 }
 
 fn parse_raw_fields(fields: Option<&str>) -> Result<Vec<&'static str>, AppError> {
-    let Some(fields) = fields.map(str::trim).filter(|fields| !fields.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    if fields.len() > 2048 || fields.chars().any(char::is_control) {
-        return Err(AppError::Validation(
-            "telemetry field selector is invalid".into(),
-        ));
-    }
-    let mut selected = Vec::new();
-    for field in fields
-        .split(',')
-        .map(str::trim)
-        .filter(|field| !field.is_empty())
-    {
-        let Some(&known) = RAW_TELEMETRY_FIELDS.iter().find(|known| **known == field) else {
-            return Err(AppError::Validation(format!(
-                "unknown telemetry field: {field}"
-            )));
-        };
-        if !selected.contains(&known) {
-            selected.push(known);
-        }
-    }
-    Ok(selected)
+    raw_diagnostics::select_fields(fields)
 }
 
 fn raw_telemetry_where_clause(selected_fields: &[&str], populated_only: bool) -> String {
-    let mut clauses = vec![
-        "t.vehicle_id = $1".to_string(),
-        "($2::timestamptz IS NULL OR t.ts >= $2)".to_string(),
-        "($3::timestamptz IS NULL OR t.ts <= $3)".to_string(),
-        "($4::text IS NULL OR to_jsonb(t)::text ILIKE '%' || $4 || '%')".to_string(),
-    ];
-    let fields = if selected_fields.is_empty() {
-        RAW_TELEMETRY_FIELDS
-    } else {
-        selected_fields
-    };
-    if populated_only || !selected_fields.is_empty() {
-        clauses.push(format!(
-            "({})",
-            fields
-                .iter()
-                .map(|field| format!("t.{field} IS NOT NULL"))
-                .collect::<Vec<_>>()
-                .join(" OR "),
-        ));
-    }
-    clauses.join(" AND ")
+    raw_diagnostics::predicate(selected_fields, populated_only)
 }
 
 fn raw_field_coverage_query(where_clause: &str) -> String {
-    let field_names = RAW_TELEMETRY_FIELDS
-        .iter()
-        .map(|field| format!("'{field}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let field_counts = RAW_TELEMETRY_FIELDS
-        .iter()
-        .map(|field| format!("COUNT(t.{field})"))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        "SELECT unnest(ARRAY[{field_names}]::text[]) AS field, \
-                unnest(ARRAY[{field_counts}]::bigint[]) AS sample_count \
-         FROM timeseries.telemetry t WHERE {where_clause}"
-    )
+    raw_diagnostics::field_coverage_query(where_clause)
 }
 
 fn raw_sample_json(r: RawVehicleSampleRow) -> serde_json::Value {
-    serde_json::json!({
-        "ts": r.ts,
-        "latitude": r.latitude,
-        "longitude": r.longitude,
-        "altitude_m": r.altitude_m,
-        "speed_mph": r.speed_mph,
-        "battery_level": r.battery_level,
-        "battery_capacity_wh": r.battery_capacity_wh,
-        "distance_to_empty_mi": r.distance_to_empty_mi,
-        "battery_limit": r.battery_limit,
-        "power_state": r.power_state,
-        "charger_state": r.charger_state,
-        "charger_status": r.charger_status,
-        "time_to_end_of_charge_min": r.time_to_end_of_charge_min,
-        "drive_mode": r.drive_mode,
-        "gear_status": r.gear_status,
-        "cabin_temp_c": r.cabin_temp_c,
-        "driver_temp_c": r.driver_temp_c,
-        "outside_temp_c": r.outside_temp_c,
-        "hvac_active": r.hvac_active,
-        "power_kw": r.power_kw,
-        "regen_power_kw": r.regen_power_kw,
-        "heading_deg": r.heading_deg,
-        "odometer_miles": r.odometer_miles,
-        "tire_fl_psi": r.tire_fl_psi,
-        "tire_fr_psi": r.tire_fr_psi,
-        "tire_rl_psi": r.tire_rl_psi,
-        "tire_rr_psi": r.tire_rr_psi,
-        "tire_fl_status": r.tire_fl_status,
-        "tire_fr_status": r.tire_fr_status,
-        "tire_rl_status": r.tire_rl_status,
-        "tire_rr_status": r.tire_rr_status,
-        "tire_fl_valid": r.tire_fl_valid,
-        "tire_fr_valid": r.tire_fr_valid,
-        "tire_rl_valid": r.tire_rl_valid,
-        "tire_rr_valid": r.tire_rr_valid,
-        "door_front_left_locked": r.door_front_left_locked,
-        "door_front_right_locked": r.door_front_right_locked,
-        "door_rear_left_locked": r.door_rear_left_locked,
-        "door_rear_right_locked": r.door_rear_right_locked,
-        "door_front_left_closed": r.door_front_left_closed,
-        "door_front_right_closed": r.door_front_right_closed,
-        "door_rear_left_closed": r.door_rear_left_closed,
-        "door_rear_right_closed": r.door_rear_right_closed,
-        "closure_frunk_closed": r.closure_frunk_closed,
-        "closure_liftgate_closed": r.closure_liftgate_closed,
-        "closure_tailgate_closed": r.closure_tailgate_closed,
-        "ota_current_version": r.ota_current_version,
-        "ota_available_version": r.ota_available_version,
-        "ota_status": r.ota_status,
-        "ota_current_status": r.ota_current_status,
-        "hv_thermal_event": r.hv_thermal_event,
-        "twelve_volt_health": r.twelve_volt_health,
-        "is_online": r.is_online
-    })
+    raw_diagnostics::project_sample(r)
 }
 
 fn raw_event_summary_json(row: RawEventSummaryRow) -> serde_json::Value {

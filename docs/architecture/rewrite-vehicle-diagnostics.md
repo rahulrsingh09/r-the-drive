@@ -12,6 +12,45 @@ request/response types, security policy, and schema migrations remain unchanged.
 Documentation impact: Documentation site update required. Root integration owns
 registration of `architecture/rewrite-vehicle-diagnostics` in the shared sidebar.
 
+## Private implementation stages
+
+`vehicles/diagnostics/raw.rs` compiles `RawDataParams` into a `RawPlan` before
+issuing telemetry queries. `Population` distinguishes unrestricted rows from
+rows with any value in a selected set; empty selectors plus `populated_only`
+select all 52 allowlisted fields. `Page` resolves the `per_page`/`limit` alias,
+clamps page size, and computes the saturating offset. `ReadScope` binds the same
+vehicle, bounds, and trimmed search into each typed read.
+
+The raw query projections come from the allowlisted sample columns and named
+coverage measures. The plan coordinates samples, aggregate coverage, total, and
+per-field coverage in the original sequence. These remain four independent
+read-committed observations; merging them into a transaction or one query would
+change concurrent-read and failure behavior. `RawResult` assembles the response
+only after all stages succeed. A destructuring sample projection requires every
+original row member and emits the complete wire shape, independent of selected
+filter fields.
+
+`vehicles/diagnostics/lanes.rs` resolves lane names to specifications containing
+named columns and typed row accessors. The field catalog generates SQL aggregate
+aliases, and the lane specifications select output columns. SQL retains all
+original aggregates, including unselected signals: pruning them would suppress
+pre-existing PostgreSQL overflow errors. `TelemetryLaneRow` remains unchanged.
+`LanePlan` resolves the window, validates the 90-day ceiling, clamps the point
+budget, and computes the fixed or integer-ceiling automatic bucket duration.
+The bucket origin remains the requested start; bounds remain inclusive.
+
+A row traversal appends the exact returned spine and updates each selected
+lane's value vectors and coverage counters together. Coverage counts non-null
+bucket values rather than raw observations. Ordered maps preserve wire key
+ordering. The original source label, approximation flag, point limit, and
+truncation expression are unchanged. Authorization still runs in the original
+handlers before either plan is compiled.
+
+This replaces query planning and coordinated projection; it does not claim new
+wire types, auth policy, schema, or clean-room ownership. Compatibility wrappers
+retain original unit-test access to the private selector/query helpers. The
+original lane query alias test exercises the same runtime projection generator.
+
 ## Frozen characterization
 
 The three ignored `diagnostic_contract_*_http_db` tests in
@@ -83,7 +122,11 @@ Two potentially misleading pre-existing behaviors are preserved as findings:
 - `tire_pressure_samples` is `greatest(count(tire_fl_psi), count(tire_fl_status))`.
   Disjoint pressure/status observations therefore do not yield their union count.
 
-Neither finding is corrected by this work. The characterization locks the existing
+A direct synthetic PostgreSQL probe also confirmed that averaging two `1e308`
+values raises `value out of range: overflow`. All original lane aggregates are
+retained so selecting another lane cannot bypass that existing database error.
+
+None of these findings is corrected by this work. The characterization locks the existing
 results; a correction needs a separate behavior-change decision and red/green proof.
 
 The external task report contains commands, source identities, parity evidence,
