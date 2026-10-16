@@ -60,6 +60,11 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Maintain external connection settings, cache and activity records | [External connections](./architecture/rewrite-external-integrations.md) |
 | Follow Grafana queries, health, stewardship and capture summaries | [Operational read models](./architecture/rewrite-operational-read-models.md) |
 | Follow charging payload identity and summary reconciliation | [Charge payload reconciliation](./architecture/rewrite-charge-payload-reconciliation.md) |
+| Maintain backup publication, imports, scheduling and S3 transfers | [Backup workflows](./architecture/rewrite-backup-workflows.md) |
+| Follow bounded history repair, replay and payload compaction | [Maintenance replay](./architecture/rewrite-maintenance-replay.md) |
+| Maintain synthetic trips, charging and telemetry generation | [Demo generation](./architecture/rewrite-demo-generation.md) |
+| Follow restore activation, rollback and operational-history replay | [Restore execution](./architecture/rewrite-restore-execution.md) |
+| Maintain weather jobs, coordinate repair and charge backfill admission | [Enrichment jobs](./architecture/rewrite-enrichment-jobs.md) |
 | Trace frontend request, map, and render failures | [Frontend error observability](./architecture/frontend-error-observability.md) |
 | Build or manage charts | [Chart architecture](./frontend/chart-architecture.md) |
 | Extend app themes or color authoring | [Theme architecture](./architecture/theming.md) |

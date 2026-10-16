@@ -36,6 +36,12 @@ use typed policies. Vehicle enrollment, invitation and artwork selection, plus
 external connection settings, cache traversal and activity recording, use new stages.
 Grafana queries and operational telemetry summaries use new selection and aggregation.
 Charging payload resolution and summary persistence use new transactional plans.
+Backup publication, import, scheduling and S3 transfer operations use new stages.
+Maintenance uses bounded scans and new repair selection; synthetic history uses
+typed timeline and telemetry generation.
+Restore activation, rollback and operational-history replay use explicit states.
+Weather scheduling, history reconciliation and charge backfill admission use
+new job and transition stages.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
