@@ -27,6 +27,8 @@ export interface SpeedHistogramBin {
   max: number;
   count: number;
   duration_seconds: number;
+  recorded_seconds?: number;
+  estimated_seconds?: number;
   sample_elapsed_s: number | null;
 }
 
@@ -48,6 +50,8 @@ export function SpeedHistogramChart({
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
   const themeRevision = useThemeRevision();
+  const hasEstimates = bins.some(bin => (bin.estimated_seconds ?? 0) > 0);
+  const hasRecorded = bins.some(bin => (bin.recorded_seconds ?? 0) > 0);
   const successColor = React.useMemo(() => resolveChartColor(CHART_COLORS.success), [isDark, palette, themeRevision]);
   const accentColor = React.useMemo(() => resolveChartColor(CHART_COLORS.accent), [isDark, palette, themeRevision]);
 
@@ -76,6 +80,13 @@ export function SpeedHistogramChart({
   }));
 
   return (
+    <div>
+    {hasEstimates && hasRecorded ? (
+      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-fg-secondary">
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: CHART_COLORS.sky }} />Recorded</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: CHART_COLORS.success }} />GPS estimated</span>
+      </div>
+    ) : null}
     <ResponsiveContainer width="100%" height={height}>
       <BarChart
         data={displayBins}
@@ -103,12 +114,19 @@ export function SpeedHistogramChart({
         />
         <Tooltip
           content={<ChartTooltip
-            formatter={(value) => [formatHistogramDuration(Number(value)), 'Time']}
+            formatter={(value, name) => [formatHistogramDuration(Number(value)), hasEstimates ? name : 'Time']}
             labelFormatter={(value) => `${String(value)} ${speedUnit}`}
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
-        <Bar dataKey="duration_seconds" radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}>
+        {hasEstimates ? (
+          <>
+            {hasRecorded ? <Bar dataKey="recorded_seconds" name="Recorded" stackId="time" fill={CHART_COLORS.sky} fillOpacity={CHART_BAR_STYLE.fillOpacity} /> : null}
+            <Bar dataKey="estimated_seconds" name="GPS estimated" stackId="time" fill={CHART_COLORS.success} radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}>
+              {bins.map(bin => <Cell key={bin.label} fillOpacity={bin.label === activeBinLabel ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity} />)}
+            </Bar>
+          </>
+        ) : <Bar dataKey="duration_seconds" radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}>
           {bins.map((bin) => {
             const intensity = (bin.duration_seconds - minDuration) / durationRange;
             const fill = blendColor(successColor, accentColor, intensity);
@@ -120,9 +138,10 @@ export function SpeedHistogramChart({
               />
             );
           })}
-        </Bar>
+        </Bar>}
       </BarChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 

@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { buildRichTimeSeriesUPlotSeries } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
+import { buildRichTimeSeriesUPlotSeries, buildRichTooltipValues } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
 
 describe('RichTimeSeriesChart paths', () => {
+  it('preserves speed gaps and unknown tooltips while other series keep their gap policy', () => {
+    const series = [
+      { key: 'power', label: 'Power', values: [10, null, 20] },
+      { key: 'speed', label: 'Speed', values: [0, null, 30], connectGaps: false },
+    ];
+    const configured = buildRichTimeSeriesUPlotSeries(series, { connectGaps: true });
+    expect(configured[1]?.spanGaps).toBe(true);
+    expect(configured[2]?.spanGaps).not.toBe(true);
+    expect(buildRichTooltipValues([[0, 30, 60], ...series.map(item => item.values)], series, true))
+      .toEqual([[10, 10, 20], [0, null, 30]]);
+  });
   it('uses a native path for Straight and the same native spline for both curved settings', () => {
     const item = { key: 'history', label: 'History', values: [10, 15, 12] };
     const straight = buildRichTimeSeriesUPlotSeries([item], { smoothness: 'straight' })[1]!;

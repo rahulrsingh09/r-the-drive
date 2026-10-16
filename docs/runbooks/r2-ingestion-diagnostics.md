@@ -83,6 +83,24 @@ field timestamps for the same change.
   speed is used when present and that a GNSS or odometer estimate is used only
   when direct speed is absent, then read the start decision and transition.
 
+## Missing trip speed histogram
+
+Trip detection may use inferred movement while stored `speed_mph` remains null.
+The trip detail view preserves that raw series and can display a separately
+labelled GPS estimate calculated from consecutive historical positions. The
+histogram weights accepted intervals by elapsed time, clips to the trip window,
+and gives recorded speed (including zero) precedence. Odometer values are never
+used for these estimates.
+
+The display accepts GPS intervals between 5 and 90 seconds, rejects coordinate
+errors, movement below 0.005 miles and speeds above 130 mph, and leaves other
+time unavailable. These are conservative display filters, not a guarantee of
+GPS accuracy. Stored telemetry timestamps may differ from original fix times;
+interval averages can understate curved routes and hide short stops or peaks.
+Coverage describes accepted time, not measurement accuracy. Inspect fresh
+ingestion capture before deciding whether missing speed originated upstream
+or in acquisition.
+
 ## Exact-SHA real-drive acceptance
 
 Decoder tests and a successful build establish code behavior. They do not prove

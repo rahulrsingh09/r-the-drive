@@ -45,6 +45,8 @@ export interface RichSeries {
   filterable?: boolean;
   /** Opt out supporting/derived line series from display curve shaping. */
   smoothable?: boolean;
+  /** Override gap drawing and tooltip carry-forward for this series. */
+  connectGaps?: boolean;
   /** Stack bar values with other bar series carrying the same ID. */
   stackId?: string;
 }
@@ -448,6 +450,14 @@ export function carryForwardTooltipValues(values: Array<number | null | undefine
   });
 }
 
+export function buildRichTooltipValues(data: AlignedData, series: RichSeries[], connectGaps: boolean) {
+  return data.slice(1).map((values, index) => (
+    (series[index]?.connectGaps ?? connectGaps)
+      ? carryForwardTooltipValues(values as Array<number | null | undefined>)
+      : Array.from(values as Array<number | null | undefined>, value => value ?? null)
+  ));
+}
+
 export function getExplicitScaleConfig(range?: [number, number], extra: Omit<uPlot.Scale, 'auto' | 'range'> = {}): uPlot.Scale {
   return {
     ...extra,
@@ -581,7 +591,7 @@ export function buildRichTimeSeriesUPlotSeries(
       };
       if (item.dash) next.dash = item.dash;
       if (seriesMode === 'area') next.fill = `${color}22`;
-      if (connectGaps && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
+      if ((item.connectGaps ?? connectGaps) && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
       if (seriesMode === 'bar') {
         const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
         next.fill = color;
@@ -758,12 +768,8 @@ export function RichTimeSeriesChart({
   }, [points, series, timeFilter, xTime]);
   alignedDataRef.current = alignedData;
   const tooltipValues = React.useMemo<Array<Array<number | null>>>(
-    () => alignedData.slice(1).map((values) => (
-      connectGaps
-        ? carryForwardTooltipValues(values as Array<number | null | undefined>)
-        : Array.from(values as Array<number | null | undefined>, (value) => value ?? null)
-    )),
-    [alignedData, connectGaps],
+    () => buildRichTooltipValues(alignedData, series, connectGaps),
+    [alignedData, series, connectGaps],
   );
   tooltipValuesRef.current = tooltipValues;
   tooltipDetailsRef.current = series.map((item) => item.tooltipDetails ?? []);
@@ -825,6 +831,8 @@ export function RichTimeSeriesChart({
     const fullXRange: [number, number] = xRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
 
     const hasRightDataAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
+    const hasLeftData = seriesRef.current.some(s => !s.tooltipOnly && s.yScale !== 'y2'
+      && s.values.some(value => value != null && Number.isFinite(value)));
 
     const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
 
@@ -1008,7 +1016,7 @@ export function RichTimeSeriesChart({
       data: alignedDataRef.current,
       // Keep a small left gutter so y-axis labels are not clipped at narrow widths.
       // Right gutter grows when a right axis is present so its labels aren't clipped.
-      padding: [topPadding, hasRightDataAxis ? 4 : 24, 0, 10],
+      padding: [topPadding, hasRightDataAxis ? 4 : 24, 0, hasLeftData ? 10 : 24],
       cursor: {
         drag: { x: !controlledCursor && interactionMode !== 'touch-explore', y: false },
         points: { size: 6 },

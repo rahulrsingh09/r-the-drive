@@ -127,13 +127,15 @@ test('trip graph readings use the selected metric units at the shared sample', a
   await page.keyboard.press('End');
   await expectSharedTime(page, '30:00');
   const tooltips = page.locator(`${chartSelector} [role="tooltip"]`);
-  await expect(tooltips.nth(0)).toContainText('Speed: 80 km/h');
+  await expect(tooltips.nth(0)).toContainText('Recorded speed: 80 km/h');
   await expect(tooltips.nth(1)).toContainText('Outside: 20 °C');
   await expect(tooltips.nth(2)).toContainText('Elevation: 20 m');
   await expect(tooltips.nth(3)).toContainText('Front Left: 138 kPa');
   const histogram = page.getByRole('heading', { name: 'Speed Histogram' }).locator('../..');
   await histogram.scrollIntoViewIfNeeded();
-  await expect(histogram.getByText('80-89', { exact: true })).toBeVisible();
+  await expect(histogram.getByText('72-80', { exact: true })).toBeVisible();
+  await expect(histogram).toContainText('30m covered · 100%');
+  await expect(histogram.getByText('80-89', { exact: true })).toHaveCount(0);
 });
 
 for (const width of [393, 1440]) {

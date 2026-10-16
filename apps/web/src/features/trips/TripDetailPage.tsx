@@ -29,6 +29,7 @@ import { formatAppDateTime } from '@panda/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
 import { ArrowLeft, Eraser, Save, Tag } from 'lucide-react';
 import { nearestPointIndex } from '@panda/ui/charts';
+import { buildTripSpeedProfile } from './tripSpeedProfile';
 
 const TRIP_PRIMARY_CHART_HEIGHT = 360;
 
@@ -123,15 +124,28 @@ export function TripDetailContent() {
     [samples],
   );
 
-  const speedBins = React.useMemo(
-    () => buildSpeedHistogram(timeline, detailData?.sample_interval_seconds ?? 10),
-    [detailData?.sample_interval_seconds, timeline],
+  const speedProfile = React.useMemo(
+    () => buildTripSpeedProfile(timeline, trip?.ended_at
+      ? (Date.parse(trip.ended_at) - Date.parse(trip.started_at)) / 1000 : 0,
+    detailData?.sample_interval_seconds ?? 10),
+    [detailData?.sample_interval_seconds, timeline, trip],
   );
+  const speedBins = speedProfile.bins;
+  const hasEstimatedSpeed = speedProfile.estimatedSeconds > 0;
   const chartPoints = React.useMemo(
     () => timeline.map((point) => ({ ts: point.elapsed_s })),
     [timeline],
   );
-  const unitPreferences = getUnitPreferences();
+  const [unitPreferences, setUnitPreferences] = React.useState(getUnitPreferences);
+  React.useEffect(() => {
+    const updateUnits = () => setUnitPreferences(getUnitPreferences());
+    window.addEventListener('rm-units-change', updateUnits);
+    window.addEventListener('storage', updateUnits);
+    return () => {
+      window.removeEventListener('rm-units-change', updateUnits);
+      window.removeEventListener('storage', updateUnits);
+    };
+  }, []);
   const temperatureFactor = unitPreferences.temperature_unit === 'fahrenheit' ? 9 / 5 : 1;
   const temperatureOffset = unitPreferences.temperature_unit === 'fahrenheit' ? 32 : 0;
   const pressureFactor = unitPreferences.pressure_unit === 'kpa' ? 6.89476 : 1;
@@ -153,11 +167,23 @@ export function TripDetailContent() {
     drive: [
       ...(drivePowerIsEstimated
         ? [{ key: 'estimated_net_power', label: 'Estimated net power', color: CHART_COLORS.accent, values: timeline.map((point) => point.estimated_net_power_kw) }]
-        : [
+        : timeline.some(point => point.power_kw != null || point.regen_kw != null) ? [
           { key: 'power', label: 'Power', color: CHART_COLORS.accent, values: timeline.map((point) => point.power_kw) },
           { key: 'regen', label: 'Regen', color: CHART_COLORS.success, values: timeline.map((point) => point.regen_kw) },
-        ]),
-      { key: 'speed', label: 'Speed', color: CHART_COLORS.sky, yScale: 'y2' as const, values: timeline.map((point) => point.speed_mph == null ? null : point.speed_mph * speedFactor) },
+        ] : []),
+      ...(!hasEstimatedSpeed || speedProfile.recordedValues.some(value => value != null)
+        ? [{ key: 'speed', label: 'Recorded speed', color: CHART_COLORS.sky, yScale: 'y2' as const,
+          connectGaps: false,
+          values: speedProfile.recordedValues.map(value => value == null ? null : value * speedFactor) }]
+        : []),
+      ...(hasEstimatedSpeed ? [{
+        key: 'estimated_speed', label: 'GPS average speed', color: CHART_COLORS.success,
+        yScale: 'y2' as const, mode: 'scatter' as const, pointSize: 5,
+        filterable: false, smoothable: false, connectGaps: false,
+        values: speedProfile.estimates.map(interval => interval == null ? null : interval.mph * speedFactor),
+        tooltipDetails: speedProfile.estimates.map(interval => interval == null ? null
+          : `Average ${formatElapsed(Math.max(0, interval.observationStart!))}–${formatElapsed(interval.observationEnd!)}`),
+      }] : []),
     ],
     temperature: [
       { key: 'outside', label: outsideTemperatureLabel, color: CHART_COLORS.sky, values: timeline.map((point) => point.outside_temp_c == null ? null : point.outside_temp_c * temperatureFactor + temperatureOffset) },
@@ -173,7 +199,7 @@ export function TripDetailContent() {
       { key: 'tire_rl', label: 'Rear Left', color: CHART_COLORS.success, values: timeline.map((point) => point.tire_rl_psi == null ? null : point.tire_rl_psi * pressureFactor) },
       { key: 'tire_rr', label: 'Rear Right', color: CHART_COLORS.warning, values: timeline.map((point) => point.tire_rr_psi == null ? null : point.tire_rr_psi * pressureFactor) },
     ],
-  }), [drivePowerIsEstimated, outsideTemperatureLabel, pressureFactor, speedFactor, altitudeFactor, temperatureFactor, temperatureOffset, timeline]);
+  }), [drivePowerIsEstimated, outsideTemperatureLabel, pressureFactor, speedFactor, altitudeFactor, temperatureFactor, temperatureOffset, timeline, speedProfile, hasEstimatedSpeed]);
 
   const metricCoverage = React.useMemo(() => {
     let powerSamples = 0;
@@ -211,10 +237,12 @@ export function TripDetailContent() {
   );
 
   const activeSpeedBinLabel = React.useMemo(() => {
-    if (activeTimelinePoint?.speed_mph == null) return null;
-    const found = speedBins.find((bin) => activeTimelinePoint.speed_mph! >= bin.min && activeTimelinePoint.speed_mph! < bin.max);
+    if (activeIndex == null) return null;
+    const speed = speedProfile.recordedValues[activeIndex] ?? speedProfile.estimates[activeIndex]?.mph;
+    if (speed == null) return null;
+    const found = speedBins.find((bin) => speed >= bin.min && speed < bin.max);
     return found?.label ?? null;
-  }, [activeTimelinePoint, speedBins]);
+  }, [activeIndex, speedProfile, speedBins]);
 
   const backButton = (
     <button
@@ -385,7 +413,7 @@ export function TripDetailContent() {
                         ? `${detailData?.power?.sample_count ?? metricCoverage.powerSamples} estimated intervals${detailData?.power?.median_interval_seconds != null ? ` · median ${Math.round(detailData.power.median_interval_seconds)}s` : ''}`
                         : metricCoverage.powerSamples > 0
                         ? `${metricCoverage.powerSamples} power samples`
-                        : 'No power samples in trip telemetry'}
+                        : hasEstimatedSpeed ? 'GPS speed averages' : 'No power samples in trip telemetry'}
                     </p>
                   </div>
                   <RichTimeSeriesChart
@@ -409,22 +437,48 @@ export function TripDetailContent() {
                       Averaged between state-of-charge updates. Negative values indicate net regeneration; short acceleration and braking peaks are not available from Rivian.
                     </p>
                   ) : null}
+                  {hasEstimatedSpeed ? (
+                    <p className="mt-2 text-xs leading-5 text-fg-tertiary">
+                      GPS dots show interval averages, not instantaneous speed. Tap or drag to inspect the averaging window.
+                    </p>
+                  ) : null}
                 </div>
 
               </div>
 
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                <div className="rounded-xl border border-border bg-bg-surface p-4">
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-fg">Speed Histogram</h3>
-                    <p className="text-xs text-fg-tertiary">Approximate time across speed bands</p>
+                <div className="rounded-xl border border-border bg-bg-surface p-4" data-trip-speed-profile>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="shrink-0 text-sm font-semibold text-fg">Speed Histogram</h3>
+                    {speedProfile.coveredSeconds > 0 ? (
+                      <span className="rounded-full border border-border bg-bg-elevated px-2.5 py-1 text-xs text-fg-secondary">
+                        {hasEstimatedSpeed ? speedProfile.recordedSeconds > 0 ? 'Recorded + GPS' : 'GPS estimated' : 'Recorded'}
+                      </span>
+                    ) : null}
                   </div>
+                  <p className="text-xs text-fg-tertiary">Time across speed bands · {speedUnitLabel}</p>
+                  {speedProfile.coveredSeconds > 0 ? (
+                    <div className="mb-3 mt-4">
+                      <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs tabular-nums">
+                        <span className="text-fg-secondary">{formatDuration(speedProfile.coveredSeconds / 60)} covered · {Math.round(speedProfile.coverage * 100)}%</span>
+                        <span className="text-fg-tertiary">{formatDuration(speedProfile.missingSeconds / 60)} unavailable</span>
+                      </div>
+                      <div className="h-1 overflow-hidden rounded-full bg-bg-elevated" aria-hidden="true">
+                        <div className="h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${speedProfile.coverage * 100}%`, backgroundColor: CHART_COLORS.success }} />
+                      </div>
+                    </div>
+                  ) : null}
                   <SpeedHistogram
                     bins={speedBins}
                     loading={chartLoading}
                     activeBinLabel={activeSpeedBinLabel}
                     speedUnit={speedUnitLabel}
                   />
+                  {hasEstimatedSpeed ? (
+                    <p className="mt-3 text-xs leading-5 text-fg-tertiary">
+                      GPS averages from location updates about {Math.round(speedProfile.medianGpsSeconds ?? 0)}s apart. Brief stops and speed changes may be missed.
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
@@ -545,15 +599,6 @@ interface TimelinePoint {
   lng: number | null;
 }
 
-interface HistogramBin {
-  label: string;
-  min: number;
-  max: number;
-  count: number;
-  duration_seconds: number;
-  sample_elapsed_s: number | null;
-}
-
 function formatElapsed(seconds: number) {
   const min = Math.floor(seconds / 60);
   const sec = Math.max(0, Math.floor(seconds % 60));
@@ -587,38 +632,4 @@ function buildTimeline(
     lat: samples.lat[index] ?? null,
     lng: samples.lng[index] ?? null,
   }));
-}
-
-function buildSpeedHistogram(timeline: TimelinePoint[], sampleIntervalSeconds = 10, binSize = 5): HistogramBin[] {
-  const speedRows = timeline.filter((point) => point.speed_mph != null && point.speed_mph >= 0);
-  if (speedRows.length === 0) return [];
-
-  const maxSpeed = Math.max(...speedRows.map((point) => point.speed_mph ?? 0));
-  const maxEdge = Math.ceil(maxSpeed / binSize) * binSize + binSize;
-  const bins: HistogramBin[] = [];
-
-  for (let min = 0; min < maxEdge; min += binSize) {
-    bins.push({
-      label: `${min}-${min + binSize}`,
-      min,
-      max: min + binSize,
-      count: 0,
-      duration_seconds: 0,
-      sample_elapsed_s: null,
-    });
-  }
-
-  for (const row of speedRows) {
-    const speedMph = row.speed_mph ?? 0;
-    const index = Math.min(bins.length - 1, Math.floor(speedMph / binSize));
-    const bin = bins[index];
-    if (!bin) continue;
-    bin.count += 1;
-    bin.duration_seconds += sampleIntervalSeconds;
-    if (bin.sample_elapsed_s == null) {
-      bin.sample_elapsed_s = row.elapsed_s;
-    }
-  }
-
-  return bins;
 }

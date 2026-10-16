@@ -15,6 +15,7 @@ export async function installRFixture(page: Page, options: {
   missingSoftware?: boolean;
   statusOverrides?: Partial<VehicleStatus>;
   populatedTrip?: boolean;
+  missingTripSpeed?: boolean;
   statusDelay?: number;
   unknownConfiguration?: boolean;
   palette?: 'classic' | 'rad';
@@ -275,7 +276,7 @@ export async function installRFixture(page: Page, options: {
       return json({ trip: options.tripCount ? trips.find(item => item.id === path.split('/')[3]) : trip(), sample_interval_seconds: 60, samples: Object.fromEntries(columns.map((name) => [name, options.populatedTrip
           ? Array.from({ length: 31 }, (_, index) => name === 'elapsed_s' ? index * 60
             : name === 'lat' ? 47.6 + index * .001 : name === 'lng' ? -122.34 + index * .001
-              : name === 'speed_mph' ? 20 + index : name === 'battery_level' ? 75 - index / 5 : 20)
+              : name === 'speed_mph' ? options.missingTripSpeed ? null : 20 + index : name === 'battery_level' ? 75 - index / 5 : 20)
           : []])),
         outside_temperature: { source: 'unavailable', attribution: null, samples: [] } });
     }
