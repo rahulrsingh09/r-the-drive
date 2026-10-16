@@ -143,7 +143,9 @@ fn normalize(mut data: Value, clock: &Value) -> Value {
     for (table, rows) in data.as_object().unwrap() {
         for (index, row) in rows.as_array().unwrap().iter().enumerate() {
             if let Some(Value::String(value)) = row.get("id") {
-                if Uuid::parse_str(value).is_ok() {
+                if Uuid::parse_str(value)
+                    .is_ok_and(|uuid| ![id(1), id(2), id(10), id(20)].contains(&uuid))
+                {
                     identities.insert(value.clone(), format!("{table}:{index}"));
                 }
             }
@@ -818,5 +820,39 @@ async fn demo_generation_database_calendar_timezone_boundaries() {
     assert!(
         value == serde_json::from_str::<Value>(&expected).unwrap(),
         "database calendar semantics changed"
+    );
+}
+
+#[test]
+fn demo_generation_identity_normalization_preserves_fixed_values() {
+    let generated = "f0000000-0000-4000-8000-000000000001";
+    let clock = json!("2026-10-16T00:00:00Z");
+    let actual = normalize(
+        json!({
+            "panda.users":[{"id":id(1),"created_at":clock}],
+            "panda.vehicles":[{"id":id(10),"user_id":id(1)}],
+            "panda.trips":[{"id":generated,"vehicle_id":id(10),"started_at":"2024-03-01T00:00:00Z"}],
+            "panda.weather_enrichment_jobs":[{"trip_id":generated}],
+            "panda.vehicle_state_periods":[{"id":17,"vehicle_id":id(10)}]
+        }),
+        &clock,
+    );
+    assert_eq!(actual["panda.users"][0]["id"], json!(id(1)));
+    assert_eq!(actual["panda.vehicles"][0]["id"], json!(id(10)));
+    assert_eq!(actual["panda.vehicles"][0]["user_id"], json!(id(1)));
+    assert_eq!(actual["panda.trips"][0]["vehicle_id"], json!(id(10)));
+    assert_eq!(actual["panda.trips"][0]["id"], "panda.trips:0");
+    assert_eq!(
+        actual["panda.weather_enrichment_jobs"][0]["trip_id"],
+        "panda.trips:0"
+    );
+    assert_eq!(actual["panda.vehicle_state_periods"][0]["id"], 17);
+    assert_eq!(
+        actual["panda.trips"][0]["started_at"],
+        "2024-03-01T00:00:00Z"
+    );
+    assert_eq!(
+        actual["panda.users"][0]["created_at"],
+        "<transaction-clock>"
     );
 }
