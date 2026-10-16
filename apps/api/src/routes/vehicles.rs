@@ -44,6 +44,15 @@ use crate::{
     },
 };
 
+#[path = "vehicles/artwork.rs"]
+mod artwork;
+#[path = "vehicles/connection.rs"]
+mod connection;
+#[path = "vehicles/enrollment.rs"]
+mod enrollment;
+#[path = "vehicles/membership.rs"]
+mod membership;
+
 #[cfg(test)]
 #[path = "vehicles/__tests__/contracts.rs"]
 mod workflow_contracts;
@@ -1209,83 +1218,20 @@ async fn connect(
     auth: AuthUser,
     Json(body): Json<ConnectBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    info!(
-        user_id = %auth.user_id,
-        email_present = !body.email.trim().is_empty(),
-        "vehicle.connect.start"
-    );
-
+    info!(user_id = %auth.user_id, email_present = !body.email.trim().is_empty(), "vehicle.connect.start");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap_or_default();
-    match crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password)
+    let login = crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password)
         .await
-        .map_err(|e| {
-            warn!(user_id = %auth.user_id, error = %e, "vehicle.connect.login_failed");
-            map_rivian_login_error(e)
-        })? {
-        crate::ingestion::rivian_auth::LoginResult::Authenticated(tokens) => {
-            let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
-                .await
-                .map_err(|e| {
-                    warn!(
-                        user_id = %auth.user_id,
-                        error = %e,
-                        "vehicle.connect.fetch_user_vehicles_failed"
-                    );
-                    AppError::RivianApi("Unable to fetch vehicles from Rivian".into())
-                })?;
-            let mut conn = state.redis.get_multiplexed_async_connection().await?;
-            let key = format!("rivian:connect:{}", auth.user_id);
-            store_encrypted_redis(&state, &mut conn, &key, &tokens, 300).await?;
-            info!(
-                user_id = %auth.user_id,
-                vehicle_count = vehicles.len(),
-                connect_key = %key,
-                "vehicle.connect.authenticated"
-            );
-            Ok(Json(
-                serde_json::to_value(ConnectResponse {
-                    status: "connected",
-                    requires_otp: false,
-                    challenge_id: None,
-                    vehicle_id: None,
-                    vehicles,
-                })
-                .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?,
-            ))
-        }
-        crate::ingestion::rivian_auth::LoginResult::OtpRequired(challenge) => {
-            let challenge_id = Uuid::new_v4().to_string();
-            let mut conn = state.redis.get_multiplexed_async_connection().await?;
-            let key = format!("rivian:otp:{challenge_id}");
-            let pending = PendingOtpChallenge {
-                email: challenge.email,
-                otp_token: challenge.otp_token,
-                csrf_token: challenge.csrf_token,
-                app_session_token: challenge.app_session_token,
-                user_id: auth.user_id,
-            };
-            store_encrypted_redis(&state, &mut conn, &key, &pending, 300).await?;
-            info!(
-                user_id = %auth.user_id,
-                challenge_id = %challenge_id,
-                challenge_key = %key,
-                "vehicle.connect.otp_required"
-            );
-            Ok(Json(
-                serde_json::to_value(ConnectResponse {
-                    status: "otp_required",
-                    requires_otp: true,
-                    challenge_id: Some(challenge_id),
-                    vehicle_id: None,
-                    vehicles: Vec::new(),
-                })
-                .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?,
-            ))
-        }
-    }
+        .map_err(|error| {
+            warn!(user_id = %auth.user_id, error = %error, "vehicle.connect.login_failed");
+            map_rivian_login_error(error)
+        })?;
+    connection::ConnectionExchange::from_login(login, auth.user_id)
+        .deliver(&state, &client, auth.user_id)
+        .await
 }
 
 async fn connect_otp(
@@ -1344,39 +1290,10 @@ async fn connect_otp(
                 );
                 map_rivian_otp_error(e)
             })?;
-    let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
+    connection::DiscoveredSession::load(&client, tokens)
+        .await?
+        .publish(&state, &mut conn, auth.user_id, Some(&key))
         .await
-        .map_err(|e| {
-            warn!(
-                user_id = %auth.user_id,
-                challenge_id = %body.challenge_id,
-                error = %e,
-                "vehicle.connect_otp.fetch_user_vehicles_failed"
-            );
-            AppError::RivianApi("Unable to fetch vehicles from Rivian".into())
-        })?;
-
-    let connect_key = format!("rivian:connect:{}", auth.user_id);
-    store_encrypted_redis(&state, &mut conn, &connect_key, &tokens, 300).await?;
-    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
-    info!(
-        user_id = %auth.user_id,
-        challenge_id = %body.challenge_id,
-        vehicle_count = vehicles.len(),
-        connect_key = %connect_key,
-        "vehicle.connect_otp.authenticated"
-    );
-
-    Ok(Json(
-        serde_json::to_value(ConnectResponse {
-            status: "connected",
-            requires_otp: false,
-            challenge_id: None,
-            vehicle_id: None,
-            vehicles,
-        })
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?,
-    ))
 }
 
 async fn add_vehicle(
@@ -1420,198 +1337,32 @@ async fn add_vehicle_with_lookup(
         &crate::ingestion::session_store::RivianTokenBundle,
     ) -> Result<Vec<RivianVehicleSummary>, AppError>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rivian_vehicle_id = body.rivian_vehicle_id.trim().to_owned();
-
-    info!(
-        user_id = %auth.user_id,
-        rivian_vehicle_id = %body.rivian_vehicle_id,
-        "vehicle.add.start"
-    );
-
-    // Retrieve tokens from Redis
+    let remote_id = body.rivian_vehicle_id.trim().to_owned();
+    info!(user_id = %auth.user_id, rivian_vehicle_id = %body.rivian_vehicle_id, "vehicle.add.start");
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:connect:{}", auth.user_id);
     let tokens = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
         &state, &mut conn, &key,
     )
-    .await?;
-    let tokens = tokens.ok_or_else(|| {
-        warn!(
-            user_id = %auth.user_id,
-            connect_key = %key,
-            "vehicle.add.missing_connect_session"
-        );
-        AppError::RivianConnectSessionExpired
-    })?;
-
-    let account_vehicles = lookup(&tokens).await?;
-    let verified = require_account_vehicle(&account_vehicles, &rivian_vehicle_id)?;
-
-    let mut tx = state.pool.begin().await?;
-    let existing_vehicle_id = lock_enrollment(&mut tx, auth.user_id, &rivian_vehicle_id).await?;
-
-    let is_new = existing_vehicle_id.is_none();
-    let vehicle_id = if let Some(existing_vehicle_id) = existing_vehicle_id {
-        sqlx::query(
-            "INSERT INTO panda.vehicle_user_settings
-             (vehicle_id, user_id, display_name)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (vehicle_id, user_id) DO UPDATE
-             SET display_name = COALESCE(EXCLUDED.display_name, panda.vehicle_user_settings.display_name),
-                 updated_at = now()",
-        )
-        .bind(existing_vehicle_id)
-        .bind(auth.user_id)
-        .bind(body.name.as_deref().map(canonical_vehicle_name))
-        .execute(&mut *tx)
-        .await?;
-
-        existing_vehicle_id
-    } else {
-        let vehicle_id: Uuid = sqlx::query_scalar(
-            r#"INSERT INTO panda.vehicles
-               (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id"#,
-        )
-        .bind(auth.user_id)
-        .bind(&rivian_vehicle_id)
-        .bind(canonical_vehicle_model(
-            verified.model.as_deref().unwrap_or("R1T"),
-        ))
-        .bind(body.trim.as_deref())
-        .bind(verified.vin.as_deref())
-        .bind(body.name.as_deref().map(canonical_vehicle_name))
-        .bind(body.home_lat)
-        .bind(body.home_lng)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO panda.vehicle_memberships (vehicle_id, user_id, role, is_default)
-             VALUES ($1, $2, 'owner', FALSE)",
-        )
-        .bind(vehicle_id)
-        .bind(auth.user_id)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            "INSERT INTO panda.vehicle_user_settings
-             (vehicle_id, user_id, display_name)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (vehicle_id, user_id) DO UPDATE
-             SET display_name = COALESCE(EXCLUDED.display_name, panda.vehicle_user_settings.display_name),
-                 updated_at = now()",
-        )
-        .bind(vehicle_id)
-        .bind(auth.user_id)
-        .bind(body.name.as_deref().map(canonical_vehicle_name))
-        .execute(&mut *tx)
-        .await?;
-
-        vehicle_id
-    };
-
-    if is_new {
-        let identity = age_identity(&state)?;
-        let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
-            .map_err(AppError::Internal)?;
-        sqlx::query(
-        "INSERT INTO panda.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at) \
-         VALUES ($1,$2,now())
-         ON CONFLICT (vehicle_id) DO UPDATE
-         SET encrypted_tokens = EXCLUDED.encrypted_tokens,
-             token_created_at = now(),
-             last_refreshed_at = now()",
-    )
-    .bind(vehicle_id)
-    .bind(encrypted.as_slice())
-    .execute(&mut *tx)
-    .await?;
+    .await?
+    .ok_or(AppError::RivianConnectSessionExpired)?;
+    let vehicles = lookup(&tokens).await?;
+    let account_vehicle = require_account_vehicle(&vehicles, &remote_id)?;
+    let saved = enrollment::VerifiedEnrollment {
+        remote_id,
+        account_vehicle,
+        requested: body,
     }
-
-    // Set as default vehicle if user has none.
-    sqlx::query(
-        "UPDATE panda.vehicle_memberships
-         SET is_default = TRUE, updated_at = now()
-         WHERE vehicle_id = $1
-           AND user_id = $2
-           AND NOT EXISTS (
-               SELECT 1 FROM panda.vehicle_memberships
-               WHERE user_id = $2 AND is_default = TRUE
-           )",
-    )
-    .bind(vehicle_id)
-    .bind(auth.user_id)
-    .execute(&mut *tx)
+    .persist(&state, auth.user_id, &tokens)
     .await?;
-
-    sqlx::query(
-        "UPDATE panda.users SET default_vehicle_id = $1 \
-         WHERE id = $2 AND default_vehicle_id IS NULL",
-    )
-    .bind(vehicle_id)
-    .bind(auth.user_id)
-    .execute(&mut *tx)
-    .await?;
-
-    if is_new {
-        sqlx::query(
-        "INSERT INTO panda.vehicle_runtime_state
-         (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
-         VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
-         ON CONFLICT (vehicle_id) DO UPDATE
-         SET is_online = FALSE,
-             worker_health = 'starting',
-             worker_health_msg = 'Initializing Rivian telemetry collector',
-             auth_state = 'authorized',
-             auth_reason_code = NULL,
-             updated_at = now()",
-    )
-    .bind(vehicle_id)
-    .execute(&mut *tx)
-    .await?;
+    if saved.created {
+        queue_vehicle_artwork_repair(&state, saved.vehicle_id).await;
     }
-
-    tx.commit().await?;
-
-    // The vehicle and credentials are durable after commit. Artwork and one-time
-    // session cleanup must not turn a successful add into a client-visible error.
-    if is_new {
-        queue_vehicle_artwork_repair(&state, vehicle_id).await;
-    }
-
     if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
-        warn!(
-            user_id = %auth.user_id,
-            vehicle_id = %vehicle_id,
-            err = %error,
-            "vehicle.add.connect_session_cleanup_failed"
-        );
+        warn!(user_id = %auth.user_id, vehicle_id = %saved.vehicle_id, err = %error, "vehicle.add.connect_session_cleanup_failed");
     }
-    info!(
-        user_id = %auth.user_id,
-        vehicle_id = %vehicle_id,
-        rivian_vehicle_id = %rivian_vehicle_id,
-        "vehicle.add.persisted"
-    );
-
-    let telemetry_start_queued = is_new
-        && state
-            .supervisor
-            .send(SupervisorCommand::StartWorker { vehicle_id })
-            .await;
-
-    Ok(Json(serde_json::json!({
-        "vehicle_id": vehicle_id,
-        "vehicle_saved": true,
-        "telemetry_status": if !is_new { "unchanged" } else if telemetry_start_queued { "starting" } else { "delayed" },
-        "telemetry_error": if !is_new || telemetry_start_queued {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
-        },
-    })))
+    info!(user_id = %auth.user_id, vehicle_id = %saved.vehicle_id, "vehicle.add.persisted");
+    Ok(Json(saved.notify(&state).await))
 }
 
 async fn refresh_vehicle_credentials(
@@ -1664,21 +1415,7 @@ async fn refresh_vehicle_credentials(
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(
-        "INSERT INTO panda.vehicle_runtime_state
-         (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
-         VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
-         ON CONFLICT (vehicle_id) DO UPDATE
-         SET is_online = FALSE,
-             worker_health = 'starting',
-             worker_health_msg = 'Initializing Rivian telemetry collector',
-             auth_state = 'authorized',
-             auth_reason_code = NULL,
-             updated_at = now()",
-    )
-    .bind(vid)
-    .execute(&mut *tx)
-    .await?;
+    enrollment::initialize_runtime(&mut tx, vid).await?;
 
     tx.commit().await?;
 
@@ -1909,36 +1646,12 @@ async fn set_default_vehicle(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_session_access(&state.pool, &auth, vid).await?;
     let mut tx = state.pool.begin().await?;
-
-    sqlx::query(
-        "UPDATE panda.vehicle_memberships
-         SET is_default = FALSE, updated_at = now()
-         WHERE user_id = $1",
-    )
-    .bind(auth.user_id)
-    .execute(&mut *tx)
-    .await?;
-
-    let updated = sqlx::query(
-        "UPDATE panda.vehicle_memberships
-         SET is_default = TRUE, updated_at = now()
-         WHERE user_id = $1 AND vehicle_id = $2",
-    )
-    .bind(auth.user_id)
-    .bind(vid)
-    .execute(&mut *tx)
-    .await?;
-
-    if updated.rows_affected() == 0 {
-        return Err(AppError::Forbidden);
+    enrollment::DefaultSelection::Replace {
+        user_id: auth.user_id,
+        vehicle_id: vid,
     }
-
-    sqlx::query("UPDATE panda.users SET default_vehicle_id = $1 WHERE id = $2")
-        .bind(vid)
-        .bind(auth.user_id)
-        .execute(&mut *tx)
-        .await?;
-
+    .apply(&mut tx)
+    .await?;
     tx.commit().await?;
     Ok(Json(
         serde_json::json!({ "ok": true, "default_vehicle_id": vid }),
@@ -1975,79 +1688,36 @@ async fn add_vehicle_member(
     Json(body): Json<AddVehicleMemberBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
-
-    let email = body.email.trim().to_lowercase();
-    if email.is_empty() || !email.contains('@') {
-        return Err(AppError::Validation("valid email required".into()));
-    }
-    if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
-        return Err(AppError::Validation(
-            "role must be owner, manager, or viewer".into(),
-        ));
-    }
-
-    let target_user_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT id FROM panda.users WHERE email = $1")
-            .bind(&email)
-            .fetch_optional(&state.pool)
-            .await?;
-
-    if let Some(target_user_id) = target_user_id {
-        let result = sqlx::query(
-            "INSERT INTO panda.vehicle_memberships (vehicle_id, user_id, role, is_default)
-             VALUES ($1, $2, $3, FALSE)
-             ON CONFLICT (vehicle_id, user_id) DO UPDATE
-             SET role = EXCLUDED.role,
-                 updated_at = now()",
-        )
-        .bind(vid)
-        .bind(target_user_id)
-        .bind(body.role.as_str())
-        .execute(&state.pool)
-        .await?;
-
-        if result.rows_affected() == 0 {
-            return Err(AppError::Conflict("member already exists".into()));
+    let email = membership::member_email(&body.email)?;
+    membership::member_role(&body.role)?;
+    match membership::MemberDestination::resolve(&state.pool, email).await? {
+        membership::MemberDestination::Registered(user_id) => {
+            let grant = membership::MembershipGrant {
+                vehicle_id: vid,
+                user_id,
+                role: &body.role,
+            };
+            if grant.write(&state.pool).await? == 0 {
+                return Err(AppError::Conflict("member already exists".into()));
+            }
+            grant.settings(&state.pool).await?;
+            Ok(Json(serde_json::json!({"ok":true,"invite_created":false})))
         }
-
-        sqlx::query(
-            "INSERT INTO panda.vehicle_user_settings (vehicle_id, user_id)
-             VALUES ($1, $2)
-             ON CONFLICT (vehicle_id, user_id) DO NOTHING",
-        )
-        .bind(vid)
-        .bind(target_user_id)
-        .execute(&state.pool)
-        .await?;
-
-        return Ok(Json(
-            serde_json::json!({ "ok": true, "invite_created": false }),
-        ));
+        membership::MemberDestination::Invitation(email) => {
+            let invite = membership::IssuedInvitation::create(
+                &state.pool,
+                vid,
+                auth.user_id,
+                &email,
+                &body.role,
+                14,
+            )
+            .await?;
+            Ok(Json(
+                serde_json::json!({"ok":true,"invite_created":true,"invite_token":invite.token}),
+            ))
+        }
     }
-
-    let token = format!("rmi_{}", Uuid::new_v4().simple());
-    let token_hash = hash_invite_token(&token);
-    let expires_in_days = 14;
-    let expires_at = chrono::Utc::now() + chrono::Duration::days(expires_in_days as i64);
-    sqlx::query(
-        "INSERT INTO panda.vehicle_invites
-         (vehicle_id, invited_by, invitee_email, role, token_hash, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(vid)
-    .bind(auth.user_id)
-    .bind(email)
-    .bind(body.role.as_str())
-    .bind(token_hash.as_slice())
-    .bind(expires_at)
-    .execute(&state.pool)
-    .await?;
-
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "invite_created": true,
-        "invite_token": token,
-    })))
 }
 
 async fn update_vehicle_member(
@@ -2128,38 +1798,21 @@ async fn create_vehicle_invite(
     Json(body): Json<CreateVehicleInviteBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
-    if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
-        return Err(AppError::Validation(
-            "role must be owner, manager, or viewer".into(),
-        ));
-    }
-    let email = body.email.trim().to_lowercase();
-    if email.is_empty() || !email.contains('@') {
-        return Err(AppError::Validation("valid email required".into()));
-    }
-    let token = format!("rmi_{}", Uuid::new_v4().simple());
-    let token_hash = hash_invite_token(&token);
-    let expires_in_days = body.expires_in_days.unwrap_or(14).clamp(1, 30);
-    let expires_at = chrono::Utc::now() + chrono::Duration::days(expires_in_days as i64);
-    sqlx::query(
-        "INSERT INTO panda.vehicle_invites
-         (vehicle_id, invited_by, invitee_email, role, token_hash, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+    membership::member_role(&body.role)?;
+    let email = membership::member_email(&body.email)?;
+    let days = body.expires_in_days.unwrap_or(14).clamp(1, 30);
+    let invite = membership::IssuedInvitation::create(
+        &state.pool,
+        vid,
+        auth.user_id,
+        &email,
+        &body.role,
+        days,
     )
-    .bind(vid)
-    .bind(auth.user_id)
-    .bind(email)
-    .bind(body.role)
-    .bind(token_hash.as_slice())
-    .bind(expires_at)
-    .execute(&state.pool)
     .await?;
-
-    Ok(Json(serde_json::json!({
-        "ok": true,
-        "invite_token": token,
-        "expires_at": expires_at,
-    })))
+    Ok(Json(
+        serde_json::json!({"ok":true,"invite_token":invite.token,"expires_at":invite.expires_at}),
+    ))
 }
 
 async fn list_vehicle_invites(
@@ -2230,82 +1883,11 @@ async fn accept_invite(
     auth: AuthUser,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token_hash = hash_invite_token(&token);
     let mut tx = state.pool.begin().await?;
-    let invite = sqlx::query(
-        "SELECT i.id, i.vehicle_id, i.invitee_email, i.role, i.expires_at, i.accepted_at, i.revoked_at, u.email AS user_email
-         FROM panda.vehicle_invites i
-         JOIN panda.users u ON u.id = $2
-         WHERE i.token_hash = $1
-         FOR UPDATE",
-    )
-    .bind(token_hash.as_slice())
-    .bind(auth.user_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    if invite
-        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
-        .is_some()
-    {
-        return Err(AppError::Validation("invite revoked".into()));
-    }
-    if invite
-        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at")
-        .is_some()
-    {
-        return Err(AppError::Validation("invite already accepted".into()));
-    }
-    let expires_at = invite.get::<chrono::DateTime<chrono::Utc>, _>("expires_at");
-    if expires_at < chrono::Utc::now() {
-        return Err(AppError::Validation("invite expired".into()));
-    }
-    let invitee_email = invite.get::<String, _>("invitee_email");
-    let user_email = invite.get::<String, _>("user_email").to_lowercase();
-    if invitee_email.to_lowercase() != user_email {
-        return Err(AppError::Forbidden);
-    }
-    let vehicle_id = invite.get::<Uuid, _>("vehicle_id");
-    let role = invite.get::<String, _>("role");
-    let invite_id = invite.get::<Uuid, _>("id");
-
-    sqlx::query(
-        "INSERT INTO panda.vehicle_memberships (vehicle_id, user_id, role, is_default)
-         VALUES ($1, $2, $3, FALSE)
-         ON CONFLICT (vehicle_id, user_id) DO UPDATE
-         SET role = EXCLUDED.role, updated_at = now()",
-    )
-    .bind(vehicle_id)
-    .bind(auth.user_id)
-    .bind(role)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT INTO panda.vehicle_user_settings (vehicle_id, user_id)
-         VALUES ($1, $2)
-         ON CONFLICT (vehicle_id, user_id) DO NOTHING",
-    )
-    .bind(vehicle_id)
-    .bind(auth.user_id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "UPDATE panda.vehicle_invites
-         SET accepted_at = now(), accepted_user_id = $2, updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(invite_id)
-    .bind(auth.user_id)
-    .execute(&mut *tx)
-    .await?;
-
+    let invite = membership::LockedInvitation::load(&mut tx, auth.user_id, &token).await?;
+    let vehicle_id = invite.accept(&mut tx, auth.user_id).await?;
     tx.commit().await?;
-    Ok(Json(
-        serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
-    ))
+    Ok(Json(serde_json::json!({"ok":true,"vehicle_id":vehicle_id})))
 }
 
 fn hash_invite_token(token: &str) -> Vec<u8> {
@@ -4113,30 +3695,8 @@ fn metadata_has_local_mirror(config: &crate::config::Config, metadata: &serde_js
 }
 
 fn artwork_asset_counts(config: &crate::config::Config, rows: &[VehicleImageRow]) -> (i32, i32) {
-    let mut total = 0;
-    let mut ready = 0;
-    for row in rows {
-        if !row.url.starts_with("http://") && !row.url.starts_with("https://") {
-            continue;
-        }
-        total += 1;
-        if metadata_has_local_mirror(config, &row.metadata) {
-            ready += 1;
-        }
-        for overlay in row
-            .metadata
-            .get("overlay_mirrors")
-            .and_then(|value| value.as_array())
-            .into_iter()
-            .flatten()
-        {
-            total += 1;
-            if mirrored_asset_is_valid(config, overlay) {
-                ready += 1;
-            }
-        }
-    }
-    (total, ready)
+    let counts = artwork::CacheInventory::inspect(config, rows);
+    (counts.total, counts.ready)
 }
 
 async fn mark_vehicle_artwork_repair_attempt(pool: &sqlx::PgPool, vehicle_id: Uuid) {
@@ -4168,14 +3728,11 @@ async fn refresh_vehicle_artwork_cache_state(
     .await
     .unwrap_or_default();
     let (asset_count, ready_asset_count) = artwork_asset_counts(config, &rows);
-    let ready = asset_count > 0 && asset_count == ready_asset_count;
-    let status = if ready {
-        "ready"
-    } else if error.is_some() {
-        "failed"
-    } else {
-        "pending"
-    };
+    let status = artwork::CacheInventory {
+        total: asset_count,
+        ready: ready_asset_count,
+    }
+    .status(error.is_some());
     let sanitized_error = error.map(|_| "Rivian artwork repair failed; retry is scheduled.");
     let _ = sqlx::query(
         r#"INSERT INTO panda.vehicle_artwork_cache_state
@@ -4244,32 +3801,7 @@ fn resolved_overlays(
     row_overlays: &serde_json::Value,
     metadata: &serde_json::Value,
 ) -> serde_json::Value {
-    let overlays = overlay_entries_from_value(row_overlays);
-    let Some(mirrors) = metadata
-        .get("overlay_mirrors")
-        .and_then(|value| value.as_array())
-    else {
-        return serde_json::json!([]);
-    };
-
-    let overlays: Vec<_> = overlays
-        .into_iter()
-        .filter_map(|mut overlay| {
-            let mirror = mirrors.iter().find(|entry| {
-                entry.get("source_url").and_then(|value| value.as_str())
-                    == Some(overlay.url.as_str())
-            })?;
-            if let Some(key) = mirror.get("mirror_key").and_then(|value| value.as_str()) {
-                if metadata_has_local_mirror(config, mirror) {
-                    overlay.url = format!("/v1/vehicle-image-cache/{vehicle_id}/{key}");
-                    return Some(overlay);
-                }
-            }
-            None
-        })
-        .collect();
-
-    serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]))
+    artwork::overlay_projection(config, vehicle_id, row_overlays, metadata)
 }
 
 async fn find_mirrored_asset(
@@ -4325,57 +3857,9 @@ async fn fetch_vehicle_images_json(
     .fetch_all(pool)
     .await?;
 
-    let all: Vec<_> = rows
-        .iter()
-        .filter_map(|row| {
-            let resolved_url = resolved_image_url(config, vehicle_id, &row.url, &row.metadata)?;
-            let resolved_overlays =
-                resolved_overlays(config, vehicle_id, &row.overlays, &row.metadata);
-            Some(serde_json::json!({
-                "placement": row.placement,
-                "design": row.design,
-                "size": row.size,
-                "resolution": row.resolution,
-                "url": resolved_url,
-                "overlays": resolved_overlays,
-                "metadata": row.metadata,
-            }))
-        })
-        .collect();
-
-    let best = |placement: &str, design: &str| {
-        rows.iter()
-            .find(|row| {
-                normalize_image_placement(&row.placement) == placement
-                    && normalize_image_design(row.design.as_deref()) == design
-            })
-            .or_else(|| {
-                rows.iter()
-                    .find(|row| normalize_image_placement(&row.placement) == placement)
-            })
-            .and_then(|row| resolved_image_url(config, vehicle_id, &row.url, &row.metadata))
-    };
-
-    Ok(serde_json::json!({
-        "all": all,
-        "cache": vehicle_artwork_cache_state_json(pool, vehicle_id).await,
-        "side": {
-            "dark": best("side", "dark"),
-            "light": best("side", "light")
-        },
-        "overhead": {
-            "dark": best("overhead", "dark"),
-            "light": best("overhead", "light")
-        },
-        "front": {
-            "dark": best("front", "dark"),
-            "light": best("front", "light")
-        },
-        "rear": {
-            "dark": best("rear", "dark"),
-            "light": best("rear", "light")
-        }
-    }))
+    let selection = artwork::ArtworkSelection::new(&rows);
+    let cache = vehicle_artwork_cache_state_json(pool, vehicle_id).await;
+    Ok(selection.render(config, vehicle_id, cache))
 }
 
 async fn vehicle_image_cache_asset(
