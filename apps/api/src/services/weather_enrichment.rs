@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
 use rand::seq::SliceRandom;
 use serde_json::Value;
 use sqlx::{FromRow, PgPool};
@@ -208,48 +209,11 @@ async fn enrich_trip(
     .await?
     .context("trip not found")?;
 
-    let route = sqlx::query_as::<_, RoutePoint>(
-        r#"SELECT ts, latitude AS lat, longitude AS lng
-           FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3
-             AND latitude IS NOT NULL AND longitude IS NOT NULL
-             AND latitude <> 0 AND longitude <> 0
-             AND (trip_id=$4 OR trip_id IS NULL)
-           ORDER BY ts"#,
-    )
-    .bind(trip.vehicle_id)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .bind(trip.id)
-    .fetch_all(pool)
-    .await?;
-
-    if trip.ended_at < trip.started_at
-        || trip.ended_at - trip.started_at > chrono::Duration::days(1)
-    {
-        anyhow::bail!("trip exceeds weather sample bounds");
-    }
-    let targets = build_targets(&trip, &route, false);
-    if targets.is_empty() {
+    let plan = HistoryWeatherPlan::load(pool, &trip).await?;
+    if plan.targets.is_empty() {
         return Ok(EnrichTripOutcome::Unavailable);
     }
-
-    let raw = sqlx::query_as::<_, RawOutsideTemp>(
-        r#"SELECT ts, outside_temp_c FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3 AND outside_temp_c IS NOT NULL
-           ORDER BY ts"#,
-    )
-    .bind(trip.vehicle_id)
-    .bind(trip.started_at)
-    .bind(trip.ended_at)
-    .fetch_all(pool)
-    .await?;
-
-    let weather_targets = targets
-        .iter()
-        .filter(|target| nearest_raw_temp(&raw, target.sampled_at).is_none())
-        .cloned()
-        .collect::<Vec<_>>();
+    let weather_targets = plan.weather_targets();
     let mut cells = unique_weather_cells(&weather_targets);
     let provider_called = !cells.is_empty();
     cells.shuffle(&mut rand::thread_rng());
@@ -275,47 +239,149 @@ async fn enrich_trip(
         }
     }
 
-    let mut enriched = Vec::with_capacity(targets.len());
-    for target in weather_targets {
-        let Some(payload) = hourly_by_cell.get(&target.cell_key) else {
-            continue;
-        };
-        let Some(temp) = pick_closest_temp(payload, target.sampled_at) else {
-            continue;
-        };
-        enriched.push((target, temp));
-    }
-    if enriched.is_empty() && raw.is_empty() {
-        anyhow::bail!("weather provider returned no usable temperatures");
-    }
-
-    let weather_by_time = enriched
-        .iter()
-        .map(|(target, temperature)| (target.sampled_at, *temperature))
-        .collect::<HashMap<_, _>>();
-    let mut summary_values = Vec::with_capacity(targets.len());
-    let mut raw_used = 0usize;
-    let mut weather_used = 0usize;
-    for target in &targets {
-        if let Some(raw_temp) = nearest_raw_temp(&raw, target.sampled_at) {
-            raw_used += 1;
-            summary_values.push((target.sampled_at, raw_temp));
-        } else if let Some(weather_temp) = weather_by_time.get(&target.sampled_at) {
-            weather_used += 1;
-            summary_values.push((target.sampled_at, *weather_temp));
-        }
-    }
-    let source = if raw_used == 0 && weather_used > 0 {
-        "open_meteo"
-    } else if weather_used == 0 && raw_used > 0 {
-        "vehicle"
-    } else {
-        "mixed"
-    };
-    let summary = time_weighted_average(&summary_values).context("weather summary unavailable")?;
-
-    store_estimates(pool, trip.id, enriched, summary, source).await?;
+    let estimate = plan.finish(&hourly_by_cell)?;
+    store_estimates(
+        pool,
+        trip.id,
+        estimate.samples,
+        estimate.summary,
+        estimate.source,
+    )
+    .await?;
     Ok(EnrichTripOutcome::Complete { provider_called })
+}
+
+struct HistoryWeatherPlan {
+    targets: Vec<TargetSample>,
+    vehicle_values: Vec<Option<f64>>,
+    has_raw: bool,
+}
+
+struct HistoryWeatherEstimate {
+    samples: Vec<(TargetSample, f64)>,
+    summary: f64,
+    source: &'static str,
+}
+
+impl HistoryWeatherPlan {
+    async fn load(pool: &PgPool, trip: &TripInfo) -> Result<Self> {
+        if trip.ended_at < trip.started_at
+            || trip.ended_at - trip.started_at > chrono::Duration::days(1)
+        {
+            anyhow::bail!("trip exceeds weather sample bounds");
+        }
+        let times = history_weather_times(trip);
+        let mut positions = vec![None; times.len()];
+        let mut route = sqlx::query_as::<_, RoutePoint>(
+            r#"SELECT ts, latitude AS lat, longitude AS lng
+               FROM timeseries.telemetry
+               WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3
+                 AND latitude IS NOT NULL AND longitude IS NOT NULL
+                 AND latitude <> 0 AND longitude <> 0
+                 AND (trip_id=$4 OR trip_id IS NULL)
+               ORDER BY ts"#,
+        )
+        .bind(trip.vehicle_id)
+        .bind(trip.started_at)
+        .bind(trip.ended_at)
+        .bind(trip.id)
+        .fetch(pool);
+        while let Some(point) = route.try_next().await? {
+            for (at, position) in times.iter().zip(&mut positions) {
+                history_keep_nearest(
+                    position,
+                    (point.ts - *at).num_seconds().abs(),
+                    (point.lat, point.lng),
+                );
+            }
+        }
+        drop(route);
+        let targets = times
+            .into_iter()
+            .zip(positions)
+            .filter_map(|(at, position)| {
+                history_weather_target(trip, at, position.map(|(_, pair)| pair), false)
+            })
+            .collect::<Vec<_>>();
+        let mut temperatures = vec![None; targets.len()];
+        let mut has_raw = false;
+        if !targets.is_empty() {
+            let mut raw = sqlx::query_as::<_, RawOutsideTemp>(
+                r#"SELECT ts, outside_temp_c FROM timeseries.telemetry
+                   WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3 AND outside_temp_c IS NOT NULL
+                   ORDER BY ts"#,
+            )
+            .bind(trip.vehicle_id)
+            .bind(trip.started_at)
+            .bind(trip.ended_at)
+            .fetch(pool);
+            while let Some(row) = raw.try_next().await? {
+                has_raw = true;
+                for (target, temperature) in targets.iter().zip(&mut temperatures) {
+                    let distance = (row.ts - target.sampled_at).num_seconds().abs();
+                    if distance <= SAMPLE_INTERVAL_SECONDS / 2 {
+                        history_keep_nearest(temperature, distance, row.outside_temp_c);
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            targets,
+            vehicle_values: temperatures
+                .into_iter()
+                .map(|v| v.map(|(_, temp)| temp))
+                .collect(),
+            has_raw,
+        })
+    }
+
+    fn weather_targets(&self) -> Vec<TargetSample> {
+        self.targets
+            .iter()
+            .zip(&self.vehicle_values)
+            .filter(|(_, value)| value.is_none())
+            .map(|(target, _)| target.clone())
+            .collect()
+    }
+
+    fn finish(self, hourly: &HashMap<String, Value>) -> Result<HistoryWeatherEstimate> {
+        let mut samples = Vec::new();
+        let mut summary_values = Vec::with_capacity(self.targets.len());
+        let mut vehicle_count = 0;
+        for (target, measured) in self.targets.into_iter().zip(self.vehicle_values) {
+            if let Some(value) = measured {
+                vehicle_count += 1;
+                summary_values.push((target.sampled_at, value));
+            } else if let Some(value) = hourly
+                .get(&target.cell_key)
+                .and_then(|body| pick_closest_temp(body, target.sampled_at))
+            {
+                summary_values.push((target.sampled_at, value));
+                samples.push((target, value));
+            }
+        }
+        if samples.is_empty() && !self.has_raw {
+            anyhow::bail!("weather provider returned no usable temperatures");
+        }
+        let source = match (vehicle_count > 0, !samples.is_empty()) {
+            (true, false) => "vehicle",
+            (false, true) => "open_meteo",
+            _ => "mixed",
+        };
+        let summary =
+            time_weighted_average(&summary_values).context("weather summary unavailable")?;
+        Ok(HistoryWeatherEstimate {
+            samples,
+            summary,
+            source,
+        })
+    }
+}
+
+fn history_keep_nearest<T>(slot: &mut Option<(i64, T)>, distance: i64, value: T) {
+    if slot.as_ref().is_none_or(|(best, _)| distance < *best) {
+        *slot = Some((distance, value));
+    }
 }
 
 async fn store_estimates(
@@ -350,6 +416,7 @@ async fn store_estimates(
     Ok(())
 }
 
+#[cfg(test)]
 fn nearest_raw_temp(raw: &[RawOutsideTemp], sampled_at: DateTime<Utc>) -> Option<f64> {
     raw.iter()
         .min_by_key(|row| (row.ts - sampled_at).num_seconds().abs())
@@ -357,39 +424,52 @@ fn nearest_raw_temp(raw: &[RawOutsideTemp], sampled_at: DateTime<Utc>) -> Option
         .map(|row| row.outside_temp_c)
 }
 
+#[cfg(test)]
 fn build_targets(trip: &TripInfo, route: &[RoutePoint], exact: bool) -> Vec<TargetSample> {
-    let mut times = Vec::new();
-    let mut cursor = trip.started_at;
-    while cursor < trip.ended_at {
-        times.push(cursor);
-        cursor += chrono::Duration::seconds(SAMPLE_INTERVAL_SECONDS);
-    }
-    if times.last().copied() != Some(trip.ended_at) {
-        times.push(trip.ended_at);
-    }
-
-    times
+    history_weather_times(trip)
         .into_iter()
-        .filter_map(|sampled_at| {
-            let point = route
-                .iter()
-                .min_by_key(|point| (point.ts - sampled_at).num_seconds().abs());
-            let (lat, lng) = point
-                .map(|point| (point.lat, point.lng))
-                .or_else(|| trip.start_lat.zip(trip.start_lng))?;
-            let decimals: usize = if exact { 5 } else { 2 };
-            let factor = 10_f64.powi(decimals as i32);
-            let provider_lat = (lat * factor).round() / factor;
-            let provider_lng = (lng * factor).round() / factor;
-            Some(TargetSample {
-                sampled_at,
-                elapsed_seconds: (sampled_at - trip.started_at).num_seconds().max(0) as i32,
-                cell_key: format!("{provider_lat:.decimals$},{provider_lng:.decimals$}"),
-                provider_lat,
-                provider_lng,
-            })
+        .filter_map(|at| {
+            let mut position = None;
+            for point in route {
+                history_keep_nearest(
+                    &mut position,
+                    (point.ts - at).num_seconds().abs(),
+                    (point.lat, point.lng),
+                );
+            }
+            history_weather_target(trip, at, position.map(|(_, pair)| pair), exact)
         })
         .collect()
+}
+
+fn history_weather_times(trip: &TripInfo) -> Vec<DateTime<Utc>> {
+    let duration = (trip.ended_at - trip.started_at).num_seconds().max(0);
+    let mut times = (0..=duration / SAMPLE_INTERVAL_SECONDS)
+        .map(|index| trip.started_at + chrono::Duration::seconds(index * SAMPLE_INTERVAL_SECONDS))
+        .filter(|at| *at < trip.ended_at)
+        .collect::<Vec<_>>();
+    times.push(trip.ended_at);
+    times
+}
+
+fn history_weather_target(
+    trip: &TripInfo,
+    sampled_at: DateTime<Utc>,
+    position: Option<(f64, f64)>,
+    exact: bool,
+) -> Option<TargetSample> {
+    let (lat, lng) = position.or_else(|| trip.start_lat.zip(trip.start_lng))?;
+    let decimals: usize = if exact { 5 } else { 2 };
+    let factor = 10_f64.powi(decimals as i32);
+    let provider_lat = (lat * factor).round() / factor;
+    let provider_lng = (lng * factor).round() / factor;
+    Some(TargetSample {
+        sampled_at,
+        elapsed_seconds: (sampled_at - trip.started_at).num_seconds().max(0) as i32,
+        cell_key: format!("{provider_lat:.decimals$},{provider_lng:.decimals$}"),
+        provider_lat,
+        provider_lng,
+    })
 }
 
 fn unique_weather_cells(targets: &[TargetSample]) -> Vec<WeatherCell> {
@@ -894,5 +974,175 @@ mod history_weather_contract_tests {
         let stored:(f64,String,i64)=sqlx::query_as("SELECT outside_temp_c,outside_temp_source,(SELECT count(*) FROM panda.trip_weather_samples WHERE trip_id=$1) FROM panda.trips WHERE id=$1").bind(id).fetch_one(pool).await.unwrap();
         assert_eq!(stored, (5., "open_meteo".into(), 1));
         fixture.cleanup().await;
+    }
+}
+
+#[cfg(test)]
+mod history_weather_plan_tests {
+    use super::*;
+    use chrono::TimeZone;
+    use serde_json::json;
+
+    #[test]
+    fn synthetic_provider_payloads_fill_only_unmeasured_targets() {
+        let start = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let trip = TripInfo {
+            id: Uuid::new_v4(),
+            vehicle_id: Uuid::new_v4(),
+            started_at: start,
+            ended_at: start + chrono::Duration::minutes(30),
+            start_lat: Some(30.26721),
+            start_lng: Some(-97.74311),
+        };
+        let targets = build_targets(&trip, &[], false);
+        let payloads = HashMap::from([(
+            targets[0].cell_key.clone(),
+            json!({"hourly": {
+                "time": ["2026-07-14T12:00"], "temperature_2m": [20.0]
+            }}),
+        )]);
+        for (values, source, count) in [
+            (vec![Some(10.), None, Some(30.)], "mixed", 1),
+            (vec![None, None, None], "open_meteo", 3),
+            (vec![Some(10.), Some(20.), Some(30.)], "vehicle", 0),
+        ] {
+            let plan = HistoryWeatherPlan {
+                targets: targets.clone(),
+                has_raw: values.iter().any(Option::is_some),
+                vehicle_values: values,
+            };
+            assert_eq!(plan.weather_targets().len(), count);
+            let estimate = plan.finish(&payloads).unwrap();
+            assert_eq!(
+                (estimate.summary, estimate.source, estimate.samples.len()),
+                (20., source, count)
+            );
+            assert!(estimate.samples.iter().all(|(target, temp)| *temp == 20.
+                && target.provider_lat == 30.27
+                && target.provider_lng == -97.74));
+        }
+        for (has_raw, message) in [
+            (false, "weather provider returned no usable temperatures"),
+            (true, "weather summary unavailable"),
+        ] {
+            let plan = HistoryWeatherPlan {
+                targets: targets.clone(),
+                vehicle_values: vec![None; 3],
+                has_raw,
+            };
+            assert_eq!(
+                plan.finish(&HashMap::new()).err().unwrap().to_string(),
+                message
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
+    async fn streamed_sparse_plan_preserves_vehicle_and_trip_joins() {
+        let mut fixture = crate::authorization_test_support::Fixture::new().await;
+        let options = fixture.state.pool.connect_options().as_ref().clone();
+        fixture.state.pool.close().await;
+        fixture.state.pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let pool = &fixture.state.pool;
+        let owner = fixture.user("admin").await;
+        let vehicle = fixture.vehicle(owner, "streamed-history-weather").await;
+        let other_vehicle = fixture.vehicle(owner, "streamed-history-other").await;
+        let start = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
+        let id: Uuid = sqlx::query_scalar("INSERT INTO panda.trips (vehicle_id,started_at,ended_at,start_lat,start_lng) VALUES ($1,$2,$2+interval '31 minutes',40,-100) RETURNING id")
+            .bind(vehicle).bind(start).fetch_one(pool).await.unwrap();
+        let other: Uuid = sqlx::query_scalar("INSERT INTO panda.trips (vehicle_id,started_at,ended_at) VALUES ($1,$2,$2) RETURNING id")
+            .bind(vehicle).bind(start).fetch_one(pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.telemetry (vehicle_id,ts,trip_id,latitude,longitude,outside_temp_c) VALUES
+            ($1,$3,$5,55,66,NULL),
+            ($1,$3+interval '10 minutes',$4,30,-97,10),
+            ($1,$3+interval '15 minutes',NULL,0,-96,NULL),
+            ($1,$3+interval '20 minutes',NULL,31,-98,20),
+            ($1,$3+interval '31 minutes',$5,50,-90,30),
+            ($2,$3,NULL,60,70,99)")
+            .bind(vehicle).bind(other_vehicle).bind(start).bind(id).bind(other).execute(pool).await.unwrap();
+        let trip = TripInfo {
+            id,
+            vehicle_id: vehicle,
+            started_at: start,
+            ended_at: start + chrono::Duration::minutes(31),
+            start_lat: Some(40.),
+            start_lng: Some(-100.),
+        };
+        let plan = HistoryWeatherPlan::load(pool, &trip).await.unwrap();
+        assert_eq!(
+            plan.targets
+                .iter()
+                .map(|target| (
+                    target.elapsed_seconds,
+                    target.provider_lat,
+                    target.provider_lng
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 30., -97.),
+                (900, 30., -97.),
+                (1800, 31., -98.),
+                (1860, 31., -98.)
+            ]
+        );
+        assert_eq!(
+            plan.vehicle_values,
+            vec![None, Some(10.), Some(30.), Some(30.)]
+        );
+        let payloads = HashMap::from([(
+            plan.targets[0].cell_key.clone(),
+            json!({"hourly": {
+                "time": ["2026-07-14T12:00"], "temperature_2m": [5.0]
+            }}),
+        )]);
+        let estimate = plan.finish(&payloads).unwrap();
+        assert_eq!(
+            (estimate.summary, estimate.source, estimate.samples.len()),
+            (26550. / 1860., "mixed", 1)
+        );
+        store_estimates(
+            pool,
+            id,
+            estimate.samples,
+            estimate.summary,
+            estimate.source,
+        )
+        .await
+        .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM timeseries.telemetry")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 6);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn weather_chunk_size_errors_never_need_a_provider_or_database() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://synthetic:synthetic@localhost/unused")
+            .unwrap();
+        let client = reqwest::Client::new();
+        let now = Utc::now();
+        let cell = WeatherCell {
+            key: "30.00,-97.00".into(),
+            lat: 30.,
+            lng: -97.,
+        };
+        for cells in [vec![], vec![cell.clone(), cell]] {
+            assert_eq!(
+                fetch_weather_chunk(&pool, &client, &cells, now, now)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "Weather requests require one location"
+            );
+        }
+        pool.close().await;
     }
 }

@@ -11,19 +11,12 @@ const METERS_PER_DEGREE_LNG: f64 = 111_320.0;
 /// Build a compact `[longitude, latitude]` preview while retaining endpoints
 /// and the meaningful bends in the original route.
 pub fn build_route_preview(points: &[(f64, f64)]) -> Vec<[f64; 2]> {
-    let mut cleaned = Vec::with_capacity(points.len());
-    for &(lat, lng) in points {
-        if !lat.is_finite() || !lng.is_finite() || (lat == 0.0 && lng == 0.0) {
-            continue;
-        }
-        if cleaned
-            .last()
-            .is_some_and(|&(last_lat, last_lng)| last_lat == lat && last_lng == lng)
-        {
-            continue;
-        }
-        cleaned.push((lat, lng));
-    }
+    let mut cleaned = points
+        .iter()
+        .copied()
+        .filter(|&(lat, lng)| lat.is_finite() && lng.is_finite() && (lat != 0.0 || lng != 0.0))
+        .collect::<Vec<_>>();
+    cleaned.dedup();
 
     if cleaned.len() <= MAX_PREVIEW_POINTS {
         return cleaned.into_iter().map(|(lat, lng)| [lng, lat]).collect();
@@ -40,7 +33,11 @@ pub fn build_route_preview(points: &[(f64, f64)]) -> Vec<[f64; 2]> {
     let projected: Vec<(f64, f64)> = cleaned.iter().copied().map(project).collect();
 
     let mut tolerance = INITIAL_TOLERANCE_METERS;
-    while simplify_indices(&projected, tolerance).len() > MAX_PREVIEW_POINTS {
+    // Squared tolerance reaches infinity within 512 doublings, retaining endpoints.
+    for _ in 0..512 {
+        if simplify_indices(&projected, tolerance).len() <= MAX_PREVIEW_POINTS {
+            break;
+        }
         tolerance *= 2.0;
     }
 
@@ -72,46 +69,33 @@ fn simplify_indices(points: &[(f64, f64)], tolerance_meters: f64) -> Vec<usize> 
     let mut keep = vec![false; points.len()];
     keep[0] = true;
     keep[points.len() - 1] = true;
-    simplify_segment(
-        points,
-        0,
-        points.len() - 1,
-        tolerance_meters * tolerance_meters,
-        &mut keep,
-    );
+    let threshold = tolerance_meters * tolerance_meters;
+    let mut pending = vec![(0, points.len() - 1)];
+    while let Some((start, end)) = pending.pop() {
+        let mut furthest = 0.0;
+        let mut split = None;
+        for index in start + 1..end {
+            let distance = squared_segment_distance(points[index], points[start], points[end]);
+            if distance > furthest {
+                furthest = distance;
+                split = Some(index);
+            }
+        }
+        if let Some(index) = split.filter(|_| furthest > threshold) {
+            keep[index] = true;
+            if end > index + 1 {
+                pending.push((index, end));
+            }
+            if index > start + 1 {
+                pending.push((start, index));
+            }
+        }
+    }
 
     keep.into_iter()
         .enumerate()
         .filter_map(|(index, keep)| keep.then_some(index))
         .collect()
-}
-
-fn simplify_segment(
-    points: &[(f64, f64)],
-    start: usize,
-    end: usize,
-    tolerance_squared: f64,
-    keep: &mut [bool],
-) {
-    if end <= start + 1 {
-        return;
-    }
-
-    let mut furthest = 0.0;
-    let mut furthest_index = None;
-    for index in (start + 1)..end {
-        let distance = squared_segment_distance(points[index], points[start], points[end]);
-        if distance > furthest {
-            furthest = distance;
-            furthest_index = Some(index);
-        }
-    }
-
-    if let Some(index) = furthest_index.filter(|_| furthest > tolerance_squared) {
-        keep[index] = true;
-        simplify_segment(points, start, index, tolerance_squared, keep);
-        simplify_segment(points, index, end, tolerance_squared, keep);
-    }
 }
 
 fn squared_segment_distance(point: (f64, f64), start: (f64, f64), end: (f64, f64)) -> f64 {
