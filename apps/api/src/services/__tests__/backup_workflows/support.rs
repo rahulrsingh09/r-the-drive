@@ -99,20 +99,31 @@ pub fn id(value: u128) -> Uuid {
     Uuid::from_u128(value)
 }
 
-pub fn record(name: &str, raw: &Value, expected: &str) {
-    let dir = std::path::PathBuf::from(
-        std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").expect("evidence directory"),
-    );
-    let run = std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_| "actual".into());
-    std::fs::write(
-        dir.join(format!("{run}-{name}-raw.json")),
-        serde_json::to_vec_pretty(raw).unwrap(),
-    )
-    .unwrap();
-    if std::env::var_os("BACKUP_CONTRACT_CAPTURE").is_none() {
-        let frozen: Value = serde_json::from_str(expected).expect("frozen expectation");
-        assert_eq!(raw, &frozen, "complete {name} contract");
+pub fn temporary_directory() -> tempfile::TempDir {
+    match std::env::var_os("BACKUP_CONTRACT_ARTIFACT_DIR") {
+        Some(directory) => tempfile::tempdir_in(directory).unwrap(),
+        None => tempfile::tempdir().unwrap(),
     }
+}
+
+pub fn evidence(name: &str, content: &[u8]) {
+    if let Some(directory) = std::env::var_os("BACKUP_CONTRACT_ARTIFACT_DIR") {
+        let run = std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_| "actual".into());
+        std::fs::write(
+            std::path::Path::new(&directory).join(format!("{run}-{name}")),
+            content,
+        )
+        .unwrap();
+    }
+}
+
+pub fn record(name: &str, raw: &Value, expected: &str) {
+    evidence(
+        &format!("{name}-raw.json"),
+        &serde_json::to_vec_pretty(raw).unwrap(),
+    );
+    let frozen: Value = serde_json::from_str(expected).expect("frozen expectation");
+    assert_eq!(raw, &frozen, "complete {name} contract");
 }
 
 pub fn package() -> Vec<u8> {

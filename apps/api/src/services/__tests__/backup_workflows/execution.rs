@@ -38,8 +38,7 @@ async fn backup_workflow_execution_success_failure_and_fallback() {
         "retention-failure",
     ] {
         let db = support::DatabaseFixture::new().await;
-        let root =
-            tempfile::tempdir_in(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap()).unwrap();
+        let root = support::temporary_directory();
         let mut cfg = config(&db, root.path());
         let remote = matches!(scenario, "remote" | "upload-failure" | "retention-failure");
         let fake = if remote {
@@ -120,10 +119,7 @@ async fn backup_workflow_execution_success_failure_and_fallback() {
                         .unwrap();
                 (bytes, package)
             } else {
-                let dir = PathBuf::from(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap());
-                let phase =
-                    std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_| "actual".into());
-                let source = dir.join(format!("{phase}-s3-{scenario}-0.body"));
+                let source = fake.as_ref().unwrap().body_path(0);
                 let bytes = fs::read(&source).await.unwrap();
                 let package = validate_recovery_package_with_limits(&source, &cfg.recovery)
                     .await
@@ -176,11 +172,8 @@ async fn backup_workflow_execution_success_failure_and_fallback() {
         evidence.push(json!({"scenario":scenario,"state":raw,"calls":fake.map(|f|f.finish())}));
         db.cleanup().await;
     }
-    let dir = PathBuf::from(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap());
-    let phase = std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_| "actual".into());
-    std::fs::write(
-        dir.join(format!("{phase}-execution-original.json")),
-        serde_json::to_vec_pretty(&evidence).unwrap(),
-    )
-    .unwrap();
+    support::evidence(
+        "execution-original.json",
+        &serde_json::to_vec_pretty(&evidence).unwrap(),
+    );
 }

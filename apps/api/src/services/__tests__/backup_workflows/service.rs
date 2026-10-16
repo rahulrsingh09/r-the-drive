@@ -106,8 +106,7 @@ async fn state(pool: &PgPool) -> Value {
 async fn backup_workflow_retention_failure_restart_contract() {
     use sqlx::Executor;
     let db = support::DatabaseFixture::new().await;
-    let root =
-        tempfile::tempdir_in(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap()).unwrap();
+    let root = support::temporary_directory();
     let cfg = config(&db, root.path());
     fs::create_dir_all(&cfg.backup_artifact_dir).await.unwrap();
     let mut rows = Vec::new();
@@ -164,13 +163,10 @@ async fn backup_workflow_retention_failure_restart_contract() {
         .unwrap_err();
     rows.push(json!({"case":"invalid settings fails durable run","error":error.to_string(),"state":state(&db.pool).await}));
     let mut raw = json!(rows);
-    let dir = std::path::PathBuf::from(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap());
-    let phase = std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_| "actual".into());
-    std::fs::write(
-        dir.join(format!("{phase}-service-original.json")),
-        serde_json::to_vec_pretty(&raw).unwrap(),
-    )
-    .unwrap();
+    support::evidence(
+        "service-original.json",
+        &serde_json::to_vec_pretty(&raw).unwrap(),
+    );
     normalize(&mut raw, root.path());
     support::record("service", &raw, include_str!("service.json"));
     db.cleanup().await;

@@ -19,8 +19,7 @@ async fn backup_workflow_s3_listing_and_transfer_contract() {
     for (name,replies) in [("list failure",vec![error("GET")]),("head failure",vec![reply("GET",200,b"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>fixture/a.rma.tar.gz</Key></Contents></ListBucketResult>".to_vec()),error("HEAD")])]{
         let fake=Fake::new(name,replies).await;let err=list(&fake.settings).await.unwrap_err();records.push(json!({"case":name,"error":format!("{err:#}"),"calls":fake.finish()}));
     }
-    let root =
-        tempfile::tempdir_in(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap()).unwrap();
+    let root = support::temporary_directory();
     let path = root.path().join("upload.rma.tar.gz");
     fs::write(&path, b"synthetic package bytes").await.unwrap();
     let fake = Fake::new("single-upload", vec![reply("PUT", 200, vec![])]).await;

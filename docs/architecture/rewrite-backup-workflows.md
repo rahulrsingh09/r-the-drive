@@ -86,7 +86,9 @@ installations, install extensions through privileged bootstrap, apply all curren
 migrations, and run the application as a restricted role with history protection.
 S3 uses loopback scripted HTTP with the existing development-origin policy;
 no provider account or cloud resource is used. Raw bodies and state evidence stay
-outside the repository. Frozen expectations normalize generated IDs, clocks, and
+outside the repository. Evidence variables only enable optional file copies; when
+unset, tests use owned temporary directories. Frozen assertions always run.
+Frozen expectations normalize generated IDs, clocks, and
 random ciphertext identity; package bytes, checksums, sizes, statuses, and messages
 remain compared. Archive creation uses independent byte/hash verification and
 complete row assertions because real dumps contain installation-specific data.
@@ -99,8 +101,8 @@ cargo check --locked --offline --all-targets --all-features
 cargo clippy --locked --offline --all-targets --all-features -- -D warnings
 ```
 
-These tests do not authorize or prove a production restore. The existing
-Garage integration test, live supervisor cutover, process-kill cleanup, and
+These tests do not authorize or prove a production restore. A real Garage
+deployment, live supervisor cutover, process-kill cleanup, and
 arbitrary concurrent catalog/restore-request mutations are outside this bounded
 verification. Multipart task cancellation retains the inherited behavior: abort
 is attempted for returned errors, not guaranteed after task/process termination.

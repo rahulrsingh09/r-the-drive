@@ -1,4 +1,4 @@
-use crate::services::s3_backups::S3Settings;
+use crate::services::{backups::workflow_test_support as support, s3_backups::S3Settings};
 use axum::{
     body::{to_bytes, Body},
     http::{Request, Response},
@@ -30,6 +30,7 @@ pub(crate) struct Fake {
     replies: Arc<Mutex<VecDeque<Reply>>>,
     calls: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
+    bodies: tempfile::TempDir,
 }
 impl Fake {
     pub(crate) async fn new(name: &str, replies: Vec<Reply>) -> Self {
@@ -52,8 +53,10 @@ impl Fake {
         let queue = replies.clone();
         let log = calls.clone();
         let name = name.to_owned();
+        let bodies = support::temporary_directory();
+        let body_directory = bodies.path().to_owned();
         let router=Router::new().fallback(any(move |request:Request<Body>|{
-            let queue=queue.clone();let log=log.clone();let name=name.clone();
+            let queue=queue.clone();let log=log.clone();let name=name.clone();let body_directory=body_directory.clone();
             async move{
                 let (parts,body)=request.into_parts();
                 let bytes=to_bytes(body,70*1024*1024).await.unwrap();
@@ -61,9 +64,8 @@ impl Fake {
                 let query=url::form_urlencoded::parse(parts.uri.query().unwrap_or("").as_bytes()).into_owned().collect::<std::collections::BTreeMap<_,_>>();
                 let mut log=log.lock().unwrap();
                 let index=log.len();
-                let dir=std::path::PathBuf::from(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap());
-                let run=std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_|"actual".into());
-                std::fs::write(dir.join(format!("{run}-s3-{name}-{index}.body")),&bytes).unwrap();
+                std::fs::write(body_directory.join(format!("{index}.body")), &bytes).unwrap();
+                support::evidence(&format!("s3-{name}-{index}.body"), &bytes);
                 log.push(json!({"method":parts.method.as_str(),"path":parts.uri.path(),"query":query,"metadata":headers,"bytes":bytes.len(),"sha256":hex::encode(Sha256::digest(&bytes))}));
                 let r=queue.lock().unwrap().pop_front().expect("unexpected S3 request");
                 assert_eq!(parts.method,r.method);
@@ -78,7 +80,11 @@ impl Fake {
             replies,
             calls,
             task,
+            bodies,
         }
+    }
+    pub(crate) fn body_path(&self, index: usize) -> std::path::PathBuf {
+        self.bodies.path().join(format!("{index}.body"))
     }
     pub(crate) fn finish(self) -> Value {
         assert!(

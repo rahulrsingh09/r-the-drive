@@ -200,8 +200,7 @@ fn settings() -> Value {
 #[ignore = "requires a newly created disposable restricted TimescaleDB fixture"]
 async fn backup_workflow_http_and_complete_state_contract() {
     let db = DatabaseFixture::new().await;
-    let root =
-        tempfile::tempdir_in(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap()).unwrap();
+    let root = support::temporary_directory();
     let state = app(&db, root.path()).await;
     for (n, role) in [
         (1, "admin"),
@@ -438,13 +437,10 @@ async fn backup_workflow_http_and_complete_state_contract() {
     .await
     .unwrap());
     let raw = json!(records);
-    let evidence = std::path::PathBuf::from(std::env::var("BACKUP_CONTRACT_ARTIFACT_DIR").unwrap());
-    let phase = std::env::var("BACKUP_CONTRACT_RUN").unwrap_or_else(|_| "actual".into());
-    std::fs::write(
-        evidence.join(format!("{phase}-http-original.json")),
-        serde_json::to_vec_pretty(&raw).unwrap(),
-    )
-    .unwrap();
+    support::evidence(
+        "http-original.json",
+        &serde_json::to_vec_pretty(&raw).unwrap(),
+    );
     let mut normalized = raw;
     Normalizer::new(root.path()).apply(&mut normalized);
     support::record(
