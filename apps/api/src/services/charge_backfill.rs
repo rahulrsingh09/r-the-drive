@@ -260,3 +260,66 @@ async fn run_claimed_inner(
 
     Ok(canonical_count as usize)
 }
+
+#[cfg(test)]
+mod charge_history_backfill_contract {
+    use super::*;
+    use crate::services::charge_sessions::charge_history_contract::{
+        cleanup, database, id, vehicle,
+    };
+    use serde_json::json;
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL; never contacts a provider"]
+    async fn charge_history_claim_status_retry_and_local_errors() {
+        let (pool, admin, name) = database().await;
+        let v = vehicle(&pool, 20).await;
+        assert!(matches!(
+            claim(&pool, id(999)).await,
+            Err(ChargeBackfillError::CredentialsNotFound)
+        ));
+        assert!(matches!(
+            claim(&pool, v).await,
+            Err(ChargeBackfillError::CredentialsNotFound)
+        ));
+        assert_eq!(
+            serde_json::to_value(get_status(&pool, id(999)).await.unwrap()).unwrap(),
+            json!({"vehicle_id":id(999),"history_backfilled_at":null,"status":null,"rivian_session_count":null,"local_session_count":0,"missing_source_count":0})
+        );
+        // The left join reports one missing source for an existing vehicle with no sessions.
+        assert_eq!(get_status(&pool, v).await.unwrap().missing_source_count, 1);
+        sqlx::query("INSERT INTO panda.vehicle_credentials(vehicle_id,encrypted_tokens,token_created_at) VALUES($1,$2,now())")
+            .bind(v).bind(vec![0u8,1,2]).execute(&pool).await.unwrap();
+        let claimed = claim(&pool, v).await.unwrap();
+        assert_eq!(claimed.rivian_vehicle_id, "history-20");
+        assert!(matches!(
+            claim(&pool, v).await,
+            Err(ChargeBackfillError::AlreadyRunning)
+        ));
+        let err = run_claimed(&pool, &reqwest::Client::new(), "invalid-key", claimed)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().starts_with("age key parse failed:"));
+        assert_eq!(
+            get_status(&pool, v).await.unwrap().status.as_deref(),
+            Some("error")
+        );
+        let _ = claim(&pool, v).await.unwrap();
+        sqlx::query(
+            "UPDATE panda.vehicles SET updated_at=now()-interval '121 minutes' WHERE id=$1",
+        )
+        .bind(v)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(claim(&pool, v).await.is_ok());
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,source) VALUES($1,$2,'2026-08-01T10:00Z',NULL),($3,$2,'2026-08-02T10:00Z','telemetry')")
+            .bind(id(2001)).bind(v).bind(id(2002)).execute(&pool).await.unwrap();
+        let status = get_status(&pool, v).await.unwrap();
+        assert_eq!(
+            (status.local_session_count, status.missing_source_count),
+            (2, 1)
+        );
+        cleanup(pool, admin, name).await;
+    }
+}

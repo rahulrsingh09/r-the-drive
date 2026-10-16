@@ -790,3 +790,167 @@ mod tests {
         format!("{prefix}/{name}")
     }
 }
+
+#[cfg(test)]
+mod charge_history_repair_contract {
+    use super::*;
+    use crate::services::charge_sessions::charge_history_contract::{
+        cleanup, database, evidence, id, patch, session, vehicle,
+    };
+    use serde_json::json;
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL"]
+    async fn charge_history_repair_full_rows_rollback_and_failure_atomicity() {
+        let (pool, admin, name) = database().await;
+        let v = vehicle(&pool, 30).await;
+        let other = vehicle(&pool, 31).await;
+        let left = id(3001);
+        let right = id(3002);
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,source,soc_start,live_power_kw) VALUES($1,$2,'2026-08-03T10:00Z','telemetry',20,7)")
+            .bind(left).bind(v).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,ended_at,source,soc_end,kwh_added,energy_added_wh,parallax_pack_energy_kwh,live_power_kw) VALUES($1,$2,'2026-08-03T10:10Z','2026-08-03T11:00Z','telemetry',60,22,22000,21,11)")
+            .bind(right).bind(v).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,ended_at,source) VALUES($1,$2,'2026-08-03T10:00Z','2026-08-03T11:00Z','telemetry')")
+            .bind(id(3101)).bind(other).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.telemetry(ts,vehicle_id,charge_session_id,charger_state,power_kw) VALUES('2026-08-03T10:09Z',$1,$2,'charging',7),('2026-08-03T10:10Z',$1,$3,'charging',11)")
+            .bind(v).bind(left).bind(right).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO panda.rivian_charge_payloads(id,vehicle_id,charge_session_id,operation,payload,captured_at) VALUES($1,$2,$3,'synthetic','{}','2026-08-03T10:10Z')")
+            .bind(id(3050)).bind(v).bind(right).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.parallax_charge_curve_points(vehicle_id,source_at,segment_index,power_kw,charge_session_id) VALUES($1,'2026-08-03T10:10Z',0,11,$2)")
+            .bind(v).bind(right).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO panda.charge_session_user_annotations(charge_session_id,user_id,cost_usd) VALUES($1,$3,2),($2,$3,9)")
+            .bind(left).bind(right).bind(id(10030)).execute(&pool).await.unwrap();
+        let before_left = session(&pool, left).await;
+        let before_right = session(&pool, right).await;
+        let before_other = session(&pool, id(3101)).await;
+        // Fail after journaling and reference writes to prove transaction rollback.
+        sqlx::query("ALTER TABLE panda.charge_sessions ADD CONSTRAINT fixture_no_end CHECK (id<>'00000000-0000-0000-0000-000000000bb9'::uuid OR ended_at IS NULL)").execute(&pool).await.unwrap();
+        assert!(heal_active_tail(&pool, v).await.is_err());
+        assert_eq!(session(&pool, left).await, before_left);
+        assert_eq!(session(&pool, right).await, before_right);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM panda.charge_session_repair_journal"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT charge_session_id FROM panda.rivian_charge_payloads WHERE id=$1"
+            )
+            .bind(id(3050))
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            right
+        );
+        sqlx::query("ALTER TABLE panda.charge_sessions DROP CONSTRAINT fixture_no_end")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            heal_active_tail(&pool, v).await.unwrap(),
+            RepairStats {
+                merged: 1,
+                closed: 0
+            }
+        );
+        let expected = patch(
+            before_left.clone(),
+            json!({"ended_at":"2026-08-03T11:00:00+00:00","soc_end":60,"kwh_added":22,"energy_added_wh":22000,"energy_used_wh":0,"max_charge_rate_kw":0,"live_power_kw":11,"parallax_pack_energy_kwh":21,"duration_minutes":60}),
+        );
+        assert_eq!(session(&pool, left).await, expected);
+        assert_eq!(session(&pool, id(3101)).await, before_other);
+        assert_eq!(
+            heal_active_tail(&pool, v).await.unwrap(),
+            RepairStats::default()
+        );
+        evidence(&pool, "repair-applied", json!({"merged":1,"closed":0})).await;
+        let journal: i64 = sqlx::query_scalar(
+            "SELECT id FROM panda.charge_session_repair_journal WHERE vehicle_id=$1",
+        )
+        .bind(v)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE panda.charge_sessions SET soc_end=61 WHERE id=$1")
+            .bind(left)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            rollback_repair(&pool, journal)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "affected session, annotations, or aliases changed after repair; rollback refused"
+        );
+        sqlx::query("UPDATE panda.charge_sessions SET soc_end=60 WHERE id=$1")
+            .bind(left)
+            .execute(&pool)
+            .await
+            .unwrap();
+        rollback_repair(&pool, journal).await.unwrap();
+        assert_eq!(session(&pool, left).await, before_left);
+        assert_eq!(session(&pool, right).await, before_right);
+        assert_eq!(
+            rollback_repair(&pool, journal)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "repair has already been rolled back"
+        );
+        assert_eq!(
+            rollback_repair(&pool, 9999).await.unwrap_err().to_string(),
+            "repair journal entry not found"
+        );
+        evidence(&pool, "repair-rolled-back", json!({"rollback":"complete"})).await;
+
+        sqlx::query("INSERT INTO timeseries.parallax_charge_curve_points(vehicle_id,source_at,segment_index,power_kw) VALUES($1,'2026-08-03T10:20Z',0,11),($1,'2026-08-03T10:20Z',1,9),($1,'2026-08-04T10:20Z',0,8)")
+            .bind(v).execute(&pool).await.unwrap();
+        let first = reconcile_unassociated_parallax_samples(&pool, v, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            first,
+            ReconcileStats {
+                scanned: 1,
+                attached: 1,
+                ambiguous: 0
+            }
+        );
+        let rest = reconcile_unassociated_parallax_samples(&pool, v, 10000)
+            .await
+            .unwrap();
+        assert_eq!(
+            rest,
+            ReconcileStats {
+                scanned: 2,
+                attached: 1,
+                ambiguous: 0
+            }
+        );
+        evidence(&pool,"repair-samples",json!({"first":[first.scanned,first.attached,first.ambiguous],"rest":[rest.scanned,rest.attached,rest.ambiguous]})).await;
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,source) VALUES($1,$2,'2026-08-05T10:00Z','rivian_api')")
+            .bind(id(3004)).bind(v).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.telemetry(ts,vehicle_id,charger_state) VALUES('2026-08-05T11:00Z',$1,'done')")
+            .bind(v).execute(&pool).await.unwrap();
+        assert_eq!(
+            heal_active_tail(&pool, v).await.unwrap(),
+            RepairStats {
+                merged: 0,
+                closed: 2
+            }
+        );
+        assert_eq!(
+            heal_active_tail(&pool, v).await.unwrap(),
+            RepairStats::default()
+        );
+        evidence(&pool, "repair-closed", json!({"merged":0,"closed":2})).await;
+        cleanup(pool, admin, name).await;
+    }
+}
