@@ -1,4 +1,5 @@
 mod curves;
+mod fallback_series;
 mod history;
 mod mutations;
 mod summary;
@@ -321,41 +322,16 @@ fn build_fallback_curve_samples(
     points: &[RawCurvePointRow],
     cap_kw: f64,
 ) -> Vec<CurveSampleRow> {
-    if points.is_empty() {
-        return vec![];
-    }
-
-    let span_minutes = (ended_at - started_at).num_seconds().max(1) as f64 / 60.0;
-    let point_span_seconds = points
-        .first()
-        .zip(points.last())
-        .map(|(first, last)| (last.ts - first.ts).num_seconds().max(1) as f64)
-        .unwrap_or(1.0);
-    let first_ts = points.first().map(|point| point.ts).unwrap_or(started_at);
-
-    points
-        .iter()
-        .map(|row| {
-            let elapsed_minutes = (row.ts - started_at).num_seconds() as f64 / 60.0;
-            let soc = if points.len() == 1 {
-                Some((soc_start + soc_end) / 2.0)
-            } else {
-                let ratio =
-                    ((row.ts - first_ts).num_seconds() as f64 / point_span_seconds).clamp(0.0, 1.0);
-                Some(soc_start + (soc_end - soc_start) * ratio)
-            };
-
-            CurveSampleRow {
-                session_id,
-                minutes_elapsed: elapsed_minutes.clamp(0.0, span_minutes),
-                charge_rate_kw: row.power_kw.unwrap_or(0.0).clamp(0.0, cap_kw),
-                soc,
-                sample_source: row.sample_source.clone(),
-                charger_type: charger_type.map(ToOwned::to_owned),
-                power_method: "recorded",
-            }
-        })
-        .collect()
+    fallback_series::build(
+        session_id,
+        started_at,
+        ended_at,
+        charger_type,
+        soc_start,
+        soc_end,
+        points,
+        cap_kw,
+    )
 }
 
 #[derive(Debug, sqlx::FromRow)]
