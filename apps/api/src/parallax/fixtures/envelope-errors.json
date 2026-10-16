@@ -1,0 +1,43 @@
+[
+  {
+    "error": "missing RVM topic",
+    "input": null
+  },
+  {
+    "error": "missing RVM topic",
+    "input": {}
+  },
+  {
+    "error": "missing RVM topic",
+    "input": {
+      "rvm": 1
+    }
+  },
+  {
+    "error": null,
+    "input": {
+      "payload": "!",
+      "rvm": "unknown"
+    }
+  },
+  {
+    "error": "missing Parallax payload",
+    "input": {
+      "rvm": "vehicle.power.state"
+    }
+  },
+  {
+    "error": "Invalid symbol 33, offset 0.",
+    "input": {
+      "payload": "!",
+      "rvm": "vehicle.power.state"
+    }
+  },
+  {
+    "error": "typed Parallax decoder rejected topic vehicle.power.state",
+    "input": {
+      "payload": "Cv8=",
+      "rvm": "vehicle.power.state"
+    }
+  }
+]

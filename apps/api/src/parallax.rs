@@ -2782,3 +2782,11 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "parallax/contract_tests.rs"]
+mod contract_tests;
+
+#[cfg(test)]
+#[path = "parallax/persistence_tests.rs"]
+mod persistence_tests;

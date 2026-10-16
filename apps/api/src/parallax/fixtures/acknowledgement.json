@@ -1,0 +1,39 @@
+[
+  {
+    "error": null,
+    "name": "ack",
+    "sent": []
+  },
+  {
+    "error": null,
+    "name": "ping-before-ack",
+    "sent": [
+      "Pong(b\"\\x01\\x02\\x03\")"
+    ]
+  },
+  {
+    "error": "EOF while parsing an object at line 1 column 1",
+    "name": "malformed-json",
+    "sent": []
+  },
+  {
+    "error": "socket ended before Parallax acknowledgement",
+    "name": "wrong-type-eof",
+    "sent": []
+  },
+  {
+    "error": "socket ended before Parallax acknowledgement",
+    "name": "eof",
+    "sent": []
+  },
+  {
+    "error": "timed out waiting for Parallax acknowledgement",
+    "name": "timeout",
+    "sent": []
+  },
+  {
+    "error": "Connection closed normally",
+    "name": "transport-error",
+    "sent": []
+  }
+]

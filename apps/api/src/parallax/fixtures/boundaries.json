@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "sessions": [
+    {
+      "seconds": -1,
+      "session": null
+    },
+    {
+      "seconds": 0,
+      "session": "00000000-0000-0000-0000-0000000000c8"
+    },
+    {
+      "seconds": 1,
+      "session": "00000000-0000-0000-0000-0000000000c8"
+    },
+    {
+      "seconds": 59,
+      "session": "00000000-0000-0000-0000-0000000000c8"
+    },
+    {
+      "seconds": 60,
+      "session": "00000000-0000-0000-0000-0000000000c8"
+    },
+    {
+      "seconds": 61,
+      "session": null
+    }
+  ],
+  "signal": [
+    null,
+    -150,
+    0,
+    null
+  ],
+  "subscription": {
+    "id": "panda-parallax-collector",
+    "payload": {
+      "operationName": "ParallaxMessages",
+      "query": "subscription ParallaxMessages($vehicleId: String!, $rvms: [String!]) { parallaxMessages(vehicleId: $vehicleId, rvms: $rvms) { payload timestamp rvm } }",
+      "variables": {
+        "rvms": [
+          "vehicle.network.state",
+          "dynamics.vehicle.efficiency",
+          "dynamics.vehicle.mass_estimate",
+          "dynamics.vehicle.drive_mode",
+          "energy_edge_compute.graphs.parked_energy_distributions",
+          "energy_edge_compute.graphs.charge_session_breakdown",
+          "energy.high_voltage.battery_state",
+          "energy_edge_compute.graphs.charging_graph_global",
+          "charging.session.time_estimation",
+          "charging.session.status",
+          "energy_edge_compute.graphs.cold_weather_soc",
+          "vehicle.power.state",
+          "dynamics.vehicle.gnss",
+          "dynamics.vehicle.odometer",
+          "dynamics.vehicle.gear",
+          "body.closures.states",
+          "body.locks.states",
+          "dynamics.tires.state",
+          "comfort.cabin.cabin_temperatures",
+          "comfort.cabin.cabin_preconditioning_status",
+          "comfort.cabin.defrost_defog_status"
+        ],
+        "vehicleId": "synthetic-vehicle"
+      }
+    },
+    "type": "subscribe"
+  },
+  "timestamps": [
+    {
+      "input": null,
+      "output": null
+    },
+    {
+      "input": "bad",
+      "output": null
+    },
+    {
+      "input": "2026-10-16T12:34:56.789+02:00",
+      "output": "2026-10-16T10:34:56.789Z"
+    },
+    {
+      "input": "1800000000000",
+      "output": "2027-01-15T08:00:00Z"
+    },
+    {
+      "input": 1800000000000,
+      "output": "2027-01-15T08:00:00Z"
+    },
+    {
+      "input": 1800000000,
+      "output": "1970-01-21T20:00:00Z"
+    },
+    {
+      "input": -1,
+      "output": "1969-12-31T23:59:59.999Z"
+    },
+    {
+      "input": 1.5,
+      "output": null
+    },
+    {
+      "input": 9223372036854775807,
+      "output": null
+    }
+  ]
+}
