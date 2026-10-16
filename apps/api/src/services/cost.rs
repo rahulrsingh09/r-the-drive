@@ -797,3 +797,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "cost_contracts.rs"]
+mod cost_contracts;
