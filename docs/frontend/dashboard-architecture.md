@@ -304,3 +304,9 @@ packages/ui/src/
 ## Next Structural Step
 
 The current shell is the first stabilization step. If the number of built-in dashboards keeps growing, the next evolution should be a lightweight page-definition layer so routes declare metadata instead of assembling custom wrapper logic repeatedly.
+
+## Browser schema initialization
+
+The web entrypoint first evaluates `apps/web/src/schemaRuntime.ts`, which configures Zod for interpreted validation before application schemas are constructed. This avoids Zod’s dynamic-code capability probe under the production `script-src 'self'` policy. Keep this bootstrap import ahead of application imports; do not loosen the script policy to enable generated validators.
+
+After a production build, run `node scripts/verify-browser-csp.mjs` to load the compiled sign-in shell with the checked-in production policy and assert that no policy violation occurs. This focused check serves no API data; full deployment acceptance separately exercises authenticated pages and vehicle history.
