@@ -170,13 +170,29 @@ impl DemoFixture {
             )))
             .await
             .unwrap();
-        self.admin
-            .execute(sqlx::AssertSqlSafe(format!(
-                "DROP DATABASE {} WITH (FORCE)",
-                self.database
-            )))
-            .await
-            .unwrap();
+        for attempt in 0..10 {
+            let result = self
+                .admin
+                .execute(sqlx::AssertSqlSafe(format!(
+                    "DROP DATABASE {} WITH (FORCE)",
+                    self.database
+                )))
+                .await;
+            match result {
+                Ok(_) => break,
+                Err(error)
+                    if attempt < 9
+                        && error
+                            .as_database_error()
+                            .and_then(|error| error.code())
+                            .as_deref()
+                            == Some("55006") =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(error) => panic!("disposable demo database cleanup failed: {error}"),
+            }
+        }
         self.admin
             .execute(sqlx::AssertSqlSafe(format!("DROP ROLE {}", self.role)))
             .await
