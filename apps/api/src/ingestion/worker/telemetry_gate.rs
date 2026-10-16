@@ -199,6 +199,7 @@ impl TelemetryPersistenceGate {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn decide(&mut self, event: &TelemetryEvent) -> PersistenceDecision {
         let selection = self.select(event);
         let decision = selection.decision;

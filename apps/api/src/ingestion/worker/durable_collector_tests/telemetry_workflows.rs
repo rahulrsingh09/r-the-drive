@@ -212,7 +212,7 @@ async fn reconciliation_reads_one_latest_meaningful_row_without_filling_sparse_s
 
 #[tokio::test]
 #[ignore = "requires explicit isolated synthetic TimescaleDB and Redis"]
-async fn failed_telemetry_write_still_advances_gate_latest_and_lifecycle() {
+async fn failed_telemetry_write_keeps_gate_retryable_without_blocking_durable_or_live_state() {
     let db = CollectorFixture::new().await;
     let mut harness = PipelineHarness::new(&db, true).await;
     db.pool.execute("ALTER TABLE timeseries.telemetry ADD CONSTRAINT worker_reject_write CHECK(false) NOT VALID").await.unwrap();
@@ -237,12 +237,17 @@ async fn failed_telemetry_write_still_advances_gate_latest_and_lifecycle() {
         .execute("ALTER TABLE timeseries.telemetry DROP CONSTRAINT worker_reject_write")
         .await
         .unwrap();
+    harness.telemetry(event.clone(), "baseline").await;
+    harness.pipeline.flush().await;
+    let counts: (i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM timeseries.telemetry),telemetry_writes_persisted,telemetry_writes_suppressed FROM panda.rivian_stewardship_counters WHERE vehicle_id=$1")
+        .bind(db.vehicle_id).fetch_one(&db.pool).await.unwrap();
+    assert_eq!(counts, (1, 1, 0));
     event.ts += Duration::seconds(30);
     harness.telemetry(event, "parallax:battery").await;
     harness.pipeline.flush().await;
     let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM timeseries.telemetry),telemetry_writes_suppressed,telemetry_suppressed_duplicate FROM panda.rivian_stewardship_counters WHERE vehicle_id=$1")
         .bind(db.vehicle_id).fetch_one(&db.pool).await.unwrap();
-    assert_eq!(counts, (0, 1, 1));
+    assert_eq!(counts, (1, 1, 1));
     let checkpoint: Value = sqlx::query_scalar(
         "SELECT snapshot FROM panda.active_charge_checkpoints WHERE vehicle_id=$1",
     )
@@ -250,7 +255,7 @@ async fn failed_telemetry_write_still_advances_gate_latest_and_lifecycle() {
     .fetch_one(&db.pool)
     .await
     .unwrap();
-    assert_eq!(checkpoint["sequence"], 2);
+    assert_eq!(checkpoint["sequence"], 3);
     assert_eq!(checkpoint["last_observation"]["source"], "parallax");
     drop(harness);
     db.finish().await;

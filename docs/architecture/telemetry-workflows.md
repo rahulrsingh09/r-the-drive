@@ -26,7 +26,9 @@ Raw telemetry retains the incoming sparse frame. Same-time writes replace presen
 
 Latest status protects its timestamped sensors with each sensor's own timestamp. A missing or older sensor timestamp cannot overwrite an existing value. Equal sensor timestamps are accepted. Other fields merge in arrival order even when the frame timestamp is older; the row timestamp is a maximum. The initial insert accepts values without sensor timestamps.
 
-The suppression gate compares against both the last observed patch and the last selected persistence snapshot. Selection advances its baseline before the SQL write. A failed write therefore still affects later duplicate/threshold decisions; this existing limitation is characterized separately from durable trip/charge recovery. Latest-status and lifecycle stages continue when raw telemetry storage fails. No raw telemetry retry outbox is promised.
+The suppression gate compares against both the last accepted observation and the last successful persistence snapshot. Selecting a write does not advance either baseline. A successful SQL write advances both; a threshold-suppressed observation advances only the observation baseline. Empty and duplicate frames advance neither.
+
+A failed raw write discards the proposed gate advance, so an identical later observation remains eligible for storage. The earlier behavior suppressed this retry even after the database recovered; the baseline characterization and a separate failing-then-passing regression document that correction. Latest-status and lifecycle stages still continue when raw telemetry storage fails, and the detector checkpoints remain committed. There is no raw telemetry retry outbox: a failed frame that is never sent again is not automatically replayed.
 
 ## State periods
 

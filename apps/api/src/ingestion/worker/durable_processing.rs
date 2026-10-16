@@ -367,11 +367,13 @@ impl TelemetryStage {
         if let Err(error) = upsert_latest_status(&io.pool, event).await {
             tracing::warn!(vehicle_id=%io.vehicle_id, err=%error, "latest-status upsert failed");
         }
-        let decision = if io.config.rivian_suppress_duplicate_telemetry {
-            self.gate.decide(event)
-        } else {
-            PersistenceDecision::Persist
-        };
+        let selection = io
+            .config
+            .rivian_suppress_duplicate_telemetry
+            .then(|| self.gate.select(event));
+        let decision = selection
+            .as_ref()
+            .map_or(PersistenceDecision::Persist, |selection| selection.decision);
         match decision {
             PersistenceDecision::Persist => {
                 if write_telemetry(
@@ -383,11 +385,17 @@ impl TelemetryStage {
                 .await
                 .is_ok()
                 {
+                    if let Some(selection) = selection {
+                        self.gate.advance(selection);
+                    }
                     counters.increment("telemetry_writes_persisted");
                     mark_persisted(&io.pool, io.vehicle_id, event.ts).await;
                 }
             }
             PersistenceDecision::Suppress(reason) => {
+                if let Some(selection) = selection {
+                    self.gate.advance(selection);
+                }
                 counters.increment("telemetry_writes_suppressed");
                 counters.increment(reason.counter_column());
             }

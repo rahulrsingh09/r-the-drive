@@ -225,3 +225,36 @@ fn lifecycle_precedence_matrix_includes_sparse_and_provider_guards() {
         }
     }
 }
+
+#[test]
+fn discarding_a_selected_write_preserves_both_gate_baselines() {
+    let mut gate = TelemetryPersistenceGate::new(Uuid::nil());
+    let mut event = blank_event(Uuid::nil(), all_fields().ts);
+    event.power_state = Some(PowerState::Drive);
+    event.speed_mph = Some(10.0);
+    gate.decide(&event);
+    let initial = event.ts;
+    event.ts += Duration::seconds(1);
+    event.speed_mph = Some(10.5);
+    assert_eq!(
+        gate.decide(&event),
+        PersistenceDecision::Suppress(SuppressionReason::Threshold)
+    );
+    event.ts += Duration::seconds(5);
+    event.speed_mph = Some(12.0);
+    let failed = gate.select(&event);
+    assert_eq!(failed.decision, PersistenceDecision::Persist);
+    drop(failed);
+    assert_eq!(gate.latest.as_ref().unwrap().speed_mph, Some(10.5));
+    assert_eq!(gate.last_persisted.as_ref().unwrap().speed_mph, Some(10.0));
+    assert_eq!(gate.last_persisted_at, Some(initial));
+    let retry = gate.select(&event);
+    assert_eq!(retry.decision, PersistenceDecision::Persist);
+    gate.advance(retry);
+    assert_eq!(gate.latest.as_ref().unwrap().speed_mph, Some(12.0));
+    assert_eq!(gate.last_persisted_at, Some(event.ts));
+    assert_eq!(
+        gate.select(&event).decision,
+        PersistenceDecision::Suppress(SuppressionReason::Duplicate)
+    );
+}
