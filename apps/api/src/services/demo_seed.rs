@@ -5,6 +5,9 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 
+mod history_plan;
+mod telemetry;
+
 const FIXTURE_JSON: &str = include_str!("../../fixtures/demo/history-v1.json");
 const DEMO_OSM_ID_BASE: i64 = -9_100_000;
 const DEMO_ACTIVE_DAY_OFFSETS: [i64; 12] = [0, 1, 2, 4, 5, 6, 7, 8, 10, 11, 12, 13];
@@ -98,29 +101,40 @@ struct ModelProfile {
 }
 
 fn model_profile(model: &str) -> Result<ModelProfile, AppError> {
-    match model {
-        "R1S" => Ok(ModelProfile {
-            capacity_wh: 135_000.0,
-            max_range_mi: 260.0,
-            has_liftgate: true,
-            has_truck_closures: false,
-        }),
-        "R1T" => Ok(ModelProfile {
-            capacity_wh: 135_000.0,
-            max_range_mi: 248.0,
-            has_liftgate: false,
-            has_truck_closures: true,
-        }),
-        "R2" | "R2S" | "R2-S" => Ok(ModelProfile {
-            capacity_wh: 82_000.0,
-            max_range_mi: 300.0,
-            has_liftgate: true,
-            has_truck_closures: false,
-        }),
-        _ => Err(AppError::Validation(
-            "model must be one of R1T, R1S, R2".into(),
-        )),
-    }
+    const PROFILES: &[(&[&str], ModelProfile)] = &[
+        (
+            &["R1S"],
+            ModelProfile {
+                capacity_wh: 135_000.0,
+                max_range_mi: 260.0,
+                has_liftgate: true,
+                has_truck_closures: false,
+            },
+        ),
+        (
+            &["R1T"],
+            ModelProfile {
+                capacity_wh: 135_000.0,
+                max_range_mi: 248.0,
+                has_liftgate: false,
+                has_truck_closures: true,
+            },
+        ),
+        (
+            &["R2", "R2S", "R2-S"],
+            ModelProfile {
+                capacity_wh: 82_000.0,
+                max_range_mi: 300.0,
+                has_liftgate: true,
+                has_truck_closures: false,
+            },
+        ),
+    ];
+    PROFILES
+        .iter()
+        .find(|(names, _)| names.contains(&model))
+        .map(|(_, profile)| *profile)
+        .ok_or_else(|| AppError::Validation("model must be one of R1T, R1S, R2".into()))
 }
 
 pub fn load_fixture() -> Result<DemoFixtureSpec, AppError> {
@@ -361,17 +375,16 @@ async fn seed_trips(
     weather_sample_count: i32,
     address_ids: &[Uuid],
 ) -> Result<(), AppError> {
-    let mut remaining_weather = weather_sample_count;
-    for index in 0..trip_count {
-        let route = index as usize % DEMO_ADDRESSES.len();
-        let destination = (route + 1) % DEMO_ADDRESSES.len();
-        let day_slot = index as usize % DEMO_ACTIVE_DAY_OFFSETS.len();
-        let occurrence = index as usize / DEMO_ACTIVE_DAY_OFFSETS.len();
-        let started_at = anchor - Duration::days(14)
-            + Duration::days(DEMO_ACTIVE_DAY_OFFSETS[day_slot])
-            + Duration::hours(8 + occurrence as i64 * 5);
-        let duration_minutes = 18 + (index % 5) * 7;
-        let ended_at = started_at + Duration::minutes(i64::from(duration_minutes));
+    for plan in history_plan::trips(anchor, trip_count, weather_sample_count) {
+        let history_plan::TripSlot {
+            index,
+            route,
+            destination,
+            started_at,
+            ended_at,
+            duration_minutes,
+            weather_samples: samples_for_trip,
+        } = plan;
         let start = DEMO_ADDRESSES[route];
         let end = DEMO_ADDRESSES[destination];
         let mid_lat = (start.latitude + end.latitude) / 2.0 + 0.006;
@@ -435,9 +448,7 @@ async fn seed_trips(
         .fetch_one(&mut **tx)
         .await?;
 
-        let trips_left = trip_count - index;
-        let samples_for_trip = (remaining_weather / trips_left).max(1);
-        remaining_weather -= samples_for_trip;
+        let mut samples = Vec::with_capacity(samples_for_trip as usize);
         for sample_index in 0..samples_for_trip {
             let fraction = if samples_for_trip == 1 {
                 0.5
@@ -448,21 +459,25 @@ async fn seed_trips(
             let sampled_at = started_at + Duration::seconds(i64::from(elapsed_seconds));
             let latitude = start.latitude + (end.latitude - start.latitude) * fraction;
             let longitude = start.longitude + (end.longitude - start.longitude) * fraction;
-            sqlx::query(
-                r#"INSERT INTO panda.trip_weather_samples
-                     (trip_id, sampled_at, elapsed_seconds, provider_latitude,
-                      provider_longitude, temperature_c, source)
-                   VALUES ($1,$2,$3,$4,$5,$6,'open_meteo')"#,
-            )
-            .bind(trip_id)
-            .bind(sampled_at)
-            .bind(elapsed_seconds)
-            .bind(latitude)
-            .bind(longitude)
-            .bind(outside_temp + fraction * 1.8)
-            .execute(&mut **tx)
-            .await?;
+            samples.push((
+                sampled_at,
+                elapsed_seconds,
+                latitude,
+                longitude,
+                outside_temp + fraction * 1.8,
+            ));
         }
+        sqlx::query(
+            "INSERT INTO panda.trip_weather_samples (trip_id,sampled_at,elapsed_seconds,provider_latitude,provider_longitude,temperature_c,source)
+             SELECT $1,sampled_at,elapsed,lat,lng,temp,'open_meteo'
+             FROM unnest($2::timestamptz[],$3::int[],$4::float8[],$5::float8[],$6::float8[]) AS s(sampled_at,elapsed,lat,lng,temp)"
+        ).bind(trip_id)
+            .bind(samples.iter().map(|s|s.0).collect::<Vec<_>>())
+            .bind(samples.iter().map(|s|s.1).collect::<Vec<_>>())
+            .bind(samples.iter().map(|s|s.2).collect::<Vec<_>>())
+            .bind(samples.iter().map(|s|s.3).collect::<Vec<_>>())
+            .bind(samples.iter().map(|s|s.4).collect::<Vec<_>>())
+            .execute(&mut **tx).await?;
 
         sqlx::query(
             r#"INSERT INTO panda.weather_enrichment_jobs
@@ -484,26 +499,23 @@ async fn seed_charges(
     charge_count: i32,
     address_ids: &[Uuid],
 ) -> Result<(), AppError> {
-    let day_offsets = [12_i64, 8, 4, 1];
-    let durations = [180_i32, 115, 46, 135];
-    let types = [Some("ac"), Some("ac"), Some("dc"), None];
-    for index in 0..charge_count {
-        let slot = index as usize % day_offsets.len();
-        let started_at = anchor - Duration::days(day_offsets[slot]) + Duration::hours(2);
-        let duration = durations[slot];
-        let ended_at = started_at + Duration::minutes(i64::from(duration));
+    for plan in history_plan::charges(anchor, charge_count) {
+        let history_plan::ChargeSlot {
+            index,
+            address: slot,
+            started_at,
+            ended_at,
+            duration,
+            kind,
+        } = plan;
         let soc_start = 31.0 + f64::from(index) * 7.0;
-        let soc_end = if types[slot] == Some("dc") {
+        let soc_end = if kind == Some("dc") {
             82.0
         } else {
             (soc_start + 24.0).min(90.0)
         };
         let kwh_added = 18.0 + f64::from(index) * 7.5;
-        let max_rate = if types[slot] == Some("dc") {
-            186.0
-        } else {
-            11.2
-        };
+        let max_rate = if kind == Some("dc") { 186.0 } else { 11.2 };
         let charge_id = sqlx::query_scalar::<_, Uuid>(
             r#"INSERT INTO panda.charge_sessions
                  (vehicle_id, started_at, ended_at, location_lat, location_lng, source_location_lat, source_location_lng, is_home,
@@ -520,7 +532,7 @@ async fn seed_charges(
         .bind(DEMO_ADDRESSES[slot].latitude)
         .bind(DEMO_ADDRESSES[slot].longitude)
         .bind(slot < 2)
-        .bind(types[slot])
+        .bind(kind)
         .bind(kwh_added)
         .bind(soc_start)
         .bind(soc_end)
@@ -532,32 +544,33 @@ async fn seed_charges(
         .bind(kwh_added * 1_045.0)
         .bind(kwh_added / (f64::from(duration) / 60.0))
         .bind(address_ids[slot])
-        .bind(if types[slot] == Some("dc") {
+        .bind(if kind == Some("dc") {
             Some("Demo Adventure Network")
         } else {
             None
         })
-        .bind(types[slot] == Some("dc"))
+        .bind(kind == Some("dc"))
         .fetch_one(&mut **tx)
         .await?;
 
-        if types[slot] == Some("dc") {
-            for point in 0..=24 {
-                let fraction = f64::from(point) / 24.0;
-                let power_kw = 186.0 - fraction.powf(1.7) * 118.0;
-                sqlx::query(
-                    "INSERT INTO panda.rivian_charge_curve_points
-                       (vehicle_id, charge_session_id, ts, power_kw, captured_at)
-                     VALUES ($1,$2,$3,$4,$5)",
-                )
-                .bind(vehicle_id)
-                .bind(charge_id)
-                .bind(started_at + Duration::seconds((fraction * f64::from(duration * 60)) as i64))
-                .bind(power_kw)
-                .bind(anchor)
-                .execute(&mut **tx)
-                .await?;
-            }
+        if kind == Some("dc") {
+            let curve: Vec<_> = (0..=24)
+                .map(|point| {
+                    let fraction = f64::from(point) / 24.0;
+                    (
+                        started_at
+                            + Duration::seconds((fraction * f64::from(duration * 60)) as i64),
+                        186.0 - fraction.powf(1.7) * 118.0,
+                    )
+                })
+                .collect();
+            sqlx::query(
+                "INSERT INTO panda.rivian_charge_curve_points (vehicle_id,charge_session_id,ts,power_kw,captured_at)
+                 SELECT $1,$2,ts,power,$5 FROM unnest($3::timestamptz[],$4::float8[]) AS curve(ts,power)"
+            ).bind(vehicle_id).bind(charge_id)
+                .bind(curve.iter().map(|p|p.0).collect::<Vec<_>>())
+                .bind(curve.iter().map(|p|p.1).collect::<Vec<_>>())
+                .bind(anchor).execute(&mut **tx).await?;
         }
     }
     Ok(())
@@ -570,229 +583,27 @@ async fn seed_telemetry(
     fixture: &DemoFixtureSpec,
     profile: ModelProfile,
 ) -> Result<(), AppError> {
-    let samples_per_day = fixture.telemetry_rows / i64::from(fixture.active_days);
-    if samples_per_day * i64::from(fixture.active_days) != fixture.telemetry_rows {
-        return Err(AppError::Validation(
-            "demo telemetry row count must divide evenly across active days".into(),
-        ));
-    }
-    let location_cutoff = (fixture.coverage.location * 1_000.0).round() as i64;
-    let battery_cutoff = (fixture.coverage.battery * 1_000.0).round() as i64;
-    let tire_cutoff = (fixture.coverage.tires * 1_000.0).round() as i64;
-    let door_cutoff = (fixture.coverage.doors * 1_000.0).round() as i64;
-
-    for (day_index, day_offset) in DEMO_ACTIVE_DAY_OFFSETS.iter().enumerate() {
-        let result = sqlx::query(
-        r#"WITH active_days(day_offset) AS (
-               SELECT $13::int
-             ), samples AS (
-               SELECT row_number() OVER (ORDER BY s.sample_no) - 1 + ($14::bigint * $3::bigint) AS sample_index,
-                      $2::timestamptz - interval '14 days'
-                        + make_interval(days => d.day_offset)
-                        + make_interval(secs => (s.sample_no * 86400.0 / $3::float8)) AS ts
-               FROM active_days d
-               CROSS JOIN generate_series(0, $3::int - 1) AS s(sample_no)
-             ), linked AS (
-               SELECT samples.*,
-                      tr.id AS trip_id, tr.started_at AS trip_start, tr.ended_at AS trip_end,
-                      tr.start_lat, tr.start_lng, tr.end_lat, tr.end_lng, tr.drive_mode,
-                      cs.id AS charge_session_id, cs.started_at AS charge_start,
-                      cs.ended_at AS charge_end, cs.charger_type
-               FROM samples
-               LEFT JOIN LATERAL (
-                 SELECT id, started_at, ended_at, start_lat, start_lng, end_lat, end_lng, drive_mode
-                 FROM panda.trips
-                 WHERE vehicle_id=$1 AND samples.ts BETWEEN started_at AND ended_at
-                 ORDER BY started_at LIMIT 1
-               ) tr ON TRUE
-               LEFT JOIN LATERAL (
-                 SELECT id, started_at, ended_at, charger_type
-                 FROM panda.charge_sessions
-                 WHERE vehicle_id=$1 AND samples.ts BETWEEN started_at AND ended_at
-                 ORDER BY started_at LIMIT 1
-               ) cs ON TRUE
-             )
-             INSERT INTO timeseries.telemetry
-               (ts, vehicle_id, latitude, longitude, altitude_m, speed_mph,
-                battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-                power_state, charger_state, charger_status, time_to_end_of_charge_min,
-                drive_mode, gear_status, cabin_temp_c, driver_temp_c, odometer_miles,
-                hv_thermal_event, twelve_volt_health, is_online, heading_deg, outside_temp_c,
-                hvac_active, power_kw, regen_power_kw,
-                tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-                tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
-                door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
-                door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
-                closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
-                closure_tailgate_locked, closure_tailgate_closed, ota_current_version, ota_status,
-                trip_id, charge_session_id, charge_port_open, charger_derate_active,
-                cabin_precon_status, cabin_precon_type, pet_mode_active, pet_mode_temp_ok,
-                defrost_active, steering_wheel_heat, seat_fl_heat, seat_fr_heat, seat_rl_heat,
-                seat_rr_heat, seat_fl_vent, seat_fr_vent, tonneau_locked, tonneau_closed,
-                side_bin_left_locked, side_bin_right_locked, window_fl_closed, window_fr_closed,
-                window_rl_closed, window_rr_closed, gear_guard_locked, gear_guard_video_status,
-                wiper_fluid_low, brake_fluid_low, alarm_active, service_mode,
-                tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
-                side_bin_left_closed, side_bin_right_closed)
-             SELECT
-               l.ts, $1,
-               CASE WHEN l.trip_id IS NOT NULL THEN
-                 l.start_lat + (l.end_lat-l.start_lat) *
-                   (extract(epoch FROM (l.ts-l.trip_start)) / NULLIF(extract(epoch FROM (l.trip_end-l.trip_start)),0))
-                 WHEN mod(l.sample_index,1000) < $4 THEN 38.8895 + mod(l.sample_index,17)::float8/100000.0 END,
-               CASE WHEN l.trip_id IS NOT NULL THEN
-                 l.start_lng + (l.end_lng-l.start_lng) *
-                   (extract(epoch FROM (l.ts-l.trip_start)) / NULLIF(extract(epoch FROM (l.trip_end-l.trip_start)),0))
-                 WHEN mod(l.sample_index,1000) < $4 THEN -77.0353 - mod(l.sample_index,19)::float8/100000.0 END,
-               CASE WHEN l.trip_id IS NOT NULL OR mod(l.sample_index,1000) < $4
-                    THEN 8.0 + mod(l.sample_index,70)::float8 END,
-               CASE WHEN l.trip_id IS NOT NULL THEN 18.0 + mod(l.sample_index,47)::float8 ELSE 0.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $5
-                    THEN 85.0 - (l.sample_index::float8 / GREATEST($8::float8-1,1)) * 17.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $5
-                    THEN $9::float8 * (0.996 - (l.sample_index::float8 / GREATEST($8::float8-1,1)) * 0.006) END,
-               CASE WHEN mod(l.sample_index,1000) < $5
-                    THEN $10::float8 * ((85.0 - (l.sample_index::float8 / GREATEST($8::float8-1,1)) * 17.0) / 100.0) END,
-               85.0,
-               CASE WHEN l.trip_id IS NOT NULL THEN 'drive'
-                    WHEN l.charge_session_id IS NOT NULL THEN 'charging'
-                    WHEN mod(l.sample_index,7)=0 THEN 'sleep' ELSE 'ready' END,
-               CASE WHEN l.charge_session_id IS NOT NULL THEN 'Charging' ELSE 'Disconnected' END,
-               CASE WHEN l.charge_session_id IS NOT NULL THEN 'chrgr_sts_connected_charging'
-                    ELSE 'chrgr_sts_not_connected' END,
-               CASE WHEN l.charge_session_id IS NOT NULL
-                    THEN GREATEST(0, ceil(extract(epoch FROM (l.charge_end-l.ts))/60.0)::int) END,
-               CASE WHEN l.trip_id IS NOT NULL THEN l.drive_mode END,
-               CASE WHEN l.trip_id IS NOT NULL THEN 'drive' ELSE 'park' END,
-               CASE WHEN mod(l.sample_index,13) < 8 THEN 20.0 + mod(l.sample_index,42)::float8/10.0 END,
-               CASE WHEN mod(l.sample_index,17) < 10 THEN 19.0 + mod(l.sample_index,35)::float8/10.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $5 THEN 15000.0 + l.sample_index::float8 * 0.011 END,
-               CASE WHEN mod(l.sample_index,181)=0 THEN 'none' END,
-               CASE WHEN mod(l.sample_index,173)=0 THEN 'normal' END,
-               TRUE,
-               CASE WHEN l.trip_id IS NOT NULL THEN mod(l.sample_index*17,360)::float8 END,
-               NULL::float8,
-               CASE WHEN mod(l.sample_index,23)=0 THEN TRUE END,
-               CASE WHEN l.trip_id IS NOT NULL THEN 16.0 + mod(l.sample_index,55)::float8 END,
-               CASE WHEN l.trip_id IS NOT NULL AND mod(l.sample_index,11)=0 THEN 6.0 + mod(l.sample_index,18)::float8 END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 47.5 + mod(l.sample_index,18)::float8/10.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 47.6 + mod(l.sample_index,19)::float8/10.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 49.0 + mod(l.sample_index,17)::float8/10.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 49.1 + mod(l.sample_index,16)::float8/10.0 END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 'normal' END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 'normal' END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 'normal' END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN 'normal' END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $11::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $11::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,100)=0 THEN '2026.18.0' END,
-               CASE WHEN mod(l.sample_index,100)=0 THEN 'idle' END,
-               l.trip_id, l.charge_session_id,
-               CASE WHEN l.charge_session_id IS NOT NULL THEN TRUE ELSE FALSE END,
-               CASE WHEN mod(l.sample_index,211)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,191)=0 THEN 'off' END,
-               CASE WHEN mod(l.sample_index,191)=0 THEN 'none' END,
-               CASE WHEN mod(l.sample_index,223)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,223)=0 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,229)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,227)=0 THEN 0 END,
-               CASE WHEN mod(l.sample_index,233)=0 THEN 0 END,
-               CASE WHEN mod(l.sample_index,239)=0 THEN 0 END,
-               CASE WHEN mod(l.sample_index,241)=0 THEN 0 END,
-               CASE WHEN mod(l.sample_index,251)=0 THEN 0 END,
-               CASE WHEN mod(l.sample_index,257)=0 THEN 0 END,
-               CASE WHEN mod(l.sample_index,263)=0 THEN 0 END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,269)=0 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,269)=0 THEN 'idle' END,
-               CASE WHEN mod(l.sample_index,271)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,277)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,281)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,283)=0 THEN FALSE END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN TRUE END,
-               CASE WHEN mod(l.sample_index,1000) < $6 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END,
-               CASE WHEN $12::bool AND mod(l.sample_index,1000) < $7 THEN TRUE END
-             FROM linked l"#,
-    )
-    .bind(vehicle_id)
-    .bind(anchor)
-    .bind(samples_per_day as i32)
-    .bind(location_cutoff)
-    .bind(battery_cutoff)
-    .bind(tire_cutoff)
-    .bind(door_cutoff)
-    .bind(fixture.telemetry_rows)
-    .bind(profile.capacity_wh)
-    .bind(profile.max_range_mi)
-    .bind(profile.has_liftgate)
-    .bind(profile.has_truck_closures)
-    .bind(*day_offset as i32)
-    .bind(day_index as i64)
-    .execute(&mut **tx)
-    .await?;
-        if result.rows_affected() != samples_per_day as u64 {
-            return Err(AppError::Validation(format!(
-                "demo telemetry batch {day_index} inserted {} rows instead of {samples_per_day}",
-                result.rows_affected()
-            )));
-        }
-    }
-    Ok(())
+    telemetry::seed(tx, vehicle_id, anchor, fixture, profile).await
 }
 
 async fn seed_state_periods(
     tx: &mut Transaction<'_, Postgres>,
     vehicle_id: Uuid,
 ) -> Result<(), AppError> {
+    let anchors=sqlx::query_as::<_,history_plan::Period>(
+        "SELECT 'drive'::text AS state,started_at,ended_at FROM panda.trips WHERE vehicle_id=$1
+         UNION ALL SELECT 'charging'::text,started_at,ended_at FROM panda.charge_sessions WHERE vehicle_id=$1
+         ORDER BY started_at"
+    ).bind(vehicle_id).fetch_all(&mut **tx).await?;
+    let periods = history_plan::periods(anchors);
     sqlx::query(
-        r#"WITH anchors AS (
-             SELECT started_at, ended_at, 'drive'::text AS state
-             FROM panda.trips WHERE vehicle_id=$1
-             UNION ALL
-             SELECT started_at, ended_at, 'charging'::text AS state
-             FROM panda.charge_sessions WHERE vehicle_id=$1
-           ), ordered AS (
-             SELECT *, lag(ended_at) OVER (ORDER BY started_at) AS previous_end
-             FROM anchors
-           ), periods AS (
-             SELECT state, started_at, ended_at FROM ordered
-             UNION ALL
-             SELECT 'sleep', previous_end, started_at - interval '45 minutes' FROM ordered
-             WHERE previous_end IS NOT NULL AND started_at > previous_end + interval '45 minutes'
-             UNION ALL
-             SELECT 'ready', GREATEST(previous_end, started_at - interval '45 minutes'), started_at
-             FROM ordered
-             WHERE previous_end IS NOT NULL AND started_at > previous_end
-           )
-           INSERT INTO panda.vehicle_state_periods (vehicle_id, state, started_at, ended_at)
-           SELECT $1, state, started_at, ended_at FROM periods
-           WHERE ended_at > started_at ORDER BY started_at"#,
-    )
-    .bind(vehicle_id)
-    .execute(&mut **tx)
-    .await?;
+        "INSERT INTO panda.vehicle_state_periods (vehicle_id,state,started_at,ended_at)
+         SELECT $1,state,started_at,ended_at FROM unnest($2::text[],$3::timestamptz[],$4::timestamptz[]) AS p(state,started_at,ended_at)"
+    ).bind(vehicle_id)
+        .bind(periods.iter().map(|p|p.state.as_str()).collect::<Vec<_>>())
+        .bind(periods.iter().map(|p|p.started_at).collect::<Vec<_>>())
+        .bind(periods.iter().map(|p|p.ended_at).collect::<Vec<_>>())
+        .execute(&mut **tx).await?;
     Ok(())
 }
 
