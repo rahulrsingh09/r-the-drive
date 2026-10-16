@@ -557,6 +557,10 @@ pub fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[path = "trip_domain_contract_tests.rs"]
+mod trip_domain_contract_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::telemetry::PowerState;

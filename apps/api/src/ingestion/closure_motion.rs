@@ -115,6 +115,10 @@ fn closure_values(event: &TelemetryEvent) -> [(&'static str, Option<bool>); 14] 
 }
 
 #[cfg(test)]
+#[path = "closure_motion_contract_tests.rs"]
+mod closure_motion_contract_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use uuid::Uuid;
