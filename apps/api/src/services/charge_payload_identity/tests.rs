@@ -3,23 +3,9 @@ use super::*;
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL/TimescaleDB DATABASE_URL"]
 async fn backfill_index_preserves_migrated_schema_contract_and_detects_real_drift() {
-    let mut database_url = url::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
-    database_url.set_path("/postgres");
-    let admin = PgPool::connect(database_url.as_str()).await.unwrap();
-    let database = format!(
-        "panda_index_contract_test_{}",
-        uuid::Uuid::new_v4().simple()
-    );
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE DATABASE \"{database}\""
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    database_url.set_path(&format!("/{database}"));
-    let pool = PgPool::connect(database_url.as_str()).await.unwrap();
+    let (pool, admin, database) =
+        crate::services::charge_sessions::charge_history_contract::database().await;
     let fingerprints = async {
-        crate::db::migrations::MIGRATOR.run(&pool).await?;
         let before = crate::services::restore_compatibility::schema_fingerprint(&pool).await?;
         ensure_pending_index(&pool).await?;
         let after = crate::services::restore_compatibility::schema_fingerprint(&pool).await?;
@@ -30,14 +16,7 @@ async fn backfill_index_preserves_migrated_schema_contract_and_detects_real_drif
         Ok::<_, anyhow::Error>((before, after, drift))
     }
     .await;
-    pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE \"{database}\" WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    admin.close().await;
+    crate::services::charge_sessions::charge_history_contract::cleanup(pool, admin, database).await;
     let (before, after, drift) = fingerprints.unwrap();
     assert_eq!(
         before, after,

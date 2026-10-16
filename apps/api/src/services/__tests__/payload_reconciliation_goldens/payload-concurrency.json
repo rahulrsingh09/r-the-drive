@@ -1,0 +1,128 @@
+{
+  "cancelled": true,
+  "foreign": {
+    "captured_at": "<clock>",
+    "payload_id": "<foreign-payload>",
+    "repaired": false,
+    "session": null,
+    "unchanged": false
+  },
+  "outputs": [
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": false
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    },
+    {
+      "captured_at": "<clock>",
+      "payload_id": "<race-payload>",
+      "repaired": false,
+      "session": null,
+      "unchanged": true
+    }
+  ],
+  "retry": {
+    "captured_at": "<clock>",
+    "payload_id": "<race-payload>",
+    "repaired": false,
+    "session": null,
+    "unchanged": true
+  },
+  "state": {
+    "aliases": [],
+    "checkpoints": [],
+    "identities": [
+      {
+        "canonical_payload_id": "<race-payload>",
+        "created_at": "<clock>",
+        "identity_key": "\\x3c9f54d7095ea40ed7a90e16ed1553eeb1b83d512af1c6e4f29e87cf83b1c92c",
+        "operation": "history",
+        "payload_fingerprint": "\\xa38002d007b081009b272198c19c77360db766b5a3b5cba5fe8e65b8b62caff1",
+        "vehicle_id": "00000000-0000-0000-0000-000000000001"
+      },
+      {
+        "canonical_payload_id": "<foreign-payload>",
+        "created_at": "<clock>",
+        "identity_key": "\\x485d73d10db7bcbe5debc8a7cbeb1c75a84778d9e42421c712ca916a251f3d8b",
+        "operation": "history",
+        "payload_fingerprint": "\\xa38002d007b081009b272198c19c77360db766b5a3b5cba5fe8e65b8b62caff1",
+        "vehicle_id": "00000000-0000-0000-0000-000000000002"
+      }
+    ],
+    "payloads": [
+      {
+        "captured_at": "<clock>",
+        "charge_session_id": null,
+        "id": "<race-payload>",
+        "operation": "history",
+        "payload": {
+          "race": true
+        },
+        "payload_fingerprint": "\\xa38002d007b081009b272198c19c77360db766b5a3b5cba5fe8e65b8b62caff1",
+        "rivian_transaction_id": "race",
+        "rivian_vehicle_id": "synthetic-rv",
+        "vehicle_id": "00000000-0000-0000-0000-000000000001"
+      },
+      {
+        "captured_at": "<clock>",
+        "charge_session_id": null,
+        "id": "<foreign-payload>",
+        "operation": "history",
+        "payload": {
+          "race": true
+        },
+        "payload_fingerprint": "\\xa38002d007b081009b272198c19c77360db766b5a3b5cba5fe8e65b8b62caff1",
+        "rivian_transaction_id": "race",
+        "rivian_vehicle_id": "synthetic-rv",
+        "vehicle_id": "00000000-0000-0000-0000-000000000002"
+      }
+    ],
+    "pending": [],
+    "sessions": [],
+    "telemetry": []
+  }
+}

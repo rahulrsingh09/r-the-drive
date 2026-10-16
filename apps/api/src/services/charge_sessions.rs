@@ -1933,3 +1933,11 @@ pub(crate) mod charge_history_contract;
 #[cfg(test)]
 #[path = "__tests__/charge_sessions_charge_history_replay_contract.rs"]
 mod charge_history_replay_contract;
+
+#[cfg(test)]
+#[path = "__tests__/payload_reconciliation_fixture.rs"]
+pub(crate) mod payload_reconciliation_fixture;
+
+#[cfg(test)]
+#[path = "__tests__/summary_reconciliation_contract.rs"]
+mod summary_reconciliation_contract;

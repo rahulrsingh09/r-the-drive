@@ -2152,7 +2152,7 @@ mod tests {
     use axum::{extract::State, routing::post, Json, Router};
     use chrono::Utc;
     use serde_json::json;
-    use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
+    use sqlx::PgPool;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -2171,55 +2171,24 @@ mod tests {
     }
 
     pub(super) struct DisposableDatabase {
-        admin: PgPool,
-        name: String,
+        fixture: crate::services::charge_sessions::payload_reconciliation_fixture::Fixture,
         pub(super) pool: PgPool,
     }
 
     impl DisposableDatabase {
         pub(super) async fn new() -> Self {
-            let base_url =
-                std::env::var("DATABASE_URL").expect("DATABASE_URL for ignored DB tests");
-            let admin_url = replace_database_name(&base_url, "postgres");
-            let name = format!("panda_charge_test_{}", uuid::Uuid::new_v4().simple());
-            let admin = PgPoolOptions::new()
-                .max_connections(1)
-                .connect(&admin_url)
-                .await
-                .expect("connect to disposable database administrator");
-            admin
-                .execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
-                .await
-                .expect("create disposable charge test database");
-            let pool = PgPoolOptions::new()
-                .max_connections(8)
-                .connect(&replace_database_name(&base_url, &name))
-                .await
-                .expect("connect to disposable charge test database");
-            crate::db::migrations::run_current_migrations(&pool)
-                .await
-                .expect("migrate disposable charge test database");
-            Self { admin, name, pool }
+            let fixture =
+                crate::services::charge_sessions::payload_reconciliation_fixture::Fixture::new()
+                    .await;
+            Self {
+                pool: fixture.pool.clone(),
+                fixture,
+            }
         }
 
         pub(super) async fn cleanup(self) {
-            self.pool.close().await;
-            self.admin
-                .execute(sqlx::AssertSqlSafe(format!(
-                    "DROP DATABASE \"{}\" WITH (FORCE)",
-                    self.name
-                )))
-                .await
-                .expect("drop disposable charge test database");
-            self.admin.close().await;
+            self.fixture.cleanup().await;
         }
-    }
-
-    fn replace_database_name(url: &str, name: &str) -> String {
-        let (prefix, _) = url
-            .rsplit_once('/')
-            .expect("DATABASE_URL has database name");
-        format!("{prefix}/{name}")
     }
 
     pub(super) async fn seed_vehicle(pool: &PgPool) -> uuid::Uuid {
@@ -2854,3 +2823,7 @@ mod tests {
 #[cfg(test)]
 #[path = "rivian_poll/contract_tests.rs"]
 mod contract_tests;
+
+#[cfg(test)]
+#[path = "__tests__/payload_reconciliation_contract.rs"]
+mod payload_reconciliation_contract;

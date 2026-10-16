@@ -1,0 +1,87 @@
+{
+  "canonical_error": {
+    "error": "charge payload canonical evidence is inconsistent"
+  },
+  "first": {
+    "captured_at": "2026-01-01T10:00:00Z",
+    "payload_id": "00000000-0000-0000-0000-0000000000c8",
+    "repaired": false,
+    "session": null,
+    "unchanged": true
+  },
+  "late_error": {
+    "error": "error returned from database: synthetic identity fault at line 3909"
+  },
+  "metadata_error": {
+    "error": "charge payload identity metadata is inconsistent"
+  },
+  "replay": {
+    "captured_at": "<clock>",
+    "payload_id": "<fresh-payload>",
+    "repaired": false,
+    "session": null,
+    "unchanged": true
+  },
+  "retry": {
+    "captured_at": "<clock>",
+    "payload_id": "<fresh-payload>",
+    "repaired": false,
+    "session": null,
+    "unchanged": false
+  },
+  "state": {
+    "aliases": [],
+    "checkpoints": [],
+    "identities": [
+      {
+        "canonical_payload_id": "00000000-0000-0000-0000-0000000000c8",
+        "created_at": "<clock>",
+        "identity_key": "\\x7bef2e3f86673dbd9d696f915d3bd6a99188ed94720e55b63f487cb162790f07",
+        "operation": "history",
+        "payload_fingerprint": "\\xf90a95c28b235d571ee6707dc7549ec611fb6151067ca77e0a7e3a54097623f4",
+        "vehicle_id": "00000000-0000-0000-0000-000000000001"
+      },
+      {
+        "canonical_payload_id": "<fresh-payload>",
+        "created_at": "<clock>",
+        "identity_key": "\\xc869e38a53b7f794146e1dab117c2036790affe24788e60dfdaf7f3717b5e310",
+        "operation": "history",
+        "payload_fingerprint": "\\xc8007c2785d8606b22ce952d9978f1e131b9af64eec51fe9cff0d4359714fd38",
+        "vehicle_id": "00000000-0000-0000-0000-000000000001"
+      }
+    ],
+    "payloads": [
+      {
+        "captured_at": "2026-01-01T10:00:00+00:00",
+        "charge_session_id": null,
+        "id": "00000000-0000-0000-0000-0000000000c8",
+        "operation": "history",
+        "payload": {
+          "empty": "",
+          "energy": 0,
+          "null": null
+        },
+        "payload_fingerprint": null,
+        "rivian_transaction_id": "fault",
+        "rivian_vehicle_id": "synthetic-rv",
+        "vehicle_id": "00000000-0000-0000-0000-000000000001"
+      },
+      {
+        "captured_at": "<clock>",
+        "charge_session_id": null,
+        "id": "<fresh-payload>",
+        "operation": "history",
+        "payload": {
+          "fresh": true
+        },
+        "payload_fingerprint": "\\xc8007c2785d8606b22ce952d9978f1e131b9af64eec51fe9cff0d4359714fd38",
+        "rivian_transaction_id": null,
+        "rivian_vehicle_id": "synthetic-rv",
+        "vehicle_id": "00000000-0000-0000-0000-000000000001"
+      }
+    ],
+    "pending": [],
+    "sessions": [],
+    "telemetry": []
+  }
+}

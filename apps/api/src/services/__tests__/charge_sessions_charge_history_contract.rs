@@ -2,21 +2,8 @@ use super::*;
 use serde_json::{json, Value};
 
 pub async fn database() -> (PgPool, PgPool, String) {
-    let mut url =
-        url::Url::parse(&std::env::var("DATABASE_URL").expect("disposable DATABASE_URL")).unwrap();
-    url.set_path("/postgres");
-    let admin = PgPool::connect(url.as_str()).await.unwrap();
-    let name = format!("charge_history_contract_{}", Uuid::new_v4().simple());
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    url.set_path(&format!("/{name}"));
-    let pool = PgPool::connect(url.as_str()).await.unwrap();
-    crate::db::migrations::run_current_migrations(&pool)
-        .await
-        .unwrap();
-    (pool, admin, name)
+    let fixture = super::payload_reconciliation_fixture::Fixture::new().await;
+    (fixture.pool, fixture.admin, fixture.name)
 }
 
 pub async fn cleanup(pool: PgPool, admin: PgPool, name: String) {
@@ -27,6 +14,10 @@ pub async fn cleanup(pool: PgPool, admin: PgPool, name: String) {
     .execute(&admin)
     .await
     .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE {name}_role")))
+        .execute(&admin)
+        .await
+        .unwrap();
     admin.close().await;
 }
 
