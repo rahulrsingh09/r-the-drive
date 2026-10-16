@@ -15,6 +15,9 @@ use crate::{
     services::restore_compatibility::{CandidatePreparationReport, RestorePlan},
 };
 
+#[path = "restore_jobs_recovery_journal.rs"]
+mod recovery_journal;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RestorePhase {
@@ -213,10 +216,23 @@ pub async fn create(
 }
 
 pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, AppError> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    let fits: bool = sqlx::query_scalar(
+        "SELECT (SELECT COALESCE(sum(octet_length(row_to_json(r)::text)),0) FROM panda.backup_runs r) + (SELECT COALESCE(sum(octet_length(row_to_json(a)::text)),0) FROM panda.backup_artifacts a) + (SELECT COALESCE(sum(octet_length(row_to_json(q)::text)),0) FROM panda.backup_restore_requests q) <= $1::bigint",
+    ).bind(crate::config::RecoveryConfig::default().max_history_bytes as i64)
+        .fetch_one(&mut *transaction).await?;
+    if !fits {
+        return Err(AppError::RecoveryTooLarge(
+            "Recovery catalog snapshot exceeds the operational history budget.".into(),
+        ));
+    }
     let runs = sqlx::query_as::<_, (Uuid, String, String, String, i16, Option<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
         "SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at FROM panda.backup_runs ORDER BY created_at",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *transaction)
     .await?
     .into_iter()
     .map(|row| BackupRunSnapshot {
@@ -236,7 +252,7 @@ pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, Ap
     let artifacts = sqlx::query_as::<_, (Uuid, Option<Uuid>, String, String, String, i64, String, Value, DateTime<Utc>)>(
         "SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at FROM panda.backup_artifacts ORDER BY created_at",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *transaction)
     .await?
     .into_iter()
     .map(|row| BackupArtifactSnapshot { id: row.0, run_id: row.1, storage_type: row.2, file_name: row.3, storage_path: row.4, size_bytes: row.5, checksum_sha256: row.6, manifest: row.7, created_at: row.8 })
@@ -244,11 +260,12 @@ pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, Ap
     let restore_requests = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
         "SELECT id, artifact_id, status, confirmation_phrase, notes, error_message, requested_at, updated_at FROM panda.backup_restore_requests ORDER BY requested_at",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *transaction)
     .await?
     .into_iter()
     .map(|row| BackupRestoreRequestSnapshot { id: row.0, artifact_id: row.1, status: row.2, confirmation_phrase: row.3, notes: row.4, error_message: row.5, requested_at: row.6, updated_at: row.7 })
     .collect();
+    transaction.commit().await?;
     Ok(BackupCatalogSnapshot {
         runs,
         artifacts,
@@ -257,26 +274,11 @@ pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, Ap
 }
 
 pub async fn read(config: &Config, id: Uuid) -> Result<RestoreJob, AppError> {
-    let bytes = fs::read(job_path(config, id))
-        .await
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Io(error),
-        })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid restore job record: {error}")))
+    recovery_journal::read(config, id).await
 }
 
 pub async fn write(config: &Config, job: &RestoreJob) -> Result<(), AppError> {
-    let directory = jobs_dir(config);
-    fs::create_dir_all(&directory).await?;
-    let path = job_path(config, job.id);
-    let temporary = directory.join(format!(".{}.tmp", job.id));
-    let bytes = serde_json::to_vec_pretty(job)
-        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-    fs::write(&temporary, bytes).await?;
-    fs::rename(&temporary, &path).await?;
-    Ok(())
+    recovery_journal::write(config, job).await
 }
 
 pub async fn update(
@@ -286,24 +288,25 @@ pub async fn update(
     progress_percent: u8,
     message: impl Into<String>,
 ) -> Result<RestoreJob, AppError> {
-    let mut job = read(config, id).await?;
-    job.phase = phase;
-    job.progress_percent = progress_percent.min(100);
-    job.message = message.into();
-    job.updated_at = Utc::now();
-    write(config, &job).await?;
-    Ok(job)
+    let message = message.into();
+    recovery_journal::mutate(config, id, move |job| {
+        job.phase = phase;
+        job.progress_percent = progress_percent.min(100);
+        job.message = message;
+    })
+    .await
 }
 
 pub async fn fail(config: &Config, id: Uuid, error: impl ToString) -> Result<(), AppError> {
-    let mut job = read(config, id).await?;
     let message = error.to_string();
-    job.phase = RestorePhase::Failed;
-    job.progress_percent = job.progress_percent.min(99);
-    job.message = "Restore failed".into();
-    job.error_message = Some(message);
-    job.updated_at = Utc::now();
-    write(config, &job).await
+    recovery_journal::mutate(config, id, move |job| {
+        job.phase = RestorePhase::Failed;
+        job.progress_percent = job.progress_percent.min(99);
+        job.message = "Restore failed".into();
+        job.error_message = Some(message);
+    })
+    .await
+    .map(|_| ())
 }
 
 pub fn token_matches(job: &RestoreJob, token: &str) -> bool {
@@ -362,35 +365,85 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
     }
     let mut entries = fs::read_dir(&directory).await?;
     while let Some(entry) = entries.next_entry().await? {
-        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+        let Some(id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|name| Uuid::parse_str(name).ok())
+        else {
             continue;
-        }
-        let bytes = match fs::read(entry.path()).await {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
         };
-        let mut job: RestoreJob = match serde_json::from_slice(&bytes) {
-            Ok(job) => job,
-            Err(_) => continue,
+        let job = match read(config, id).await {
+            Ok(job)
+                if matches!(job.phase, RestorePhase::Completed | RestorePhase::Failed)
+                    && job.reconciled_at.is_none() =>
+            {
+                job
+            }
+            _ => continue,
         };
-        if !matches!(job.phase, RestorePhase::Completed | RestorePhase::Failed)
-            || job.reconciled_at.is_some()
-        {
-            continue;
-        }
+        let prepared = PreparedReconciliation::prepare(config, job).await?;
+        prepared.commit(pool).await?;
+        let expected_updated_at = prepared.job.updated_at;
+        recovery_journal::mutate(config, id, move |current| {
+            if current.updated_at == expected_updated_at {
+                current.reconciled_at = Some(Utc::now());
+            }
+        })
+        .await?;
+    }
+    Ok(())
+}
 
-        if let Some(snapshot) = &job.catalog_snapshot {
-            merge_catalog_snapshot(pool, snapshot).await?;
-        }
+struct PreparedReconciliation {
+    job: RestoreJob,
+    imported: Option<crate::services::backups::ValidatedRecoveryPackage>,
+    safety: Option<crate::services::backups::ValidatedRecoveryPackage>,
+}
 
-        if job.catalog_snapshot.is_none() {
-            let imported = crate::services::backups::validate_recovery_package_with_limits(
-                Path::new(&job.artifact_path),
-                &config.recovery,
+impl PreparedReconciliation {
+    async fn prepare(config: &Config, job: RestoreJob) -> Result<Self, AppError> {
+        let imported = if job.catalog_snapshot.is_none() {
+            Some(
+                crate::services::backups::validate_recovery_package_with_limits(
+                    Path::new(&job.artifact_path),
+                    &config.recovery,
+                )
+                .await?,
             )
-            .await?;
+        } else {
+            None
+        };
+        let safety = if job.safety_run_id.is_some() && job.safety_artifact_id.is_some() {
+            match job.safety_artifact_path.as_deref() {
+                Some(path) => Some(
+                    crate::services::backups::validate_recovery_package_with_limits(
+                        Path::new(path),
+                        &config.recovery,
+                    )
+                    .await?,
+                ),
+                None => None,
+            }
+        } else {
+            None
+        };
+        Ok(Self {
+            job,
+            imported,
+            safety,
+        })
+    }
+
+    async fn commit(&self, pool: &PgPool) -> Result<(), AppError> {
+        let job = &self.job;
+        let mut tx = pool.begin().await?;
+        if let Some(snapshot) = &job.catalog_snapshot {
+            merge_catalog_snapshot_in(&mut tx, snapshot).await?;
+        }
+        if let Some(imported) = &self.imported {
             insert_reconciled_artifact(
-                pool,
+                &mut tx,
                 job.id,
                 job.artifact_id,
                 "restore",
@@ -400,20 +453,16 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
             )
             .await?;
         }
-        if let (Some(run_id), Some(artifact_id), Some(path)) = (
+        if let (Some(run), Some(artifact), Some(path), Some(safety)) = (
             job.safety_run_id,
             job.safety_artifact_id,
             job.safety_artifact_path.as_deref(),
+            &self.safety,
         ) {
-            let safety = crate::services::backups::validate_recovery_package_with_limits(
-                Path::new(path),
-                &config.recovery,
-            )
-            .await?;
             insert_reconciled_artifact(
-                pool,
-                run_id,
-                artifact_id,
+                &mut tx,
+                run,
+                artifact,
                 "pre_restore",
                 "safety",
                 path,
@@ -440,16 +489,25 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
         .bind(final_status)
         .bind(&job.error_message)
         .bind(job.created_at)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-        job.reconciled_at = Some(Utc::now());
-        write(config, &job).await?;
+        tx.commit().await?;
+        Ok(())
     }
-    Ok(())
 }
 
 pub async fn merge_catalog_snapshot(
     pool: &PgPool,
+    snapshot: &BackupCatalogSnapshot,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    merge_catalog_snapshot_in(&mut tx, snapshot).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn merge_catalog_snapshot_in(
+    connection: &mut sqlx::PgConnection,
     snapshot: &BackupCatalogSnapshot,
 ) -> Result<(), AppError> {
     for run in &snapshot.runs {
@@ -465,15 +523,14 @@ pub async fn merge_catalog_snapshot(
         "#).bind(run.id).bind(&run.trigger).bind(&run.status).bind(phase)
             .bind(progress_percent).bind(&run.artifact_key).bind(run.started_at)
             .bind(run.completed_at).bind(&run.error_message).bind(run.created_at)
-            .bind(run.updated_at).execute(pool).await?;
+            .bind(run.updated_at).execute(&mut *connection).await?;
     }
     for artifact in &snapshot.artifacts {
-        let mut tx = pool.begin().await?;
         // The target catalog is merged last. Preserve older history/FKs but
         // never let an imported ID claim the unique operational S3 locator.
         if artifact.storage_type == "s3" {
             sqlx::query("UPDATE panda.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest)='object' THEN manifest ELSE '{}'::jsonb END || jsonb_build_object('historical_storage_path',storage_path,'restore_availability','unavailable'), storage_path = 'unavailable:' || id::text WHERE storage_type='s3' AND storage_path=$1 AND id<>$2")
-                .bind(&artifact.storage_path).bind(artifact.id).execute(&mut *tx).await?;
+                .bind(&artifact.storage_path).bind(artifact.id).execute(&mut *connection).await?;
         }
         sqlx::query(r#"
             INSERT INTO panda.backup_artifacts (id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
@@ -485,8 +542,7 @@ pub async fn merge_catalog_snapshot(
         "#).bind(artifact.id).bind(artifact.run_id).bind(&artifact.storage_type)
             .bind(&artifact.file_name).bind(&artifact.storage_path).bind(artifact.size_bytes)
             .bind(&artifact.checksum_sha256).bind(&artifact.manifest).bind(artifact.created_at)
-            .execute(&mut *tx).await?;
-        tx.commit().await?;
+            .execute(&mut *connection).await?;
     }
     for request in &snapshot.restore_requests {
         sqlx::query(r#"
@@ -498,7 +554,7 @@ pub async fn merge_catalog_snapshot(
                 updated_at = EXCLUDED.updated_at
         "#).bind(request.id).bind(request.artifact_id).bind(&request.status)
             .bind(&request.confirmation_phrase).bind(&request.notes).bind(&request.error_message)
-            .bind(request.requested_at).bind(request.updated_at).execute(pool).await?;
+            .bind(request.requested_at).bind(request.updated_at).execute(&mut *connection).await?;
     }
     Ok(())
 }
@@ -544,13 +600,13 @@ pub fn start_reconciler(pool: PgPool, config: Config) -> tokio::task::JoinHandle
 }
 
 async fn insert_reconciled_artifact(
-    pool: &PgPool,
+    connection: &mut sqlx::PgConnection,
     run_id: Uuid,
     artifact_id: Uuid,
     trigger: &str,
     storage_type: &str,
     path: &str,
-    validated: crate::services::backups::ValidatedRecoveryPackage,
+    validated: &crate::services::backups::ValidatedRecoveryPackage,
 ) -> Result<(), AppError> {
     let file_name = Path::new(path)
         .file_name()
@@ -573,7 +629,7 @@ async fn insert_reconciled_artifact(
     .bind(run_id)
     .bind(trigger)
     .bind(path)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     sqlx::query(
         r#"
@@ -589,13 +645,13 @@ async fn insert_reconciled_artifact(
     .bind(file_name)
     .bind(path)
     .bind(validated.size_bytes)
-    .bind(validated.checksum_sha256)
+    .bind(&validated.checksum_sha256)
     .bind(serde_json::json!({
         "artifact_kind": "recovery_package",
         "format": package_format,
         "package": validated.manifest,
     }))
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     Ok(())
 }
@@ -611,6 +667,10 @@ fn job_path(config: &Config, id: Uuid) -> PathBuf {
 fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
+
+#[cfg(test)]
+#[path = "restore_jobs_recovery_operations_tests.rs"]
+pub(crate) mod recovery_operations_tests;
 
 #[cfg(test)]
 mod tests {

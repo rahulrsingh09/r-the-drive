@@ -16,29 +16,45 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
         return Ok(0);
     }
     let scan_root = root.clone();
+    let limits = config.recovery.clone();
     let paths = tokio::task::spawn_blocking(move || {
-        let mut paths = WalkDir::new(scan_root)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry
+        let started = std::time::Instant::now();
+        let mut paths = Vec::new();
+        for entry in WalkDir::new(scan_root).into_iter().filter_entry(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !name.starts_with('.'))
+        }) {
+            if started.elapsed() >= std::time::Duration::from_secs(limits.restore_deadline_seconds)
+            {
+                return Err(AppError::RecoveryDeadline(
+                    "Recovery catalog scan deadline exceeded.".into(),
+                ));
+            }
+            let Ok(entry) = entry else { continue };
+            if entry.file_type().is_file()
+                && entry
+                    .path()
                     .file_name()
-                    .to_str()
-                    .is_none_or(|name| !name.starts_with('.'))
-            })
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .map(|entry| entry.into_path())
-            .filter(|path| {
-                path.file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.ends_with(".rma.tar.gz"))
-            })
-            .collect::<Vec<_>>();
+            {
+                if paths.len() >= limits.max_members
+                    || entry.path().as_os_str().as_encoded_bytes().len() > 64 * 1024
+                {
+                    return Err(AppError::RecoveryTooLarge(
+                        "Recovery catalog scan exceeds its path budget.".into(),
+                    ));
+                }
+                paths.push(entry.into_path());
+            }
+        }
         paths.sort();
-        paths
+        Ok::<_, AppError>(paths)
     })
     .await
-    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))??;
 
     let mut inserted = 0;
     for path in paths {
@@ -148,3 +164,7 @@ fn backup_run_id_from_artifact_path(path: &Path) -> Option<Uuid> {
     let (_, run_id) = file_name.rsplit_once('-')?;
     Uuid::parse_str(run_id).ok()
 }
+
+#[cfg(test)]
+#[path = "backup_catalog_recovery_operations_tests.rs"]
+mod recovery_operations_tests;

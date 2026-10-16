@@ -30,6 +30,10 @@ use crate::{
     },
 };
 
+#[path = "backups_recovery_stream.rs"]
+mod recovery_stream;
+use recovery_stream::{check_deadline, stream_error, CompressedInput, TarEnvelope};
+
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 const RECOVERY_MUTATION_ADVISORY_LOCK_ID: i64 = 2_042_051_102;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
@@ -77,30 +81,32 @@ struct BackupLock {
 
 impl BackupLock {
     async fn acquire(pool: &PgPool) -> Result<Self, AppError> {
-        let mut connection = pool.acquire().await.map_err(AppError::from)?;
+        let mut guard = Self {
+            connection: Some(pool.acquire().await?),
+        };
         let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
             .bind(BACKUP_ADVISORY_LOCK_ID)
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(AppError::from)?;
+            .fetch_one(guard.connection.as_deref_mut().expect("owned connection"))
+            .await?;
         if !locked {
+            drop(guard.connection.take());
             return Err(AppError::Conflict(
                 "A backup job is already running.".into(),
             ));
         }
-        Ok(Self {
-            connection: Some(connection),
-        })
+        Ok(guard)
     }
 
     async fn release(mut self) {
-        if let Some(mut connection) = self.connection.take() {
+        if self.connection.is_some() {
             match sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
                 .bind(BACKUP_ADVISORY_LOCK_ID)
-                .fetch_one(&mut *connection)
+                .fetch_one(self.connection.as_deref_mut().expect("owned connection"))
                 .await
             {
-                Ok(true) => {}
+                Ok(true) => {
+                    drop(self.connection.take());
+                }
                 Ok(false) => tracing::error!("backup.lock.release_not_owned"),
                 Err(error) => tracing::error!(error = %error, "backup.lock.release_failed"),
             }
@@ -126,11 +132,14 @@ pub struct RecoveryMutationLock {
 
 impl RecoveryMutationLock {
     pub async fn release(mut self) {
-        if let Some(mut connection) = self.connection.take() {
-            let _: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        if self.connection.is_some() {
+            let result: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
                 .bind(RECOVERY_MUTATION_ADVISORY_LOCK_ID)
-                .fetch_one(&mut *connection)
+                .fetch_one(self.connection.as_deref_mut().expect("owned connection"))
                 .await;
+            if matches!(result, Ok(true)) {
+                drop(self.connection.take());
+            }
         }
     }
 }
@@ -963,7 +972,13 @@ pub async fn extract_recovery_package_with_limits(
     let destination = destination.to_owned();
     let limits = limits.clone();
     tokio::task::spawn_blocking(move || {
-        crate::services::recovery_extract::extract(&package_path, &destination, &limits)
+        let root = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let workspace = crate::services::recovery_workspace::RecoveryWorkspace::new(root, &limits)?;
+        let frozen = workspace.snapshot(&package_path, &limits)?;
+        crate::services::recovery_extract::extract(frozen.path(), &destination, &limits)
     })
     .await
     .map_err(|error| {
@@ -1044,40 +1059,32 @@ fn validate_recovery_file_sync(
     limits: &RecoveryConfig,
 ) -> Result<ValidatedRecoveryPackage, AppError> {
     use std::io::{Seek, SeekFrom};
-    let deadline =
-        std::time::Instant::now() + StdDuration::from_secs(limits.restore_deadline_seconds);
     let metadata = file.metadata()?;
-    if metadata.len() > limits.max_upload_bytes {
+    if !metadata.is_file() {
+        return Err(AppError::Validation(
+            "Recovery package is not a regular file.".into(),
+        ));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    validate_recovery_reader(file, metadata.len(), limits)
+}
+
+fn validate_recovery_reader<R: Read>(
+    source: R,
+    compressed_bytes: u64,
+    limits: &RecoveryConfig,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    let started = std::time::Instant::now();
+    check_deadline(started, limits)?;
+    if compressed_bytes > limits.max_upload_bytes {
         return Err(AppError::Validation(format!(
             "Recovery package exceeds the {} GiB compressed size limit.",
             limits.max_upload_bytes / 1024 / 1024 / 1024
         )));
     }
-    let mut checksum = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut read_bytes = 0_u64;
-    loop {
-        if std::time::Instant::now() >= deadline {
-            return Err(AppError::RecoveryDeadline(
-                "Recovery validation deadline exceeded.".into(),
-            ));
-        }
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        read_bytes = read_bytes.saturating_add(read as u64);
-        if read_bytes > limits.max_upload_bytes {
-            return Err(AppError::RecoveryTooLarge(
-                "Recovery package exceeds the compressed byte limit.".into(),
-            ));
-        }
-        checksum.update(&buffer[..read]);
-    }
-    let package_checksum = hex::encode(checksum.finalize());
-    file.seek(SeekFrom::Start(0))?;
-    let decoder = GzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
+    let source = CompressedInput::new(source, limits, started);
+    let decoder = GzDecoder::new(source);
+    let mut archive = Archive::new(TarEnvelope::new(decoder, limits, started));
     let mut manifest_bytes = None;
     let mut file_checksums = HashMap::<String, String>::new();
     let mut file_sizes = HashMap::<String, u64>::new();
@@ -1085,18 +1092,25 @@ fn validate_recovery_file_sync(
     let mut members = HashSet::<String>::new();
     let mut expanded_bytes = 0_u64;
     let mut member_count = 0_usize;
+    let mut path_bytes = 0_usize;
 
-    for entry in archive
-        .entries()
-        .map_err(|error| AppError::Validation(format!("Invalid recovery archive: {error}")))?
-    {
-        let mut entry = entry.map_err(|error| {
-            AppError::Validation(format!("Invalid recovery archive entry: {error}"))
-        })?;
+    for entry in archive.entries().map_err(stream_error)? {
+        let mut entry = entry.map_err(stream_error)?;
         let path = entry
             .path()
             .map_err(|error| AppError::Validation(format!("Invalid archive path: {error}")))?;
-        let normalized = path.to_string_lossy().replace('\\', "/");
+        let normalized = path
+            .to_str()
+            .ok_or_else(|| AppError::Validation("Invalid recovery archive path encoding.".into()))?
+            .replace('\\', "/");
+        path_bytes = path_bytes
+            .checked_add(normalized.len())
+            .ok_or_else(|| AppError::Validation("Recovery path size overflowed.".into()))?;
+        if path_bytes as u64 > limits.max_manifest_bytes {
+            return Err(AppError::Validation(
+                "Recovery package exceeds the configured metadata limit for archive paths.".into(),
+            ));
+        }
         let entry_type = entry.header().entry_type();
         if !entry_type.is_file() && !entry_type.is_dir() {
             return Err(AppError::Validation(format!(
@@ -1104,7 +1118,8 @@ fn validate_recovery_file_sync(
                 entry_type.as_byte()
             )));
         }
-        if path.is_absolute()
+        if (entry_type.is_file() && normalized.ends_with('/'))
+            || path.is_absolute()
             || normalized.starts_with('/')
             || normalized.trim_end_matches('/').split('/').any(|segment| {
                 segment == "."
@@ -1127,7 +1142,7 @@ fn validate_recovery_file_sync(
                 limits.max_members
             )));
         }
-        if !members.insert(normalized.clone()) {
+        if !members.insert(normalized.trim_end_matches('/').to_owned()) {
             return Err(AppError::Validation(format!(
                 "Recovery package contains duplicate member {normalized}."
             )));
@@ -1146,11 +1161,7 @@ fn validate_recovery_file_sync(
             continue;
         }
 
-        if std::time::Instant::now() >= deadline {
-            return Err(AppError::RecoveryDeadline(
-                "Recovery validation deadline exceeded.".into(),
-            ));
-        }
+        check_deadline(started, limits)?;
         let entry_size = entry.size();
         if entry_size > metadata_limit(&normalized, limits) {
             return Err(AppError::Validation(format!("Recovery package member {normalized} exceeds its configured metadata or member size limit.")));
@@ -1168,8 +1179,11 @@ fn validate_recovery_file_sync(
                 "Recovery package exceeds the configured expanded byte limit.".into(),
             ));
         }
-        let compressed_bytes = metadata.len().max(1);
-        if expanded_bytes > compressed_bytes.saturating_mul(limits.max_compression_ratio) {
+        if expanded_bytes
+            > compressed_bytes
+                .max(1)
+                .saturating_mul(limits.max_compression_ratio)
+        {
             return Err(AppError::Validation(
                 "Recovery package exceeds the maximum expansion ratio.".into(),
             ));
@@ -1182,9 +1196,7 @@ fn validate_recovery_file_sync(
                 ));
             }
             let mut bytes = Vec::with_capacity(entry_size as usize);
-            entry.read_to_end(&mut bytes).map_err(|error| {
-                AppError::Validation(format!("Recovery package manifest is truncated: {error}"))
-            })?;
+            entry.read_to_end(&mut bytes).map_err(stream_error)?;
             manifest_bytes = Some(bytes);
             continue;
         }
@@ -1192,16 +1204,8 @@ fn validate_recovery_file_sync(
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
-            if std::time::Instant::now() >= deadline {
-                return Err(AppError::RecoveryDeadline(
-                    "Recovery validation deadline exceeded.".into(),
-                ));
-            }
-            let read = entry.read(&mut buffer).map_err(|error| {
-                AppError::Validation(format!(
-                    "Recovery package member {normalized} is truncated: {error}"
-                ))
-            })?;
+            check_deadline(started, limits)?;
+            let read = entry.read(&mut buffer).map_err(stream_error)?;
             if read == 0 {
                 break;
             }
@@ -1215,33 +1219,7 @@ fn validate_recovery_file_sync(
         file_checksums.insert(normalized, hex::encode(hasher.finalize()));
     }
 
-    let mut decoder = archive.into_inner();
-    let tail_limit = limits
-        .max_expanded_bytes
-        .saturating_sub(expanded_bytes)
-        .saturating_add(64 * 1024);
-    let mut tail_bytes = 0_u64;
-    loop {
-        if std::time::Instant::now() >= deadline {
-            return Err(AppError::RecoveryDeadline(
-                "Recovery validation deadline exceeded.".into(),
-            ));
-        }
-        let read = decoder.read(&mut buffer).map_err(|error| {
-            AppError::Validation(format!("Invalid recovery gzip stream: {error}"))
-        })?;
-        if read == 0 {
-            break;
-        }
-        tail_bytes = tail_bytes.checked_add(read as u64).ok_or_else(|| {
-            AppError::Validation("Recovery package expanded size overflowed.".into())
-        })?;
-        if tail_bytes > tail_limit {
-            return Err(AppError::Validation(
-                "Recovery package exceeds the expanded byte limit after tar end.".into(),
-            ));
-        }
-    }
+    let source = archive.into_inner().finish()?.into_inner();
 
     let manifest_bytes = manifest_bytes
         .ok_or_else(|| AppError::Validation("Recovery package is missing manifest.json.".into()))?;
@@ -1406,11 +1384,13 @@ fn validate_recovery_file_sync(
         }
     }
 
-    Ok(ValidatedRecoveryPackage {
-        manifest,
-        checksum_sha256: package_checksum,
-        size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
-    })
+    let validated = source.finish(manifest)?;
+    if validated.size_bytes as u64 != compressed_bytes {
+        return Err(AppError::Validation(
+            "Recovery package size changed during validation.".into(),
+        ));
+    }
+    Ok(validated)
 }
 
 fn verify_manifest_component(

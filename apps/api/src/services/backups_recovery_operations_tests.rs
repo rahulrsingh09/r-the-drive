@@ -239,3 +239,203 @@ fn admission_regression_bounds_post_tar_expansion() {
         }
     }
 }
+
+#[test]
+fn admission_regression_bounds_hidden_gnu_and_pax_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("package.rma.tar.gz");
+    for kind in [
+        EntryType::GNULongName,
+        EntryType::GNULongLink,
+        EntryType::XHeader,
+    ] {
+        let mut archive = Builder::new(GzEncoder::new(
+            File::create(&path).unwrap(),
+            Compression::default(),
+        ));
+        for (name, bytes, kind) in members(1) {
+            let mut header = Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_entry_type(kind);
+            archive.append_data(&mut header, name, &bytes[..]).unwrap();
+        }
+        if kind == EntryType::XHeader {
+            archive
+                .append_pax_extensions([("comment", &vec![b'x'; 128 * 1024][..])])
+                .unwrap();
+        } else {
+            let mut bytes = format!("vehicle-image-cache/{}", "a".repeat(128 * 1024)).into_bytes();
+            bytes.push(0);
+            let mut header = Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_entry_type(kind);
+            archive
+                .append_data(&mut header, "././@LongLink", &bytes[..])
+                .unwrap();
+        }
+        let mut header = Header::new_gnu();
+        header.set_size(1);
+        archive
+            .append_data(&mut header, "vehicle-image-cache/extra", &b"x"[..])
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+        assert!(
+            matches!(
+                validate_recovery_package_sync_with_limits(&path, &limits())
+                    .map_err(classify_recovery_error),
+                Err(AppError::RecoveryTooLarge(_))
+            ),
+            "unbounded extension {kind:?} accepted"
+        );
+    }
+}
+
+#[test]
+fn admission_regression_rejects_directory_payloads_and_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("package.rma.tar.gz");
+    for case in 0..2 {
+        let mut entries = members(1);
+        if case == 0 {
+            entries.last_mut().unwrap().1 = b"hidden payload".to_vec();
+        } else {
+            entries.push(("vehicle-image-cache".into(), vec![], EntryType::Directory));
+        }
+        write_archive(&path, &entries);
+        assert!(
+            validate_recovery_package_sync_with_limits(&path, &limits()).is_err(),
+            "ambiguous directory case {case} accepted"
+        );
+    }
+}
+
+#[test]
+fn admission_stream_binds_manifest_and_hash_when_the_source_is_replaced() {
+    struct ChangingFile {
+        source: File,
+        path: PathBuf,
+        replacement: Vec<u8>,
+        changed: bool,
+    }
+    impl Read for ChangingFile {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.source.read(buffer)?;
+            if !self.changed {
+                assert!(
+                    count >= self.replacement.len(),
+                    "fixture must fit in the first compressed read"
+                );
+                std::fs::write(&self.path, &self.replacement)?;
+                self.changed = true;
+            }
+            Ok(count)
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("package.rma.tar.gz");
+    write_archive(&path, &members(2));
+    let mut replacement = std::fs::read(&path).unwrap();
+    write_archive(&path, &members(1));
+    let mut original = std::fs::read(&path).unwrap();
+    let length = original.len().max(replacement.len());
+    original.resize(length, 0);
+    replacement.resize(length, 0);
+    std::fs::write(&path, &original).unwrap();
+    let input = ChangingFile {
+        source: File::open(&path).unwrap(),
+        path: path.clone(),
+        replacement,
+        changed: false,
+    };
+    let validated = validate_recovery_reader(input, length as u64, &limits()).unwrap();
+    assert_eq!(validated.manifest["format_version"], 1);
+    assert_eq!(
+        validated.checksum_sha256,
+        hex::encode(Sha256::digest(original))
+    );
+    let replaced = validate_recovery_package_sync_with_limits(&path, &limits()).unwrap();
+    assert_eq!(replaced.manifest["format_version"], 2);
+    assert_ne!(validated.checksum_sha256, replaced.checksum_sha256);
+}
+
+#[test]
+fn admission_rejects_huge_extension_headers_before_reading_their_payload() {
+    for kind in [
+        EntryType::GNULongName,
+        EntryType::GNULongLink,
+        EntryType::XHeader,
+    ] {
+        let mut header = Header::new_gnu();
+        header.set_size(1 << 40);
+        header.set_entry_type(kind);
+        header.set_cksum();
+        let config = limits();
+        let source = Cursor::new(header.as_bytes());
+        let envelope = TarEnvelope::new(source, &config, std::time::Instant::now());
+        let mut archive = Archive::new(envelope);
+        let error = archive.entries().unwrap().next().unwrap().err().unwrap();
+        assert!(
+            matches!(stream_error(error), AppError::Validation(message) if message.contains("extension limit"))
+        );
+    }
+}
+
+#[test]
+fn admission_preserves_pax_paths_and_effective_sizes_across_gnu_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("package.rma.tar.gz");
+    let mut archive = Builder::new(GzEncoder::new(
+        File::create(&path).unwrap(),
+        Compression::default(),
+    ));
+    for (name, bytes, kind) in members(1) {
+        let mut header = Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_entry_type(kind);
+        archive.append_data(&mut header, name, &bytes[..]).unwrap();
+    }
+    archive
+        .append_pax_extensions([
+            ("path", &b"vehicle-image-cache/pax"[..]),
+            ("size", &b"3"[..]),
+        ])
+        .unwrap();
+    let mut long = Header::new_gnu();
+    long.set_entry_type(EntryType::GNULongName);
+    let long_name = b"vehicle-image-cache/long-name\0";
+    long.set_size(long_name.len() as u64);
+    archive
+        .append_data(&mut long, "././@LongLink", &long_name[..])
+        .unwrap();
+    let mut header = Header::new_gnu();
+    header.set_size(3);
+    archive
+        .append_data(&mut header, "ignored", &b"xyz"[..])
+        .unwrap();
+    archive.into_inner().unwrap().finish().unwrap();
+    validate_recovery_package_sync_with_limits(&path, &limits()).unwrap();
+}
+
+#[test]
+fn admission_truncation_and_input_growth_fail_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("package.rma.tar.gz");
+    write_archive(&path, &members(1));
+    let original = std::fs::read(&path).unwrap();
+    for length in [0, 1, 10, original.len() / 2, original.len() - 1] {
+        assert!(
+            validate_recovery_reader(Cursor::new(&original[..length]), length as u64, &limits())
+                .is_err(),
+            "{length}"
+        );
+    }
+    let mut config = limits();
+    config.max_upload_bytes = original.len() as u64 - 1;
+    let input = CompressedInput::new(Cursor::new(original), &config, std::time::Instant::now());
+    assert!(matches!(
+        input
+            .finish(serde_json::Value::Null)
+            .map_err(classify_recovery_error),
+        Err(AppError::RecoveryTooLarge(_))
+    ));
+}

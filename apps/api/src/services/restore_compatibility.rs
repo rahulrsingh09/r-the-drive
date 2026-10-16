@@ -854,6 +854,10 @@ fn parse_version_triplet(value: &str) -> Option<(u32, u32, u32)> {
 }
 
 #[cfg(test)]
+#[path = "restore_compatibility_recovery_operations_tests.rs"]
+pub(crate) mod recovery_operations_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::Row;
