@@ -1,0 +1,25 @@
+{
+  "activity": [],
+  "addresses": [],
+  "annotations": [],
+  "credentials": [],
+  "geofences": [],
+  "jobs": [],
+  "observations": {
+    "ordered_errors": [
+      "trip_enrichment.reconciler_trip_coordinates_failed",
+      "trip_enrichment.reconciler_trip_geofences_failed",
+      "trip_enrichment.reconciler_charge_coordinates_failed",
+      "trip_enrichment.reconciler_charge_locations_failed",
+      "trip_enrichment.reconciler_failed"
+    ]
+  },
+  "sessions": [],
+  "settings": [],
+  "telemetry": [],
+  "trip_annotations": [],
+  "trips": [],
+  "usage_days": [],
+  "vehicles": [],
+  "weather": []
+}

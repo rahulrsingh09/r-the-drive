@@ -1410,7 +1410,7 @@ fn has_usable_coordinate_pair(lat: Option<f64>, lng: Option<f64>) -> bool {
 #[cfg(test)]
 mod history_enrichment_contract_tests {
     use super::*;
-    use crate::authorization_test_support::Fixture;
+    use crate::services::weather_enrichment::job_fixture::Fixture;
     use chrono::TimeZone;
 
     fn start() -> DateTime<Utc> {
@@ -1674,11 +1674,15 @@ mod history_enrichment_contract_tests {
                 .scanned,
             0
         );
-        assert!(sqlx::query("DELETE FROM panda.trips WHERE id=$1")
+        let deletion = sqlx::query("DELETE FROM panda.trips WHERE id=$1")
             .bind(id)
             .execute(pool)
             .await
-            .is_ok());
+            .unwrap_err();
+        assert_eq!(
+            deletion.as_database_error().unwrap().code().as_deref(),
+            Some("42501")
+        );
         fixture.cleanup().await;
     }
 
@@ -1865,7 +1869,7 @@ mod history_address_record_tests {
     #[tokio::test]
     #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
     async fn synthetic_address_cache_upsert_retains_coordinates_and_null_identity_semantics() {
-        let fixture = crate::authorization_test_support::Fixture::new().await;
+        let fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let pool = &fixture.state.pool;
         let old = json!({"display_name":"Old","osm_id":42,"address":{"road":"Old road"}});
         let id = store_history_address(pool, 30., -97., old).await.unwrap();
@@ -1918,3 +1922,7 @@ mod history_address_record_tests {
         fixture.cleanup().await;
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/reconciliation_jobs.rs"]
+mod job_tests;

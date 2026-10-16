@@ -201,6 +201,10 @@ async fn enrich_trip(
     _settings: &ConnectionSettingsRow,
     trip_id: Uuid,
 ) -> Result<EnrichTripOutcome> {
+    #[cfg(test)]
+    if let Some(outcome) = job_tests::injected_outcome().await {
+        return outcome;
+    }
     let trip = sqlx::query_as::<_, TripInfo>(
         "SELECT id, vehicle_id, started_at, ended_at, start_lat, start_lng FROM panda.trips WHERE id=$1",
     )
@@ -554,7 +558,7 @@ mod tests {
     async fn authorization_weather_estimates_preserve_driving_history_and_sensor_priority() {
         use super::{enrich_trip, store_estimates, EnrichTripOutcome, TargetSample};
         use crate::services::external_connections as connections;
-        let fixture = crate::authorization_test_support::Fixture::new().await;
+        let fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let pool = &fixture.state.pool;
         connections::ensure_defaults(pool).await.unwrap();
         let owner = fixture.user("admin").await;
@@ -900,7 +904,7 @@ mod history_weather_contract_tests {
     #[tokio::test]
     #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
     async fn history_weather_database_join_cache_and_error_contracts() {
-        let fixture = crate::authorization_test_support::Fixture::new().await;
+        let fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let pool = &fixture.state.pool;
         connections::ensure_defaults(pool).await.unwrap();
         let owner = fixture.user("admin").await;
@@ -1040,7 +1044,7 @@ mod history_weather_plan_tests {
     #[tokio::test]
     #[ignore = "requires isolated disposable DATABASE_URL and REDIS_URL"]
     async fn streamed_sparse_plan_preserves_vehicle_and_trip_joins() {
-        let mut fixture = crate::authorization_test_support::Fixture::new().await;
+        let mut fixture = crate::services::weather_enrichment::job_fixture::Fixture::new().await;
         let options = fixture.state.pool.connect_options().as_ref().clone();
         fixture.state.pool.close().await;
         fixture.state.pool = sqlx::postgres::PgPoolOptions::new()
@@ -1146,3 +1150,11 @@ mod history_weather_plan_tests {
         pool.close().await;
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/enrichment_jobs_fixture.rs"]
+pub(super) mod job_fixture;
+
+#[cfg(test)]
+#[path = "__tests__/weather_jobs.rs"]
+mod job_tests;

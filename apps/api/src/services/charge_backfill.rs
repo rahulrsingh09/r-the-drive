@@ -256,9 +256,7 @@ pub async fn spawn(
 #[cfg(test)]
 mod charge_history_backfill_contract {
     use super::*;
-    use crate::services::charge_sessions::charge_history_contract::{
-        cleanup, database, id, vehicle,
-    };
+    use crate::services::weather_enrichment::job_fixture::{cleanup, database, id, vehicle};
     use serde_json::json;
 
     #[tokio::test]
@@ -386,3 +384,7 @@ mod charge_history_backfill_contract {
         cleanup(pool, admin, name).await;
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/charge_backfill_jobs.rs"]
+mod job_tests;

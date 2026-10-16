@@ -1,0 +1,528 @@
+[
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "errors": [
+        "vehicle credentials not found",
+        "vehicle credentials not found"
+      ],
+      "status": {
+        "history_backfilled_at": null,
+        "local_session_count": 0,
+        "missing_source_count": 1,
+        "rivian_session_count": null,
+        "status": null,
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": null,
+        "history_backfilled_at": null,
+        "history_session_count": null,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "claimed": {
+        "encrypted_tokens": [
+          0,
+          1,
+          2
+        ],
+        "rivian_vehicle_id": "history-40",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      },
+      "errors": [
+        "backfill already running",
+        "backfill already running",
+        "backfill already running",
+        "backfill already running",
+        "backfill already running",
+        "backfill already running",
+        "backfill already running"
+      ],
+      "winners": 1
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "running",
+        "history_backfilled_at": null,
+        "history_session_count": null,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "error": "age key parse failed: invalid Bech32 encoding",
+      "status": {
+        "history_backfilled_at": null,
+        "local_session_count": 0,
+        "missing_source_count": 1,
+        "rivian_session_count": null,
+        "status": "error",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "error",
+        "history_backfilled_at": null,
+        "history_session_count": null,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "cancelled": {
+        "history_backfilled_at": null,
+        "local_session_count": 0,
+        "missing_source_count": 1,
+        "rivian_session_count": null,
+        "status": "running",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "running",
+        "history_backfilled_at": null,
+        "history_session_count": null,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "spawn": {
+        "ok": true,
+        "status": "running"
+      },
+      "status": {
+        "history_backfilled_at": null,
+        "local_session_count": 0,
+        "missing_source_count": 1,
+        "rivian_session_count": null,
+        "status": "error",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "error",
+        "history_backfilled_at": null,
+        "history_session_count": null,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "error": "token decrypt failed: failed to fill whole buffer"
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "error",
+        "history_backfilled_at": null,
+        "history_session_count": null,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "synthetic_success": {
+        "history_backfilled_at": "<clock>",
+        "local_session_count": 0,
+        "missing_source_count": 1,
+        "rivian_session_count": 0,
+        "status": "done",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "done",
+        "history_backfilled_at": "<clock>",
+        "history_session_count": 0,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  },
+  {
+    "activity": [],
+    "addresses": [],
+    "annotations": [],
+    "credentials": [
+      {
+        "encrypted_tokens": "\\x000102",
+        "last_refreshed_at": null,
+        "token_created_at": "2026-01-01T00:00:00+00:00",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    ],
+    "geofences": [],
+    "jobs": [],
+    "observations": {
+      "repeat": {
+        "history_backfilled_at": "<clock>",
+        "local_session_count": 0,
+        "missing_source_count": 1,
+        "rivian_session_count": 0,
+        "status": "done",
+        "vehicle_id": "00000000-0000-0000-0000-000000000028"
+      }
+    },
+    "sessions": [],
+    "settings": [],
+    "telemetry": [],
+    "trip_annotations": [],
+    "trips": [],
+    "usage_days": [],
+    "vehicles": [
+      {
+        "battery_capacity_wh": null,
+        "battery_cell_type": null,
+        "battery_config": null,
+        "charge_port_type": null,
+        "color": null,
+        "cost_profile_id": null,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "display_priority": 0,
+        "firmware_version": null,
+        "history_backfill_status": "done",
+        "history_backfilled_at": "<clock>",
+        "history_session_count": 0,
+        "home_geofence_id": null,
+        "home_latitude": null,
+        "home_longitude": null,
+        "id": "00000000-0000-0000-0000-000000000028",
+        "interior_color": null,
+        "max_vehicle_power_kw": null,
+        "model": "R1T",
+        "name": "Synthetic",
+        "ota_release_notes_url": null,
+        "rivian_vehicle_id": "history-40",
+        "supported_features": null,
+        "target_tire_pressure_psi": 40,
+        "trim": null,
+        "updated_at": "<clock>",
+        "user_id": "00000000-0000-0000-0000-000000002738",
+        "vin": null,
+        "wheel_option": null
+      }
+    ],
+    "weather": []
+  }
+]
