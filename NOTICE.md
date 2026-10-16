@@ -42,6 +42,9 @@ typed timeline and telemetry generation.
 Restore activation, rollback and operational-history replay use explicit states.
 Weather scheduling, history reconciliation and charge backfill admission use
 new job and transition stages.
+Collector acquisition, trip and charge completion, software history and
+stewardship use explicit stages with write-retry and retention corrections.
+Maintenance cursor scans isolate result metadata across different row shapes.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 

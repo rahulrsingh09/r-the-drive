@@ -130,6 +130,7 @@ const sidebars: SidebarsConfig = {
         'architecture/rewrite-personalization',
         'architecture/rewrite-places-profiles',
         'architecture/telemetry-workflows',
+        'architecture/collector-host-projections',
         'architecture/rewrite-vehicle-workflows',
         'architecture/rewrite-external-integrations',
         'architecture/rewrite-operational-read-models',

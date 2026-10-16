@@ -56,6 +56,7 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Maintain dashboard, chart, theme and preference workflows | [Personalization](./architecture/rewrite-personalization.md) |
 | Follow places, pricing profiles and geocoder scheduling | [Places and profiles](./architecture/rewrite-places-profiles.md) |
 | Maintain telemetry merging, storage and vehicle-state history | [Telemetry workflows](./architecture/telemetry-workflows.md) |
+| Follow collector recovery, completion writes and retention | [Collector host and projections](./architecture/collector-host-projections.md) |
 | Follow vehicle enrollment, invitations and artwork selection | [Vehicle workflows](./architecture/rewrite-vehicle-workflows.md) |
 | Maintain external connection settings, cache and activity records | [External connections](./architecture/rewrite-external-integrations.md) |
 | Follow Grafana queries, health, stewardship and capture summaries | [Operational read models](./architecture/rewrite-operational-read-models.md) |
