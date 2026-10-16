@@ -4,6 +4,8 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[path = "chart_registry/catalog.rs"]
+mod catalog;
 #[cfg(test)]
 #[path = "chart_registry/contract_tests.rs"]
 mod contract_tests;
@@ -20,33 +22,7 @@ const UPSERT_BUNDLED_CHART_SQL: &str =
 /// Seed installation-wide chart rows without touching personal overrides.
 /// The JSON file is generated from the canonical dashboard package defaults.
 pub async fn seed_defaults(pool: &PgPool) -> anyhow::Result<()> {
-    for slug in RETIRED_BUNDLED_CHART_SLUGS {
-        sqlx::query(DELETE_RETIRED_BUNDLED_CHART_SQL)
-            .bind(slug)
-            .execute(pool)
-            .await?;
-    }
-
-    let defaults: Vec<Value> = serde_json::from_str(BUNDLED_CHART_DEFAULTS)?;
-    for chart in defaults {
-        let slug = chart["slug"].as_str().unwrap_or_default();
-
-        let name = chart["name"].as_str().unwrap_or("Chart");
-        let description = chart["description"].as_str();
-        let enabled = chart["enabled"].as_bool().unwrap_or(true);
-        let config = chart["definition"].clone();
-        sqlx::query(UPSERT_BUNDLED_CHART_SQL)
-            .bind(slug)
-            .bind(name)
-            .bind(description)
-            .bind(enabled)
-            .bind(config)
-            .bind(BUNDLED_CHART_BASELINE_REVISION)
-            .execute(pool)
-            .await?;
-    }
-
-    Ok(())
+    catalog::reconcile(pool).await
 }
 
 #[cfg(test)]
@@ -139,69 +115,6 @@ pub struct ChartManagerEntry {
     pub permissions: ChartPermissions,
 }
 
-pub fn merge_entries(
-    mut rows: Vec<ChartRecord>,
-    user_id: Uuid,
-    admin: bool,
-) -> Vec<ChartManagerEntry> {
-    rows.sort_by(|a, b| {
-        a.slug
-            .cmp(&b.slug)
-            .then_with(|| a.owner_id.is_some().cmp(&b.owner_id.is_some()))
-    });
-    let mut entries = Vec::new();
-    while let Some(row) = rows.pop() {
-        let slug = row.slug.clone();
-        let mut system_base = None;
-        let mut personal_override = None;
-        let mut effective = row;
-
-        if effective.owner_id.is_none() {
-            system_base = Some(effective.clone());
-        } else {
-            personal_override = Some(effective.clone());
-        }
-        while rows.last().is_some_and(|candidate| candidate.slug == slug) {
-            let candidate = rows.pop().expect("row exists");
-            if candidate.owner_id.is_none() {
-                system_base = Some(candidate);
-            } else if candidate.owner_id == Some(user_id) {
-                personal_override = Some(candidate);
-            }
-        }
-        if let Some(personal) = personal_override.clone() {
-            effective = personal;
-        } else if let Some(system) = system_base.clone() {
-            effective = system;
-        }
-        let is_personal = effective.owner_id == Some(user_id);
-        let has_system_base = system_base.is_some();
-        let locked = effective.is_locked;
-        entries.push(ChartManagerEntry {
-            effective,
-            system_base,
-
-            personal_override,
-            origin: if is_personal && has_system_base {
-                "override"
-            } else if is_personal {
-                "personal"
-            } else {
-                "system"
-            }
-            .into(),
-            permissions: ChartPermissions {
-                read: true,
-                edit: admin || is_personal && !locked,
-                duplicate: true,
-                reset: is_personal && has_system_base,
-                restore: admin,
-                delete: is_personal,
-
-                lock: admin,
-            },
-        });
-    }
-    entries.sort_by(|a, b| a.effective.slug.cmp(&b.effective.slug));
-    entries
+pub fn merge_entries(rows: Vec<ChartRecord>, user_id: Uuid, admin: bool) -> Vec<ChartManagerEntry> {
+    catalog::merge(rows, user_id, admin)
 }

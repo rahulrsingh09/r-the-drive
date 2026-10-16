@@ -5,9 +5,15 @@ use serde_json::Value;
 
 use crate::routes::metrics::is_series_metric;
 
+#[path = "chart_validation/bundled.rs"]
+mod bundled;
 #[cfg(test)]
 #[path = "chart_validation/contract_tests.rs"]
 mod contract_tests;
+#[path = "chart_validation/source_policy.rs"]
+mod source_policy;
+#[path = "chart_validation/stages.rs"]
+mod stages;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -213,20 +219,6 @@ pub struct ChartValidationError {
     pub message: String,
 }
 
-const SOURCE_IDS: &[&str] = &[
-    "metrics.series",
-    "battery.mileage",
-    "battery.degradation",
-    "battery.idle-drain",
-    "charging.sessions",
-    "charging.charge-curve",
-    "charging.curve-analysis",
-    "efficiency.trend",
-    "efficiency.temperature",
-    "efficiency.drive-mode",
-    "efficiency.trip-tags",
-    "trips.tire-pressure-timeline",
-];
 const FORBIDDEN_KEYS: &[&str] = &[
     "url",
     "remoteurl",
@@ -319,247 +311,12 @@ pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartV
     }
     let definition = match serde_json::from_value::<ChartDefinitionV1>(value.clone()) {
         Ok(definition) => definition,
-        Err(error) => {
-            errors.push(ChartValidationError {
-                path: "config".into(),
-                message: error.to_string(),
-            });
+        Err(failure) => {
+            errors.push(error("config", &failure.to_string()));
             return Err(errors);
         }
     };
-    if definition.schema_version != 1 {
-        errors.push(error(
-            "config.schemaVersion",
-            "Only schemaVersion 1 is supported",
-        ));
-    }
-    if definition.placements.len() > 20 {
-        errors.push(error(
-            "config.placements",
-            "At most 20 placements are allowed",
-        ));
-    }
-    if definition.sources.is_empty() || definition.sources.len() > 4 {
-        errors.push(error(
-            "config.sources",
-            "Between 1 and 4 source bindings are required",
-        ));
-    }
-    if definition.series.is_empty() || definition.series.len() > 32 {
-        errors.push(error(
-            "config.series",
-            "Between 1 and 32 series are required",
-        ));
-    }
-    if let ChartTimeframePolicy::Relative { preset } = &definition.timeframe {
-        if !["1h", "6h", "24h", "7d", "30d", "90d", "1y"].contains(&preset.as_str()) {
-            errors.push(error(
-                "config.timeframe.preset",
-                "Unsupported relative timeframe",
-            ));
-        }
-    }
-    let source_ids: HashSet<_> = definition
-        .sources
-        .iter()
-        .map(|source| source.id.as_str())
-        .collect();
-    if source_ids.len() != definition.sources.len() {
-        errors.push(error("config.sources", "Source binding IDs must be unique"));
-    }
-    let series_ids: HashSet<_> = definition
-        .series
-        .iter()
-        .map(|series| series.id.as_str())
-        .collect();
-    if series_ids.len() != definition.series.len() {
-        errors.push(error("config.series", "Series IDs must be unique"));
-    }
-    for placement in &definition.placements {
-        if !id(&placement.dashboard_slug) {
-            errors.push(error(
-                "config.placements",
-                "Invalid dashboard placement slug",
-            ));
-        }
-    }
-    for source in &definition.sources {
-        if !id(&source.id) || !id(&source.source_id) {
-            errors.push(error("config.sources", "Invalid source binding identifier"));
-        }
-        if !SOURCE_IDS.contains(&source.source_id.as_str()) {
-            errors.push(error(
-                &format!("config.sources.{}.sourceId", source.id),
-                "Unknown chart source ID",
-            ));
-        }
-        if source.source_id == "metrics.series" {
-            match source.params.get("metric").and_then(Value::as_str) {
-                Some(metric) if is_series_metric(metric) => {}
-                _ => errors.push(error(
-                    &format!("config.sources.{}.params.metric", source.id),
-                    "Metric series requires a known series-capable metric parameter",
-                )),
-            }
-        }
-        for filter in &source.filters {
-            if !id(&filter.field)
-                || ![
-                    "eq",
-                    "neq",
-                    "gt",
-                    "gte",
-                    "lt",
-                    "lte",
-                    "in",
-                    "not_in",
-                    "is_null",
-                    "is_not_null",
-                ]
-                .contains(&filter.operator.as_str())
-            {
-                errors.push(error(
-                    "config.sources.filters",
-                    "Invalid filter field or operator",
-                ));
-            }
-            if !filter_fields(&source.source_id).contains(&filter.field.as_str()) {
-                errors.push(error(
-                    "config.sources.filters.field",
-                    "Filter field is not supported by this source",
-                ));
-            }
-            let no_value = matches!(filter.operator.as_str(), "is_null" | "is_not_null");
-            if no_value != filter.value.is_none() {
-                errors.push(error(
-                    "config.sources.filters.value",
-                    "Null checks require no value; other operators require one",
-                ));
-            }
-            if let Some(value) = &filter.value {
-                if !valid_filter_value(value) {
-                    errors.push(error(
-                        "config.sources.filters.value",
-                        "Filter values must be scalar or a string/number array",
-                    ));
-                }
-            }
-        }
-    }
-    validate_ref(
-        &definition.x.field,
-        &source_ids,
-        "config.x.field",
-        &mut errors,
-    );
-    validate_source_field(
-        &definition.x.field,
-        &definition.sources,
-        "config.x.field",
-        &mut errors,
-    );
-    for (index, series) in definition.series.iter().enumerate() {
-        match &series.color {
-            ChartColorDefinition::Token { token } if !valid_chart_color_token(token) => errors
-                .push(error(
-                    &format!("config.series.{index}.color.token"),
-                    "Unknown chart color token",
-                )),
-            ChartColorDefinition::Custom { light, dark }
-                if !valid_custom_color(light) || !valid_custom_color(dark) =>
-            {
-                errors.push(error(
-                    &format!("config.series.{index}.color"),
-                    "Custom chart colors must be hex, rgb, rgba, hsl, or hsla values",
-                ))
-            }
-            _ => {}
-        }
-        validate_ref(
-            &series.y,
-            &source_ids,
-            &format!("config.series.{index}.y"),
-            &mut errors,
-        );
-        validate_source_field(
-            &series.y,
-            &definition.sources,
-            &format!("config.series.{index}.y"),
-            &mut errors,
-        );
-        if let Some(x) = &series.x {
-            validate_ref(
-                x,
-                &source_ids,
-                &format!("config.series.{index}.x"),
-                &mut errors,
-            );
-            validate_source_field(
-                x,
-                &definition.sources,
-                &format!("config.series.{index}.x"),
-                &mut errors,
-            );
-        }
-        if let Some(binding) = definition
-            .sources
-            .iter()
-            .find(|binding| binding.id == series.y.source_binding_id)
-        {
-            let mark = match series.mark.as_str() {
-                "step" => "line",
-                "histogram" => "bar",
-                other => other,
-            };
-            if !marks_for_source(&binding.source_id).contains(&mark) {
-                errors.push(error(
-                    &format!("config.series.{index}.mark"),
-                    "Mark is not supported by the selected source",
-                ));
-            }
-        }
-        if !finite_options(series.stroke_width, 0.5, 12.0)
-            || !finite_options(series.point_size, 1.0, 24.0)
-        {
-            errors.push(error(
-                "config.series",
-                "Series dimensions must be finite and within bounds",
-            ));
-        }
-        if series.y_axis == "y2" && definition.axes.y2.is_none() {
-            errors.push(error("config.axes.y2", "A right-axis series requires y2"));
-        }
-        for transform in &series.transforms {
-            validate_transform(transform, &mut errors);
-        }
-    }
-    let transform_count: usize = definition
-        .series
-        .iter()
-        .map(|series| series.transforms.len())
-        .sum();
-    if transform_count > 12 {
-        errors.push(error(
-            "config.series.transforms",
-            "At most 12 transforms are allowed",
-        ));
-    }
-    for axis in [&definition.axes.x, &definition.axes.y] {
-        validate_axis(axis, &mut errors);
-    }
-    if let Some(axis) = definition.axes.y2.as_ref() {
-        validate_axis(axis, &mut errors);
-    }
-    if let Some(smoothing) = &definition.display.data_smoothing {
-        if !["rolling_average", "rolling_median"].contains(&smoothing.kind.as_str())
-            || !(2..=1000).contains(&smoothing.window)
-        {
-            errors.push(error(
-                "config.display.dataSmoothing",
-                "Invalid smoothing definition",
-            ));
-        }
-    }
+    stages::validate(&definition, &mut errors);
     if errors.is_empty() {
         Ok(definition)
     } else {
@@ -572,375 +329,30 @@ pub fn parse_and_validate_for_slug(
     value: &Value,
 ) -> Result<ChartDefinitionV1, Vec<ChartValidationError>> {
     let definition = parse_and_validate(value)?;
-    let mut errors = validate_bundled_renderer_definition(slug, value, &definition);
+    let errors = bundled::validate(slug, value, &definition);
     if errors.is_empty() {
         Ok(definition)
     } else {
-        Err(std::mem::take(&mut errors))
+        Err(errors)
     }
 }
 
-fn validate_bundled_renderer_definition(
-    slug: &str,
-    value: &Value,
-    definition: &ChartDefinitionV1,
-) -> Vec<ChartValidationError> {
-    let capabilities: Vec<BundledRendererCapability> =
-        serde_json::from_str(BUNDLED_RENDERER_CAPABILITIES)
-            .expect("bundled renderer capability manifest must be valid");
-    let Some(capability) = capabilities.iter().find(|candidate| candidate.slug == slug) else {
-        return Vec::new();
-    };
-    let mut errors = Vec::new();
-    let x_binding = definition
-        .sources
-        .iter()
-        .find(|source| source.id == definition.x.field.source_binding_id);
-    if !x_binding.is_some_and(|source| {
-        source.source_id == capability.x.source_id
-            && definition.x.field.field == capability.x.field
-            && definition.x.kind == capability.x.kind
-    }) {
-        errors.push(error(
-            "config.x",
-            &format!(
-                "The {slug} production renderer requires {} X data from {}.{}.",
-                capability.x.kind, capability.x.source_id, capability.x.field
-            ),
-        ));
-    }
-    let defaults: Vec<Value> =
-        serde_json::from_str(BUNDLED_CHART_DEFAULTS).expect("bundled chart defaults must be valid");
-    let canonical = defaults
-        .iter()
-        .find(|chart| chart["slug"] == slug)
-        .and_then(|chart| chart.get("definition"))
-        .expect("every bundled renderer capability must have a default definition");
-    if value.get("timeframe") != canonical.get("timeframe") {
-        errors.push(error(
-            "config.timeframe",
-            "Bundled charts inherit the active dashboard timeframe so preview and dashboard data stay identical.",
-        ));
-    }
-    for axis_id in ["x", "y", "y2"] {
-        let pointer = format!("/axes/{axis_id}/unit");
-        if value.pointer(&pointer) != canonical.pointer(&pointer) {
-            errors.push(error(
-                &format!("config.axes.{axis_id}.unit"),
-                "Bundled renderer units are owned by the production data adapter.",
-            ));
-        }
-    }
-    if value.pointer("/display/emptyTitle") != canonical.pointer("/display/emptyTitle")
-        || value.pointer("/display/emptyDescription")
-            != canonical.pointer("/display/emptyDescription")
-    {
-        errors.push(error(
-            "config.display.emptyTitle",
-            "Bundled empty-state copy is owned by the production renderer.",
-        ));
-    }
-    if value.get("rendererId") != canonical.get("rendererId") {
-        errors.push(error(
-            "config.rendererId",
-            "Bundled renderer selection cannot be changed.",
-        ));
-    }
-    if capability.editing != "rich" {
-        if value.get("sources") != canonical.get("sources") {
-            errors.push(error(
-                "config.sources",
-                "This bundled renderer owns its data bindings; duplicate the chart to build a custom source configuration.",
-            ));
-        }
-        if series_without_colors(value) != series_without_colors(canonical) {
-            errors.push(error(
-                "config.series",
-                "This bundled renderer supports curve color edits only; its curve order, labels, marks, and axes are fixed.",
-            ));
-        }
-        if value.get("x") != canonical.get("x") {
-            errors.push(error(
-                "config.x",
-                "This bundled renderer owns its X-axis encoding.",
-            ));
-        }
-        let mut comparable_axes = value.get("axes").cloned().unwrap_or(Value::Null);
-        let canonical_axes = canonical.get("axes").cloned().unwrap_or(Value::Null);
-        if matches!(
-            capability.renderer.as_str(),
-            "daily-charge-sessions"
-                | "daily-energy-bars"
-                | "phantom-drain"
-                | "tire-pressure-timeline"
-        ) {
-            comparable_axes["y"]["domain"] = canonical_axes["y"]["domain"].clone();
-        }
-        if comparable_axes != canonical_axes {
-            errors.push(error(
-                "config.axes",
-                "This bundled renderer supports only its production axis contract; use dashboard chart settings for a temporary range.",
-            ));
-        }
-        if value.get("display") != canonical.get("display") {
-            errors.push(error(
-                "config.display",
-                "This bundled renderer owns its legend, grid, tooltip, and smoothing presentation.",
-            ));
-        }
-        if value.get("interaction") != canonical.get("interaction") {
-            errors.push(error(
-                "config.interaction",
-                "This bundled renderer owns its interaction behavior.",
-            ));
-        }
-    }
-    for (index, series) in definition.series.iter().enumerate() {
-        let binding = definition
-            .sources
-            .iter()
-            .find(|source| source.id == series.y.source_binding_id);
-        if !binding.is_some_and(|source| {
-            capability
-                .curves
-                .iter()
-                .any(|curve| curve.source_id == source.source_id && curve.field == series.y.field)
-        }) {
-            errors.push(error(
-                &format!("config.series.{index}.y"),
-                &format!("The {slug} production renderer does not support this curve."),
-            ));
-        }
-        if series.x.is_some() {
-            errors.push(error(
-                &format!("config.series.{index}.x"),
-                "Per-series X fields are supported only by independent custom charts.",
-            ));
-        }
-        if series
-            .transforms
-            .iter()
-            .any(|transform| !matches!(transform, ChartTransformDefinition::None))
-        {
-            errors.push(error(
-                &format!("config.series.{index}.transforms"),
-                "Transforms are not supported by bundled production renderers.",
-            ));
-        }
-        if series.stack_id.is_some() && !matches!(series.mark.as_str(), "bar" | "histogram") {
-            errors.push(error(
-                &format!("config.series.{index}.stackId"),
-                "Stacking is supported only for bar or histogram curves.",
-            ));
-        }
-        if series.connect_gaps.is_some() {
-            errors.push(error(
-                &format!("config.series.{index}.connectGaps"),
-                "Use the chart-level connectGaps setting for bundled charts.",
-            ));
-        }
-        if series.value_format.is_some() {
-            errors.push(error(
-                &format!("config.series.{index}.valueFormat"),
-                "Per-curve value formatting is not supported by bundled production renderers.",
-            ));
-        }
-    }
-    if definition
-        .annotations
-        .as_ref()
-        .is_some_and(|annotations| !annotations.is_empty())
-    {
-        errors.push(error(
-            "config.annotations",
-            "Annotations are supported only by independent custom charts.",
-        ));
-    }
-    if definition.display.data_smoothing.is_some() {
-        errors.push(error(
-            "config.display.dataSmoothing",
-            "Use curve smoothness for bundled production renderers.",
-        ));
-    }
-    if !definition.interaction.pan_zoom {
-        errors.push(error(
-            "config.interaction.panZoom",
-            "Bundled production charts require pan and zoom.",
-        ));
-    }
-    if !definition.interaction.touch_explore {
-        errors.push(error(
-            "config.interaction.touchExplore",
-            "Bundled production charts require touch exploration.",
-        ));
-    }
-    for (axis_id, axis) in [
-        ("x", Some(&definition.axes.x)),
-        ("y", Some(&definition.axes.y)),
-        ("y2", definition.axes.y2.as_ref()),
-    ] {
-        let Some(axis) = axis else { continue };
-        if axis.scale == "log" {
-            errors.push(error(
-                &format!("config.axes.{axis_id}.scale"),
-                "Logarithmic axes are not supported by bundled production renderers.",
-            ));
-        }
-        if axis.tick_format.is_some() {
-            errors.push(error(
-                &format!("config.axes.{axis_id}.tickFormat"),
-                "Custom tick formats are not supported by bundled production renderers.",
-            ));
-        }
-    }
-    errors
-}
-
-fn series_without_colors(value: &Value) -> Value {
-    let mut series = value.get("series").cloned().unwrap_or(Value::Null);
-    if let Some(items) = series.as_array_mut() {
-        for item in items {
-            if let Some(object) = item.as_object_mut() {
-                object.remove("color");
-            }
-        }
-    }
-    series
+fn append_failures<'a>(
+    errors: &mut Vec<ChartValidationError>,
+    checks: impl IntoIterator<Item = (bool, &'a str, &'a str)>,
+) {
+    errors.extend(
+        checks
+            .into_iter()
+            .filter(|(failed, _, _)| *failed)
+            .map(|(_, path, message)| error(path, message)),
+    );
 }
 
 fn error(path: &str, message: &str) -> ChartValidationError {
     ChartValidationError {
         path: path.into(),
         message: message.into(),
-    }
-}
-fn validate_ref(
-    reference: &ChartFieldRef,
-    ids: &HashSet<&str>,
-    path: &str,
-    errors: &mut Vec<ChartValidationError>,
-) {
-    if !ids.contains(reference.source_binding_id.as_str()) || !id(&reference.field) {
-        errors.push(error(
-            path,
-            "Unknown source binding or invalid field identifier",
-        ));
-    }
-}
-
-fn validate_source_field(
-    reference: &ChartFieldRef,
-    sources: &[ChartSourceBinding],
-    path: &str,
-    errors: &mut Vec<ChartValidationError>,
-) {
-    if let Some(source) = sources
-        .iter()
-        .find(|source| source.id == reference.source_binding_id)
-    {
-        let valid = if source.source_id == "metrics.series" {
-            reference.field == "timestamp"
-                || source
-                    .params
-                    .get("metric")
-                    .and_then(Value::as_str)
-                    .is_some_and(|metric| metric == reference.field && is_series_metric(metric))
-        } else {
-            source_fields(&source.source_id).contains(&reference.field.as_str())
-        };
-        if !valid {
-            errors.push(error(
-                path,
-                "Field is not available from the selected source or does not match its metric parameter",
-            ));
-        }
-    }
-}
-
-fn source_fields(source_id: &str) -> &'static [&'static str] {
-    match source_id {
-        "metrics.series" => &["timestamp"],
-        "battery.mileage" => &[
-            "timestamp",
-            "odometer_miles",
-            "usable_kwh",
-            "range_mi",
-            "projected_max_range_mi",
-            "degradation_pct",
-        ],
-        "battery.degradation" => &["timestamp", "capacity_pct", "degradation_pct"],
-        "battery.idle-drain" => &[
-            "day_start",
-            "soc_lost_pct",
-            "parked_hours",
-            "drain_rate_pct_per_hour",
-        ],
-        "charging.sessions" => &[
-            "day_start",
-            "total_energy_kwh",
-            "session_count",
-            "ac_energy_kwh",
-            "dc_energy_kwh",
-        ],
-        "charging.charge-curve" => &[
-            "timestamp",
-            "elapsed_minutes",
-            "soc_pct",
-            "power_kw",
-            "energy_kwh",
-        ],
-        "charging.curve-analysis" => &["soc_pct", "power_kw", "trend_kw"],
-        "efficiency.trend" => &["timestamp", "trip_efficiency_wh_mi", "rolling_24h_wh_mi"],
-        "efficiency.temperature" => &[
-            "temp_c_low",
-            "temp_c_high",
-            "avg_efficiency_wh_mi",
-            "total_miles",
-            "avg_speed_mph",
-        ],
-        "efficiency.drive-mode" => &["drive_mode", "avg_efficiency_wh_mi", "trip_count"],
-        "efficiency.trip-tags" => &[
-            "tag_name",
-            "tag_id",
-            "avg_efficiency_wh_mi",
-            "trip_count",
-            "total_miles",
-            "coverage",
-        ],
-        "trips.tire-pressure-timeline" => &[
-            "timestamp",
-            "front_left_psi",
-            "front_right_psi",
-            "rear_left_psi",
-            "rear_right_psi",
-        ],
-        _ => &[],
-    }
-}
-
-fn filter_fields(source_id: &str) -> &'static [&'static str] {
-    match source_id {
-        "metrics.series" => &["metric"],
-        "efficiency.trend" | "efficiency.temperature" => &["trip_tag_id"],
-        "efficiency.drive-mode" => &["drive_mode"],
-        "efficiency.trip-tags" | "trips.tire-pressure-timeline" => &["tag_id", "trip_tag_id"],
-        _ => &[],
-    }
-}
-
-fn marks_for_source(source_id: &str) -> &'static [&'static str] {
-    match source_id {
-        "metrics.series" => &["line", "area", "step", "bar", "scatter", "histogram"],
-        "battery.mileage" | "battery.degradation" => &["line", "area", "step", "scatter"],
-        "battery.idle-drain" => &["line", "area", "bar", "scatter"],
-        "charging.sessions" => &["bar", "line", "area", "scatter"],
-        "charging.charge-curve" => &["line", "area", "step", "scatter"],
-        "charging.curve-analysis" => &["scatter", "line", "area"],
-        "efficiency.trend" => &["line", "area", "step", "scatter"],
-        "efficiency.temperature" => &["scatter", "bar", "line"],
-        "efficiency.drive-mode" | "efficiency.trip-tags" => &["bar"],
-        "trips.tire-pressure-timeline" => &["line", "area", "step", "scatter"],
-        _ => &[],
     }
 }
 fn finite_options(value: Option<f64>, min: f64, max: f64) -> bool {
@@ -1025,23 +437,33 @@ fn validate_axis(axis: &ChartAxisDefinition, errors: &mut Vec<ChartValidationErr
     }
 }
 fn find_forbidden(value: &Value, path: &str, errors: &mut Vec<ChartValidationError>) {
-    match value {
-        Value::Array(items) => items
-            .iter()
-            .enumerate()
-            .for_each(|(i, v)| find_forbidden(v, &format!("{path}.{i}"), errors)),
-        Value::Object(object) => {
-            for (key, child) in object {
-                if FORBIDDEN_KEYS.contains(&key.replace('_', "").to_ascii_lowercase().as_str()) {
-                    errors.push(error(
-                        &format!("{path}.{key}"),
-                        "Executable, remote, SQL, HTML, or CSS fields are not allowed",
-                    ));
-                }
-                find_forbidden(child, &format!("{path}.{key}"), errors);
-            }
+    let mut pending = vec![(value, path.to_owned(), false)];
+    while let Some((value, path, forbidden)) = pending.pop() {
+        if forbidden {
+            errors.push(error(
+                &path,
+                "Executable, remote, SQL, HTML, or CSS fields are not allowed",
+            ));
         }
-        _ => {}
+        match value {
+            Value::Array(items) => {
+                pending.extend(
+                    items
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .map(|(index, child)| (child, format!("{path}.{index}"), false)),
+                );
+            }
+            Value::Object(object) => {
+                for (key, child) in object.iter().rev() {
+                    let forbidden = FORBIDDEN_KEYS
+                        .contains(&key.replace('_', "").to_ascii_lowercase().as_str());
+                    pending.push((child, format!("{path}.{key}"), forbidden));
+                }
+            }
+            _ => {}
+        }
     }
 }
 
