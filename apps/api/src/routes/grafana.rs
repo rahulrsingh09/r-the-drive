@@ -217,3 +217,7 @@ async fn tag_keys(_auth: AuthUser) -> Json<serde_json::Value> {
 async fn tag_values(_auth: AuthUser) -> Json<serde_json::Value> {
     Json(serde_json::json!([]))
 }
+
+#[cfg(test)]
+#[path = "__tests__/operational_read_models.rs"]
+mod operational_contracts;
