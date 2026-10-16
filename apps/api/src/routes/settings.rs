@@ -1,3 +1,6 @@
+#[path = "settings/workflow.rs"]
+mod workflow;
+
 use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -165,29 +168,16 @@ async fn update_update_check_settings(
     Json(body): Json<UpdateCheckSettingsBody>,
 ) -> Result<Json<UpdateCheckSettingsResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
-    let mut transaction = state.pool.begin().await?;
-    let (enabled, frequency): (bool, String) = sqlx::query_as(
-        "INSERT INTO panda.update_check_settings (id, enabled, frequency, updated_by) \
-         VALUES (TRUE, $1, $2, $3) \
-         ON CONFLICT (id) DO UPDATE SET enabled = EXCLUDED.enabled, \
-             frequency = EXCLUDED.frequency, updated_by = EXCLUDED.updated_by, updated_at = now() \
-         RETURNING enabled, frequency",
-    )
-    .bind(body.enabled)
-    .bind(body.frequency.as_str())
-    .bind(auth.user_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    SecurityAuditEvent::success("github_release_check_settings_updated", Some(auth.user_id))
-        .target("system_config:github_release_check")
-        .request_id_from_headers(&headers)
-        .record_tx(&mut transaction)
-        .await?;
-    transaction.commit().await?;
-    Ok(Json(UpdateCheckSettingsResponse {
-        enabled,
-        frequency: UpdateCheckFrequency::parse(&frequency)?,
-    }))
+    let change = workflow::InstallationChange::UpdateCheck {
+        enabled: body.enabled,
+        frequency: body.frequency,
+    };
+    let workflow::SavedSetting::UpdateCheck(response) =
+        change.commit(&state, auth.user_id, &headers).await?
+    else {
+        unreachable!("update check change returns update check");
+    };
+    Ok(Json(response))
 }
 
 async fn update_timezone(
@@ -197,22 +187,13 @@ async fn update_timezone(
     Json(body): Json<UpdateTimezoneBody>,
 ) -> Result<Json<TimezoneResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
-    let timezone = body
-        .timezone
-        .trim()
-        .parse::<Tz>()
-        .map_err(|_| AppError::Validation("timezone must be a valid IANA timezone".into()))?;
-    let mut transaction = state.pool.begin().await?;
-    app_settings::set_app_timezone_tx(&mut transaction, timezone).await?;
-    SecurityAuditEvent::success("application_timezone_updated", Some(auth.user_id))
-        .target("system_config:app_timezone")
-        .request_id_from_headers(&headers)
-        .record_tx(&mut transaction)
-        .await?;
-    transaction.commit().await?;
-    Ok(Json(TimezoneResponse {
-        timezone: timezone.name().to_string(),
-    }))
+    let change = workflow::InstallationChange::timezone(body)?;
+    let workflow::SavedSetting::Timezone(response) =
+        change.commit(&state, auth.user_id, &headers).await?
+    else {
+        unreachable!("timezone change returns timezone");
+    };
+    Ok(Json(response))
 }
 
 async fn get_security_status(

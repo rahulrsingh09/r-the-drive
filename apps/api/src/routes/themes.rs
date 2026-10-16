@@ -1,3 +1,8 @@
+#[path = "themes/lifecycle.rs"]
+mod lifecycle;
+#[path = "themes/preferences.rs"]
+mod preferences;
+
 use std::collections::BTreeSet;
 
 use axum::{
@@ -419,38 +424,9 @@ async fn create_theme(
     auth: AuthUser,
     Json(body): Json<CreateThemeBody>,
 ) -> Result<Response, AppError> {
-    validate_builtin_id(&body.base_theme_id)?;
-    let name = normalize_name(&body.name)?;
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM panda.users WHERE id = $1 FOR UPDATE")
-        .bind(auth.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM panda.user_themes WHERE owner_id = $1 AND retired_at IS NULL",
-    )
-    .bind(auth.user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if count >= MAX_CUSTOM_THEMES {
-        return Err(AppError::Validation(
-            "custom theme limit of 20 reached".into(),
-        ));
-    }
-    let row = sqlx::query(
-        "INSERT INTO panda.user_themes (owner_id, name, base_theme_id)
-         VALUES ($1, $2, $3)
-         RETURNING id, etag_version",
-    )
-    .bind(auth.user_id)
-    .bind(name)
-    .bind(body.base_theme_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let id: Uuid = row.get("id");
-    let etag = theme_etag(id, row.get("etag_version"));
-    tx.commit().await?;
-    etag_json(&etag, json!({ "themeId": id, "etag": etag }))
+    lifecycle::NewTheme::prepare(body)?
+        .create(&state, auth.user_id)
+        .await
 }
 
 async fn get_theme(
@@ -533,48 +509,15 @@ async fn save_revision(
     headers: HeaderMap,
     Json(body): Json<SaveRevisionBody>,
 ) -> Result<Response, AppError> {
-    let mut tx = state.pool.begin().await?;
-    let (base, version, retired_at) = lock_owned_theme(&mut tx, auth.user_id, theme_id).await?;
-    require_etag(&headers, &theme_etag(theme_id, version))?;
-    if retired_at.is_some() {
-        return Err(AppError::Conflict(
-            "retired themes cannot be changed".into(),
-        ));
-    }
-    let bytes = validate_theme_definition(&base, &body.definition)?;
-    let revision: i32 = sqlx::query_scalar(
-        "SELECT COALESCE(max(revision), 0) + 1
-         FROM panda.user_theme_revisions WHERE theme_id = $1",
+    let result = lifecycle::execute(
+        &state,
+        auth.user_id,
+        theme_id,
+        &headers,
+        lifecycle::Action::Save(&body.definition),
     )
-    .bind(theme_id)
-    .fetch_one(&mut *tx)
     .await?;
-    let hash = definition_hash(&bytes);
-    sqlx::query(
-        "INSERT INTO panda.user_theme_revisions
-            (theme_id, revision, definition, definition_hash)
-         VALUES ($1, $2, $3, $4)",
-    )
-    .bind(theme_id)
-    .bind(revision)
-    .bind(&body.definition)
-    .bind(&hash)
-    .execute(&mut *tx)
-    .await?;
-    let new_version: i64 = sqlx::query_scalar(
-        "UPDATE panda.user_themes
-         SET etag_version = etag_version + 1, updated_at = now()
-         WHERE id = $1 RETURNING etag_version",
-    )
-    .bind(theme_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    let etag = theme_etag(theme_id, new_version);
-    etag_json(
-        &etag,
-        json!({ "themeId": theme_id, "revision": revision, "definitionHash": hash, "etag": etag }),
-    )
+    result.response(&state, auth.user_id, theme_id).await
 }
 
 async fn apply_custom_selection_tx(
@@ -621,51 +564,18 @@ async fn publish_revision(
     headers: HeaderMap,
     Json(body): Json<PublishRevisionBody>,
 ) -> Result<Response, AppError> {
-    let mut tx = state.pool.begin().await?;
-    let (base, version, retired_at) = lock_owned_theme(&mut tx, auth.user_id, theme_id).await?;
-    require_etag(&headers, &theme_etag(theme_id, version))?;
-    if retired_at.is_some() {
-        return Err(AppError::Conflict(
-            "retired themes cannot be published".into(),
-        ));
-    }
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM panda.user_theme_revisions WHERE theme_id = $1 AND revision = $2)",
+    let result = lifecycle::execute(
+        &state,
+        auth.user_id,
+        theme_id,
+        &headers,
+        lifecycle::Action::Publish {
+            revision,
+            apply: body.apply,
+        },
     )
-    .bind(theme_id)
-    .bind(revision)
-    .fetch_one(&mut *tx)
     .await?;
-    if !exists {
-        return Err(AppError::NotFound);
-    }
-    sqlx::query(
-        "INSERT INTO panda.user_theme_publications (theme_id, revision)
-         VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(theme_id)
-    .bind(revision)
-    .execute(&mut *tx)
-    .await?;
-    let new_version: i64 = sqlx::query_scalar(
-        "UPDATE panda.user_themes
-         SET published_revision = $2, etag_version = etag_version + 1, updated_at = now()
-         WHERE id = $1 RETURNING etag_version",
-    )
-    .bind(theme_id)
-    .bind(revision)
-    .fetch_one(&mut *tx)
-    .await?;
-    if body.apply {
-        require_preference_etag(&mut tx, auth.user_id, &headers).await?;
-        apply_custom_selection_tx(&mut tx, auth.user_id, None, theme_id, revision, &base).await?;
-    }
-    tx.commit().await?;
-    let etag = theme_etag(theme_id, new_version);
-    etag_json(
-        &etag,
-        json!({ "themeId": theme_id, "publishedRevision": revision, "applied": body.apply, "etag": etag }),
-    )
+    result.response(&state, auth.user_id, theme_id).await
 }
 
 async fn rollback_theme(
@@ -675,34 +585,15 @@ async fn rollback_theme(
     headers: HeaderMap,
     Json(body): Json<RollbackBody>,
 ) -> Result<Response, AppError> {
-    let mut tx = state.pool.begin().await?;
-    let (base, version, retired_at) = lock_owned_theme(&mut tx, auth.user_id, theme_id).await?;
-    require_etag(&headers, &theme_etag(theme_id, version))?;
-    if retired_at.is_some() {
-        return Err(AppError::Conflict(
-            "retired themes cannot be selected".into(),
-        ));
-    }
-    let published: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM panda.user_theme_publications
-         WHERE theme_id = $1 AND revision = $2)",
+    let result = lifecycle::execute(
+        &state,
+        auth.user_id,
+        theme_id,
+        &headers,
+        lifecycle::Action::Rollback(body.revision),
     )
-    .bind(theme_id)
-    .bind(body.revision)
-    .fetch_one(&mut *tx)
     .await?;
-    if !published {
-        return Err(AppError::Validation(
-            "only published revisions can be selected".into(),
-        ));
-    }
-    require_preference_etag(&mut tx, auth.user_id, &headers).await?;
-    let _preference_version =
-        apply_custom_selection_tx(&mut tx, auth.user_id, None, theme_id, body.revision, &base)
-            .await?;
-    tx.commit().await?;
-    let (payload, etag) = theme_preferences_payload(&state, auth.user_id).await?;
-    etag_json(&etag, payload)
+    result.response(&state, auth.user_id, theme_id).await
 }
 
 async fn retire_theme(
@@ -711,39 +602,15 @@ async fn retire_theme(
     Path(theme_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let mut tx = state.pool.begin().await?;
-    let (base, version, retired_at) = lock_owned_theme(&mut tx, auth.user_id, theme_id).await?;
-    require_etag(&headers, &theme_etag(theme_id, version))?;
-    if retired_at.is_some() {
-        return Err(AppError::Conflict("theme is already retired".into()));
-    }
-    let new_version: i64 = sqlx::query_scalar(
-        "UPDATE panda.user_themes
-         SET retired_at = now(), etag_version = etag_version + 1, updated_at = now()
-         WHERE id = $1 RETURNING etag_version",
+    let result = lifecycle::execute(
+        &state,
+        auth.user_id,
+        theme_id,
+        &headers,
+        lifecycle::Action::Retire,
     )
-    .bind(theme_id)
-    .fetch_one(&mut *tx)
     .await?;
-    sqlx::query(
-        "UPDATE panda.user_preferences
-         SET theme_palette = $3,
-             theme_selection_kind = 'builtin', theme_builtin_id = $3,
-             theme_custom_id = NULL, theme_custom_revision = NULL,
-             theme_etag_version = theme_etag_version + 1, updated_at = now()
-         WHERE user_id = $1 AND theme_custom_id = $2",
-    )
-    .bind(auth.user_id)
-    .bind(theme_id)
-    .bind(base)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    let etag = theme_etag(theme_id, new_version);
-    etag_json(
-        &etag,
-        json!({ "themeId": theme_id, "retired": true, "etag": etag }),
-    )
+    result.response(&state, auth.user_id, theme_id).await
 }
 
 async fn ensure_preferences_row(
@@ -761,58 +628,7 @@ async fn theme_preferences_payload(
     state: &AppState,
     user_id: Uuid,
 ) -> Result<(Value, String), AppError> {
-    let row = sqlx::query(
-        "SELECT theme_mode, theme_selection_kind, theme_builtin_id,
-                theme_custom_id, theme_custom_revision, theme_etag_version
-         FROM panda.user_preferences WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(row) = row else {
-        return Ok((
-            json!({ "schemaVersion": 2, "mode": "dark", "selection": { "kind": "builtin", "themeId": "classic" } }),
-            preferences_etag(1),
-        ));
-    };
-    let version: i64 = row.get("theme_etag_version");
-    let selection = if row.get::<String, _>("theme_selection_kind") == "custom" {
-        let theme_id: Uuid = row.get("theme_custom_id");
-        let revision: i32 = row.get("theme_custom_revision");
-        let custom = sqlx::query(
-            "SELECT t.base_theme_id, r.definition, r.definition_hash
-             FROM panda.user_themes t
-             JOIN panda.user_theme_revisions r ON r.theme_id = t.id AND r.revision = $3
-             WHERE t.id = $1 AND t.owner_id = $2 AND t.retired_at IS NULL",
-        )
-        .bind(theme_id)
-        .bind(user_id)
-        .bind(revision)
-        .fetch_optional(&state.pool)
-        .await?;
-        if let Some(custom) = custom {
-            json!({
-                "kind": "custom",
-                "themeId": theme_id,
-                "revision": revision,
-                "baseThemeId": custom.get::<String, _>("base_theme_id"),
-                "definition": custom.get::<Value, _>("definition"),
-                "definitionHash": custom.get::<String, _>("definition_hash"),
-            })
-        } else {
-            json!({ "kind": "builtin", "themeId": "classic", "fallbackReason": "unavailable-custom-theme" })
-        }
-    } else {
-        json!({ "kind": "builtin", "themeId": row.get::<String, _>("theme_builtin_id") })
-    };
-    Ok((
-        json!({
-            "schemaVersion": 2,
-            "mode": row.get::<String, _>("theme_mode"),
-            "selection": selection,
-        }),
-        preferences_etag(version),
-    ))
+    preferences::load(state, user_id).await
 }
 
 async fn get_theme_preferences(
@@ -829,70 +645,7 @@ async fn update_theme_preferences(
     headers: HeaderMap,
     Json(body): Json<UpdateThemePreferencesBody>,
 ) -> Result<Response, AppError> {
-    if body.schema_version != 2 {
-        return Err(AppError::Validation(
-            "unsupported theme schema version".into(),
-        ));
-    }
-    validate_mode(&body.mode)?;
-    let mut tx = state.pool.begin().await?;
-    ensure_preferences_row(&mut tx, auth.user_id).await?;
-    let current_version: i64 = sqlx::query_scalar(
-        "SELECT theme_etag_version FROM panda.user_preferences WHERE user_id = $1 FOR UPDATE",
-    )
-    .bind(auth.user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    require_etag(&headers, &preferences_etag(current_version))?;
-
-    match body.selection {
-        ThemeSelection::Builtin { theme_id } => {
-            validate_builtin_id(&theme_id)?;
-            sqlx::query(
-                "UPDATE panda.user_preferences
-                 SET theme_mode = $2, theme_palette = $3,
-                     theme_selection_kind = 'builtin', theme_builtin_id = $3,
-                     theme_custom_id = NULL, theme_custom_revision = NULL,
-                     theme_etag_version = theme_etag_version + 1, updated_at = now()
-                 WHERE user_id = $1",
-            )
-            .bind(auth.user_id)
-            .bind(&body.mode)
-            .bind(theme_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-        ThemeSelection::Custom { theme_id, revision } => {
-            let row = sqlx::query(
-                "SELECT t.base_theme_id
-                 FROM panda.user_themes t
-                 JOIN panda.user_theme_revisions r ON r.theme_id = t.id AND r.revision = $3
-                 JOIN panda.user_theme_publications p ON p.theme_id = r.theme_id AND p.revision = r.revision
-                 WHERE t.id = $1 AND t.owner_id = $2 AND t.retired_at IS NULL
-                ",
-            )
-            .bind(theme_id)
-            .bind(auth.user_id)
-            .bind(revision)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(|| {
-                AppError::Validation("custom theme revision is unavailable or unpublished".into())
-            })?;
-            apply_custom_selection_tx(
-                &mut tx,
-                auth.user_id,
-                Some(&body.mode),
-                theme_id,
-                revision,
-                row.get("base_theme_id"),
-            )
-            .await?;
-        }
-    }
-    tx.commit().await?;
-    let (payload, etag) = theme_preferences_payload(&state, auth.user_id).await?;
-    etag_json(&etag, payload)
+    preferences::update(&state, auth.user_id, &headers, body).await
 }
 
 #[cfg(test)]

@@ -98,7 +98,13 @@ impl Fixture {
         .await
         .unwrap();
         assert!(protected);
-        assert!(sqlx::query("DELETE FROM panda.trips WHERE id='00000000-0000-0000-0000-000000000000'").execute(&pool).await.is_err(), "production history protection must deny direct deletion");
+        assert!(
+            sqlx::query("DELETE FROM panda.trips WHERE id='00000000-0000-0000-0000-000000000000'")
+                .execute(&pool)
+                .await
+                .is_err(),
+            "production history protection must deny direct deletion"
+        );
         Self {
             admin,
             pool,
@@ -237,8 +243,20 @@ impl Harness {
             .await
             .unwrap();
         let status = response.status().as_u16();
-        let header_values: BTreeMap<String, Vec<String>> = response.headers().keys()
-            .map(|key| (key.to_string(), response.headers().get_all(key).iter().map(|value| value.to_str().unwrap().to_owned()).collect()))
+        let header_values: BTreeMap<String, Vec<String>> = response
+            .headers()
+            .keys()
+            .map(|key| {
+                (
+                    key.to_string(),
+                    response
+                        .headers()
+                        .get_all(key)
+                        .iter()
+                        .map(|value| value.to_str().unwrap().to_owned())
+                        .collect(),
+                )
+            })
             .collect();
         let headers: BTreeMap<String, String> = response
             .headers()
@@ -249,7 +267,11 @@ impl Harness {
             .await
             .unwrap();
         if let Some(length) = headers.get("content-length") {
-            assert_eq!(length.parse::<usize>().unwrap(), bytes.len(), "declared body length");
+            assert_eq!(
+                length.parse::<usize>().unwrap(),
+                bytes.len(),
+                "declared body length"
+            );
         }
         let body = serde_json::from_slice::<Value>(&bytes)
             .unwrap_or_else(|_| json!(String::from_utf8(bytes.to_vec()).unwrap()));
@@ -292,10 +314,24 @@ impl Harness {
         let response = self.request(actor, method, path, raw, headers).await;
         assert_eq!(response["status"], expected, "{name}: {response}");
         let after = self.state().await;
-        for (table,identity) in [("dashboards","id"),("charts","id"),("user_themes","id"),("user_preferences","user_id")] {
+        for (table, identity) in [
+            ("dashboards", "id"),
+            ("charts", "id"),
+            ("user_themes", "id"),
+            ("user_preferences", "user_id"),
+        ] {
             for previous in before[table].as_array().unwrap() {
-                if let Some(current) = after[table].as_array().unwrap().iter().find(|current| current[identity]==previous[identity]) {
-                    assert_eq!(previous.get("created_at"), current.get("created_at"), "{name}: existing creation time changed");
+                if let Some(current) = after[table]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|current| current[identity] == previous[identity])
+                {
+                    assert_eq!(
+                        previous.get("created_at"),
+                        current.get("created_at"),
+                        "{name}: existing creation time changed"
+                    );
                 }
             }
         }

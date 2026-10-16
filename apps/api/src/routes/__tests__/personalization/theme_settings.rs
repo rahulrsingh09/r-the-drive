@@ -440,7 +440,16 @@ pub(super) async fn exercise(h: &mut Harness) {
     }
     sqlx::query("UPDATE panda.user_preferences SET theme_selection_kind='custom', theme_palette='classic', theme_builtin_id='classic', theme_custom_id=$1, theme_custom_revision=1 WHERE user_id=$2")
         .bind(id.parse::<Uuid>().unwrap()).bind(Uuid::from_u128(103)).execute(&h.fixture.pool).await.unwrap();
-    h.step("theme unavailable custom fallback",Some(2),"GET","/v2/auth/preferences/theme",Value::Null,&[],200).await;
+    h.step(
+        "theme unavailable custom fallback",
+        Some(2),
+        "GET",
+        "/v2/auth/preferences/theme",
+        Value::Null,
+        &[],
+        200,
+    )
+    .await;
     let prefs = h
         .step(
             "theme builtin before",

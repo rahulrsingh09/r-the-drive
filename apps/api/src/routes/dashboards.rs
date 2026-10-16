@@ -1,3 +1,8 @@
+#[path = "dashboards/reconcile.rs"]
+mod reconcile;
+#[path = "dashboards/store.rs"]
+mod store;
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -94,19 +99,11 @@ async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<Dashboard>>, AppError> {
-    let rows = sqlx::query_as::<_, Dashboard>(
-        r#"
-        SELECT id, owner_id, slug, name, description, is_default, is_locked, config
-        FROM dashboards
-        WHERE owner_id = $1 OR owner_id IS NULL
-        ORDER BY is_default DESC, name ASC
-        "#,
-    )
-    .bind(auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(Json(rows))
+    Ok(Json(
+        store::ReadPlan::Visible(auth.user_id)
+            .rows(&state.pool)
+            .await?,
+    ))
 }
 
 /// Fetch a single dashboard by id.
@@ -115,17 +112,7 @@ async fn fetch(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Dashboard>, AppError> {
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        SELECT id, owner_id, slug, name, description, is_default, is_locked, config
-        FROM dashboards WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
+    let row = get_dashboard(&state, id).await?;
     check_read_access(&row, auth.user_id)?;
     Ok(Json(row))
 }
@@ -136,23 +123,14 @@ async fn by_slug(
     auth: AuthUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Dashboard>, AppError> {
-    // User-owned variant first, then system default
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        SELECT id, owner_id, slug, name, description, is_default, is_locked, config
-        FROM dashboards
-        WHERE slug = $1 AND (owner_id = $2 OR owner_id IS NULL)
-        ORDER BY (owner_id = $2) DESC NULLS LAST
-        LIMIT 1
-        "#,
-    )
-    .bind(slug)
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
+    Ok(Json(
+        store::ReadPlan::Preferred {
+            owner: auth.user_id,
+            slug: &slug,
+        }
+        .one(&state.pool)
+        .await?,
+    ))
 }
 
 /// Create a user-owned dashboard.
@@ -162,42 +140,8 @@ async fn create(
     Json(body): Json<CreateDashboard>,
 ) -> Result<(StatusCode, Json<Dashboard>), AppError> {
     validate_slug(&body.slug)?;
-
-    let id = Uuid::new_v4();
-    let config = dashboard_config_with_metadata(
-        body.config,
-        id,
-        Some(auth.user_id),
-        &body.slug,
-        &body.name,
-        body.description.as_deref(),
-        false,
-        false,
-    );
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        INSERT INTO dashboards (id, owner_id, slug, name, description, is_default, is_locked, config)
-        VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
-        ON CONFLICT (owner_id, slug) DO UPDATE
-        SET name        = EXCLUDED.name,
-            description = EXCLUDED.description,
-            config      = EXCLUDED.config,
-            is_default  = FALSE,
-            is_locked   = FALSE,
-            updated_at  = NOW()
-        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#
-    )
-    .bind(id)
-    .bind(auth.user_id)
-    .bind(body.slug)
-    .bind(body.name)
-    .bind(body.description)
-    .bind(config)
-    .fetch_one(&state.pool)
-    .await?;
-
-    Ok((StatusCode::CREATED, Json(row)))
+    let write = store::NewDashboard::create(auth.user_id, body);
+    Ok((StatusCode::CREATED, Json(write.save(&state.pool).await?)))
 }
 
 /// Update a user-owned dashboard (non-admin cannot touch system defaults).
@@ -209,43 +153,8 @@ async fn update(
 ) -> Result<Json<Dashboard>, AppError> {
     let existing = get_dashboard(&state, id).await?;
     check_write_access(&existing, auth.user_id, false)?;
-    let next_name = body.name.as_deref().unwrap_or(&existing.name);
-    let next_description = body
-        .description
-        .as_deref()
-        .or(existing.description.as_deref());
-    let next_config = body.config.map(|config| {
-        dashboard_config_with_metadata(
-            config,
-            existing.id,
-            existing.owner_id,
-            &existing.slug,
-            next_name,
-            next_description,
-            existing.is_default,
-            existing.is_locked,
-        )
-    });
-
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        UPDATE dashboards
-        SET name        = COALESCE($1, name),
-            description = COALESCE($2, description),
-            config      = COALESCE($3, config),
-            updated_at  = NOW()
-        WHERE id = $4
-        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-    )
-    .bind(body.name)
-    .bind(body.description)
-    .bind(next_config)
-    .bind(id)
-    .fetch_one(&state.pool)
-    .await?;
-
-    Ok(Json(row))
+    let write = store::PatchWrite::prepare(existing, body);
+    Ok(Json(write.save(&state.pool, false).await?))
 }
 
 /// Delete a user-owned dashboard.
@@ -273,46 +182,8 @@ async fn clone_dashboard(
 ) -> Result<(StatusCode, Json<Dashboard>), AppError> {
     let source = get_dashboard(&state, id).await?;
     check_read_access(&source, auth.user_id)?;
-
-    let new_id = Uuid::new_v4();
-    let new_slug = format!("{}-copy", source.slug);
-    let new_name = format!("{} (copy)", source.name);
-    let config = dashboard_config_with_metadata(
-        source.config.clone(),
-        new_id,
-        Some(auth.user_id),
-        &new_slug,
-        &new_name,
-        source.description.as_deref(),
-        false,
-        false,
-    );
-
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        INSERT INTO dashboards (id, owner_id, slug, name, description, is_default, is_locked, config)
-        VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
-        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#
-    )
-    .bind(new_id)
-    .bind(auth.user_id)
-    .bind(new_slug)
-    .bind(new_name)
-    .bind(source.description)
-    .bind(config)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e: sqlx::Error| {
-        if let Some(db) = e.as_database_error() {
-            if db.constraint().is_some() {
-                return AppError::Validation("You already have a dashboard with that slug".into());
-            }
-        }
-        AppError::Database(e)
-    })?;
-
-    Ok((StatusCode::CREATED, Json(row)))
+    let write = store::NewDashboard::clone_from(auth.user_id, source);
+    Ok((StatusCode::CREATED, Json(write.save(&state.pool).await?)))
 }
 
 // ─── Admin handlers ───────────────────────────────────────────────────────────
@@ -325,44 +196,8 @@ async fn admin_update(
 ) -> Result<Json<Dashboard>, AppError> {
     require_admin(&state, auth.user_id).await?;
     let existing = get_dashboard(&state, id).await?;
-    let next_name = body.name.as_deref().unwrap_or(&existing.name);
-    let next_description = body
-        .description
-        .as_deref()
-        .or(existing.description.as_deref());
-    let next_config = body.config.map(|config| {
-        dashboard_config_with_metadata(
-            config,
-            existing.id,
-            existing.owner_id,
-            &existing.slug,
-            next_name,
-            next_description,
-            existing.is_default,
-            existing.is_locked,
-        )
-    });
-
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        UPDATE dashboards
-        SET name        = COALESCE($1, name),
-            description = COALESCE($2, description),
-            config      = COALESCE($3, config),
-            updated_at  = NOW()
-        WHERE id = $4
-        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-    )
-    .bind(body.name)
-    .bind(body.description)
-    .bind(next_config)
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
+    let write = store::PatchWrite::prepare(existing, body);
+    Ok(Json(write.save(&state.pool, true).await?))
 }
 
 #[derive(Deserialize)]
@@ -377,21 +212,14 @@ async fn admin_set_lock(
     Json(body): Json<LockBody>,
 ) -> Result<Json<Dashboard>, AppError> {
     require_admin(&state, auth.user_id).await?;
-
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        UPDATE dashboards SET is_locked = $1, updated_at = NOW()
-        WHERE id = $2
-        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-    )
-    .bind(body.locked)
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
+    Ok(Json(
+        store::MetadataWrite::Lock {
+            id,
+            locked: body.locked,
+        }
+        .save(&state.pool)
+        .await?,
+    ))
 }
 
 async fn admin_restore_default(
@@ -400,67 +228,18 @@ async fn admin_restore_default(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Dashboard>, AppError> {
     require_admin(&state, auth.user_id).await?;
-
     let existing = get_dashboard(&state, id).await?;
-    if existing.owner_id.is_some() || !existing.is_default {
-        return Err(AppError::Validation(
-            "Only system default dashboards can be restored".into(),
-        ));
-    }
-
-    let config = bundled_default_config(id).ok_or(AppError::NotFound)?;
-    let name = config["name"]
-        .as_str()
-        .unwrap_or(&existing.name)
-        .to_string();
-    let config = dashboard_config_with_metadata(
-        config,
-        existing.id,
-        existing.owner_id,
-        &existing.slug,
-        &name,
-        existing.description.as_deref(),
-        true,
-        true,
-    );
-
-    let row = sqlx::query_as::<_, Dashboard>(
-        r#"
-        UPDATE dashboards
-        SET name = $1,
-            config = $2,
-            is_default = TRUE,
-            is_locked = TRUE,
-            baseline_revision = $3,
-            updated_at = NOW()
-        WHERE id = $4
-        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-    )
-    .bind(name)
-    .bind(config)
-    .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
+    Ok(Json(
+        store::MetadataWrite::restore(existing)?
+            .save(&state.pool)
+            .await?,
+    ))
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn get_dashboard(state: &AppState, id: Uuid) -> Result<Dashboard, AppError> {
-    sqlx::query_as::<_, Dashboard>(
-        r#"
-        SELECT id, owner_id, slug, name, description, is_default, is_locked, config
-        FROM dashboards WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)
+    store::ReadPlan::Identity(id).one(&state.pool).await
 }
 
 fn check_read_access(d: &Dashboard, user_id: Uuid) -> Result<(), AppError> {
@@ -591,78 +370,7 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         ),
     ];
 
-    for (id_str, json_str) in defaults {
-        let id: Uuid = id_str.parse()?;
-        let config: Value = serde_json::from_str(json_str)?;
-        let name = config["name"].as_str().unwrap_or("Dashboard").to_string();
-        let slug = config["slug"].as_str().unwrap_or("dashboard").to_string();
-        let config =
-            dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
-
-        sqlx::query(UPSERT_SYSTEM_DEFAULT_SQL)
-            .bind(id)
-            .bind(slug)
-            .bind(name)
-            .bind(config)
-            .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
-            .execute(pool)
-            .await?;
-    }
-
-    migrate_user_owned_managed_widgets(pool, defaults).await?;
-
-    Ok(())
-}
-
-/// Apply bundled fixed-composition changes without replacing a personal layout.
-///
-/// Managed widgets own their visual composition, but their saved grid position,
-/// title, visibility, and unrelated options remain user-owned. Explicitly retired
-/// managed widgets are removed, and only unchanged canonical layouts are compacted.
-/// The operation is idempotent so it can run on every API startup.
-async fn migrate_user_owned_managed_widgets(
-    pool: &sqlx::PgPool,
-    defaults: &[(&str, &str)],
-) -> anyhow::Result<()> {
-    for (_id_str, json_str) in defaults {
-        let bundled: Value = serde_json::from_str(json_str)?;
-        let Some(slug) = bundled["slug"].as_str() else {
-            continue;
-        };
-        let managed_widgets = bundled["widgets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|widget| widget["managed"].as_bool() == Some(true))
-            .collect::<Vec<_>>();
-        let retired_widgets = retired_managed_widgets(slug);
-        if managed_widgets.is_empty() && retired_widgets.is_empty() {
-            continue;
-        }
-
-        let rows = sqlx::query_as::<_, (Uuid, Value)>(
-            "SELECT id, config FROM panda.dashboards WHERE owner_id IS NOT NULL AND slug = $1",
-        )
-        .bind(slug)
-        .fetch_all(pool)
-        .await?;
-
-        for (id, current) in rows {
-            let Some(next) = merge_managed_widgets(current, &managed_widgets, retired_widgets)
-            else {
-                continue;
-            };
-            sqlx::query(
-                "UPDATE panda.dashboards SET config = $1, updated_at = NOW() WHERE id = $2 AND owner_id IS NOT NULL",
-            )
-            .bind(next)
-            .bind(id)
-            .execute(pool)
-            .await?;
-        }
-    }
-
-    Ok(())
+    reconcile::seed(pool, defaults).await
 }
 
 fn retired_managed_widgets(slug: &str) -> &'static [(&'static str, &'static str)] {
@@ -673,132 +381,11 @@ fn retired_managed_widgets(slug: &str) -> &'static [(&'static str, &'static str)
 }
 
 fn merge_managed_widgets(
-    mut config: Value,
+    config: Value,
     bundled_widgets: &[&Value],
     retired_widgets: &[(&str, &str)],
 ) -> Option<Value> {
-    let widgets = config.get_mut("widgets")?.as_array_mut()?;
-    let mut changed = false;
-
-    let previous_len = widgets.len();
-    widgets.retain(|widget| {
-        !retired_widgets.iter().any(|(managed_key, id)| {
-            widget["managedKey"].as_str() == Some(*managed_key)
-                || widget["id"].as_str() == Some(*id)
-        })
-    });
-    if widgets.len() != previous_len {
-        changed = true;
-        if retired_widgets
-            .iter()
-            .any(|(managed_key, _)| *managed_key == "trips.tire-pressure-timeline")
-        {
-            changed |= compact_canonical_trips_layout(widgets);
-        }
-    }
-
-    for bundled in bundled_widgets {
-        let bundled_id = bundled["id"].as_str();
-        let managed_key = bundled["managedKey"].as_str();
-        let existing_index = widgets.iter().position(|widget| {
-            managed_key.is_some_and(|key| widget["managedKey"].as_str() == Some(key))
-                || bundled_id.is_some_and(|id| widget["id"].as_str() == Some(id))
-        });
-
-        if let Some(index) = existing_index {
-            let existing = &mut widgets[index];
-            let Some(existing_object) = existing.as_object_mut() else {
-                continue;
-            };
-            let Some(bundled_object) = bundled.as_object() else {
-                continue;
-            };
-
-            if existing_object.get("managed") != Some(&Value::Bool(true)) {
-                existing_object.insert("managed".into(), Value::Bool(true));
-                changed = true;
-            }
-            if let Some(key) = managed_key {
-                if existing_object.get("managedKey").and_then(Value::as_str) != Some(key) {
-                    existing_object.insert("managedKey".into(), Value::String(key.into()));
-                    changed = true;
-                }
-            }
-
-            // A legacy copy may have stored the old chart definition ID. Bring
-            // the canonical widget identity forward while retaining its layout.
-            for field in ["componentType", "definitionId"] {
-                if existing_object.get(field) != bundled_object.get(field) {
-                    if let Some(value) = bundled_object.get(field) {
-                        existing_object.insert(field.into(), value.clone());
-                        changed = true;
-                    }
-                }
-            }
-
-            let mut next_options = bundled_object
-                .get("options")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(existing_options) =
-                existing_object.get("options").and_then(Value::as_object)
-            {
-                for (key, value) in existing_options {
-                    next_options.insert(key.clone(), value.clone());
-                }
-            }
-            // The timeline is a fixed composition. It must always resolve to
-            // the timeline source even if an older copy used the bad widget ID.
-            if managed_key == Some("trips.tire-pressure-timeline") {
-                if let Some(value) = bundled_object
-                    .get("options")
-                    .and_then(|options| options.get("page"))
-                {
-                    next_options.insert("page".into(), value.clone());
-                }
-                if let Some(value) = bundled_object
-                    .get("options")
-                    .and_then(|options| options.get("chartId"))
-                {
-                    next_options.insert("chartId".into(), value.clone());
-                }
-                if let Some(value) = bundled_object
-                    .get("options")
-                    .and_then(|options| options.get("showPicker"))
-                {
-                    next_options.insert("showPicker".into(), value.clone());
-                }
-            }
-            let next_options = Value::Object(next_options);
-            if existing_object.get("options") != Some(&next_options) {
-                existing_object.insert("options".into(), next_options);
-                changed = true;
-            }
-            continue;
-        }
-
-        let mut appended = (*bundled).clone();
-        if let Some(object) = appended.as_object_mut() {
-            let max_y = widgets
-                .iter()
-                .filter_map(|widget| {
-                    widget["layout"]["y"]
-                        .as_i64()
-                        .zip(widget["layout"]["h"].as_i64())
-                })
-                .map(|(y, h)| y + h)
-                .max()
-                .unwrap_or(0);
-            if let Some(layout) = object.get_mut("layout").and_then(Value::as_object_mut) {
-                layout.insert("y".into(), Value::from(max_y));
-            }
-        }
-        widgets.push(appended);
-        changed = true;
-    }
-
-    changed.then_some(config)
+    reconcile::merge(config, bundled_widgets, retired_widgets)
 }
 
 fn compact_canonical_trips_layout(widgets: &mut [Value]) -> bool {

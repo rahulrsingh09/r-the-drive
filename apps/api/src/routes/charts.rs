@@ -1,3 +1,6 @@
+#[path = "charts/workflow.rs"]
+mod workflow;
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -95,10 +98,11 @@ async fn list(
     auth: AuthUser,
 ) -> Result<Json<Vec<ChartManagerEntry>>, AppError> {
     let rows = visible_rows(&state, auth.user_id).await?;
-    Ok(Json(merge_entries(
+    let admin = is_admin(&state, auth.user_id).await?;
+    Ok(Json(workflow::CatalogScope::Manager.project(
         rows,
         auth.user_id,
-        is_admin(&state, auth.user_id).await?,
+        admin,
     )))
 }
 
@@ -108,30 +112,14 @@ async fn effective(
     Query(query): Query<EffectiveQuery>,
 ) -> Result<Json<Vec<ChartManagerEntry>>, AppError> {
     let admin = is_admin(&state, auth.user_id).await?;
-    let entries = merge_entries(
-        visible_rows(&state, auth.user_id).await?,
-        auth.user_id,
-        admin,
-    );
-    let entries = entries
-        .into_iter()
-        .filter(|entry| {
-            entry.effective.is_enabled
-                && query.dashboard_slug.as_deref().is_none_or(|slug| {
-                    entry
-                        .effective
-                        .config
-                        .get("placements")
-                        .and_then(Value::as_array)
-                        .is_some_and(|placements| {
-                            placements.iter().any(|placement| {
-                                placement.get("dashboardSlug").and_then(Value::as_str) == Some(slug)
-                            })
-                        })
-                })
-        })
-        .collect();
-    Ok(Json(entries))
+    let rows = visible_rows(&state, auth.user_id).await?;
+    Ok(Json(
+        workflow::CatalogScope::Effective(query.dashboard_slug.as_deref()).project(
+            rows,
+            auth.user_id,
+            admin,
+        ),
+    ))
 }
 
 async fn fetch(
@@ -149,13 +137,8 @@ async fn create(
     auth: AuthUser,
     Json(body): Json<ChartInput>,
 ) -> Result<(StatusCode, Json<ChartRecord>), AppError> {
-    validate_slug(&body.slug)?;
-
-    validate_name(&body.name)?;
-    validate_config(&body.slug, &body.config)?;
-    let row = sqlx::query_as::<_, ChartRecord>("INSERT INTO panda.charts (owner_id, slug, name, description, is_default, is_locked, is_enabled, config) VALUES ($1,$2,$3,$4,FALSE,FALSE,COALESCE($5,TRUE),$6) RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
-        .bind(auth.user_id).bind(body.slug).bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).fetch_one(&state.pool).await.map_err(map_conflict)?;
-    Ok((StatusCode::CREATED, Json(row)))
+    let write = workflow::NewChart::from_input(auth.user_id, body)?;
+    Ok((StatusCode::CREATED, Json(write.insert(&state).await?)))
 }
 
 async fn update(
@@ -166,12 +149,11 @@ async fn update(
 ) -> Result<Json<ChartRecord>, AppError> {
     let existing = get_chart(&state, id).await?;
     check_write(&existing, auth.user_id, false)?;
-    if let Some(config) = &body.config {
-        validate_config(&existing.slug, config)?;
-    }
-    let row = sqlx::query_as::<_, ChartRecord>("UPDATE panda.charts SET name=COALESCE($1,name),description=COALESCE($2,description),is_enabled=COALESCE($3,is_enabled),config=COALESCE($4,config),updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
-        .bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    Ok(Json(row))
+    Ok(Json(
+        workflow::Change::patch(&existing, body)?
+            .persist(&state)
+            .await?,
+    ))
 }
 
 async fn remove(
@@ -196,17 +178,8 @@ async fn clone_chart(
 ) -> Result<(StatusCode, Json<ChartRecord>), AppError> {
     let source = get_chart(&state, id).await?;
     check_read(&source, auth.user_id)?;
-    let slug = body
-        .slug
-        .unwrap_or_else(|| format!("{}-copy-{}", source.slug, Uuid::new_v4().simple()));
-    validate_slug(&slug)?;
-    let name = body
-        .name
-        .unwrap_or_else(|| format!("{} (copy)", source.name));
-    validate_name(&name)?;
-    let row = sqlx::query_as::<_, ChartRecord>("INSERT INTO panda.charts (owner_id,slug,name,description,is_default,is_locked,is_enabled,config) VALUES ($1,$2,$3,$4,FALSE,FALSE,$5,$6) RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
-        .bind(auth.user_id).bind(slug).bind(name).bind(source.description).bind(source.is_enabled).bind(source.config).fetch_one(&state.pool).await.map_err(map_conflict)?;
-    Ok((StatusCode::CREATED, Json(row)))
+    let write = workflow::NewChart::from_source(auth.user_id, source, body)?;
+    Ok((StatusCode::CREATED, Json(write.insert(&state).await?)))
 }
 
 async fn reset(
@@ -215,17 +188,11 @@ async fn reset(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ChartRecord>, AppError> {
     let existing = get_chart(&state, id).await?;
-
     if existing.owner_id != Some(auth.user_id) {
         return Err(AppError::Forbidden);
     }
-    let system = sqlx::query_as::<_,ChartRecord>("SELECT id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at FROM panda.charts WHERE owner_id IS NULL AND slug=$1").bind(&existing.slug).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    sqlx::query("DELETE FROM panda.charts WHERE id=$1")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-
-    Ok(Json(system))
+    let removal = workflow::OverrideRemoval::resolve(&state, existing).await?;
+    Ok(Json(removal.remove(&state).await?))
 }
 
 async fn set_placements(
@@ -236,35 +203,11 @@ async fn set_placements(
 ) -> Result<Json<ChartRecord>, AppError> {
     let existing = get_chart(&state, id).await?;
     check_write(&existing, auth.user_id, false)?;
-    if body.placements.len() > 20
-        || body
-            .placements
-            .iter()
-            .any(|placement| !validate_slug_value(&placement.dashboard_slug))
-    {
-        return Err(AppError::Validation(
-            "placements must contain at most 20 valid dashboard slugs".into(),
-        ));
-    }
-    let existing_slug = existing.slug.clone();
-    let mut config = existing.config;
-    let object = config
-        .as_object_mut()
-        .ok_or_else(|| AppError::Validation("chart config must be an object".into()))?;
-    object.insert(
-        "placements".into(),
-        serde_json::to_value(&body.placements)
-            .map_err(|_| AppError::Validation("placements could not be encoded".into()))?,
-    );
-    validate_config(&existing_slug, &config)?;
-    let row = sqlx::query_as::<_, ChartRecord>("UPDATE panda.charts SET config=$1,updated_at=NOW() WHERE id=$2 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
-
-        .bind(config)
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(row))
+    Ok(Json(
+        workflow::Change::placements(existing, body)?
+            .persist(&state)
+            .await?,
+    ))
 }
 
 async fn admin_update(
@@ -275,11 +218,11 @@ async fn admin_update(
 ) -> Result<Json<ChartRecord>, AppError> {
     require_admin(&state, auth.user_id).await?;
     let existing = get_chart(&state, id).await?;
-    if let Some(config) = &body.config {
-        validate_config(&existing.slug, config)?;
-    }
-    let row=sqlx::query_as::<_,ChartRecord>("UPDATE panda.charts SET name=COALESCE($1,name),description=COALESCE($2,description),is_enabled=COALESCE($3,is_enabled),config=COALESCE($4,config),updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at").bind(body.name).bind(body.description).bind(body.is_enabled).bind(body.config).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    Ok(Json(row))
+    Ok(Json(
+        workflow::Change::patch(&existing, body)?
+            .persist(&state)
+            .await?,
+    ))
 }
 async fn admin_lock(
     State(state): State<AppState>,
@@ -289,8 +232,14 @@ async fn admin_lock(
     Json(body): Json<LockInput>,
 ) -> Result<Json<ChartRecord>, AppError> {
     require_admin(&state, auth.user_id).await?;
-    let row=sqlx::query_as::<_,ChartRecord>("UPDATE panda.charts SET is_locked=$1,updated_at=NOW() WHERE id=$2 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at").bind(body.locked).bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-    Ok(Json(row))
+    Ok(Json(
+        workflow::Change::Lock {
+            id,
+            locked: body.locked,
+        }
+        .persist(&state)
+        .await?,
+    ))
 }
 async fn admin_restore(
     State(state): State<AppState>,
@@ -299,33 +248,13 @@ async fn admin_restore(
 ) -> Result<Json<ChartRecord>, AppError> {
     require_admin(&state, auth.user_id).await?;
     let row = get_chart(&state, id).await?;
-    if row.owner_id == Some(auth.user_id) || row.owner_id.is_some() {
-        let system=sqlx::query_as::<_,ChartRecord>("SELECT id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at FROM panda.charts WHERE owner_id IS NULL AND slug=$1").bind(&row.slug).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
-
-        sqlx::query("DELETE FROM panda.charts WHERE id=$1")
-            .bind(id)
-            .execute(&state.pool)
-            .await?;
-        return Ok(Json(system));
+    if row.owner_id.is_some() {
+        let removal = workflow::OverrideRemoval::resolve(&state, row).await?;
+        return Ok(Json(removal.remove(&state).await?));
     }
-    let bundled = bundled_default(&row.slug).ok_or(AppError::NotFound)?;
-    let name = bundled["name"].as_str().unwrap_or(row.name.as_str());
-
-    let description = bundled["description"].as_str();
-    let enabled = bundled["enabled"].as_bool().unwrap_or(true);
-    let config = bundled["definition"].clone();
-    validate_config(&row.slug, &config)?;
-    let restored = sqlx::query_as::<_, ChartRecord>("UPDATE panda.charts SET name=$1,description=$2,is_enabled=$3,config=$4,baseline_revision=$6,updated_at=NOW() WHERE id=$5 RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
-        .bind(name)
-        .bind(description)
-        .bind(enabled)
-
-        .bind(config)
-        .bind(row.id)
-        .bind(BUNDLED_CHART_BASELINE_REVISION)
-        .fetch_one(&state.pool)
-        .await?;
-    Ok(Json(restored))
+    Ok(Json(
+        workflow::Change::baseline(row)?.persist(&state).await?,
+    ))
 }
 
 fn bundled_default(slug: &str) -> Option<Value> {
