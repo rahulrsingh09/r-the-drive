@@ -132,6 +132,8 @@ const sidebars: SidebarsConfig = {
         'architecture/telemetry-workflows',
         'architecture/rewrite-vehicle-workflows',
         'architecture/rewrite-external-integrations',
+        'architecture/rewrite-operational-read-models',
+        'architecture/rewrite-charge-payload-reconciliation',
         'architecture/unification-baseline',
         'architecture/theming',
         'architecture/frontend-error-observability',

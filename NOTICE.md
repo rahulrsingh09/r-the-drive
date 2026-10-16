@@ -34,6 +34,8 @@ new mutation and reconciliation stages behind the retained public interfaces.
 Telemetry projection, duplicate suppression, storage and state-history rotation
 use typed policies. Vehicle enrollment, invitation and artwork selection, plus
 external connection settings, cache traversal and activity recording, use new stages.
+Grafana queries and operational telemetry summaries use new selection and aggregation.
+Charging payload resolution and summary persistence use new transactional plans.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
