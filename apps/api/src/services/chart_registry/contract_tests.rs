@@ -24,14 +24,14 @@ fn record(index: u128, slug: &str, owner: Option<Uuid>, locked: bool) -> ChartRe
         owner_id: owner,
         slug: slug.into(),
         name: format!("Synthetic {index}"),
-        description: if index % 2 == 0 {
+        description: if index.is_multiple_of(2) {
             None
         } else {
             Some("Fixture".into())
         },
         is_default: owner.is_none(),
         is_locked: locked,
-        is_enabled: index % 2 == 0,
+        is_enabled: index.is_multiple_of(2),
         config: json!({"synthetic": index.to_string()}),
         baseline_revision: owner.is_none().then_some(5),
         created_at: "2026-01-01T00:00:00Z".parse().unwrap(),

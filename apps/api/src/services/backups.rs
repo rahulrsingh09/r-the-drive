@@ -1196,21 +1196,21 @@ fn validate_manifest_contract(
         }
     }
 
-    verify_manifest_component(&manifest, inventory, "database", "database.dump")?;
+    verify_manifest_component(manifest, inventory, "database", "database.dump")?;
     if !inventory.custom_database_dump() {
         return Err(AppError::Validation(
             "Recovery package database.dump is not a PostgreSQL custom-format dump.".into(),
         ));
     }
     verify_manifest_component(
-        &manifest,
+        manifest,
         inventory,
         "backup_settings",
         "backup-settings.json",
     )?;
     if matches!(format, RECOVERY_FORMAT_V2 | RECOVERY_FORMAT_V3) {
         verify_manifest_component(
-            &manifest,
+            manifest,
             inventory,
             "operational_history",
             "operational-history.json",

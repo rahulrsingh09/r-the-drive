@@ -57,9 +57,9 @@ async fn catalog_characterizes_discovery_active_runs_and_reverification() {
     std::fs::create_dir(&root).unwrap();
     let config = crate::services::restore_jobs::recovery_operations_tests::config(&root);
     let local = &root.join("package.rma.tar.gz");
-    write_archive(&local, &members(1));
+    write_archive(local, &members(1));
     let hidden = &root.join(".hidden");
-    std::fs::create_dir(&hidden).unwrap();
+    std::fs::create_dir(hidden).unwrap();
     write_archive(&hidden.join("hidden.rma.tar.gz"), &members(1));
     let run: Uuid = sqlx::query_scalar(
         "INSERT INTO panda.backup_runs (trigger,status) VALUES ('manual','running') RETURNING id",
@@ -71,7 +71,7 @@ async fn catalog_characterizes_discovery_active_runs_and_reverification() {
         "backup-20261016T000000Z-{}.rma.tar.gz",
         run.simple()
     ));
-    write_archive(&pending, &members(1));
+    write_archive(pending, &members(1));
     assert_eq!(reconcile_local_catalog(&db.pool, &config).await.unwrap(), 1);
     assert_eq!(reconcile_local_catalog(&db.pool, &config).await.unwrap(), 0);
     sqlx::query("UPDATE panda.backup_artifacts SET manifest=jsonb_build_object('restore_availability','unavailable'), checksum_sha256='stale'").execute(&db.pool).await.unwrap();

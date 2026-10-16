@@ -379,7 +379,7 @@ mod tests {
                     1 => candidate.jwt_public_pem = invalid.into(),
                     _ => candidate.age_key = invalid.into(),
                 }
-                let error = candidate.validate().err().expect("invalid key rejected");
+                let error = candidate.validate().expect_err("invalid key rejected");
                 assert!(!error
                     .to_string()
                     .contains("invalid-private-material-must-not-appear"));

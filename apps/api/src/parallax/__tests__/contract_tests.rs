@@ -294,7 +294,7 @@ fn subscription_timestamp_and_boundary_contract() {
     .map(|input| json!({"input":input,"output":parse_source_at(Some(&input))}))
     .collect();
     let sessions: Vec<Value> = [-1,0,1,59,60,61].into_iter().map(|seconds| {
-        let context=crate::ingestion::worker::ActiveSessionContext{session_id:Some(Uuid::from_u128(200)),started_at:Some(at()),ended_at:Some(at()+chrono::Duration::seconds(60)),..Default::default()};
+        let context=crate::ingestion::worker::ActiveSessionContext{session_id:Some(Uuid::from_u128(200)),started_at:Some(at()),ended_at:Some(at()+chrono::Duration::seconds(60))};
         json!({"seconds":seconds,"session":matching_active_session(&context,at()+chrono::Duration::seconds(seconds))})
     }).collect();
     assert_snapshot(

@@ -99,7 +99,7 @@ async fn outbound_policy_blocks_artwork_downloads_including_saved_private_urls()
             source,
         )
         .await;
-        let error = result.err().expect("artwork must be denied");
+        let error = result.expect_err("artwork must be denied");
         assert!(matches!(
             error.downcast_ref::<crate::services::outbound_policy::PolicyError>(),
             Some(crate::services::outbound_policy::PolicyError::OptionalTraffic)

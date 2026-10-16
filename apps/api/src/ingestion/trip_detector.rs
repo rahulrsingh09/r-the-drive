@@ -506,7 +506,7 @@ pub fn compute_trip_energy(
                 .zip(historical_wh_per_mi)
                 .and_then(|((start, end), efficiency)| {
                     let loss = start - end;
-                    (loss >= 1.0).then(|| (loss * efficiency, "range_delta"))
+                    (loss >= 1.0).then_some((loss * efficiency, "range_delta"))
                 })
         })
         .or_else(|| {
