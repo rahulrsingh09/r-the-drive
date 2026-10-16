@@ -1215,6 +1215,34 @@ fn validate_recovery_file_sync(
         file_checksums.insert(normalized, hex::encode(hasher.finalize()));
     }
 
+    let mut decoder = archive.into_inner();
+    let tail_limit = limits
+        .max_expanded_bytes
+        .saturating_sub(expanded_bytes)
+        .saturating_add(64 * 1024);
+    let mut tail_bytes = 0_u64;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(AppError::RecoveryDeadline(
+                "Recovery validation deadline exceeded.".into(),
+            ));
+        }
+        let read = decoder.read(&mut buffer).map_err(|error| {
+            AppError::Validation(format!("Invalid recovery gzip stream: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        tail_bytes = tail_bytes.checked_add(read as u64).ok_or_else(|| {
+            AppError::Validation("Recovery package expanded size overflowed.".into())
+        })?;
+        if tail_bytes > tail_limit {
+            return Err(AppError::Validation(
+                "Recovery package exceeds the expanded byte limit after tar end.".into(),
+            ));
+        }
+    }
+
     let manifest_bytes = manifest_bytes
         .ok_or_else(|| AppError::Validation("Recovery package is missing manifest.json.".into()))?;
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
@@ -2660,3 +2688,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+#[cfg(test)]
+#[path = "backups_recovery_operations_tests.rs"]
+mod recovery_operations_tests;
