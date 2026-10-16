@@ -1,0 +1,941 @@
+[
+  [
+    "login",
+    "synthetic@example.invalid",
+    "synthetic-password"
+  ],
+  [
+    "register",
+    "synthetic@example.invalid",
+    "synthetic-password",
+    "synthetic-setup-proof"
+  ],
+  [
+    "logout"
+  ],
+  [
+    "changePassword",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "refresh"
+  ],
+  [
+    "setup"
+  ],
+  [
+    "previewAccountInvitation",
+    "synthetic-invitation"
+  ],
+  [
+    "acceptAccountInvitation",
+    "synthetic-invitation",
+    "synthetic-password"
+  ],
+  [
+    "startAccountInvitationOidc",
+    "synthetic-invitation"
+  ],
+  [
+    "resumeSession"
+  ],
+  [
+    "me"
+  ],
+  [
+    "getAuthConfig"
+  ],
+  [
+    "getAuthenticationSettings"
+  ],
+  [
+    "updateAuthenticationSettings",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "testAuthenticationSettings"
+  ],
+  [
+    "getOidcIdentities"
+  ],
+  [
+    "startOidc",
+    "/trips?view=all"
+  ],
+  [
+    "startOidcLink",
+    "/trips?view=all"
+  ],
+  [
+    "startOidcPasswordSetup",
+    "synthetic-new-password"
+  ],
+  [
+    "unlinkOidc",
+    "synthetic-current-password"
+  ],
+  [
+    "getUnitPreferences"
+  ],
+  [
+    "updateUnitPreferences",
+    {
+      "distance": "mi"
+    },
+    {
+      "mode": "dark"
+    }
+  ],
+  [
+    "updateThemePreferences",
+    {
+      "mode": "dark"
+    }
+  ],
+  [
+    "getDashboardChartFavorites"
+  ],
+  [
+    "updateDashboardChartFavorite",
+    "dashboard:key",
+    "chart-1"
+  ],
+  [
+    "getAppTimezone"
+  ],
+  [
+    "getAppVersion"
+  ],
+  [
+    "getUpdateCheckSettings"
+  ],
+  [
+    "updateUpdateCheckSettings",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updateAppTimezone",
+    "Etc/UTC"
+  ],
+  [
+    "listVehicles"
+  ],
+  [
+    "vehicleStatus",
+    "vehicle-1"
+  ],
+  [
+    "vehicleImages",
+    "vehicle-1"
+  ],
+  [
+    "refreshVehicleArtwork",
+    "vehicle-1"
+  ],
+  [
+    "purgeVehicleArtworkCache",
+    "vehicle-1"
+  ],
+  [
+    "addVehicle",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "createDemoVehicle",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "refreshDemoVehicle",
+    "vehicle-1"
+  ],
+  [
+    "getVehicleIngestionCapture",
+    "vehicle-1"
+  ],
+  [
+    "startVehicleIngestionCapture",
+    "vehicle-1"
+  ],
+  [
+    "stopVehicleIngestionCapture",
+    "vehicle-1"
+  ],
+  [
+    "downloadVehicleIngestionCapture",
+    "vehicle-1"
+  ],
+  [
+    "deleteVehicle",
+    "vehicle-1"
+  ],
+  [
+    "refreshVehicleCredentials",
+    "vehicle-1",
+    "remote-1"
+  ],
+  [
+    "connectRivian",
+    "synthetic@example.invalid",
+    "synthetic-password"
+  ],
+  [
+    "connectRivianOtp",
+    "challenge-1",
+    "123456"
+  ],
+  [
+    "updateVehicleBatteryConfig",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updateVehicleSettings",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updateVehicleName",
+    "vehicle-1",
+    "Synthetic name"
+  ],
+  [
+    "setDefaultVehicle",
+    "vehicle-1"
+  ],
+  [
+    "listVehicleMembers",
+    "vehicle-1"
+  ],
+  [
+    "addVehicleMember",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updateVehicleMember",
+    "vehicle-1",
+    "user-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "removeVehicleMember",
+    "vehicle-1",
+    "user-1"
+  ],
+  [
+    "listVehicleInvites",
+    "vehicle-1"
+  ],
+  [
+    "createVehicleInvite",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "revokeVehicleInvite",
+    "vehicle-1",
+    "invite-1"
+  ],
+  [
+    "acceptVehicleInvite",
+    "synthetic-invitation"
+  ],
+  [
+    "previewVehicleInvite",
+    "synthetic-invitation"
+  ],
+  [
+    "listUsers",
+    "  mountains & coast  "
+  ],
+  [
+    "listAdminVehicleOptions"
+  ],
+  [
+    "listAccountInvitations"
+  ],
+  [
+    "createAccountInvitation",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "revokeAccountInvitation",
+    "item/a b"
+  ],
+  [
+    "updateUser",
+    "item/a b",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "deleteUser",
+    "item/a b"
+  ],
+  [
+    "listUserVehicleMemberships",
+    "item/a b"
+  ],
+  [
+    "getUserDetail",
+    "item/a b"
+  ],
+  [
+    "listUserInvites",
+    "item/a b"
+  ],
+  [
+    "revokeUserInvite",
+    "user-1",
+    "invite-1"
+  ],
+  [
+    "grantUserVehicleMembership",
+    "user-1",
+    "vehicle-1",
+    "viewer"
+  ],
+  [
+    "updateUserVehicleMembership",
+    "user-1",
+    "vehicle-1",
+    "viewer"
+  ],
+  [
+    "removeUserVehicleMembership",
+    "user-1",
+    "vehicle-1"
+  ],
+  [
+    "listApiKeys"
+  ],
+  [
+    "createApiKey",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "revokeApiKey",
+    "item/a b"
+  ],
+  [
+    "listPlaces"
+  ],
+  [
+    "searchPlaceAddresses",
+    "Lake & city",
+    12
+  ],
+  [
+    "createPlace",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updatePlace",
+    "item/a b",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "deletePlace",
+    "item/a b"
+  ],
+  [
+    "getApiCatalog"
+  ],
+  [
+    "getBackupOverview",
+    {
+      "page": 2,
+      "perPage": 7,
+      "per_page": 7,
+      "from": "from",
+      "to": "to",
+      "fields": [
+        "soc",
+        "",
+        "speed"
+      ],
+      "populated_only": true,
+      "search": "  sample  "
+    }
+  ],
+  [
+    "getExternalConnections"
+  ],
+  [
+    "updateExternalConnection",
+    "item/a b",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "testExternalConnection",
+    "item/a b",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "purgeExternalConnectionCache",
+    "item/a b"
+  ],
+  [
+    "disableOptionalExternalConnections"
+  ],
+  [
+    "updateBackupSettings",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "runBackupNow"
+  ],
+  [
+    "testBackupS3",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "requestBackupRestore",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "deleteUploadedBackup",
+    "artifact-1"
+  ],
+  [
+    "preflightBackupRestore",
+    "artifact-1"
+  ],
+  [
+    "startBackupRestore",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "getRestoreJob",
+    "job-1",
+    "synthetic-capability"
+  ],
+  [
+    "downloadBackupArtifact",
+    "artifact-1"
+  ],
+  [
+    "getSoc",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getRange",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getPhantomDrain",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getIdleDrainPeriods",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    12,
+    8,
+    false
+  ],
+  [
+    "getParkedEnergy",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z"
+  ],
+  [
+    "getDegradation",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getBatteryHealth",
+    "vehicle-1"
+  ],
+  [
+    "getBatteryMileage",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "listTrips",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    2,
+    7,
+    "  mountains & coast  ",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getTripMap",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    "  mountains & coast  ",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getTirePressureTimeline",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "listTripTags",
+    "vehicle-1"
+  ],
+  [
+    "createTripTag",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updateTripTag",
+    "vehicle-1",
+    "tag-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "deleteTripTag",
+    "vehicle-1",
+    "tag-1"
+  ],
+  [
+    "updateTripTagAssignments",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "getTrip",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "getTripDetailData",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "getTripTrack",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "getSpeedProfile",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "getElevationProfile",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "getTripPowerProfile",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "getTripDetailSeries",
+    "trip-1",
+    "vehicle-1"
+  ],
+  [
+    "listChargeSessions",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    2,
+    7,
+    "  mountains & coast  ",
+    false,
+    "2026-01-20"
+  ],
+  [
+    "getChargeSession",
+    "charge-1",
+    "vehicle-1"
+  ],
+  [
+    "updateChargeSession",
+    "vehicle-1",
+    "charge-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "listChargingNetworkPreferences",
+    "vehicle-1"
+  ],
+  [
+    "updateChargingNetworkPreference",
+    "vehicle-1",
+    "Network/A & B",
+    "free"
+  ],
+  [
+    "getChargeCurve",
+    "charge-1",
+    "vehicle-1"
+  ],
+  [
+    "getChargeCurveAnalysis",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getChargingSummary",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getChargingChartSeries",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getVehicleHealth",
+    "vehicle-1"
+  ],
+  [
+    "getChargingSchedule",
+    "vehicle-1"
+  ],
+  [
+    "putChargingSchedule",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "listDepartureSchedules",
+    "vehicle-1"
+  ],
+  [
+    "createDepartureSchedule",
+    "vehicle-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "updateDepartureSchedule",
+    "vehicle-1",
+    "schedule-1",
+    {
+      "synthetic": "body",
+      "nullable": null
+    }
+  ],
+  [
+    "deleteDepartureSchedule",
+    "vehicle-1",
+    "schedule-1"
+  ],
+  [
+    "getLiveSession",
+    "vehicle-1"
+  ],
+  [
+    "getBackfillStatus",
+    "vehicle-1"
+  ],
+  [
+    "triggerBackfill",
+    "vehicle-1"
+  ],
+  [
+    "getStats",
+    "vehicle-1"
+  ],
+  [
+    "getEfficiencySummary",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getEfficiencyByMode",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getEfficiencyTrend",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getEfficiencyVsTemp",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getEfficiencyByTag",
+    "vehicle-1",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false,
+    {
+      "tagIds": [
+        "z",
+        "a",
+        "z"
+      ],
+      "tagMatch": "any",
+      "untagged": true
+    }
+  ],
+  [
+    "getMetricCatalog"
+  ],
+  [
+    "getMetricValue",
+    "vehicle-1",
+    "battery.soc",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    false
+  ],
+  [
+    "getMetricSeries",
+    "vehicle-1",
+    "battery.soc",
+    "2026-01-01T00:00:00Z",
+    "2026-01-31T00:00:00Z",
+    "hour",
+    false
+  ],
+  [
+    "getMetricBatch",
+    {
+      "synthetic": "batch"
+    }
+  ],
+  [
+    "getRawTelemetry",
+    "vehicle-1",
+    {
+      "page": 2,
+      "perPage": 7,
+      "per_page": 7,
+      "from": "from",
+      "to": "to",
+      "fields": [
+        "soc",
+        "",
+        "speed"
+      ],
+      "populated_only": true,
+      "search": "  sample  "
+    }
+  ],
+  [
+    "getTelemetryLanes",
+    "vehicle-1",
+    {
+      "from": "from",
+      "to": "to",
+      "page": 2,
+      "per_page": 7,
+      "lanes": [
+        "power",
+        "speed"
+      ],
+      "resolution": "minute",
+      "max_points": 50,
+      "event_type": "sample",
+      "message_type": "state"
+    }
+  ],
+  [
+    "getRawEvents",
+    "vehicle-1",
+    {
+      "from": "from",
+      "to": "to",
+      "page": 2,
+      "per_page": 7,
+      "lanes": [
+        "power",
+        "speed"
+      ],
+      "resolution": "minute",
+      "max_points": 50,
+      "event_type": "sample",
+      "message_type": "state"
+    }
+  ],
+  [
+    "getRawEvent",
+    "vehicle-1",
+    "event-1"
+  ],
+  [
+    "getRivianStewardship"
+  ]
+]

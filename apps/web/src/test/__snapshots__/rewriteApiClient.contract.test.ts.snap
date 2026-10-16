@@ -1,0 +1,3767 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`complete endpoint request/response characterization > acceptAccountInvitation 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"token":"synthetic-invitation","password":"synthetic-password"}",
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/account-invitations/accept",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > acceptVehicleInvite 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/invites/synthetic-invitation/accept",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > addVehicle 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > addVehicleMember 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/members",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > changePassword 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/password",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > connectRivian 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"email":"synthetic@example.invalid","password":"synthetic-password"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/connect",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > connectRivianOtp 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"challenge_id":"challenge-1","otp_code":"123456"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/connect/otp",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createAccountInvitation 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/account-invitations",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createApiKey 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/api-keys",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createDemoVehicle 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/demo",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createDepartureSchedule 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/departure-schedules",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createPlace 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/places",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createTripTag 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/trip-tags",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > createVehicleInvite 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/invites",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > deleteDepartureSchedule 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/departure-schedules/schedule-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > deletePlace 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/places/item/a b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > deleteTripTag 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/trip-tags/tag-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > deleteUploadedBackup 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/imports/artifact-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > deleteUser 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/admin/users/item/a b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > deleteVehicle 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > disableOptionalExternalConnections 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/settings/external-connections/disable-optional",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > downloadBackupArtifact 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/artifacts/artifact-1/download",
+    },
+  ],
+  "result": {
+    "blob": {
+      "size": 4429,
+      "type": "text/plain;charset=utf-8",
+    },
+    "fileName": "synthetic.dump",
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > downloadVehicleIngestionCapture 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/ingestion-diagnostics/export",
+    },
+  ],
+  "result": {
+    "blob": {
+      "size": 4429,
+      "type": "text/plain;charset=utf-8",
+    },
+    "fileName": "synthetic.dump",
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getApiCatalog 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/api/catalog",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getAppTimezone 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/settings/timezone",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getAppVersion 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/app/version",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getAuthConfig 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/auth/config",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getAuthenticationSettings 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/settings/authentication",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getBackfillStatus 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/backfill-status",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getBackupOverview 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/backups?page=2&per_page=7",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getBatteryHealth 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/battery/health?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getBatteryMileage 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/battery/mileage?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": [
+    {
+      "degradation_pct": null,
+      "odometer_mi": null,
+      "projected_max_range_mi": null,
+      "range_mi": null,
+      "ts": "2026-01-01T00:00:00Z",
+      "usable_kwh": null,
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getChargeCurve 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/charging/sessions/charge-1/curve?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": [
+    {
+      "minutes_elapsed": null,
+      "power_kw": 0,
+      "soc_pct": 55,
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getChargeCurveAnalysis 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/charging/curve-analysis?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": [
+    {
+      "charge_rate_kw": 0,
+      "charger_type": null,
+      "minutes_elapsed": null,
+      "sample_source": "telemetry",
+      "session_id": "",
+      "soc_pct": 55,
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getChargeSession 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/charging/charge-1?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": {
+    "api_ended_at": null,
+    "api_started_at": null,
+    "charger_id": null,
+    "charger_type": null,
+    "cost_method": null,
+    "cost_override_mode": null,
+    "cost_override_usd": null,
+    "cost_usd": null,
+    "currency_code": null,
+    "data_confidence": null,
+    "duration_min": null,
+    "ended_at": null,
+    "energy_added_kwh": 9,
+    "id": "record-1",
+    "is_free_session": null,
+    "is_public": null,
+    "is_rivian_network": null,
+    "live_charge_rate_kph": null,
+    "live_charger_state": null,
+    "live_charger_status": null,
+    "live_current_currency": null,
+    "live_current_price": null,
+    "live_power_kw": null,
+    "live_range_added_km": null,
+    "live_soc_pct": null,
+    "live_started_at": null,
+    "live_time_elapsed_seconds": null,
+    "live_time_remaining_min": null,
+    "live_total_charged_kwh": null,
+    "location_lat": null,
+    "location_lng": null,
+    "location_name": null,
+    "location_override_mode": null,
+    "network_vendor": null,
+    "peak_power_kw": 7,
+    "range_added_km": null,
+    "rivian_charger_type": null,
+    "rivian_city": null,
+    "rivian_paid_total": null,
+    "session_day_local": null,
+    "soc_end": null,
+    "soc_start": null,
+    "source": null,
+    "source_location_lat": null,
+    "source_location_lng": null,
+    "started_at": "2026-01-01T00:00:00Z",
+    "telemetry_sample_count": 0,
+    "vehicle_id": "vehicle-1",
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getChargingChartSeries 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/charging/chart-series?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": {
+    "daily": [
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": 20,
+      },
+    ],
+    "daily_sessions": [
+      {
+        "charger_type": null,
+        "cost_usd": null,
+        "day_local": "",
+        "day_start": "2026-01-01T00:00:00Z",
+        "energy_added_kwh": null,
+        "location_name": null,
+        "session_id": "",
+        "started_at": "2026-01-01T00:00:00Z",
+      },
+    ],
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getChargingSchedule 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/charging-schedule",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getChargingSummary 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/charging/summary?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": {
+    "ac_kwh": 5,
+    "away_kwh": 0,
+    "charging_cycles": null,
+    "charging_efficiency_pct": null,
+    "dc_kwh": 15,
+    "free_session_count": 0,
+    "home_kwh": 0,
+    "known_cost_session_count": 0,
+    "max_charge_limit_pct": null,
+    "max_charge_rate_kw": 7,
+    "network_breakdown": [],
+    "rivian_paid_total_usd": null,
+    "session_count": 0,
+    "total_cost_usd": null,
+    "total_energy_kwh": 20,
+    "total_energy_used_kwh": null,
+    "total_range_added_km": null,
+    "typed_session_count": 0,
+    "unknown_cost_session_count": 0,
+    "unknown_location_kwh": 0,
+    "weekly": [
+      {
+        "energy_kwh": 20,
+        "sessions": 2,
+        "week_start": "2026-01-01",
+      },
+    ],
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getDashboardChartFavorites 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/auth/preferences/chart-favorites",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getDegradation 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/battery/degradation?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getEfficiencyByMode 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/efficiency/by-mode?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&tag_ids=a%2Cz&tag_match=any",
+    },
+  ],
+  "result": [
+    {
+      "avg_efficiency": 320,
+      "drive_mode": "all_purpose",
+      "p10_efficiency": 0,
+      "p90_efficiency": 0,
+      "trip_count": 2,
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getEfficiencyByTag 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/efficiency/by-tag?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&tag_ids=a%2Cz&tag_match=any",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getEfficiencySummary 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/efficiency/summary?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&tag_ids=a%2Cz&tag_match=any",
+    },
+  ],
+  "result": {
+    "avg": 320,
+    "coverage_percent": undefined,
+    "efficiency_miles": undefined,
+    "p10": undefined,
+    "p90": undefined,
+    "total_miles": undefined,
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getEfficiencyTrend 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/efficiency/trend?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&tag_ids=a%2Cz&tag_match=any",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getEfficiencyVsTemp 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/efficiency/vs-temp?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&tag_ids=a%2Cz&tag_match=any",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getElevationProfile 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1/elevation?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getExternalConnections 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/settings/external-connections",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getIdleDrainPeriods 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/idle-drain?from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&limit=12&min_duration_hours=8",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getLiveSession 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/live-session",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getMetricBatch 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"batch"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/metrics/batch",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getMetricCatalog 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/metrics/catalog",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getMetricSeries 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/metrics/series?vehicle_id=vehicle-1&metric=battery.soc&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&bucket=hour",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getMetricValue 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/metrics/value?vehicle_id=vehicle-1&metric=battery.soc&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getOidcIdentities 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/auth/identities",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getParkedEnergy 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/parked-energy?from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getPhantomDrain 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/battery/phantom-drain?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getRange 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/battery/range?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getRawEvent 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/raw-events/event-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getRawEvents 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/raw-events?from=from&to=to&page=2&per_page=7&event_type=sample&message_type=state",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getRawTelemetry 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/raw-data?from=from&to=to&page=2&per_page=7&search=sample&fields=soc%2Cspeed&populated_only=true",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getRestoreJob 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "same-origin",
+      "headers": {
+        "X-Panda-Restore-Token": "synthetic-capability",
+      },
+      "url": "https://synthetic.example.invalid/v1/restore-runtime/jobs/job-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getRivianStewardship 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/rivian/stewardship",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getSoc 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/battery/soc?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getSpeedProfile 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1/speed?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": [
+    {
+      "elapsed_s": 0,
+      "speed_mph": 8,
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getStats 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/stats?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTelemetryLanes 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/telemetry/lanes?from=from&to=to&lanes=power%2Cspeed&resolution=minute&max_points=50",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTirePressureTimeline 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/tire-pressure-timeline?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&tag_ids=a%2Cz&tag_match=any&untagged=1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTrip 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": {
+    "distance_mi": 12,
+    "drive_mode": "all_purpose",
+    "duration_min": 20,
+    "efficiency_wh_mi": 320,
+    "end_address": null,
+    "end_lat": null,
+    "end_lng": null,
+    "end_place": null,
+    "ended_at": null,
+    "energy_used_kwh": 3.84,
+    "id": "record-1",
+    "max_speed_mph": null,
+    "soc_end": null,
+    "soc_start": null,
+    "start_address": null,
+    "start_lat": null,
+    "start_lng": null,
+    "start_place": null,
+    "started_at": "2026-01-01T00:00:00Z",
+    "tags": [],
+    "vehicle_id": "vehicle-1",
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTripDetailData 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1/detail?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": {
+    "access_token": "synthetic-renewed",
+    "avg_wh_per_mi": 320,
+    "by_type": {
+      "ac_kwh": 2,
+      "ac_l2_kwh": 3,
+      "dc_kwh": 15,
+    },
+    "daily": [
+      {
+        "day_local": "2026-01-01",
+        "day_start": "2026-01-01T00:00:00Z",
+        "session_count": 2,
+        "total_energy_kwh": "20",
+      },
+    ],
+    "daily_sessions": [
+      {
+        "avg_wh_per_mi": 320,
+        "day_start": "2026-01-01T00:00:00Z",
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "default_vehicle_id": null,
+    "distance_miles": 12,
+    "drive_mode": "all_purpose",
+    "duration_seconds": 1200,
+    "efficiency_wh_per_mile": 320,
+    "expires_in": 900,
+    "id": "record-1",
+    "invitations": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "invites": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "items": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "kwh_added": 9,
+    "max_charge_rate_kw": 7,
+    "members": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "memberships": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "metrics": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "page": 2,
+    "per_page": 7,
+    "places": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "sentinel": "unchanged",
+    "session": {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+    "soc": 55,
+    "started_at": "2026-01-01T00:00:00Z",
+    "total": 41,
+    "total_kwh": 20,
+    "trip": {
+      "distance_mi": 12,
+      "drive_mode": "all_purpose",
+      "duration_min": 20,
+      "efficiency_wh_mi": 320,
+      "end_address": null,
+      "end_lat": null,
+      "end_lng": null,
+      "end_place": null,
+      "ended_at": null,
+      "energy_used_kwh": 3.84,
+      "id": "record-1",
+      "max_speed_mph": null,
+      "soc_end": null,
+      "soc_start": null,
+      "start_address": null,
+      "start_lat": null,
+      "start_lng": null,
+      "start_place": null,
+      "started_at": "2026-01-01T00:00:00Z",
+      "tags": [],
+      "vehicle_id": "vehicle-1",
+    },
+    "trip_count": 2,
+    "ts": "2026-01-01T00:00:00Z",
+    "users": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "value": 8,
+    "vehicle_id": "vehicle-1",
+    "vehicles": [
+      {
+        "avg_wh_per_mi": 320,
+        "distance_miles": 12,
+        "drive_mode": "all_purpose",
+        "duration_seconds": 1200,
+        "efficiency_wh_per_mile": 320,
+        "id": "record-1",
+        "kwh_added": 9,
+        "max_charge_rate_kw": 7,
+        "soc": 55,
+        "started_at": "2026-01-01T00:00:00Z",
+        "trip_count": 2,
+        "ts": "2026-01-01T00:00:00Z",
+        "value": 8,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "weekly": [
+      {
+        "kwh": 20,
+        "sessions": 2,
+        "week_start": "2026-01-01",
+      },
+    ],
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTripDetailSeries 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1/series?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": [
+    {
+      "battery_level": null,
+      "cabin_temp_c": null,
+      "driver_temp_c": null,
+      "estimated_net_power_kw": null,
+      "hvac_active": null,
+      "outside_temp_c": null,
+      "power_kw": null,
+      "regen_power_kw": null,
+      "speed_mph": null,
+      "tire_fl_psi": null,
+      "tire_fr_psi": null,
+      "tire_rl_psi": null,
+      "tire_rr_psi": null,
+      "ts": "2026-01-01T00:00:00Z",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTripMap 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/map?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&search=mountains+%26+coast&tag_ids=a%2Cz&tag_match=any&untagged=1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTripPowerProfile 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1/power?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": [
+    {
+      "battery_level": null,
+      "estimated_net_power_kw": null,
+      "power_kw": null,
+      "regen_power_kw": null,
+      "speed_mph": null,
+      "ts": "2026-01-01T00:00:00Z",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > getTripTrack 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips/trip-1/track?vehicle_id=vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getUnitPreferences 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/auth/preferences",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getUpdateCheckSettings 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/settings/update-check",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getUserDetail 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/users/item/a b/detail",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getVehicleHealth 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/health",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > getVehicleIngestionCapture 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/ingestion-diagnostics",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > grantUserVehicleMembership 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"role":"viewer"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/users/user-1/vehicles/vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > listAccountInvitations 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/account-invitations",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listAdminVehicleOptions 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/vehicles",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listApiKeys 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/api-keys",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > listChargeSessions 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/charging?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&page=2&per_page=7&limit=7&offset=7&search=mountains+%26+coast&session_day_local=2026-01-20",
+    },
+  ],
+  "result": {
+    "items": [
+      {
+        "api_ended_at": null,
+        "api_started_at": null,
+        "charger_id": null,
+        "charger_type": null,
+        "cost_method": null,
+        "cost_override_mode": null,
+        "cost_override_usd": null,
+        "cost_usd": null,
+        "currency_code": null,
+        "data_confidence": null,
+        "duration_min": null,
+        "ended_at": null,
+        "energy_added_kwh": 9,
+        "id": "record-1",
+        "is_free_session": null,
+        "is_public": null,
+        "is_rivian_network": null,
+        "live_charge_rate_kph": null,
+        "live_charger_state": null,
+        "live_charger_status": null,
+        "live_current_currency": null,
+        "live_current_price": null,
+        "live_power_kw": null,
+        "live_range_added_km": null,
+        "live_soc_pct": null,
+        "live_started_at": null,
+        "live_time_elapsed_seconds": null,
+        "live_time_remaining_min": null,
+        "live_total_charged_kwh": null,
+        "location_lat": null,
+        "location_lng": null,
+        "location_name": null,
+        "location_override_mode": null,
+        "network_vendor": null,
+        "peak_power_kw": 7,
+        "range_added_km": null,
+        "rivian_charger_type": null,
+        "rivian_city": null,
+        "rivian_paid_total": null,
+        "session_day_local": null,
+        "soc_end": null,
+        "soc_start": null,
+        "source": null,
+        "source_location_lat": null,
+        "source_location_lng": null,
+        "started_at": "2026-01-01T00:00:00Z",
+        "telemetry_sample_count": 0,
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "page": 2,
+    "per_page": 7,
+    "total": 41,
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > listChargingNetworkPreferences 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/charging-networks",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > listDepartureSchedules 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/departure-schedules",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > listPlaces 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/places",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listTripTags 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/trip-tags",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > listTrips 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/trips?vehicle_id=vehicle-1&from=2026-01-01T00%3A00%3A00Z&to=2026-01-31T00%3A00%3A00Z&page=2&per_page=7&limit=7&offset=7&search=mountains+%26+coast&tag_ids=a%2Cz&tag_match=any&untagged=1",
+    },
+  ],
+  "result": {
+    "items": [
+      {
+        "distance_mi": 12,
+        "drive_mode": "all_purpose",
+        "duration_min": 20,
+        "efficiency_wh_mi": 320,
+        "end_address": null,
+        "end_lat": null,
+        "end_lng": null,
+        "end_place": null,
+        "ended_at": null,
+        "energy_used_kwh": 3.84,
+        "id": "record-1",
+        "max_speed_mph": null,
+        "soc_end": null,
+        "soc_start": null,
+        "start_address": null,
+        "start_lat": null,
+        "start_lng": null,
+        "start_place": null,
+        "started_at": "2026-01-01T00:00:00Z",
+        "tags": [],
+        "vehicle_id": "vehicle-1",
+      },
+    ],
+    "page": 2,
+    "per_page": 7,
+    "total": 41,
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > listUserInvites 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/users/item/a b/invites",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listUserVehicleMemberships 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/users/item/a b/vehicles",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listUsers 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/admin/users?search=++mountains+%26+coast++",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listVehicleInvites 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/invites",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listVehicleMembers 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/members",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > listVehicles 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles",
+    },
+  ],
+  "result": [
+    {
+      "avg_wh_per_mi": 320,
+      "distance_miles": 12,
+      "drive_mode": "all_purpose",
+      "duration_seconds": 1200,
+      "efficiency_wh_per_mile": 320,
+      "id": "record-1",
+      "kwh_added": 9,
+      "max_charge_rate_kw": 7,
+      "soc": 55,
+      "started_at": "2026-01-01T00:00:00Z",
+      "trip_count": 2,
+      "ts": "2026-01-01T00:00:00Z",
+      "value": 8,
+      "vehicle_id": "vehicle-1",
+    },
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > login 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"email":"synthetic@example.invalid","password":"synthetic-password"}",
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/login",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > logout 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/logout",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > me 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/auth/me",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > preflightBackupRestore 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"artifact_id":"artifact-1"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/restores/preflight",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > preserves the complete public instance method surface 1`] = `
+[
+  "acceptAccountInvitation",
+  "acceptVehicleInvite",
+  "addVehicle",
+  "addVehicleMember",
+  "apiFetch",
+  "authenticatedAsset",
+  "changePassword",
+  "connectRivian",
+  "connectRivianOtp",
+  "createAccountInvitation",
+  "createApiKey",
+  "createDemoVehicle",
+  "createDepartureSchedule",
+  "createPlace",
+  "createTripTag",
+  "createVehicleInvite",
+  "deleteDepartureSchedule",
+  "deletePlace",
+  "deleteTripTag",
+  "deleteUploadedBackup",
+  "deleteUser",
+  "deleteVehicle",
+  "disableOptionalExternalConnections",
+  "downloadBackupArtifact",
+  "downloadVehicleIngestionCapture",
+  "getApiCatalog",
+  "getAppTimezone",
+  "getAppVersion",
+  "getAuthConfig",
+  "getAuthenticationSettings",
+  "getBackfillStatus",
+  "getBackupOverview",
+  "getBatteryHealth",
+  "getBatteryMileage",
+  "getChargeCurve",
+  "getChargeCurveAnalysis",
+  "getChargeSession",
+  "getChargingChartSeries",
+  "getChargingSchedule",
+  "getChargingSummary",
+  "getDashboardChartFavorites",
+  "getDegradation",
+  "getEfficiencyByMode",
+  "getEfficiencyByTag",
+  "getEfficiencySummary",
+  "getEfficiencyTrend",
+  "getEfficiencyVsTemp",
+  "getElevationProfile",
+  "getExternalConnections",
+  "getIdleDrainPeriods",
+  "getLiveSession",
+  "getMetricBatch",
+  "getMetricCatalog",
+  "getMetricSeries",
+  "getMetricValue",
+  "getOidcIdentities",
+  "getParkedEnergy",
+  "getPhantomDrain",
+  "getRange",
+  "getRawEvent",
+  "getRawEvents",
+  "getRawTelemetry",
+  "getRestoreJob",
+  "getRivianStewardship",
+  "getSoc",
+  "getSpeedProfile",
+  "getStats",
+  "getTelemetryLanes",
+  "getTirePressureTimeline",
+  "getTrip",
+  "getTripDetailData",
+  "getTripDetailSeries",
+  "getTripMap",
+  "getTripPowerProfile",
+  "getTripTrack",
+  "getUnitPreferences",
+  "getUpdateCheckSettings",
+  "getUserDetail",
+  "getVehicleHealth",
+  "getVehicleIngestionCapture",
+  "grantUserVehicleMembership",
+  "listAccountInvitations",
+  "listAdminVehicleOptions",
+  "listApiKeys",
+  "listChargeSessions",
+  "listChargingNetworkPreferences",
+  "listDepartureSchedules",
+  "listPlaces",
+  "listTripTags",
+  "listTrips",
+  "listUserInvites",
+  "listUserVehicleMemberships",
+  "listUsers",
+  "listVehicleInvites",
+  "listVehicleMembers",
+  "listVehicles",
+  "login",
+  "logout",
+  "me",
+  "onAuthChange",
+  "preflightBackupRestore",
+  "previewAccountInvitation",
+  "previewVehicleInvite",
+  "proxyFetch",
+  "purgeExternalConnectionCache",
+  "purgeVehicleArtworkCache",
+  "putChargingSchedule",
+  "refresh",
+  "refreshDemoVehicle",
+  "refreshVehicleArtwork",
+  "refreshVehicleCredentials",
+  "register",
+  "removeUserVehicleMembership",
+  "removeVehicleMember",
+  "requestBackupRestore",
+  "requestResponse",
+  "resumeSession",
+  "revokeAccountInvitation",
+  "revokeApiKey",
+  "revokeUserInvite",
+  "revokeVehicleInvite",
+  "runBackupNow",
+  "searchPlaceAddresses",
+  "setDefaultVehicle",
+  "setToken",
+  "setup",
+  "startAccountInvitationOidc",
+  "startBackupRestore",
+  "startOidc",
+  "startOidcLink",
+  "startOidcPasswordSetup",
+  "startVehicleIngestionCapture",
+  "stopVehicleIngestionCapture",
+  "testAuthenticationSettings",
+  "testBackupS3",
+  "testExternalConnection",
+  "triggerBackfill",
+  "unlinkOidc",
+  "updateAppTimezone",
+  "updateAuthenticationSettings",
+  "updateBackupSettings",
+  "updateChargeSession",
+  "updateChargingNetworkPreference",
+  "updateDashboardChartFavorite",
+  "updateDepartureSchedule",
+  "updateExternalConnection",
+  "updatePlace",
+  "updateThemePreferences",
+  "updateTripTag",
+  "updateTripTagAssignments",
+  "updateUnitPreferences",
+  "updateUpdateCheckSettings",
+  "updateUser",
+  "updateUserVehicleMembership",
+  "updateVehicleBatteryConfig",
+  "updateVehicleMember",
+  "updateVehicleName",
+  "updateVehicleSettings",
+  "uploadBackupArtifact",
+  "vehicleImages",
+  "vehicleStatus",
+]
+`;
+
+exports[`complete endpoint request/response characterization > preserves the exported domain method sets 1`] = `
+{
+  "analyticsClient": [
+    "getEfficiencyByMode",
+    "getEfficiencyByTag",
+    "getEfficiencySummary",
+    "getEfficiencyTrend",
+    "getEfficiencyVsTemp",
+    "getStats",
+  ],
+  "authClient": [
+    "acceptAccountInvitation",
+    "changePassword",
+    "getAppTimezone",
+    "getAppVersion",
+    "getAuthConfig",
+    "getDashboardChartFavorites",
+    "getOidcIdentities",
+    "getUnitPreferences",
+    "login",
+    "logout",
+    "me",
+    "previewAccountInvitation",
+    "refresh",
+    "register",
+    "resumeSession",
+    "setup",
+    "startAccountInvitationOidc",
+    "startOidc",
+    "startOidcLink",
+    "startOidcPasswordSetup",
+    "unlinkOidc",
+    "updateAppTimezone",
+    "updateDashboardChartFavorite",
+    "updateThemePreferences",
+    "updateUnitPreferences",
+  ],
+  "chargingClient": [
+    "createDepartureSchedule",
+    "deleteDepartureSchedule",
+    "getBackfillStatus",
+    "getChargeCurve",
+    "getChargeCurveAnalysis",
+    "getChargeSession",
+    "getChargingChartSeries",
+    "getChargingSchedule",
+    "getChargingSummary",
+    "getLiveSession",
+    "listChargeSessions",
+    "listChargingNetworkPreferences",
+    "listDepartureSchedules",
+    "putChargingSchedule",
+    "triggerBackfill",
+    "updateChargeSession",
+    "updateChargingNetworkPreference",
+    "updateDepartureSchedule",
+  ],
+  "systemClient": [
+    "createAccountInvitation",
+    "createApiKey",
+    "createPlace",
+    "deletePlace",
+    "deleteUploadedBackup",
+    "deleteUser",
+    "disableOptionalExternalConnections",
+    "downloadBackupArtifact",
+    "getApiCatalog",
+    "getAuthenticationSettings",
+    "getBackupOverview",
+    "getExternalConnections",
+    "getRestoreJob",
+    "getUpdateCheckSettings",
+    "getUserDetail",
+    "grantUserVehicleMembership",
+    "listAccountInvitations",
+    "listAdminVehicleOptions",
+    "listApiKeys",
+    "listPlaces",
+    "listUserInvites",
+    "listUserVehicleMemberships",
+    "listUsers",
+    "preflightBackupRestore",
+    "purgeExternalConnectionCache",
+    "removeUserVehicleMembership",
+    "requestBackupRestore",
+    "revokeAccountInvitation",
+    "revokeApiKey",
+    "revokeUserInvite",
+    "runBackupNow",
+    "searchPlaceAddresses",
+    "startBackupRestore",
+    "testAuthenticationSettings",
+    "testBackupS3",
+    "testExternalConnection",
+    "updateAuthenticationSettings",
+    "updateBackupSettings",
+    "updateExternalConnection",
+    "updatePlace",
+    "updateUpdateCheckSettings",
+    "updateUser",
+    "updateUserVehicleMembership",
+    "uploadBackupArtifact",
+  ],
+  "telemetryClient": [
+    "getBatteryHealth",
+    "getBatteryMileage",
+    "getDegradation",
+    "getIdleDrainPeriods",
+    "getMetricBatch",
+    "getMetricCatalog",
+    "getMetricSeries",
+    "getMetricValue",
+    "getParkedEnergy",
+    "getPhantomDrain",
+    "getRange",
+    "getRawEvent",
+    "getRawEvents",
+    "getRawTelemetry",
+    "getRivianStewardship",
+    "getSoc",
+    "getTelemetryLanes",
+  ],
+  "tripClient": [
+    "createTripTag",
+    "deleteTripTag",
+    "getElevationProfile",
+    "getSpeedProfile",
+    "getTrip",
+    "getTripDetailData",
+    "getTripDetailSeries",
+    "getTripMap",
+    "getTripPowerProfile",
+    "getTripTrack",
+    "listTripTags",
+    "listTrips",
+    "updateTripTag",
+    "updateTripTagAssignments",
+  ],
+  "vehicleClient": [
+    "acceptVehicleInvite",
+    "addVehicle",
+    "addVehicleMember",
+    "connectRivian",
+    "connectRivianOtp",
+    "createDemoVehicle",
+    "createVehicleInvite",
+    "deleteVehicle",
+    "downloadVehicleIngestionCapture",
+    "getVehicleHealth",
+    "getVehicleIngestionCapture",
+    "listVehicleInvites",
+    "listVehicleMembers",
+    "listVehicles",
+    "previewVehicleInvite",
+    "purgeVehicleArtworkCache",
+    "refreshDemoVehicle",
+    "refreshVehicleArtwork",
+    "refreshVehicleCredentials",
+    "removeVehicleMember",
+    "revokeVehicleInvite",
+    "setDefaultVehicle",
+    "startVehicleIngestionCapture",
+    "stopVehicleIngestionCapture",
+    "updateVehicleBatteryConfig",
+    "updateVehicleMember",
+    "updateVehicleName",
+    "updateVehicleSettings",
+    "vehicleImages",
+    "vehicleStatus",
+  ],
+}
+`;
+
+exports[`complete endpoint request/response characterization > previewAccountInvitation 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"token":"synthetic-invitation"}",
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/account-invitations/preview",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > previewVehicleInvite 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/invites/synthetic-invitation",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > purgeExternalConnectionCache 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/settings/external-connections/item%2Fa%20b/cache/purge",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > purgeVehicleArtworkCache 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/vehicles/vehicle-1/images/cache/purge",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > putChargingSchedule 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/charging-schedule",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > refresh 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "signal": "AbortSignal",
+      "url": "https://synthetic.example.invalid/v1/auth/refresh",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > refreshDemoVehicle 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/demo/refresh",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > refreshVehicleArtwork 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/vehicles/vehicle-1/images/remirror",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > refreshVehicleCredentials 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"rivian_vehicle_id":"remote-1"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/credentials",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > register 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"email":"synthetic@example.invalid","password":"synthetic-password","setup_token":"synthetic-setup-proof"}",
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/register",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > removeUserVehicleMembership 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/admin/users/user-1/vehicles/vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > removeVehicleMember 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/members/user-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > requestBackupRestore 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/restore-requests",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > resumeSession 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "signal": "AbortSignal",
+      "url": "https://synthetic.example.invalid/v1/auth/bootstrap",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > revokeAccountInvitation 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/admin/account-invitations/item/a b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > revokeApiKey 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/api-keys/item/a b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > revokeUserInvite 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/users/user-1/invites/invite-1/revoke",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > revokeVehicleInvite 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "DELETE",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/invites/invite-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > runBackupNow 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/run",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > searchPlaceAddresses 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/places/search?q=Lake+%26+city&limit=12",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > setDefaultVehicle 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/default",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > setup 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/auth/setup",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > startAccountInvitationOidc 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"token":"synthetic-invitation"}",
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/account-invitations/oidc/start",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > startBackupRestore 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/restores",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > startOidc 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"return_to":"/trips?view=all"}",
+      "credentials": "include",
+      "headers": {
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/oidc/start",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > startOidcLink 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"return_to":"/trips?view=all"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/oidc/link/start",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > startOidcPasswordSetup 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"new_password":"synthetic-new-password"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/password/oidc/start",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > startVehicleIngestionCapture 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/ingestion-diagnostics/start",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > stopVehicleIngestionCapture 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/ingestion-diagnostics/stop",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > testAuthenticationSettings 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/settings/authentication/test",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > testBackupS3 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/s3/test",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > testExternalConnection 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/settings/external-connections/item%2Fa%20b/test",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > triggerBackfill 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/backfill",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > unlinkOidc 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"current_password":"synthetic-current-password"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/auth/oidc/unlink",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateAppTimezone 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"timezone":"Etc/UTC"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/settings/timezone",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateAuthenticationSettings 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/settings/authentication",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateBackupSettings 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/admin/backups/settings",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateChargeSession 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PATCH",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/charging-sessions/charge-1",
+    },
+  ],
+  "result": {
+    "api_ended_at": null,
+    "api_started_at": null,
+    "charger_id": null,
+    "charger_type": null,
+    "cost_method": null,
+    "cost_override_mode": null,
+    "cost_override_usd": null,
+    "cost_usd": null,
+    "currency_code": null,
+    "data_confidence": null,
+    "duration_min": null,
+    "ended_at": null,
+    "energy_added_kwh": 9,
+    "id": "record-1",
+    "is_free_session": null,
+    "is_public": null,
+    "is_rivian_network": null,
+    "live_charge_rate_kph": null,
+    "live_charger_state": null,
+    "live_charger_status": null,
+    "live_current_currency": null,
+    "live_current_price": null,
+    "live_power_kw": null,
+    "live_range_added_km": null,
+    "live_soc_pct": null,
+    "live_started_at": null,
+    "live_time_elapsed_seconds": null,
+    "live_time_remaining_min": null,
+    "live_total_charged_kwh": null,
+    "location_lat": null,
+    "location_lng": null,
+    "location_name": null,
+    "location_override_mode": null,
+    "network_vendor": null,
+    "peak_power_kw": 7,
+    "range_added_km": null,
+    "rivian_charger_type": null,
+    "rivian_city": null,
+    "rivian_paid_total": null,
+    "session_day_local": null,
+    "soc_end": null,
+    "soc_start": null,
+    "source": null,
+    "source_location_lat": null,
+    "source_location_lng": null,
+    "started_at": "2026-01-01T00:00:00Z",
+    "telemetry_sample_count": 0,
+    "vehicle_id": "vehicle-1",
+  },
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateChargingNetworkPreference 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"cost_mode":"free"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PATCH",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/charging-networks/Network%2FA%20%26%20B",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateDashboardChartFavorite 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"key":"dashboard:key","chart_id":"chart-1"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/auth/preferences/chart-favorites",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateDepartureSchedule 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PATCH",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/departure-schedules/schedule-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateExternalConnection 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/settings/external-connections/item%2Fa%20b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updatePlace 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/places/item/a b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateThemePreferences 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"theme":{"mode":"dark"}}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/auth/preferences",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateTripTag 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PATCH",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/trip-tags/tag-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateTripTagAssignments 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "POST",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/trip-tags/assignments",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateUnitPreferences 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"units":{"distance":"mi"},"theme":{"mode":"dark"}}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/auth/preferences",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateUpdateCheckSettings 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/settings/update-check",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateUser 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PATCH",
+      "url": "https://synthetic.example.invalid/v1/admin/users/item/a b",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateUserVehicleMembership 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"role":"viewer"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PATCH",
+      "url": "https://synthetic.example.invalid/v1/admin/users/user-1/vehicles/vehicle-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateVehicleBatteryConfig 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/battery-config",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateVehicleMember 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/members/user-1",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateVehicleName 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"name":"Synthetic name"}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/name",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > updateVehicleSettings 1`] = `
+{
+  "requests": [
+    {
+      "body": "{"synthetic":"body","nullable":null}",
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "PUT",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/settings",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > vehicleImages 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/images",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
+
+exports[`complete endpoint request/response characterization > vehicleStatus 1`] = `
+{
+  "requests": [
+    {
+      "credentials": "include",
+      "headers": {
+        "Authorization": "Bearer synthetic-access",
+        "Content-Type": "application/json",
+      },
+      "method": "GET",
+      "url": "https://synthetic.example.invalid/v1/vehicles/vehicle-1/status",
+    },
+  ],
+  "result": "unchanged synthetic response",
+}
+`;
