@@ -5,7 +5,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveTime, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,6 +26,14 @@ use crate::{
         app_settings, backups as backup_service, restore_compatibility, restore_jobs, s3_backups,
     },
 };
+
+use crate::services::backups::calendar;
+#[path = "backups/import.rs"]
+mod import;
+#[path = "backups/read_runs.rs"]
+mod read_runs;
+#[path = "backups/settings.rs"]
+mod settings;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -485,135 +493,7 @@ async fn upload_backup_artifact_admitted(
     headers: HeaderMap,
     body: Body,
 ) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
-    let declared_size = headers
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
-    if declared_size.is_some_and(|size| size > state.config.recovery.max_upload_bytes) {
-        return Err(AppError::RecoveryTooLarge(
-            "Recovery package exceeds the configured upload limit.".into(),
-        ));
-    }
-    let original_name = headers
-        .get("x-panda-file-name")
-        .and_then(|value| value.to_str().ok())
-        .map(sanitize_upload_name)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "external-backup.rma.tar.gz".into());
-    if !original_name.ends_with(".rma.tar.gz") {
-        return Err(AppError::Validation(
-            "Upload a Panda .rma.tar.gz recovery package.".into(),
-        ));
-    }
-    let run_id = Uuid::new_v4();
-    let root = std::path::Path::new(&state.config.backup_artifact_dir);
-    fs::create_dir_all(root).await?;
-    ensure_recovery_free_space(root, state.config.recovery.min_free_bytes)?;
-    let destination = crate::services::artifact_files::StagingFile::upload(root, run_id)?;
-    let final_path = destination.path.clone();
-    let final_name = destination.file_name().to_owned();
-    let upload_result = async {
-        sqlx::query(
-            "INSERT INTO panda.backup_runs (id, trigger, status, phase, progress_percent, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', 'queued', 0, $2, now(), now())",
-        )
-        .bind(run_id)
-        .bind(auth.user_id)
-        .execute(&state.pool)
-        .await?;
-        sqlx::query(
-            "UPDATE panda.backup_runs SET phase = 'uploading', progress_percent = 10, updated_at = now() WHERE id = $1 AND status = 'running'",
-        )
-        .bind(run_id)
-        .execute(&state.pool)
-        .await?;
-        let mut output = fs::File::from_std(destination.file.try_clone()?);
-        let mut stream = body.into_data_stream();
-        let deadline = Instant::now()
-            + TokioDuration::from_secs(state.config.recovery.upload_deadline_seconds);
-        let mut received = 0_u64;
-        while let Some(chunk) = tokio::time::timeout_at(deadline, futures::StreamExt::next(&mut stream)).await
-            .map_err(|_| AppError::RecoveryDeadline("Recovery upload exceeded the configured deadline.".into()))? {
-            if Instant::now() >= deadline {
-                return Err(AppError::RecoveryDeadline(
-                    "Recovery upload exceeded the configured deadline.".into(),
-                ));
-            }
-            let chunk = chunk.map_err(|error| {
-                AppError::Validation(format!("Backup upload was interrupted: {error}"))
-            })?;
-            received = received.checked_add(chunk.len() as u64).ok_or_else(|| {
-                AppError::RecoveryTooLarge("Recovery upload size overflowed.".into())
-            })?;
-            if received > state.config.recovery.max_upload_bytes {
-                return Err(AppError::RecoveryTooLarge(
-                    "Recovery package exceeds the configured upload limit.".into(),
-                ));
-            }
-            ensure_recovery_free_space(root, state.config.recovery.min_free_bytes.saturating_add(chunk.len() as u64))?;
-            output.write_all(&chunk).await?;
-        }
-        output.flush().await?;
-        drop(output);
-
-        sqlx::query(
-            "UPDATE panda.backup_runs SET phase = 'validating', progress_percent = 90, updated_at = now() WHERE id = $1 AND status = 'running'",
-        )
-        .bind(run_id)
-        .execute(&state.pool)
-        .await?;
-        let mut opened = destination.file.try_clone()?;
-        std::io::Seek::seek(&mut opened, std::io::SeekFrom::Start(0))?;
-        let validated = backup_service::validate_open_recovery_package(opened, &state.config.recovery).await?;
-        destination.publish()?;
-        let storage_path = final_path.to_string_lossy().into_owned();
-        let manifest = serde_json::json!({
-            "artifact_kind": "recovery_package",
-            "format": validated.manifest.get("format").cloned().unwrap_or(serde_json::Value::Null),
-            "original_file_name": original_name,
-            "package": validated.manifest,
-        });
-        let artifact_id: Uuid = sqlx::query_scalar(
-            r#"
-            INSERT INTO panda.backup_artifacts (
-                run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest
-            ) VALUES ($1, 'uploaded', $2, $3, $4, $5, $6)
-            RETURNING id
-            "#,
-        )
-        .bind(run_id)
-        .bind(&final_name)
-        .bind(&storage_path)
-        .bind(validated.size_bytes)
-        .bind(&validated.checksum_sha256)
-        .bind(manifest)
-        .fetch_one(&state.pool)
-        .await?;
-        sqlx::query(
-            "UPDATE panda.backup_runs SET status = 'succeeded', phase = 'completed', progress_percent = 100, artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1 AND status = 'running'",
-        )
-        .bind(run_id)
-        .bind(&storage_path)
-        .execute(&state.pool)
-        .await?;
-        load_artifact_by_id(&state, artifact_id).await
-    }
-    .await;
-
-    let response = match upload_result {
-        Ok(artifact) => Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact }))),
-        Err(error) => {
-            let _ = crate::services::artifact_files::remove(root, &final_path);
-            let _ = sqlx::query(
-                "UPDATE panda.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1 AND status = 'running'",
-            )
-            .bind(run_id)
-            .bind(error.to_string())
-            .execute(&state.pool)
-            .await;
-            Err(error)
-        }
-    };
-    response
+    import::execute(state, auth, headers, body).await
 }
 
 fn ensure_recovery_free_space(path: &std::path::Path, minimum: u64) -> Result<(), AppError> {
@@ -939,111 +819,7 @@ async fn update_backup_settings(
     Json(body): Json<UpdateBackupSettingsBody>,
 ) -> Result<Json<BackupSettingsResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
-
-    let run_at = parse_run_time(&body.run_at)?;
-    let timezone = parse_timezone(&body.timezone)?;
-    validate_schedule(&body.frequency, body.day_of_week, body.day_of_month)?;
-    validate_target(
-        body.target_type,
-        body.local_enabled,
-        body.s3_enabled,
-        &body.endpoint,
-        &body.bucket,
-    )?;
-
-    let normalized_day_of_week = match body.frequency {
-        BackupFrequency::Weekly => body.day_of_week,
-        _ => None,
-    };
-    let normalized_day_of_month = match body.frequency {
-        BackupFrequency::Monthly => body.day_of_month,
-        _ => None,
-    };
-
-    let normalized_endpoint = body.endpoint.trim().to_string();
-    let normalized_region = body
-        .region
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    let normalized_bucket = body.bucket.trim().to_string();
-    if body.s3_enabled {
-        crate::services::s3_transport::S3Policy::from_config(&state.config)?
-            .validate_endpoint(&body.endpoint)
-            .await?;
-    }
-    let normalized_prefix = normalize_prefix(&body.prefix)?;
-    let normalized_access_key = body
-        .access_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    let clear_secret_key = body.clear_secret_key.unwrap_or(false);
-    let encrypted_secret = encrypt_secret(state.age_key.as_str(), body.secret_key.as_deref())?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO panda.backup_settings (
-            id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
-            retention_count, local_enabled, s3_enabled, target_type, endpoint, region, bucket, prefix,
-            access_key, secret_key_encrypted, updated_at, updated_by
-        )
-        VALUES (
-            TRUE, $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10, $11, $12, $13, $14,
-            $15, $16, now(), $17
-        )
-        ON CONFLICT (id) DO UPDATE SET
-            enabled = EXCLUDED.enabled,
-            frequency = EXCLUDED.frequency,
-            run_at = EXCLUDED.run_at,
-            timezone = EXCLUDED.timezone,
-            day_of_week = EXCLUDED.day_of_week,
-            day_of_month = EXCLUDED.day_of_month,
-            retention_count = EXCLUDED.retention_count,
-            local_enabled = EXCLUDED.local_enabled,
-            s3_enabled = EXCLUDED.s3_enabled,
-            target_type = EXCLUDED.target_type,
-            endpoint = EXCLUDED.endpoint,
-            region = EXCLUDED.region,
-            bucket = EXCLUDED.bucket,
-            prefix = EXCLUDED.prefix,
-            access_key = EXCLUDED.access_key,
-            secret_key_encrypted = CASE
-                WHEN $18 THEN NULL
-                WHEN $16 IS NOT NULL THEN $16
-                ELSE panda.backup_settings.secret_key_encrypted
-            END,
-            updated_at = now(),
-            updated_by = EXCLUDED.updated_by
-        "#,
-    )
-    .bind(body.enabled)
-    .bind(body.frequency.as_str())
-    .bind(run_at)
-    .bind(timezone.name())
-    .bind(normalized_day_of_week)
-    .bind(normalized_day_of_month)
-    .bind(body.retention_count)
-    .bind(body.local_enabled)
-    .bind(body.s3_enabled)
-    .bind(body.target_type.as_str())
-    .bind(normalized_endpoint)
-    .bind(normalized_region)
-    .bind(normalized_bucket)
-    .bind(normalized_prefix)
-    .bind(normalized_access_key)
-    .bind(encrypted_secret)
-    .bind(auth.user_id)
-    .bind(clear_secret_key)
-    .execute(&state.pool)
-    .await?;
-
-    app_settings::set_app_timezone(&state.pool, timezone).await?;
-
-    Ok(Json(load_settings(&state).await?))
+    settings::update(&state, auth.user_id, body).await.map(Json)
 }
 
 struct MaterializedArtifact {
@@ -1307,40 +1083,15 @@ async fn load_recent_runs(
     page: u32,
     per_page: u32,
 ) -> Result<Vec<BackupRunResponse>, AppError> {
-    let limit = i64::from(per_page);
-    let offset = i64::from(page.saturating_sub(1)) * i64::from(per_page);
-    let rows = sqlx::query_as::<_, BackupRunRow>(
-        r#"
-        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
-        FROM panda.backup_runs
-        ORDER BY created_at DESC
-        LIMIT $1 OFFSET $2
-        "#,
-    )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await?;
-
-    rows.into_iter().map(map_run_row).collect()
+    read_runs::Selection::Page { page, per_page }
+        .many(state)
+        .await
 }
-
 async fn load_run_by_id(state: &AppState, run_id: Uuid) -> Result<BackupRunResponse, AppError> {
-    let row = sqlx::query_as::<_, BackupRunRow>(
-        r#"
-        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
-        FROM panda.backup_runs
-        WHERE id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    match row {
-        Some(row) => map_run_row(row),
-        None => Err(AppError::NotFound),
-    }
+    read_runs::Selection::Id(run_id)
+        .optional(state)
+        .await?
+        .ok_or(AppError::NotFound)
 }
 
 async fn load_artifacts(state: &AppState) -> Result<Vec<BackupArtifactResponse>, AppError> {
@@ -1420,19 +1171,7 @@ async fn load_restore_request_by_id(
 async fn load_latest_successful_run(
     state: &AppState,
 ) -> Result<Option<BackupRunResponse>, AppError> {
-    let row = sqlx::query_as::<_, BackupRunRow>(
-        r#"
-        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
-        FROM panda.backup_runs
-        WHERE status = 'succeeded'
-        ORDER BY completed_at DESC NULLS LAST, created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .fetch_optional(&state.pool)
-    .await?;
-
-    row.map(map_run_row).transpose()
+    read_runs::Selection::LatestSuccess.optional(state).await
 }
 
 fn map_settings_row(
@@ -1637,88 +1376,31 @@ fn compute_next_run(settings: &BackupSettingsResponse) -> Result<Option<DateTime
 }
 
 fn next_daily_run(now_local: chrono::DateTime<Tz>, run_at: NaiveTime) -> chrono::DateTime<Tz> {
-    let candidate = combine_local(now_local.timezone(), now_local.date_naive(), run_at);
-    if candidate <= now_local {
-        combine_local(
-            now_local.timezone(),
-            now_local.date_naive() + Duration::days(1),
-            run_at,
-        )
-    } else {
-        candidate
-    }
+    calendar::occurrence(now_local, run_at, calendar::Cadence::Daily, true)
 }
-
 fn next_weekly_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
     day_of_week: i16,
 ) -> chrono::DateTime<Tz> {
-    let current = now_local.weekday().num_days_from_sunday() as i16;
-    let mut days_until = (day_of_week - current + 7) % 7;
-    let mut candidate_date = now_local.date_naive() + Duration::days(i64::from(days_until));
-    let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-
-    if candidate <= now_local {
-        days_until = 7;
-        candidate_date += Duration::days(i64::from(days_until));
-        candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-    }
-
-    candidate
+    calendar::occurrence(
+        now_local,
+        run_at,
+        calendar::Cadence::Weekly(day_of_week),
+        true,
+    )
 }
-
 fn next_monthly_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
     day_of_month: i16,
 ) -> chrono::DateTime<Tz> {
-    let current_date = now_local.date_naive();
-    let current_month_day =
-        clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
-    let mut candidate_date =
-        NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
-            .unwrap_or(current_date);
-    let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-
-    if candidate <= now_local {
-        let (year, month) = if current_date.month() == 12 {
-            (current_date.year() + 1, 1)
-        } else {
-            (current_date.year(), current_date.month() + 1)
-        };
-        let next_day = clamp_day_of_month(year, month, day_of_month);
-        candidate_date = NaiveDate::from_ymd_opt(year, month, next_day).unwrap_or(current_date);
-        candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-    }
-
-    candidate
-}
-
-fn clamp_day_of_month(year: i32, month: u32, day_of_month: i16) -> u32 {
-    let max_day = days_in_month(year, month);
-    (day_of_month.max(1) as u32).min(max_day)
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    let first_of_next_month = NaiveDate::from_ymd_opt(next_year, next_month, 1)
-        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year, month, 1).expect("valid month"));
-    let last_of_current_month = first_of_next_month - Duration::days(1);
-    last_of_current_month.day()
-}
-
-fn combine_local(timezone: Tz, date: NaiveDate, time: NaiveTime) -> chrono::DateTime<Tz> {
-    let naive = NaiveDateTime::new(date, time);
-    match timezone.from_local_datetime(&naive) {
-        chrono::LocalResult::Single(value) => value,
-        chrono::LocalResult::Ambiguous(first, second) => first.min(second),
-        chrono::LocalResult::None => timezone.from_utc_datetime(&naive),
-    }
+    calendar::occurrence(
+        now_local,
+        run_at,
+        calendar::Cadence::Monthly(day_of_month),
+        true,
+    )
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {

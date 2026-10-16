@@ -1,11 +1,8 @@
 use super::*;
+use crate::services::backups::workflow_test_support as support;
 use serde_json::json;
-#[allow(dead_code)]
-#[path = "support.rs"]
-mod support;
 
-#[path = "s3_fixture.rs"]
-mod fixture;
+use crate::services::s3_backups::workflow_test_transport as fixture;
 use fixture::*;
 
 #[tokio::test]

@@ -11,13 +11,13 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
-pub(super) struct Reply {
-    pub(super) method: &'static str,
-    pub(super) status: u16,
-    pub(super) headers: Vec<(&'static str, String)>,
-    pub(super) body: Vec<u8>,
+pub(crate) struct Reply {
+    pub(crate) method: &'static str,
+    pub(crate) status: u16,
+    pub(crate) headers: Vec<(&'static str, String)>,
+    pub(crate) body: Vec<u8>,
 }
-pub(super) fn reply(method: &'static str, status: u16, body: impl Into<Vec<u8>>) -> Reply {
+pub(crate) fn reply(method: &'static str, status: u16, body: impl Into<Vec<u8>>) -> Reply {
     Reply {
         method,
         status,
@@ -25,14 +25,14 @@ pub(super) fn reply(method: &'static str, status: u16, body: impl Into<Vec<u8>>)
         body: body.into(),
     }
 }
-pub(super) struct Fake {
-    pub(super) settings: S3Settings,
+pub(crate) struct Fake {
+    pub(crate) settings: S3Settings,
     replies: Arc<Mutex<VecDeque<Reply>>>,
     calls: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Fake {
-    pub(super) async fn new(name: &str, replies: Vec<Reply>) -> Self {
+    pub(crate) async fn new(name: &str, replies: Vec<Reply>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let settings = S3Settings {
@@ -80,7 +80,7 @@ impl Fake {
             task,
         }
     }
-    pub(super) fn finish(self) -> Value {
+    pub(crate) fn finish(self) -> Value {
         assert!(
             self.replies.lock().unwrap().is_empty(),
             "unconsumed S3 replies"
@@ -89,7 +89,7 @@ impl Fake {
         json!(self.calls.lock().unwrap().clone())
     }
 }
-pub(super) fn head(created: &str, checksum: &str) -> Reply {
+pub(crate) fn head(created: &str, checksum: &str) -> Reply {
     Reply {
         method: "HEAD",
         status: 200,
@@ -101,7 +101,7 @@ pub(super) fn head(created: &str, checksum: &str) -> Reply {
         body: vec![],
     }
 }
-pub(super) fn error(method: &'static str) -> Reply {
+pub(crate) fn error(method: &'static str) -> Reply {
     reply(
         method,
         400,

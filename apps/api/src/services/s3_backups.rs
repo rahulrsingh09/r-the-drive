@@ -16,6 +16,9 @@ use tokio::fs::{self, File};
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
+mod catalog;
+mod multipart;
+
 const MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
 const MULTIPART_PART_SIZE: usize = 64 * 1024 * 1024;
 const MAX_CATALOG_OBJECTS: usize = 100;
@@ -224,81 +227,7 @@ async fn multipart_upload(
     path: &Path,
     metadata: HashMap<String, String>,
 ) -> Result<()> {
-    let client = client(settings)?;
-    let upload = client
-        .create_multipart_upload()
-        .bucket(&settings.bucket)
-        .key(key)
-        .set_metadata(Some(metadata))
-        .send()
-        .await
-        .context("could not start S3 multipart upload")?;
-    let upload_id = upload
-        .upload_id()
-        .context("S3 did not return a multipart upload id")?
-        .to_string();
-    let result = async {
-        let mut file = File::open(path).await?;
-        let mut completed = Vec::new();
-        let mut part_number = 1;
-        loop {
-            let mut buffer = vec![0_u8; MULTIPART_PART_SIZE];
-            let mut read = 0;
-            while read < buffer.len() {
-                let count = file.read(&mut buffer[read..]).await?;
-                if count == 0 {
-                    break;
-                }
-                read += count;
-            }
-            if read == 0 {
-                break;
-            }
-            buffer.truncate(read);
-            let output = client
-                .upload_part()
-                .bucket(&settings.bucket)
-                .key(key)
-                .upload_id(&upload_id)
-                .part_number(part_number)
-                .body(ByteStream::from(buffer))
-                .send()
-                .await
-                .with_context(|| format!("S3 multipart upload failed at part {part_number}"))?;
-            completed.push(
-                CompletedPart::builder()
-                    .part_number(part_number)
-                    .set_e_tag(output.e_tag().map(str::to_string))
-                    .build(),
-            );
-            part_number += 1;
-        }
-        client
-            .complete_multipart_upload()
-            .bucket(&settings.bucket)
-            .key(key)
-            .upload_id(&upload_id)
-            .multipart_upload(
-                CompletedMultipartUpload::builder()
-                    .set_parts(Some(completed))
-                    .build(),
-            )
-            .send()
-            .await
-            .context("could not complete S3 multipart upload")?;
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-    if result.is_err() {
-        let _ = client
-            .abort_multipart_upload()
-            .bucket(&settings.bucket)
-            .key(key)
-            .upload_id(&upload_id)
-            .send()
-            .await;
-    }
-    result
+    multipart::transfer(settings, key, path, metadata).await
 }
 
 pub async fn download(
@@ -367,64 +296,7 @@ pub async fn delete(settings: &S3Settings, key: &str) -> Result<()> {
 }
 
 pub async fn list(settings: &S3Settings) -> Result<Vec<RemoteObject>> {
-    let client = client(settings)?;
-    let prefix = normalize_prefix(&settings.prefix)?;
-    let mut continuation = None;
-    let mut rows = Vec::new();
-    loop {
-        let response = client
-            .list_objects_v2()
-            .bucket(&settings.bucket)
-            .set_prefix((!prefix.is_empty()).then_some(prefix.clone()))
-            .set_continuation_token(continuation)
-            .send()
-            .await
-            .context("S3 catalog listing failed")?;
-        for object in response.contents() {
-            let Some(key) = object.key() else {
-                continue;
-            };
-            if !key.ends_with(".rma.tar.gz") {
-                continue;
-            }
-            let head = client
-                .head_object()
-                .bucket(&settings.bucket)
-                .key(key)
-                .send()
-                .await
-                .context("S3 catalog metadata lookup failed")?;
-            let metadata = head.metadata().cloned().unwrap_or_default();
-            let created_at = metadata
-                .get("panda-created-at")
-                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&Utc))
-                .or_else(|| {
-                    object
-                        .last_modified()
-                        .and_then(|value| DateTime::parse_from_rfc3339(&value.to_string()).ok())
-                        .map(|value| value.with_timezone(&Utc))
-                })
-                .unwrap_or_else(Utc::now);
-            rows.push(RemoteObject {
-                key: key.to_string(),
-                file_name: key.rsplit('/').next().unwrap_or(key).to_string(),
-                size_bytes: object.size().unwrap_or(0),
-                checksum_sha256: metadata.get("panda-sha256").cloned(),
-                created_at,
-                metadata,
-            });
-            if rows.len() >= MAX_CATALOG_OBJECTS {
-                break;
-            }
-        }
-        if rows.len() >= MAX_CATALOG_OBJECTS || response.is_truncated() != Some(true) {
-            break;
-        }
-        continuation = response.next_continuation_token().map(str::to_string);
-    }
-    rows.sort_by_key(|row| std::cmp::Reverse(row.created_at));
-    Ok(rows)
+    catalog::read(settings).await
 }
 
 #[cfg(test)]
@@ -433,3 +305,7 @@ mod tests;
 #[cfg(test)]
 #[path = "__tests__/backup_workflows/s3.rs"]
 mod workflow_contracts;
+
+#[cfg(test)]
+#[path = "__tests__/backup_workflows/s3_fixture.rs"]
+pub(crate) mod workflow_test_transport;

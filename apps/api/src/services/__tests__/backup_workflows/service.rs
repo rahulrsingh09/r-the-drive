@@ -1,9 +1,7 @@
 use super::*;
 use serde_json::Value;
 
-#[allow(dead_code)]
-#[path = "support.rs"]
-mod support;
+use crate::services::backups::workflow_test_support as support;
 
 #[test]
 fn backup_workflow_schedule_and_selection_contract() {

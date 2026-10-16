@@ -1,8 +1,6 @@
 use super::*;
+use crate::services::s3_backups::workflow_test_transport as fixture;
 use serde_json::Value;
-#[allow(dead_code)]
-#[path = "s3_fixture.rs"]
-mod fixture;
 
 fn redact_clock(value: &mut Value) {
     match value {

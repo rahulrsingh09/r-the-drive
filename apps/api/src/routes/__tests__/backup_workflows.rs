@@ -4,8 +4,7 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-#[path = "../../services/__tests__/backup_workflows/support.rs"]
-mod support;
+use crate::services::backups::workflow_test_support as support;
 use support::{id, DatabaseFixture};
 
 async fn app(db: &DatabaseFixture, root: &std::path::Path) -> AppState {

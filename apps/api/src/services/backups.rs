@@ -6,7 +6,9 @@ use std::{
     time::Duration as StdDuration,
 };
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+#[cfg(test)]
+use chrono::Duration;
+use chrono::{DateTime, NaiveTime, Utc};
 use chrono_tz::Tz;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde_json::json;
@@ -36,6 +38,11 @@ use recovery_admission::RecoveryInventory;
 #[path = "backups_recovery_stream.rs"]
 mod recovery_stream;
 use recovery_stream::{check_deadline, stream_error, CompressedInput, TarEnvelope};
+
+#[path = "backups/calendar.rs"]
+pub(crate) mod calendar;
+#[path = "backups/publication.rs"]
+mod publication;
 
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 const RECOVERY_MUTATION_ADVISORY_LOCK_ID: i64 = 2_042_051_102;
@@ -483,191 +490,14 @@ async fn run_backup_inner_for_run(
             return Err(error);
         }
     };
-    let driver = BackupDriver::from_config(&config.backup_driver);
     let created_at = Utc::now();
-    let artifact_path = build_artifact_path(config, &settings.prefix, created_at, run_id)?;
-
-    let execution = async {
-        update_backup_progress(pool, run_id, "preparing", 5).await?;
-
-        fs::create_dir_all(&config.backup_artifact_dir).await?;
-
-        let package_manifest = execute_recovery_package(
-            pool,
-            config,
-            run_id,
-            &artifact_path,
-            trigger,
-            created_at,
-        )
-        .await?;
-
-        let storage_path = artifact_path.to_string_lossy().into_owned();
-        let file_name = artifact_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("backup artifact path is invalid")))?
-            .to_string();
-        let opened = crate::services::artifact_files::open(Path::new(&config.backup_artifact_dir), &artifact_path)?;
-        let metadata = opened.metadata()?;
-        let checksum_sha256 = validate_open_recovery_package(opened, &config.recovery).await?.checksum_sha256;
-        let database_name = current_database_name(pool).await?;
-        let timescale_version = current_timescale_version(pool).await?;
-        let base_manifest = json!({
-            "artifact_kind": driver.label(),
-            "format": RECOVERY_PACKAGE_FORMAT,
-            "package": package_manifest,
-            "created_at": created_at,
-            "database": database_name,
-            "timescale_version": timescale_version,
-            "trigger": trigger.as_str(),
-            "prefix": settings.prefix,
-            "retention_count": settings.retention_count,
-        });
-        let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-        let retain_local = settings.local_enabled || matches!(trigger, BackupRunTrigger::PreRestore)
-            || crate::private_deployment::history_backup::configured();
-        let mut artifact_ids = Vec::new();
-        if retain_local {
-            let storage_type = if matches!(trigger, BackupRunTrigger::PreRestore) { "safety" } else { "local" };
-            artifact_ids.push(
-                insert_artifact(
-                    pool,
-                    InsertArtifactParams {
-                        run_id: Some(run_id),
-                        storage_type,
-                        file_name: &file_name,
-                        storage_path: &storage_path,
-                        size_bytes,
-                        checksum_sha256: &checksum_sha256,
-                        manifest: with_storage(&base_manifest, storage_type, false),
-                    },
-                )
-                .await?,
-            );
-        }
-
-        let mut published_key = retain_local.then_some(storage_path.clone());
-        if settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore) {
-            update_backup_progress(pool, run_id, "uploading", 92).await?;
-            let s3 = settings.s3.as_ref().ok_or_else(|| AppError::Validation("S3 is enabled but its credentials are incomplete".into()))?;
-            let key = s3_backups::object_key(&settings.prefix, created_at, run_id).map_err(|e| AppError::Validation(e.to_string()))?;
-            if let Err(error) = s3_backups::upload(s3, &key, &artifact_path, &checksum_sha256, run_id, created_at).await {
-                if !retain_local {
-                    artifact_ids.push(
-                        insert_artifact(
-                            pool,
-                            InsertArtifactParams {
-                                run_id: Some(run_id),
-                                storage_type: "local",
-                                file_name: &file_name,
-                                storage_path: &storage_path,
-                                size_bytes,
-                                checksum_sha256: &checksum_sha256,
-                                manifest: with_storage(&base_manifest, "local", true),
-                            },
-                        )
-                        .await?,
-                    );
-                }
-                return Err(AppError::DependencyUnavailable(format!("S3 upload failed; the recovery package was retained locally at {storage_path}: {error}")));
-            }
-            let remote_locator = s3_backups::locator(&s3.bucket, &key);
-            artifact_ids.push(
-                insert_artifact(
-                    pool,
-                    InsertArtifactParams {
-                        run_id: Some(run_id),
-                        storage_type: "s3",
-                        file_name: &file_name,
-                        storage_path: &remote_locator,
-                        size_bytes,
-                        checksum_sha256: &checksum_sha256,
-                        manifest: with_storage(&base_manifest, "s3", false),
-                    },
-                )
-                .await?,
-            );
-            published_key = Some(remote_locator);
-        }
-
-        if !matches!(trigger, BackupRunTrigger::PreRestore) {
-            crate::private_deployment::history_backup::mirror(config, &artifact_path).await?;
-        }
-        update_backup_progress(pool, run_id, "finalizing", 98).await?;
-        prune_retained_artifacts(pool, config, settings.retention_count).await?;
-        if let Some(s3) = settings.s3.as_ref().filter(|_| settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore)) {
-            if let Err(error) = prune_remote_artifacts(pool, s3, settings.retention_count).await {
-                if !retain_local {
-                    artifact_ids.push(
-                        insert_artifact(
-                            pool,
-                            InsertArtifactParams {
-                                run_id: Some(run_id),
-                                storage_type: "local",
-                                file_name: &file_name,
-                                storage_path: &storage_path,
-                                size_bytes,
-                                checksum_sha256: &checksum_sha256,
-                                manifest: with_storage(&base_manifest, "local", true),
-                            },
-                        )
-                        .await?,
-                    );
-                }
-                return Err(AppError::DependencyUnavailable(format!(
-                    "S3 retention failed; the recovery package was retained locally at {storage_path}: {error}"
-                )));
-            }
-        }
-        if settings.s3_enabled && !retain_local && !matches!(trigger, BackupRunTrigger::PreRestore) {
-            if let Err(error) = fs::remove_file(&artifact_path).await {
-                tracing::warn!(
-                    path = %artifact_path.display(),
-                    error = %error,
-                    "backup.cleanup.s3_staging_failed"
-                );
-            }
-        }
-
-        sqlx::query(
-            r#"
-            UPDATE panda.backup_runs
-            SET status = 'succeeded', phase = 'completed', progress_percent = 100,
-                artifact_key = $2, completed_at = now(), updated_at = now(), error_message = NULL
-            WHERE id = $1 AND status = 'running'
-            "#,
-        )
-        .bind(run_id)
-        .bind(published_key)
-        .execute(pool)
-        .await?;
-
-        Ok::<BackupExecutionResult, AppError>(BackupExecutionResult { run_id, artifact_ids })
+    let path = build_artifact_path(config, &settings.prefix, created_at, run_id)?;
+    let result =
+        publication::execute(pool, config, &settings, run_id, trigger, created_at, &path).await;
+    if let Err(error) = &result {
+        publication::fail(pool, run_id, &path, error).await?;
     }
-    .await;
-
-    if let Err(error) = &execution {
-        mark_backup_run_failed(pool, run_id, error).await?;
-
-        let package_is_cataloged_locally: bool = sqlx::query_scalar(
-            r#"
-            SELECT EXISTS(
-                SELECT 1
-                FROM panda.backup_artifacts
-                WHERE run_id = $1 AND storage_type IN ('local', 'safety')
-            )
-            "#,
-        )
-        .bind(run_id)
-        .fetch_one(pool)
-        .await?;
-        if !package_is_cataloged_locally && fs::try_exists(&artifact_path).await.unwrap_or(false) {
-            let _ = fs::remove_file(&artifact_path).await;
-        }
-    }
-
-    execution
+    result
 }
 
 async fn mark_backup_run_failed(
@@ -2029,88 +1859,31 @@ fn most_recent_daily_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
 ) -> chrono::DateTime<Tz> {
-    let candidate = combine_local(now_local.timezone(), now_local.date_naive(), run_at);
-    if candidate <= now_local {
-        candidate
-    } else {
-        combine_local(
-            now_local.timezone(),
-            now_local.date_naive() - Duration::days(1),
-            run_at,
-        )
-    }
+    calendar::occurrence(now_local, run_at, calendar::Cadence::Daily, false)
 }
-
 fn most_recent_weekly_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
     day_of_week: i16,
 ) -> chrono::DateTime<Tz> {
-    let current = now_local.weekday().num_days_from_sunday() as i16;
-    let mut days_back = (current - day_of_week + 7) % 7;
-    let mut candidate_date = now_local.date_naive() - Duration::days(i64::from(days_back));
-    let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-
-    if candidate > now_local {
-        days_back = 7;
-        candidate_date -= Duration::days(i64::from(days_back));
-        candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-    }
-
-    candidate
+    calendar::occurrence(
+        now_local,
+        run_at,
+        calendar::Cadence::Weekly(day_of_week),
+        false,
+    )
 }
-
 fn most_recent_monthly_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
     day_of_month: i16,
 ) -> chrono::DateTime<Tz> {
-    let current_date = now_local.date_naive();
-    let current_month_day =
-        clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
-    let mut candidate_date =
-        NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
-            .unwrap_or(current_date);
-    let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-
-    if candidate > now_local {
-        let (year, month) = if current_date.month() == 1 {
-            (current_date.year() - 1, 12)
-        } else {
-            (current_date.year(), current_date.month() - 1)
-        };
-        let previous_day = clamp_day_of_month(year, month, day_of_month);
-        candidate_date = NaiveDate::from_ymd_opt(year, month, previous_day).unwrap_or(current_date);
-        candidate = combine_local(now_local.timezone(), candidate_date, run_at);
-    }
-
-    candidate
-}
-
-fn clamp_day_of_month(year: i32, month: u32, day_of_month: i16) -> u32 {
-    let max_day = days_in_month(year, month);
-    (day_of_month.max(1) as u32).min(max_day)
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    let (next_year, next_month) = if month == 12 {
-        (year + 1, 1)
-    } else {
-        (year, month + 1)
-    };
-    let first_of_next_month = NaiveDate::from_ymd_opt(next_year, next_month, 1)
-        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year, month, 1).expect("valid month"));
-    let last_of_current_month = first_of_next_month - Duration::days(1);
-    last_of_current_month.day()
-}
-
-fn combine_local(timezone: Tz, date: NaiveDate, time: NaiveTime) -> chrono::DateTime<Tz> {
-    let naive = NaiveDateTime::new(date, time);
-    match timezone.from_local_datetime(&naive) {
-        chrono::LocalResult::Single(value) => value,
-        chrono::LocalResult::Ambiguous(first, second) => first.min(second),
-        chrono::LocalResult::None => timezone.from_utc_datetime(&naive),
-    }
+    calendar::occurrence(
+        now_local,
+        run_at,
+        calendar::Cadence::Monthly(day_of_month),
+        false,
+    )
 }
 
 fn should_log_scheduler_failure(
@@ -2540,3 +2313,7 @@ mod recovery_operations_tests;
 #[cfg(test)]
 #[path = "__tests__/backup_workflows/service.rs"]
 mod workflow_contracts;
+
+#[cfg(test)]
+#[path = "__tests__/backup_workflows/support.rs"]
+pub(crate) mod workflow_test_support;
