@@ -167,7 +167,7 @@ describe('session coordination and bounded retries', () => {
     const result = client.vehicleStatus('a');
     client.setToken(null);
     pending.resolve(denied());
-    await expect(result).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    await expect(result).rejects.toMatchObject({ code: 'SESSION_CHANGED' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

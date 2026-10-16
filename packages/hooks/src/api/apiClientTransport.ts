@@ -182,10 +182,17 @@ export class RequestTransport {
   private accessToken: string | null = null;
   private authChangeHandler: AuthChangeHandler | null = null;
   private refreshPromise: Promise<AuthTokens | null> | null = null;
+  private sessionGeneration = 0;
   private authExpiredReported = false;
   private rateLimitCooldowns = new Map<string, number>();
 
   setToken(token: string | null) {
+    // Explicit clearing also invalidates a bootstrap that began without a token.
+    // Publishing a renewal below is still part of the same session generation.
+    if (token === null || token !== this.accessToken) {
+      this.sessionGeneration++;
+      this.refreshPromise = null;
+    }
     this.accessToken = token;
     if (token) this.authExpiredReported = false;
   }
@@ -195,39 +202,39 @@ export class RequestTransport {
   }
 
   private applyTokens(tokens: AuthTokens) {
-    this.setToken(tokens.access_token);
+    this.accessToken = tokens.access_token;
     this.authExpiredReported = false;
     this.authChangeHandler?.(tokens);
   }
 
   private clearTokens() {
-    this.setToken(null);
+    // Shared waiters for this rejected renewal retain their AUTH_EXPIRED result.
+    // Explicit logout/account replacement goes through setToken and changes generation.
+    this.accessToken = null;
     this.authChangeHandler?.(null);
   }
 
   protected renewSession(bootstrap = false): Promise<AuthTokens | null> {
     if (!this.refreshPromise) {
-      this.refreshPromise = withSessionLock(async () => {
+      const generation = this.sessionGeneration;
+      const pending = withSessionLock(async () => {
+        this.assertSessionGeneration(generation);
         const abort = new AbortController();
         const timeout = setTimeout(() => abort.abort(), 30_000);
         try {
-          const res = await this.requestResponse(
-            'POST',
-            bootstrap ? '/v1/auth/bootstrap' : '/v1/auth/refresh',
-            undefined,
-            undefined,
-            false,
-            false,
-            undefined,
-            abort.signal
-          );
-          if (res.status === 204) return null;
           const request = {
             method: 'POST',
             path: bootstrap ? '/v1/auth/bootstrap' : '/v1/auth/refresh',
+            retryOnUnauthorized: false,
             reportErrors: false,
+            signal: abort.signal,
+            sessionBound: true,
           };
-          const tokens = await this.decodeJson<AuthTokens>(res, request);
+          const res = await this.send(request);
+          this.assertSessionGeneration(generation);
+          if (res.status === 204) return null;
+          const tokens = await this.decodeJson<AuthTokens>(res, request, generation);
+          this.assertSessionGeneration(generation);
           if (
             !isRecord(tokens) ||
             typeof tokens.access_token !== 'string' ||
@@ -240,12 +247,16 @@ export class RequestTransport {
           }
           this.applyTokens(tokens);
           return tokens;
+        } catch (cause) {
+          this.assertSessionGeneration(generation);
+          throw cause;
         } finally {
           clearTimeout(timeout);
         }
       }).finally(() => {
-        this.refreshPromise = null;
+        if (this.refreshPromise === pending) this.refreshPromise = null;
       });
+      this.refreshPromise = pending;
     }
 
     return this.refreshPromise;
@@ -398,24 +409,38 @@ export class RequestTransport {
       decode?: ((value: Wire) => T | Promise<T>) | ((response: Response) => T | Promise<T>);
     }
   ): Promise<T> {
+    const generation = this.sessionGeneration;
     const response = await this.send(request);
     if (request.response === 'raw') {
-      return (request.decode as (response: Response) => T | Promise<T>)(response);
+      const result = await (request.decode as (response: Response) => T | Promise<T>)(response);
+      this.assertRequestSession(request, generation);
+      return result;
     }
-    const payload = await this.decodeJson<Wire>(response, request);
+    const payload = await this.decodeJson<Wire>(response, request, generation);
+    this.assertRequestSession(request, generation);
     if (!request.decode) return payload as unknown as T;
     try {
-      return await (request.decode as (value: Wire) => T | Promise<T>)(payload);
+      const result = await (request.decode as (value: Wire) => T | Promise<T>)(payload);
+      this.assertRequestSession(request, generation);
+      return result;
     } catch (cause) {
+      this.assertRequestSession(request, generation);
       throw this.responseFailure(response, request, 'INVALID_RESPONSE', cause);
     }
   }
 
-  private async decodeJson<T>(response: Response, request: ApiRequest): Promise<T> {
+  private async decodeJson<T>(
+    response: Response,
+    request: ApiRequest,
+    generation = this.sessionGeneration
+  ): Promise<T> {
     if (response.status === 204) return undefined as T;
     try {
-      return (await response.json()) as T;
+      const payload = (await response.json()) as T;
+      this.assertRequestSession(request, generation);
+      return payload;
     } catch (cause) {
+      this.assertRequestSession(request, generation);
       throw this.responseFailure(response, request, 'INCOMPLETE_RESPONSE', cause);
     }
   }
@@ -461,8 +486,10 @@ export class RequestTransport {
   private async send(request: ApiRequest): Promise<Response> {
     this.assertRateLimitCooldown(request.method, request.path);
     const normalized = normalizeRequest(request);
+    const generation = this.sessionGeneration;
     const tokenAtStart = this.accessToken;
-    const response = await this.fetchAttempt(normalized);
+    const response = await this.fetchAttempt(normalized, generation);
+    this.assertRequestSession(request, generation);
     if (response.ok) return response;
 
     const canRenew =
@@ -473,18 +500,21 @@ export class RequestTransport {
       !AUTH_REFRESH_EXCLUDED_PATHS.has(request.path);
     if (canRenew) {
       // A delayed 401 may belong to a token that another request already renewed.
-      if (this.accessToken === tokenAtStart) await this.recoverSession(response, request);
+      if (this.accessToken === tokenAtStart)
+        await this.recoverSession(response, request, generation);
       this.assertRateLimitCooldown(request.method, request.path);
-      const retry = await this.fetchAttempt(normalized);
+      const retry = await this.fetchAttempt(normalized, generation);
+      this.assertRequestSession(request, generation);
       if (retry.ok) return retry;
-      throw await this.httpFailure(retry, request);
+      throw await this.httpFailure(retry, request, generation);
     }
-    throw await this.httpFailure(response, request);
+    throw await this.httpFailure(response, request, generation);
   }
 
-  private async fetchAttempt(request: NormalizedRequest): Promise<Response> {
+  private async fetchAttempt(request: NormalizedRequest, generation: number): Promise<Response> {
     const { method, path, reportErrors, signal } = request;
     try {
+      this.assertRequestSession(request, generation);
       signal?.throwIfAborted();
       return await fetch(request.url, {
         method,
@@ -494,6 +524,7 @@ export class RequestTransport {
         ...(request.body !== undefined ? { body: request.body } : {}),
       });
     } catch (cause) {
+      this.assertRequestSession(request, generation);
       if (!isFetchConnectionError(cause) && !signal?.aborted) {
         if (reportErrors) {
           reportClientError(cause, {
@@ -519,10 +550,15 @@ export class RequestTransport {
     }
   }
 
-  private async recoverSession(response: Response, request: ApiRequest): Promise<void> {
+  private async recoverSession(
+    response: Response,
+    request: ApiRequest,
+    generation: number
+  ): Promise<void> {
     try {
       await this.refreshAccessToken();
     } catch (cause) {
+      this.assertSessionGeneration(generation);
       const failure = apiFailureDetailFrom(cause);
       const code =
         failure?.code ?? (cause instanceof Error && 'code' in cause ? cause.code : undefined);
@@ -553,8 +589,13 @@ export class RequestTransport {
     }
   }
 
-  private async httpFailure(response: Response, request: ApiRequest): Promise<Error> {
+  private async httpFailure(
+    response: Response,
+    request: ApiRequest,
+    generation: number
+  ): Promise<Error> {
     const payload: unknown = await response.json().catch(() => null);
+    this.assertRequestSession(request, generation);
     const envelope = isRecord(payload) && isRecord(payload.error) ? payload.error : {};
     const detail: ApiFailureDetail = {
       status: response.status,
@@ -569,6 +610,20 @@ export class RequestTransport {
     const error = apiFailure(detail);
     if (request.reportErrors !== false) this.reportFailure(detail, error);
     return error;
+  }
+
+  private assertSessionGeneration(generation: number) {
+    if (generation !== this.sessionGeneration) {
+      throw Object.assign(new Error('The session changed before the request completed.'), {
+        code: 'SESSION_CHANGED',
+      });
+    }
+  }
+
+  private assertRequestSession(request: ApiRequest, generation: number) {
+    if (request.sessionBound || !isPublicAuthPath(request.path)) {
+      this.assertSessionGeneration(generation);
+    }
   }
 
   async apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -839,6 +894,7 @@ interface ApiRequest {
   reportErrors?: boolean | undefined;
   extraHeaders?: Record<string, string> | undefined;
   signal?: AbortSignal | undefined;
+  sessionBound?: boolean;
 }
 
 interface NormalizedRequest extends Omit<ApiRequest, 'body' | 'params'> {

@@ -53,6 +53,14 @@ name and fallback implementation remain intact. Renewal has a 30-second network
 timeout; a caller's cancellation does not cancel the shared renewal. An aborted
 waiter cannot replay after renewal.
 
+An explicit token replacement or session clear invalidates pending work from the
+previous session. Renewing a token within the same session keeps concurrent
+requests valid. A stale renewal cannot publish tokens or clear a newer session;
+a stale protected request cannot replay or return data under the newer account.
+These operations reject with `SESSION_CHANGED`, without an auth-expired event.
+Publishing the same non-null token again remains valid for existing auth-store
+consumers. A session clear also invalidates a pending tokenless bootstrap.
+
 Connection failures and aborts use `NETWORK_ERROR` with the original cause.
 Interrupted or syntactically invalid successful JSON uses `INCOMPLETE_RESPONSE`.
 Endpoint conversion failures use `INVALID_RESPONSE`. Malformed HTTP error
