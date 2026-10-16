@@ -53,11 +53,14 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Follow charging summaries, curves and annotation updates | [Charging views](./architecture/rewrite-charging-views.md) |
 | Maintain metric query planning and streamed results | [Metric queries](./architecture/rewrite-metrics-queries.md) |
 | Trace battery, efficiency and parked-energy evidence | [Energy views](./architecture/rewrite-energy-views.md) |
+| Follow idle-period validation and live charging field selection | [Idle and live projection](./architecture/rewrite-idle-live-projection.md) |
+| Maintain derived trip power, temperatures and fallback charging curves | [Derived series](./architecture/rewrite-derived-trip-charge-series.md) |
 | Maintain dashboard, chart, theme and preference workflows | [Personalization](./architecture/rewrite-personalization.md) |
 | Follow places, pricing profiles and geocoder scheduling | [Places and profiles](./architecture/rewrite-places-profiles.md) |
 | Maintain telemetry merging, storage and vehicle-state history | [Telemetry workflows](./architecture/telemetry-workflows.md) |
 | Follow collector recovery, completion writes and retention | [Collector host and projections](./architecture/collector-host-projections.md) |
 | Follow vehicle enrollment, invitations and artwork selection | [Vehicle workflows](./architecture/rewrite-vehicle-workflows.md) |
+| Maintain raw telemetry diagnostics, paging and lane projections | [Vehicle diagnostics](./architecture/rewrite-vehicle-diagnostics.md) |
 | Maintain external connection settings, cache and activity records | [External connections](./architecture/rewrite-external-integrations.md) |
 | Follow Grafana queries, health, stewardship and capture summaries | [Operational read models](./architecture/rewrite-operational-read-models.md) |
 | Follow charging payload identity and summary reconciliation | [Charge payload reconciliation](./architecture/rewrite-charge-payload-reconciliation.md) |

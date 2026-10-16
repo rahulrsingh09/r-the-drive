@@ -45,6 +45,9 @@ new job and transition stages.
 Collector acquisition, trip and charge completion, software history and
 stewardship use explicit stages with write-retry and retention corrections.
 Maintenance cursor scans isolate result metadata across different row shapes.
+Raw telemetry diagnostics and lane views use typed query plans and projections.
+Derived trip and charging series, idle-period validation and live charging fields
+use new calculation and selection stages with characterized behavior.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
