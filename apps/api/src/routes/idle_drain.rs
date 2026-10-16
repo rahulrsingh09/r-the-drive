@@ -706,3 +706,7 @@ mod tests {
 #[cfg(test)]
 #[path = "__tests__/energy_idle_boundaries.rs"]
 mod energy_idle_boundaries;
+
+#[cfg(test)]
+#[path = "__tests__/idle_projection_contract.rs"]
+mod idle_projection_contract;

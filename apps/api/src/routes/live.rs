@@ -410,3 +410,11 @@ async fn close_live(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "__tests__/live_projection_contract.rs"]
+mod live_projection_contract;
+
+#[cfg(test)]
+#[path = "__tests__/live_projection_http.rs"]
+mod live_projection_http;
