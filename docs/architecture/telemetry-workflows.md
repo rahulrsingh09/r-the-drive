@@ -2,6 +2,18 @@
 
 The collector commits its trip and charge checkpoints before publishing telemetry, updating latest status or advancing lifecycle signals. This page describes the projections after that durable boundary. It does not change the accepted detector prefix or the charge completion outbox.
 
+## Implementation boundaries
+
+The private worker modules keep each policy explicit:
+
+- `telemetry_fields` lists the 95 patchable fields, whether they are payload or sensor clocks, immediate-change policy, latest-status merge policy and browser projection mapping.
+- `telemetry_values` applies typed sparse patches, detects duplicate payload and builds the browser projection. It never serializes a frame to implement coalescing, so nonfinite values retain their bits in memory.
+- `telemetry_gate` selects a candidate and advances observation/persistence state separately. Activity profiles contain the existing delay, distance and numeric thresholds.
+- `telemetry_storage` binds typed values and generates conflict assignments from static field policies. Column names never come from a frame. Raw and latest projections deliberately have distinct drive-mode and association policies.
+- `state_history` selects lifecycle evidence, plans retain/ignore/replace, then executes a rotation under the existing transaction lock.
+
+The collector's checkpoint transaction and charge-history pin locks remain upstream of these projections. This refactoring changes workflow implementation without changing schema, route contracts, provider classification or the UI.
+
 ## Sparse observations
 
 A frame is a patch, not a complete vehicle snapshot. Coalescing keeps the receiving vehicle identity, replaces the observation timestamp even for late arrivals, and overwrites only present fields. Sensor timestamps are patched independently. Closure movement is live-only and does not participate in coalescing or duplicate detection. Timestamp-only frames are empty for persistence suppression. Duplicate patches do not refresh the gate's observation timestamp.
