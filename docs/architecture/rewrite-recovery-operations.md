@@ -114,6 +114,15 @@ locator wins and displaced historical IDs remain unavailable without breaking
 their foreign keys. Backup/recovery advisory guards retain their physical
 session through acquisition and release, including cancelled queries.
 
+Baseline schema proof also owns its asynchronous lifetime. A reproduced
+cancellation after scratch-database creation previously skipped its cleanup.
+The probe now completes and cleans its own database even when its waiter is
+cancelled. The operation uses the default recovery deadline; database removal
+and pool close each have a 30-second cleanup allowance. Cleanup failure is
+logged and returned when a waiter remains. Server unavailability or process
+termination can still prevent cleanup; the probe never removes another
+operation's database.
+
 The journal staging regressions previously overwrote a separate synthetic file
 through a predictable temporary symlink and left a temporary file after rename
 failure. Both now preserve other files and clean their own staging. A catalog

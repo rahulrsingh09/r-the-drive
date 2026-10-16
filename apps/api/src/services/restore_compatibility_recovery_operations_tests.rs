@@ -164,3 +164,50 @@ async fn candidate_adopts_legacy_ledger_only_with_physical_baseline_proof() {
         db.close().await;
     }
 }
+
+#[tokio::test]
+#[ignore = "requires the uniquely named disposable recovery operations database"]
+async fn cancellation_of_baseline_probe_does_not_leak_its_scratch_database() {
+    let db = SyntheticDatabase::new().await;
+    let url = db.url.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (finish, wait) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        baseline_schema_fingerprint_after_create(&url, |name| async move {
+            started.send(name).unwrap();
+            let _ = wait.await;
+        })
+        .await
+    });
+    let name = ready.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    let _ = finish.send(());
+    let leaked = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)")
+                    .bind(&name)
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+            if !exists {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .is_err();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"
+    )))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    db.close().await;
+    assert!(
+        !leaked,
+        "cancelled baseline verification leaked its scratch database"
+    );
+}

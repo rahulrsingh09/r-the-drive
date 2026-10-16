@@ -433,41 +433,58 @@ where
 /// baseline. This gives legacy-ledger restores a concrete structural proof
 /// without ever applying or probing against the live target database.
 async fn baseline_schema_fingerprint(candidate_database_url: &str) -> anyhow::Result<String> {
-    let mut admin_url = Url::parse(candidate_database_url)?;
-    admin_url.set_path("/postgres");
-    let admin_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(admin_url.as_str())
-        .await?;
-    let database_name = format!("panda_restore_baseline_{}", Uuid::new_v4().simple());
-    sqlx::query(AssertSqlSafe(format!(
-        "CREATE DATABASE \"{database_name}\" TEMPLATE template0"
-    )))
-    .execute(&admin_pool)
-    .await?;
+    baseline_schema_fingerprint_after_create(candidate_database_url, |_| async {}).await
+}
 
-    let mut scratch_url = Url::parse(candidate_database_url)?;
-    scratch_url.set_path(&format!("/{database_name}"));
-    let result = async {
-        let scratch_pool = PgPoolOptions::new()
-            .max_connections(2)
-            .connect(scratch_url.as_str())
-            .await?;
-        migrations::apply_baseline_schema(&scratch_pool).await?;
-        let fingerprint = schema_fingerprint(&scratch_pool).await?;
-        scratch_pool.close().await;
-        Ok::<_, anyhow::Error>(fingerprint)
-    }
-    .await;
-
-    let cleanup = sqlx::query(AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
-    )))
-    .execute(&admin_pool)
-    .await;
-    admin_pool.close().await;
-    cleanup?;
-    result
+async fn baseline_schema_fingerprint_after_create<F, W>(
+    candidate_database_url: &str,
+    after_create: F,
+) -> anyhow::Result<String>
+where
+    F: FnOnce(String) -> W + Send + 'static,
+    W: std::future::Future<Output = ()> + Send + 'static,
+{
+    let candidate_database_url = candidate_database_url.to_owned();
+    // The cleanup owner survives cancellation of the candidate's waiter.
+    tokio::spawn(async move {
+        let budget = std::time::Duration::from_secs(
+            crate::config::RecoveryConfig::default().restore_deadline_seconds,
+        );
+        let cleanup_budget = std::time::Duration::from_secs(30);
+        let mut admin_url = Url::parse(&candidate_database_url)?;
+        admin_url.set_path("/postgres");
+        let admin_pool = PgPoolOptions::new().max_connections(2)
+            .connect(admin_url.as_str()).await?;
+        let database_name = format!("panda_restore_baseline_{}", Uuid::new_v4().simple());
+        let mut scratch_url = Url::parse(&candidate_database_url)?;
+        scratch_url.set_path(&format!("/{database_name}"));
+        let result = tokio::time::timeout(budget, async {
+            sqlx::query(AssertSqlSafe(format!(
+                "CREATE DATABASE \"{database_name}\" TEMPLATE template0"
+            ))).execute(&admin_pool).await?;
+            after_create(database_name.clone()).await;
+            let scratch_pool = PgPoolOptions::new().max_connections(2)
+                .connect(scratch_url.as_str()).await?;
+            let result = async {
+                migrations::apply_baseline_schema(&scratch_pool).await?;
+                Ok::<_, anyhow::Error>(schema_fingerprint(&scratch_pool).await?)
+            }.await;
+            scratch_pool.close().await;
+            result
+        }).await.map_err(|_| anyhow::anyhow!("recovery baseline verification deadline exceeded"))
+            .and_then(|result| result);
+        let cleanup = tokio::time::timeout(cleanup_budget, sqlx::query(AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
+        ))).execute(&admin_pool)).await
+            .map_err(|_| anyhow::anyhow!("recovery baseline cleanup deadline exceeded"))
+            .and_then(|result| result.map_err(anyhow::Error::from));
+        let _ = tokio::time::timeout(cleanup_budget, admin_pool.close()).await;
+        if let Err(error) = &cleanup {
+            tracing::error!(database = %database_name, error = %error, "recovery.baseline.cleanup_failed");
+        }
+        cleanup?;
+        result
+    }).await.map_err(|error| anyhow::anyhow!("recovery baseline task failed: {error}"))?
 }
 
 fn inject_candidate_fault(phase: &str) -> anyhow::Result<()> {
