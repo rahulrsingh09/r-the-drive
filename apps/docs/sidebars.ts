@@ -118,6 +118,7 @@ const sidebars: SidebarsConfig = {
         'architecture/rewrite-history-enrichment',
         'architecture/rewrite-provider-orchestration',
         'architecture/rewrite-durable-collector',
+        'architecture/durable-charge-capture',
         'architecture/rewrite-recovery-operations',
         'architecture/rewrite-cost-engine',
         'architecture/rewrite-parallax-core',

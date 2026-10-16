@@ -44,6 +44,7 @@ R:The Drive's repository documentation is the source of truth for the applicatio
 | Trace route, location, and weather enrichment | [History enrichment](./architecture/rewrite-history-enrichment.md) |
 | Maintain provider polling, connections, and shutdown | [Provider orchestration](./architecture/rewrite-provider-orchestration.md) |
 | Follow telemetry persistence, checkpoints, and restart limits | [Durable collection](./architecture/rewrite-durable-collector.md) |
+| Understand charge restart recovery and completion retries | [Durable charge capture](./architecture/durable-charge-capture.md) |
 | Maintain backup admission, compatibility, and restore journals | [Recovery operations](./architecture/rewrite-recovery-operations.md) |
 | Understand charging price selection and time-of-use calculations | [Charging costs](./architecture/rewrite-cost-engine.md) |
 | Follow companion telemetry decoding, persistence and forwarding | [Companion telemetry](./architecture/rewrite-parallax-core.md) |

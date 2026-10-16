@@ -26,6 +26,8 @@ pricing are also replaced while preserving their characterized outputs.
 Companion telemetry processing, chart validation and catalog reconciliation
 have new internal stages. Browser schema initialization avoids dynamic code
 under the existing Content Security Policy.
+Charge detector state and completion records now commit with trip checkpoints,
+with durable retries and session pins during history maintenance.
 See [BOOTSTRAP.md](./BOOTSTRAP.md) and
 [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md) for source and validation details.
 
