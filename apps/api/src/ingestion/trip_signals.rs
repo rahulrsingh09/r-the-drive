@@ -50,194 +50,365 @@ impl Default for FusionDiagnostics {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+enum PowerRetention {
+    #[default]
+    Periodic,
+    UntilChanged,
+}
+
+impl PowerRetention {
+    fn from_source(change_only: bool) -> Self {
+        if change_only {
+            Self::UntilChanged
+        } else {
+            Self::Periodic
+        }
+    }
+
+    fn retains(self, age: Duration) -> bool {
+        matches!(self, Self::UntilChanged) || age <= POWER_MAX_AGE
+    }
+
+    fn diagnostic(self) -> &'static str {
+        match self {
+            Self::Periodic => "periodic",
+            Self::UntilChanged => "change_only",
+        }
+    }
+}
+
+struct ObservedPower {
+    value: PowerState,
+    at: DateTime<Utc>,
+    retention: PowerRetention,
+}
+
+#[derive(Default)]
+struct PowerMemory(Option<ObservedPower>);
+
+impl PowerMemory {
+    fn join(
+        &mut self,
+        sample: &TelemetryEvent,
+        retention: PowerRetention,
+        joined: &mut TelemetryEvent,
+        diagnostics: &mut FusionDiagnostics,
+    ) {
+        if let Some(value) = &sample.power_state {
+            let at = sample.power_state_ts.unwrap_or(sample.ts);
+            let acceptable = at <= sample.ts + Duration::seconds(5)
+                && retention.retains(sample.ts - at)
+                && self.0.as_ref().is_none_or(|prior| at >= prior.at);
+            if acceptable {
+                self.0 = Some(ObservedPower {
+                    value: value.clone(),
+                    at,
+                    retention,
+                });
+                diagnostics.reported_power_outcome = "accepted";
+                diagnostics.power_origin = "reported";
+                diagnostics.power_outcome = "accepted";
+            } else {
+                joined.power_state = None;
+                joined.power_state_ts = None;
+                diagnostics.reported_power_outcome = "stale_future_or_out_of_order";
+                diagnostics.power_outcome = "stale_future_or_out_of_order";
+            }
+        }
+        let Some(cached) = &self.0 else {
+            return;
+        };
+        diagnostics.power_policy = cached.retention.diagnostic();
+        if joined.power_state.is_none() {
+            if sample.ts >= cached.at && cached.retention.retains(sample.ts - cached.at) {
+                joined.power_state = Some(cached.value.clone());
+                joined.power_state_ts = Some(cached.at);
+                diagnostics.power_origin = "carried_forward";
+                diagnostics.power_outcome = "accepted";
+            } else {
+                diagnostics.power_outcome = "stale_or_future";
+            }
+        }
+    }
+}
+
+enum SelectedSpeed {
+    Missing(Option<DateTime<Utc>>),
+    Reported(f64, Option<DateTime<Utc>>),
+    Gnss(f64, DateTime<Utc>),
+    Odometer(f64, DateTime<Utc>),
+}
+
+impl SelectedSpeed {
+    fn from_report(sample: &TelemetryEvent, diagnostics: &mut FusionDiagnostics) -> Self {
+        let Some(mph) = sample.speed_mph else {
+            return Self::Missing(sample.speed_mph_ts);
+        };
+        let at = sample.speed_mph_ts.unwrap_or(sample.ts);
+        if at > sample.ts || sample.ts - at > FIX_MAX_AGE {
+            diagnostics.reported_speed_outcome = "stale_or_future";
+            Self::Missing(None)
+        } else if !mph.is_finite() || !(0.0..=MAX_PLAUSIBLE_MPH).contains(&mph) {
+            diagnostics.reported_speed_outcome = "invalid";
+            Self::Missing(None)
+        } else {
+            diagnostics.reported_speed_outcome = "accepted";
+            Self::Reported(mph, sample.speed_mph_ts)
+        }
+    }
+
+    fn allows_odometer(&self) -> bool {
+        matches!(self, Self::Missing(_) | Self::Gnss(0.0, _))
+    }
+
+    fn write(self, joined: &mut TelemetryEvent, diagnostics: &mut FusionDiagnostics) {
+        let (mph, at, origin) = match self {
+            Self::Missing(at) => (None, at, "absent"),
+            Self::Reported(mph, at) => (Some(mph), at, "reported"),
+            Self::Gnss(mph, at) => (Some(mph), Some(at), "gnss"),
+            Self::Odometer(mph, at) => (Some(mph), Some(at), "odometer"),
+        };
+        joined.speed_mph = mph;
+        joined.speed_mph_ts = at;
+        diagnostics.speed_origin = origin;
+    }
+}
+
+#[derive(Default)]
+enum MotionEvidence {
+    #[default]
+    Stationary,
+    Candidate,
+    Confirmed(u8),
+}
+
+impl MotionEvidence {
+    fn segments(&self) -> u8 {
+        match self {
+            Self::Stationary => 0,
+            Self::Candidate => 1,
+            Self::Confirmed(count) => *count,
+        }
+    }
+
+    fn observe(&mut self, mph: f64) -> (Option<f64>, &'static str) {
+        if !mph.is_finite() || mph > MAX_PLAUSIBLE_MPH {
+            *self = Self::Stationary;
+            return (None, "implausible");
+        }
+        if mph <= MOVING_MPH {
+            *self = Self::Stationary;
+            return (Some(0.0), "stationary");
+        }
+        *self = match self {
+            Self::Stationary => Self::Candidate,
+            Self::Candidate => Self::Confirmed(2),
+            Self::Confirmed(count) => Self::Confirmed(count.saturating_add(1)),
+        };
+        match self {
+            Self::Confirmed(_) => (Some(mph), "derived"),
+            _ => (Some(0.0), "provisional_zero"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PositionFix {
+    latitude: f64,
+    longitude: f64,
+    at: DateTime<Utc>,
+}
+
+#[derive(Default)]
+struct GnssHistory {
+    last: Option<PositionFix>,
+    motion: MotionEvidence,
+}
+
+impl GnssHistory {
+    fn join(
+        &mut self,
+        sample: &TelemetryEvent,
+        speed: &mut SelectedSpeed,
+        joined: &mut TelemetryEvent,
+        diagnostics: &mut FusionDiagnostics,
+    ) {
+        if matches!(speed, SelectedSpeed::Reported(..)) {
+            self.motion = MotionEvidence::Stationary;
+        }
+        let coordinates = valid_location_pair(sample.latitude, sample.longitude)
+            .filter(|(lat, lon)| (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon));
+        let Some((latitude, longitude)) = coordinates else {
+            if sample.latitude.is_some() || sample.longitude.is_some() {
+                Self::discard_location(joined);
+                diagnostics.gnss_outcome = "invalid_or_incomplete";
+            }
+            return;
+        };
+        let fix = PositionFix {
+            latitude,
+            longitude,
+            at: sample.location_ts.unwrap_or(sample.ts),
+        };
+        if fix.at > sample.ts + Duration::seconds(5)
+            || sample.ts - fix.at > FIX_MAX_AGE
+            || self.last.is_some_and(|prior| fix.at <= prior.at)
+        {
+            Self::discard_location(joined);
+            diagnostics.gnss_outcome = "stale_future_or_out_of_order";
+            return;
+        }
+        diagnostics.gnss_outcome = "baseline";
+        if let Some(prior) = self.last.replace(fix) {
+            let seconds = (fix.at - prior.at).num_seconds();
+            diagnostics.gnss_interval_seconds = Some(seconds);
+            if !(5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) {
+                self.motion = MotionEvidence::Stationary;
+                diagnostics.gnss_outcome = "interval_out_of_range";
+                return;
+            }
+            let miles =
+                haversine_miles(prior.latitude, prior.longitude, fix.latitude, fix.longitude);
+            diagnostics.gnss_distance_miles = Some(miles);
+            if matches!(speed, SelectedSpeed::Reported(..)) {
+                diagnostics.gnss_outcome = "reported_speed_precedence";
+                return;
+            }
+            let (mph, outcome) = self.motion.observe(miles * 3600.0 / seconds as f64);
+            diagnostics.gnss_outcome = outcome;
+            if let Some(mph) = mph {
+                *speed = SelectedSpeed::Gnss(mph, fix.at);
+            }
+        }
+    }
+
+    fn discard_location(joined: &mut TelemetryEvent) {
+        joined.latitude = None;
+        joined.longitude = None;
+        joined.location_ts = None;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OdometerReading {
+    miles: f64,
+    at: DateTime<Utc>,
+}
+
+#[derive(Default)]
+struct OdometerHistory(Option<OdometerReading>);
+
+impl OdometerHistory {
+    fn join(
+        &mut self,
+        sample: &TelemetryEvent,
+        speed: &mut SelectedSpeed,
+        diagnostics: &mut FusionDiagnostics,
+    ) {
+        let Some(miles) = sample
+            .odometer_miles
+            .filter(|value| value.is_finite() && *value >= 0.0)
+        else {
+            if sample.odometer_miles.is_some() {
+                diagnostics.odometer_outcome = "invalid";
+            }
+            return;
+        };
+        let reading = OdometerReading {
+            miles,
+            at: sample.odometer_miles_ts.unwrap_or(sample.ts),
+        };
+        if reading.at > sample.ts + Duration::seconds(5)
+            || self.0.is_some_and(|prior| reading.at <= prior.at)
+        {
+            diagnostics.odometer_outcome = "future_or_out_of_order";
+            return;
+        }
+        diagnostics.odometer_outcome = "baseline";
+        let Some(prior) = self.0.replace(reading) else {
+            return;
+        };
+        let seconds = (reading.at - prior.at).num_seconds();
+        let delta = reading.miles - prior.miles;
+        diagnostics.odometer_interval_seconds = Some(seconds);
+        diagnostics.odometer_delta_miles = Some(delta);
+        diagnostics.odometer_outcome = if !speed.allows_odometer() {
+            "speed_precedence"
+        } else if sample.ts - reading.at > FIX_MAX_AGE {
+            "stale"
+        } else if !(5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) {
+            "interval_out_of_range"
+        } else if delta <= 0.0 {
+            "no_increase"
+        } else {
+            let mph = delta * 3600.0 / seconds as f64;
+            if mph.is_finite() && mph <= MAX_PLAUSIBLE_MPH {
+                *speed = SelectedSpeed::Odometer(mph, reading.at);
+                "derived"
+            } else {
+                "implausible"
+            }
+        };
+    }
+}
+
+#[derive(Default)]
+struct StreamSignals {
+    power: PowerMemory,
+    gnss: GnssHistory,
+    odometer: OdometerHistory,
+}
+
+/// One instance belongs to one vehicle stream, as scoped by the ingestion worker.
 #[derive(Default)]
 pub struct TripSignalFusion {
-    power: Option<(PowerState, DateTime<Utc>, bool)>,
-    last_fix: Option<(f64, f64, DateTime<Utc>)>,
-    last_odometer: Option<(f64, DateTime<Utc>)>,
-    moving_segments: u8,
-    change_only_power: bool,
+    default_retention: PowerRetention,
+    stream: StreamSignals,
 }
 
 impl TripSignalFusion {
     /// Set a default source policy for callers with a known uniform source.
     pub fn new(change_only_power: bool) -> Self {
         Self {
-            change_only_power,
+            default_retention: PowerRetention::from_source(change_only_power),
             ..Self::default()
         }
     }
 
     pub fn fuse(&mut self, sample: &TelemetryEvent) -> TelemetryEvent {
-        self.fuse_from(sample, self.change_only_power).0
+        self.join(sample, self.default_retention).0
     }
 
-    /// `change_only_power` describes this source, not this vehicle. The cached
-    /// power keeps the policy of the source that actually supplied it.
+    /// The accepted power observation owns retention, independently of later sources.
     pub fn fuse_from(
         &mut self,
         sample: &TelemetryEvent,
         change_only_power: bool,
     ) -> (TelemetryEvent, FusionDiagnostics) {
+        self.join(sample, PowerRetention::from_source(change_only_power))
+    }
+
+    fn join(
+        &mut self,
+        sample: &TelemetryEvent,
+        retention: PowerRetention,
+    ) -> (TelemetryEvent, FusionDiagnostics) {
         let mut joined = sample.clone();
-        let mut diag = FusionDiagnostics::default();
-        if let Some(power) = sample.power_state.as_ref() {
-            let observed_at = sample.power_state_ts.unwrap_or(sample.ts);
-            if observed_at <= sample.ts + Duration::seconds(5)
-                && (change_only_power || sample.ts - observed_at <= POWER_MAX_AGE)
-                && self
-                    .power
-                    .as_ref()
-                    .is_none_or(|(_, prior, _)| observed_at >= *prior)
-            {
-                self.power = Some((power.clone(), observed_at, change_only_power));
-                diag.reported_power_outcome = "accepted";
-                diag.power_origin = "reported";
-                diag.power_outcome = "accepted";
-            } else {
-                joined.power_state = None;
-                joined.power_state_ts = None;
-                diag.reported_power_outcome = "stale_future_or_out_of_order";
-                diag.power_outcome = "stale_future_or_out_of_order";
-            }
-        }
-        if joined.power_state.is_none() {
-            if let Some((power, observed_at, latched)) = self.power.as_ref() {
-                if sample.ts >= *observed_at
-                    && (*latched || sample.ts - *observed_at <= POWER_MAX_AGE)
-                {
-                    joined.power_state = Some(power.clone());
-                    joined.power_state_ts = Some(*observed_at);
-                    diag.power_origin = "carried_forward";
-                    diag.power_outcome = "accepted";
-                } else {
-                    diag.power_outcome = "stale_or_future";
-                }
-            }
-        }
-        if self.power.as_ref().is_some_and(|(_, _, latched)| *latched) {
-            diag.power_policy = "change_only";
-        }
-        if let Some(speed) = sample.speed_mph {
-            let speed_at = sample.speed_mph_ts.unwrap_or(sample.ts);
-            if sample.ts < speed_at || sample.ts - speed_at > FIX_MAX_AGE {
-                joined.speed_mph = None;
-                joined.speed_mph_ts = None;
-                diag.reported_speed_outcome = "stale_or_future";
-            } else if !speed.is_finite() || !(0.0..=MAX_PLAUSIBLE_MPH).contains(&speed) {
-                joined.speed_mph = None;
-                joined.speed_mph_ts = None;
-                diag.reported_speed_outcome = "invalid";
-            } else {
-                diag.speed_origin = "reported";
-                diag.reported_speed_outcome = "accepted";
-                // A direct reading interrupts a fallback motion streak. A
-                // later gap must establish GNSS motion again, even when this
-                // direct-speed frame contains no location.
-                self.moving_segments = 0;
-            }
-        }
-        let mut gps_derived_zero = false;
-        if let Some((lat, lon)) = valid_location_pair(sample.latitude, sample.longitude)
-            .filter(|(lat, lon)| (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon))
-        {
-            let fix_at = sample.location_ts.unwrap_or(sample.ts);
-            if fix_at <= sample.ts + Duration::seconds(5)
-                && sample.ts - fix_at <= FIX_MAX_AGE
-                && self.last_fix.is_none_or(|(_, _, prior)| fix_at > prior)
-            {
-                diag.gnss_outcome = "baseline";
-                if let Some((last_lat, last_lon, last_at)) = self.last_fix {
-                    let seconds = (fix_at - last_at).num_seconds();
-                    diag.gnss_interval_seconds = Some(seconds);
-                    if (5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) {
-                        let miles = haversine_miles(last_lat, last_lon, lat, lon);
-                        diag.gnss_distance_miles = Some(miles);
-                        let mph = miles * 3600.0 / seconds as f64;
-                        if joined.speed_mph.is_some() {
-                            diag.gnss_outcome = "reported_speed_precedence";
-                        } else if mph.is_finite() && mph <= MAX_PLAUSIBLE_MPH {
-                            self.moving_segments = if mph > MOVING_MPH {
-                                self.moving_segments.saturating_add(1)
-                            } else {
-                                0
-                            };
-                            let derived = if self.moving_segments >= 2 { mph } else { 0.0 };
-                            gps_derived_zero = derived == 0.0;
-                            joined.speed_mph = Some(derived);
-                            joined.speed_mph_ts = Some(fix_at);
-                            diag.speed_origin = "gnss";
-                            diag.gnss_outcome = if mph <= MOVING_MPH {
-                                "stationary"
-                            } else if self.moving_segments < 2 {
-                                "provisional_zero"
-                            } else {
-                                "derived"
-                            };
-                        } else {
-                            self.moving_segments = 0;
-                            diag.gnss_outcome = "implausible";
-                        }
-                    } else {
-                        self.moving_segments = 0;
-                        diag.gnss_outcome = "interval_out_of_range";
-                    }
-                }
-                self.last_fix = Some((lat, lon, fix_at));
-            } else {
-                joined.latitude = None;
-                joined.longitude = None;
-                joined.location_ts = None;
-                diag.gnss_outcome = "stale_future_or_out_of_order";
-            }
-        } else if sample.latitude.is_some() || sample.longitude.is_some() {
-            joined.latitude = None;
-            joined.longitude = None;
-            joined.location_ts = None;
-            diag.gnss_outcome = "invalid_or_incomplete";
-        }
-        if let Some(odometer) = sample.odometer_miles.filter(|v| v.is_finite() && *v >= 0.0) {
-            let odometer_at = sample.odometer_miles_ts.unwrap_or(sample.ts);
-            if odometer_at <= sample.ts + Duration::seconds(5)
-                && self
-                    .last_odometer
-                    .is_none_or(|(_, prior)| odometer_at > prior)
-            {
-                diag.odometer_outcome = "baseline";
-                if let Some((last_odometer, last_at)) = self.last_odometer {
-                    let seconds = (odometer_at - last_at).num_seconds();
-                    let miles = odometer - last_odometer;
-                    diag.odometer_interval_seconds = Some(seconds);
-                    diag.odometer_delta_miles = Some(miles);
-                    if joined.speed_mph.is_some() && !gps_derived_zero {
-                        diag.odometer_outcome = "speed_precedence";
-                    } else if sample.ts - odometer_at > FIX_MAX_AGE {
-                        diag.odometer_outcome = "stale";
-                    } else if !(5..=MAX_FIX_INTERVAL.num_seconds()).contains(&seconds) {
-                        diag.odometer_outcome = "interval_out_of_range";
-                    } else if miles <= 0.0 {
-                        diag.odometer_outcome = "no_increase";
-                    } else {
-                        let mph = miles * 3600.0 / seconds as f64;
-                        if mph.is_finite() && mph <= MAX_PLAUSIBLE_MPH {
-                            joined.speed_mph = Some(mph);
-                            joined.speed_mph_ts = Some(odometer_at);
-                            diag.speed_origin = "odometer";
-                            diag.odometer_outcome = "derived";
-                        } else {
-                            diag.odometer_outcome = "implausible";
-                        }
-                    }
-                }
-                self.last_odometer = Some((odometer, odometer_at));
-            } else {
-                diag.odometer_outcome = "future_or_out_of_order";
-            }
-        } else if sample.odometer_miles.is_some() {
-            diag.odometer_outcome = "invalid";
-        }
-        diag.moving_segments = self.moving_segments;
-        (joined, diag)
+        let mut diagnostics = FusionDiagnostics::default();
+        self.stream
+            .power
+            .join(sample, retention, &mut joined, &mut diagnostics);
+        let mut speed = SelectedSpeed::from_report(sample, &mut diagnostics);
+        self.stream
+            .gnss
+            .join(sample, &mut speed, &mut joined, &mut diagnostics);
+        self.stream
+            .odometer
+            .join(sample, &mut speed, &mut diagnostics);
+        speed.write(&mut joined, &mut diagnostics);
+        diagnostics.moving_segments = self.stream.gnss.motion.segments();
+        (joined, diagnostics)
     }
 }
 
@@ -249,6 +420,482 @@ mod tests {
     use crate::models::telemetry::{PowerState, TelemetryEvent};
 
     use super::TripSignalFusion;
+
+    fn charge_core_at(seconds: i64) -> chrono::DateTime<Utc> {
+        chrono::DateTime::from_timestamp(1_700_000_000 + seconds, 0).unwrap()
+    }
+
+    fn charge_core_sample(seconds: i64) -> TelemetryEvent {
+        TelemetryEvent::empty(Uuid::from_u128(1), charge_core_at(seconds))
+    }
+
+    fn charge_core_fix(seconds: i64, longitude: f64) -> TelemetryEvent {
+        let mut sample = charge_core_sample(seconds);
+        sample.latitude = Some(0.0);
+        sample.longitude = Some(longitude);
+        sample
+    }
+
+    #[test]
+    fn charge_core_empty_diagnostics_and_passthrough_are_stable() {
+        let mut sample = charge_core_sample(0);
+        sample.battery_level = Some(44.0);
+        sample.regen_power_kw = Some(-3.0);
+        sample.cabin_temp_c = Some(21.0);
+        sample.charger_status = Some("chrgr_sts_connected_no_chrg".into());
+        let original = serde_json::to_value(&sample).unwrap();
+        let (joined, diagnostics) = TripSignalFusion::default().fuse_from(&sample, true);
+        assert_eq!(serde_json::to_value(&joined).unwrap(), original);
+        assert_eq!(serde_json::to_value(&sample).unwrap(), original);
+        assert_eq!(
+            format!("{diagnostics:?}"),
+            "FusionDiagnostics { power_origin: \"absent\", power_policy: \"periodic\", power_outcome: \"missing\", reported_power_outcome: \"missing\", speed_origin: \"absent\", reported_speed_outcome: \"missing\", gnss_outcome: \"missing\", odometer_outcome: \"missing\", gnss_interval_seconds: None, gnss_distance_miles: None, odometer_interval_seconds: None, odometer_delta_miles: None, moving_segments: 0 }"
+        );
+    }
+
+    #[test]
+    fn charge_core_power_age_future_and_equal_timestamp_policy_boundaries() {
+        for (age_ms, accepted) in [
+            (120_000, true),
+            (120_001, false),
+            (-5_000, true),
+            (-5_001, false),
+        ] {
+            let mut sample = charge_core_sample(0);
+            sample.power_state = Some(PowerState::Drive);
+            sample.power_state_ts = Some(sample.ts - Duration::milliseconds(age_ms));
+            let (joined, diag) = TripSignalFusion::default().fuse_from(&sample, false);
+            assert_eq!(joined.power_state.is_some(), accepted, "{age_ms}");
+            assert_eq!(
+                diag.reported_power_outcome,
+                if accepted {
+                    "accepted"
+                } else {
+                    "stale_future_or_out_of_order"
+                }
+            );
+        }
+        for latched in [false, true] {
+            let mut fusion = TripSignalFusion::default();
+            let mut sample = charge_core_sample(0);
+            sample.power_state = Some(PowerState::Drive);
+            fusion.fuse_from(&sample, latched);
+            let mut later = charge_core_sample(120);
+            assert_eq!(
+                fusion.fuse_from(&later, !latched).0.power_state,
+                Some(PowerState::Drive)
+            );
+            later.ts += Duration::milliseconds(1);
+            assert_eq!(
+                fusion.fuse_from(&later, !latched).0.power_state.is_some(),
+                latched
+            );
+            sample.power_state = Some(PowerState::Ready);
+            let (joined, diag) = fusion.fuse_from(&sample, !latched);
+            assert_eq!(joined.power_state, Some(PowerState::Ready));
+            assert_eq!(diag.reported_power_outcome, "accepted");
+            assert_eq!(
+                diag.power_policy,
+                if latched { "periodic" } else { "change_only" }
+            );
+            assert_eq!(joined.power_state_ts, None);
+        }
+    }
+
+    #[test]
+    fn charge_core_accepted_future_power_waits_until_observation_before_carrying() {
+        let mut fusion = TripSignalFusion::new(true);
+        let mut sample = charge_core_sample(0);
+        sample.power_state = Some(PowerState::Go);
+        sample.power_state_ts = Some(charge_core_at(5));
+        assert_eq!(fusion.fuse(&sample).power_state, Some(PowerState::Go));
+        let (before, diag) = fusion.fuse_from(&charge_core_sample(4), true);
+        assert_eq!(before.power_state, None);
+        assert_eq!(diag.power_outcome, "stale_or_future");
+        assert_eq!(
+            fusion.fuse(&charge_core_sample(5)).power_state,
+            Some(PowerState::Go)
+        );
+    }
+
+    #[test]
+    fn charge_core_reported_speed_bounds_and_invalid_fallback() {
+        for (speed, age_ms, outcome) in [
+            (0.0, 0, "accepted"),
+            (130.0, 120_000, "accepted"),
+            (130.001, 0, "invalid"),
+            (-0.001, 0, "invalid"),
+            (f64::NAN, 0, "invalid"),
+            (f64::INFINITY, 0, "invalid"),
+            (f64::NEG_INFINITY, 0, "invalid"),
+            (10.0, 120_001, "stale_or_future"),
+            (10.0, -1, "stale_or_future"),
+            (f64::NAN, -1, "stale_or_future"),
+        ] {
+            let mut fusion = TripSignalFusion::default();
+            let mut baseline = charge_core_sample(0);
+            baseline.odometer_miles = Some(100.0);
+            fusion.fuse(&baseline);
+            let mut sample = charge_core_sample(60);
+            sample.odometer_miles = Some(101.0);
+            sample.speed_mph = Some(speed);
+            sample.speed_mph_ts = Some(sample.ts - Duration::milliseconds(age_ms));
+            let (joined, diag) = fusion.fuse_from(&sample, false);
+            assert_eq!(diag.reported_speed_outcome, outcome);
+            assert_eq!(
+                joined.speed_mph,
+                Some(if outcome == "accepted" { speed } else { 60.0 })
+            );
+            assert_eq!(
+                diag.speed_origin,
+                if outcome == "accepted" {
+                    "reported"
+                } else {
+                    "odometer"
+                }
+            );
+            assert_eq!(
+                joined.speed_mph_ts,
+                if outcome == "accepted" {
+                    sample.speed_mph_ts
+                } else {
+                    Some(sample.ts)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn charge_core_location_shape_age_future_and_order_boundaries() {
+        for (lat, lon) in [
+            (None, Some(1.0)),
+            (Some(0.0), None),
+            (Some(0.0), Some(0.0)),
+            (Some(90.001), Some(1.0)),
+            (Some(1.0), Some(-180.001)),
+            (Some(f64::NAN), Some(1.0)),
+            (Some(1.0), Some(f64::INFINITY)),
+        ] {
+            let mut sample = charge_core_sample(0);
+            sample.latitude = lat;
+            sample.longitude = lon;
+            let (joined, diag) = TripSignalFusion::default().fuse_from(&sample, false);
+            assert_eq!(
+                (joined.latitude, joined.longitude, joined.location_ts),
+                (None, None, None)
+            );
+            assert_eq!(diag.gnss_outcome, "invalid_or_incomplete");
+        }
+        for (lat, lon) in [(-90.0, -180.0), (90.0, 180.0), (0.0, 1.0)] {
+            let mut sample = charge_core_fix(0, lon);
+            sample.latitude = Some(lat);
+            assert_eq!(
+                TripSignalFusion::default().fuse(&sample).latitude,
+                Some(lat)
+            );
+        }
+        for (age_ms, accepted) in [
+            (120_000, true),
+            (120_001, false),
+            (-5_000, true),
+            (-5_001, false),
+        ] {
+            let mut sample = charge_core_fix(0, 1.0);
+            sample.location_ts = Some(sample.ts - Duration::milliseconds(age_ms));
+            let mut fusion = TripSignalFusion::default();
+            let (joined, diag) = fusion.fuse_from(&sample, false);
+            assert_eq!(joined.latitude.is_some(), accepted);
+            assert_eq!(
+                diag.gnss_outcome,
+                if accepted {
+                    "baseline"
+                } else {
+                    "stale_future_or_out_of_order"
+                }
+            );
+            if accepted {
+                for skew in [0, -1] {
+                    sample.location_ts = sample
+                        .location_ts
+                        .map(|at| at + Duration::milliseconds(skew));
+                    let (joined, diag) = fusion.fuse_from(&sample, false);
+                    assert_eq!(joined.latitude, None);
+                    assert_eq!(diag.gnss_outcome, "stale_future_or_out_of_order");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn charge_core_gnss_interval_quantization_and_motion_confirmation() {
+        for (milliseconds, outcome) in [
+            (4_999, "interval_out_of_range"),
+            (5_000, "stationary"),
+            (300_000, "stationary"),
+            (300_999, "stationary"),
+            (301_000, "interval_out_of_range"),
+        ] {
+            let mut fusion = TripSignalFusion::default();
+            fusion.fuse(&charge_core_fix(0, 1.0));
+            let mut sample = charge_core_fix(0, 1.0);
+            sample.ts += Duration::milliseconds(milliseconds);
+            let (_, diag) = fusion.fuse_from(&sample, false);
+            assert_eq!(diag.gnss_outcome, outcome);
+            assert_eq!(diag.gnss_interval_seconds, Some(milliseconds / 1_000));
+        }
+        for (mph, first, second) in [
+            (1.999999, "stationary", "stationary"),
+            (2.000001, "provisional_zero", "derived"),
+            (129.999999, "provisional_zero", "derived"),
+            (130.000001, "implausible", "implausible"),
+        ] {
+            let step = (mph / 60.0 / 3_958.8_f64).to_degrees();
+            let mut fusion = TripSignalFusion::default();
+            fusion.fuse(&charge_core_fix(0, 1.0));
+            for (i, outcome) in [(1, first), (2, second)] {
+                let (joined, diag) =
+                    fusion.fuse_from(&charge_core_fix(i * 60, 1.0 + i as f64 * step), false);
+                assert_eq!(diag.gnss_outcome, outcome, "{mph}");
+                match outcome {
+                    "derived" => assert!((joined.speed_mph.unwrap() - mph).abs() < 1e-8),
+                    "implausible" => assert_eq!(joined.speed_mph, None),
+                    _ => assert_eq!(joined.speed_mph, Some(0.0)),
+                }
+                assert_eq!(
+                    diag.moving_segments,
+                    if mph > 2.0 && mph <= 130.0 {
+                        i as u8
+                    } else {
+                        0
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn charge_core_motion_evidence_exact_thresholds_and_saturation() {
+        use super::MotionEvidence;
+        for (mph, value, outcome) in [
+            (2.0, Some(0.0), "stationary"),
+            (2.0_f64.next_up(), Some(0.0), "provisional_zero"),
+            (130.0, Some(0.0), "provisional_zero"),
+            (130.0_f64.next_up(), None, "implausible"),
+            (f64::NAN, None, "implausible"),
+            (f64::INFINITY, None, "implausible"),
+        ] {
+            let mut evidence = MotionEvidence::default();
+            assert_eq!(evidence.observe(mph), (value, outcome));
+        }
+        let mut evidence = MotionEvidence::default();
+        evidence.observe(130.0);
+        for _ in 0..300 {
+            assert_eq!(evidence.observe(130.0), (Some(130.0), "derived"));
+        }
+        assert_eq!(evidence.segments(), u8::MAX);
+        assert_eq!(evidence.observe(2.0), (Some(0.0), "stationary"));
+        assert_eq!(evidence.segments(), 0);
+        assert_eq!(evidence.observe(3.0), (Some(0.0), "provisional_zero"));
+    }
+
+    #[test]
+    fn charge_core_gnss_positive_speed_wins_over_odometer() {
+        let mut fusion = TripSignalFusion::default();
+        for i in 0..3 {
+            let mut sample = charge_core_fix(i * 60, 1.0 + i as f64 * 0.01);
+            sample.odometer_miles = Some(100.0 + i as f64);
+            let (joined, diag) = fusion.fuse_from(&sample, false);
+            if i == 2 {
+                assert_eq!(diag.speed_origin, "gnss");
+                assert_eq!(diag.odometer_outcome, "speed_precedence");
+                assert!(joined.speed_mph.unwrap() > 2.0);
+                assert!(joined.speed_mph.unwrap() < 60.0);
+            }
+        }
+    }
+
+    #[test]
+    fn charge_core_odometer_interval_speed_and_rollback_boundaries() {
+        for (seconds, miles, outcome, speed) in [
+            (4, 0.01, "interval_out_of_range", None),
+            (5, 0.01, "derived", Some(7.2)),
+            (300, 1.0, "derived", Some(12.0)),
+            (301, 1.0, "interval_out_of_range", None),
+            (180, 6.5, "derived", Some(130.0)),
+            (180, 6.5001, "implausible", None),
+            (180, 0.1, "derived", Some(2.0)),
+            (60, 0.0, "no_increase", None),
+            (60, -1.0, "no_increase", None),
+        ] {
+            let mut fusion = TripSignalFusion::default();
+            fusion.fuse(&odometer(charge_core_at(0), 100.0));
+            let (joined, diag) =
+                fusion.fuse_from(&odometer(charge_core_at(seconds), 100.0 + miles), false);
+            assert_eq!(diag.odometer_outcome, outcome);
+            assert_eq!(diag.odometer_interval_seconds, Some(seconds));
+            match speed {
+                Some(expected) => assert!((joined.speed_mph.unwrap() - expected).abs() < 1e-8),
+                None => assert_eq!(joined.speed_mph, None),
+            }
+        }
+        let mut fusion = TripSignalFusion::default();
+        fusion.fuse(&odometer(charge_core_at(0), 100.0));
+        fusion.fuse(&odometer(charge_core_at(60), 0.0));
+        assert_eq!(
+            fusion.fuse(&odometer(charge_core_at(120), 1.0)).speed_mph,
+            Some(60.0)
+        );
+    }
+
+    #[test]
+    fn charge_core_odometer_invalid_age_future_and_order_boundaries() {
+        for miles in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.001] {
+            let (_, diag) =
+                TripSignalFusion::default().fuse_from(&odometer(charge_core_at(0), miles), false);
+            assert_eq!(diag.odometer_outcome, "invalid");
+        }
+        for (age_ms, outcome) in [
+            (120_000, "derived"),
+            (120_001, "stale"),
+            (-5_000, "derived"),
+            (-5_001, "future_or_out_of_order"),
+        ] {
+            let mut fusion = TripSignalFusion::default();
+            fusion.fuse(&odometer(charge_core_at(0), 100.0));
+            let mut sample = odometer(charge_core_at(180), 101.0);
+            sample.odometer_miles_ts = Some(sample.ts - Duration::milliseconds(age_ms));
+            let (_, diag) = fusion.fuse_from(&sample, false);
+            assert_eq!(diag.odometer_outcome, outcome);
+        }
+        let mut fusion = TripSignalFusion::default();
+        fusion.fuse(&odometer(charge_core_at(60), 100.0));
+        for seconds in [60, 59] {
+            let (_, diag) = fusion.fuse_from(&odometer(charge_core_at(seconds), 101.0), false);
+            assert_eq!(diag.odometer_outcome, "future_or_out_of_order");
+        }
+        assert_eq!(
+            fusion.fuse(&odometer(charge_core_at(120), 101.0)).speed_mph,
+            Some(60.0)
+        );
+    }
+
+    #[test]
+    fn charge_core_interleaved_vehicle_streams_and_cold_restart_are_independent() {
+        let mut first = TripSignalFusion::new(true);
+        let mut second = TripSignalFusion::new(false);
+        let mut sample = charge_core_fix(0, 1.0);
+        sample.power_state = Some(PowerState::Drive);
+        sample.odometer_miles = Some(100.0);
+        first.fuse(&sample);
+        let mut other = charge_core_fix(0, 50.0);
+        other.vehicle_id = Uuid::from_u128(2);
+        other.power_state = Some(PowerState::Sleep);
+        other.odometer_miles = Some(2_000.0);
+        second.fuse(&other);
+        sample.ts = charge_core_at(60);
+        sample.power_state = None;
+        sample.odometer_miles = Some(101.0);
+        let joined = first.fuse(&sample);
+        assert_eq!(joined.power_state, Some(PowerState::Drive));
+        assert_eq!(joined.speed_mph, Some(60.0));
+        other.ts = charge_core_at(60);
+        other.power_state = None;
+        let joined = second.fuse(&other);
+        assert_eq!(joined.vehicle_id, Uuid::from_u128(2));
+        assert_eq!(joined.power_state, Some(PowerState::Sleep));
+        assert_eq!(joined.speed_mph, Some(0.0));
+        let (restarted, diag) = TripSignalFusion::new(true).fuse_from(&sample, true);
+        assert_eq!(restarted.power_state, None);
+        assert_eq!(restarted.speed_mph, None);
+        assert_eq!(diag.gnss_outcome, "baseline");
+        assert_eq!(diag.odometer_outcome, "baseline");
+    }
+
+    #[test]
+    fn charge_core_full_sequence_and_downstream_trip_contract() {
+        use crate::ingestion::trip_detector::{
+            compute_distance_odometer_or_gps, TripDetectorState, TripEvent,
+        };
+        let mut fusion = TripSignalFusion::new(true);
+        let mut actual_detector = TripDetectorState::new(Uuid::from_u128(1));
+        let mut expected_detector = actual_detector.clone();
+        let mut actual_id = None;
+        let mut expected_id = None;
+        for i in 0..4 {
+            let mut raw = charge_core_fix(i * 60, 1.0);
+            raw.odometer_miles = Some(100.0 + i.min(2) as f64);
+            raw.battery_level = Some(80.0 - i.min(2) as f64);
+            raw.battery_capacity_wh = Some(100_000.0);
+            raw.regen_power_kw = Some(-3.0);
+            if i == 0 {
+                raw.power_state = Some(PowerState::Drive);
+            }
+            if i == 3 {
+                raw.power_state = Some(PowerState::Sleep);
+            }
+            let original = serde_json::to_value(&raw).unwrap();
+            let mut expected = raw.clone();
+            if i == 1 || i == 2 {
+                expected.power_state = Some(PowerState::Drive);
+                expected.power_state_ts = Some(charge_core_at(0));
+            }
+            if i > 0 {
+                expected.speed_mph = Some(if i == 3 { 0.0 } else { 60.0 });
+                expected.speed_mph_ts = Some(raw.ts);
+            }
+            let joined = fusion.fuse(&raw);
+            assert_eq!(
+                serde_json::to_value(&joined).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            assert_eq!(serde_json::to_value(&raw).unwrap(), original);
+            match (
+                actual_detector.process(&joined),
+                expected_detector.process(&expected),
+            ) {
+                (TripEvent::NoChange, TripEvent::NoChange) => assert!(i == 0 || i == 2),
+                (
+                    TripEvent::TripStarted {
+                        trip_id: actual,
+                        started_at,
+                    },
+                    TripEvent::TripStarted {
+                        trip_id: expected,
+                        started_at: expected_at,
+                    },
+                ) => {
+                    assert_eq!(i, 1);
+                    assert_eq!(started_at, charge_core_at(0));
+                    assert_eq!(started_at, expected_at);
+                    actual_id = Some(actual);
+                    expected_id = Some(expected);
+                }
+                (TripEvent::TripEnded { trip }, TripEvent::TripEnded { trip: mut expected }) => {
+                    assert_eq!(i, 3);
+                    assert_eq!(Some(trip.trip_id), actual_id);
+                    assert_eq!(Some(expected.trip_id), expected_id);
+                    expected.trip_id = trip.trip_id;
+                    assert_eq!(trip, expected);
+                    assert_eq!(trip.ended_at, charge_core_at(180));
+                    assert_eq!(trip.regen_wh, Some(100.0));
+                    assert_eq!(
+                        (trip.soc_start, trip.soc_end, trip.battery_capacity_wh),
+                        (Some(79.0), Some(78.0), Some(100_000.0))
+                    );
+                    assert_eq!(
+                        compute_distance_odometer_or_gps(
+                            trip.start_odometer_mi,
+                            trip.end_odometer_mi,
+                            &trip.points
+                        ),
+                        2.0
+                    );
+                }
+                (actual, expected) => panic!("transition mismatch: {actual:?}, {expected:?}"),
+            }
+        }
+        assert_eq!(actual_detector.active_trip_id(), None);
+    }
 
     #[test]
     fn source_policy_follows_latest_accepted_power_not_vehicle_model() {

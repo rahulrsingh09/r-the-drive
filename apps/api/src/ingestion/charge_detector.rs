@@ -65,21 +65,104 @@ pub struct ActiveChargeSessionSnapshot {
 #[derive(Debug, Default)]
 pub struct ChargeDetectorState {
     vehicle_id: Uuid,
-    active_session_id: Option<Uuid>,
-    is_charging: bool,
-    started_at: Option<DateTime<Utc>>,
-    start_lat: Option<f64>,
-    start_lng: Option<f64>,
-    soc_start: Option<f64>,
-    last_soc: Option<f64>,
-    charge_limit: Option<f64>,
-    battery_capacity: Option<f64>,
-    last_charge_ts: Option<DateTime<Utc>>,
-    last_power_ts: Option<DateTime<Utc>>,
+    battery: ChargeBatteryReadings,
+    phase: ChargePhase,
+}
 
-    // Energy / rate accumulators
-    energy_used_wh_acc: f64,
-    peak_charge_kw: f64,
+#[derive(Debug, Default)]
+struct ChargeBatteryReadings {
+    soc: Option<f64>,
+    limit: Option<f64>,
+    capacity_wh: Option<f64>,
+}
+
+impl ChargeBatteryReadings {
+    fn observe(&mut self, event: &TelemetryEvent) {
+        if event.battery_level.is_some() {
+            self.soc = event.battery_level;
+        }
+        if event.battery_limit.is_some() {
+            self.limit = event.battery_limit;
+        }
+        if event.battery_capacity_wh.is_some() {
+            self.capacity_wh = event.battery_capacity_wh;
+        }
+    }
+
+    fn added_wh(&self, start_soc: Option<f64>) -> Option<f64> {
+        let delta = self.soc? - start_soc?;
+        let capacity = self.capacity_wh?;
+        (delta > 0.0).then_some(delta / 100.0 * capacity)
+    }
+}
+
+#[derive(Debug, Default)]
+enum ChargePhase {
+    #[default]
+    Idle,
+    Active(ActiveCharge),
+}
+
+#[derive(Debug)]
+struct ActiveCharge {
+    id: Uuid,
+    started_at: DateTime<Utc>,
+    location: (Option<f64>, Option<f64>),
+    start_soc: Option<f64>,
+    last_activity: DateTime<Utc>,
+    grid: ChargeGridEnergy,
+}
+
+#[derive(Debug)]
+struct ChargeGridEnergy {
+    last_sample_at: Option<DateTime<Utc>>,
+    watt_hours: f64,
+    peak_kw: f64,
+}
+
+impl ChargeGridEnergy {
+    fn observe(&mut self, at: DateTime<Utc>, power: Option<f64>) {
+        let Some(kw) = power.map(f64::abs) else {
+            return;
+        };
+        let exceeds_ac_baseline =
+            self.peak_kw > 0.0 && self.peak_kw < AC_L2_MAX_KW && kw > 5.0 * self.peak_kw;
+        if !(kw > 0.0 && kw <= PLAUSIBLE_MAX_CHARGE_KW) || exceeds_ac_baseline {
+            return;
+        }
+        if let Some(previous) = self.last_sample_at {
+            let hours = (at - previous).num_milliseconds() as f64 / 3_600_000.0;
+            self.watt_hours += kw * 1_000.0 * hours;
+        }
+        self.peak_kw = self.peak_kw.max(kw);
+        self.last_sample_at = Some(at);
+    }
+}
+
+struct ChargeSignals {
+    starts: bool,
+    sustains: bool,
+    stops: bool,
+}
+
+impl ChargeSignals {
+    fn read(event: &TelemetryEvent) -> Self {
+        let starts = event.is_actively_charging();
+        let remaining = event
+            .time_to_end_of_charge_min
+            .is_some_and(|value| value > 0);
+        let stops = matches!(
+            event.charger_state,
+            Some(ChargerState::Done | ChargerState::Disconnected)
+        ) || event.charger_status.as_deref() == Some("chrgr_sts_not_connected")
+            || (event.charger_status.as_deref() == Some("chrgr_sts_connected_no_chrg")
+                && !remaining);
+        Self {
+            starts,
+            sustains: starts || remaining,
+            stops,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -94,217 +177,147 @@ impl ChargeDetectorState {
     pub fn new(vehicle_id: Uuid) -> Self {
         Self {
             vehicle_id,
-            ..Default::default()
+            ..Self::default()
         }
     }
 
     pub fn from_snapshot(vehicle_id: Uuid, snapshot: ActiveChargeSessionSnapshot) -> Self {
         Self {
             vehicle_id,
-            active_session_id: Some(snapshot.session_id),
-            is_charging: true,
-            started_at: Some(snapshot.started_at),
-            start_lat: snapshot.location_lat,
-            start_lng: snapshot.location_lng,
-            soc_start: snapshot.soc_start,
-            last_soc: snapshot.last_soc,
-            charge_limit: snapshot.charge_limit,
-            battery_capacity: snapshot.battery_capacity_wh,
-            last_charge_ts: Some(snapshot.last_charge_ts),
-            last_power_ts: snapshot.last_power_ts,
-            energy_used_wh_acc: snapshot.energy_used_wh.max(0.0),
-            peak_charge_kw: snapshot.peak_charge_kw.max(0.0),
+            battery: ChargeBatteryReadings {
+                soc: snapshot.last_soc,
+                limit: snapshot.charge_limit,
+                capacity_wh: snapshot.battery_capacity_wh,
+            },
+            phase: ChargePhase::Active(ActiveCharge {
+                id: snapshot.session_id,
+                started_at: snapshot.started_at,
+                location: (snapshot.location_lat, snapshot.location_lng),
+                start_soc: snapshot.soc_start,
+                last_activity: snapshot.last_charge_ts,
+                grid: ChargeGridEnergy {
+                    last_sample_at: snapshot.last_power_ts,
+                    watt_hours: snapshot.energy_used_wh.max(0.0),
+                    peak_kw: snapshot.peak_charge_kw.max(0.0),
+                },
+            }),
         }
     }
 
-    /// Returns the active session_id so the ingestion worker can stamp each
-    /// telemetry row while charging is in progress.
+    /// Returns the identity stamped on telemetry while a session is active.
     pub fn active_session_id(&self) -> Option<Uuid> {
-        self.active_session_id
+        match &self.phase {
+            ChargePhase::Idle => None,
+            ChargePhase::Active(session) => Some(session.id),
+        }
     }
 
     pub fn process(&mut self, event: &TelemetryEvent) -> ChargeEvent {
-        let ts = event.ts;
-        let state = event.charger_state.as_ref();
+        self.battery.observe(event);
+        let (phase, transition) =
+            std::mem::take(&mut self.phase).advance(event, self.vehicle_id, &self.battery);
+        self.phase = phase;
+        transition
+    }
+}
 
-        if let Some(soc) = event.battery_level {
-            self.last_soc = Some(soc);
-            if self.is_charging && self.soc_start.is_none() {
-                self.soc_start = Some(soc);
-            }
-        }
-        if let Some(limit) = event.battery_limit {
-            self.charge_limit = Some(limit);
-        }
-        if let Some(cap) = event.battery_capacity_wh {
-            self.battery_capacity = Some(cap);
-        }
-        if self.is_charging && self.start_lat.is_none() && self.start_lng.is_none() {
-            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
-                self.start_lat = Some(lat);
-                self.start_lng = Some(lng);
-            }
-        }
-
-        // Power integration (|power_kw| for charging — power_kw may be negative
-        // for grid intake depending on sign convention; take absolute value).
-        //
-        // Two-layer glitch rejection:
-        //
-        //  1. Hard ceiling (PLAUSIBLE_MAX_CHARGE_KW): no real charger delivers
-        //     more than ~220 kW to a Rivian.  Anything above 300 kW is hardware
-        //     noise and is discarded unconditionally.
-        //
-        //  2. AC-baseline spike filter: if every reading so far is below
-        //     AC_L2_MAX_KW (i.e. the session is clearly on a home/L2 circuit)
-        //     and this new sample is more than 5× the established peak, it is
-        //     almost certainly a transient sensor glitch — a home charger cannot
-        //     physically jump from 8 kW to 250 kW mid-session.  Discard it so a
-        //     single bad sample cannot flip the charger-type classification from
-        //     AC to DC or corrupt the energy accumulator.
-        if self.is_charging {
-            if let Some(kw) = event.power_kw {
-                let kw_abs = kw.abs();
-                let is_dc_spike_on_ac_session = self.peak_charge_kw > 0.0
-                    && self.peak_charge_kw < AC_L2_MAX_KW
-                    && kw_abs > self.peak_charge_kw * 5.0;
-
-                if kw_abs > 0.0 && kw_abs <= PLAUSIBLE_MAX_CHARGE_KW && !is_dc_spike_on_ac_session {
-                    if let Some(last_t) = self.last_power_ts {
-                        let dt_hours = (ts - last_t).num_milliseconds() as f64 / 3_600_000.0;
-                        self.energy_used_wh_acc += kw_abs * 1_000.0 * dt_hours;
-                    }
-                    if kw_abs > self.peak_charge_kw {
-                        self.peak_charge_kw = kw_abs;
-                    }
-                    self.last_power_ts = Some(ts);
+impl ChargePhase {
+    fn advance(
+        self,
+        event: &TelemetryEvent,
+        vehicle_id: Uuid,
+        battery: &ChargeBatteryReadings,
+    ) -> (Self, ChargeEvent) {
+        let signals = ChargeSignals::read(event);
+        match self {
+            Self::Idle if signals.starts => (
+                Self::Active(ActiveCharge::begin(event)),
+                ChargeEvent::SessionStarted,
+            ),
+            Self::Idle => (Self::Idle, ChargeEvent::NoChange),
+            Self::Active(mut session) => {
+                session.observe(event);
+                if signals.sustains {
+                    session.last_activity = event.ts;
+                }
+                let expired =
+                    (event.ts - session.last_activity).num_seconds() > CHARGE_TIMEOUT_SECS;
+                if signals.stops || expired {
+                    (
+                        Self::Idle,
+                        ChargeEvent::SessionEnded(session.finish(vehicle_id, event.ts, battery)),
+                    )
+                } else {
+                    (Self::Active(session), ChargeEvent::NoChange)
                 }
             }
         }
+    }
+}
 
-        let status = event.charger_status.as_deref();
-        let has_remaining_charge_time = event
-            .time_to_end_of_charge_min
-            .is_some_and(|minutes| minutes > 0);
-        let actively_charging =
-            event.is_actively_charging() || (self.is_charging && has_remaining_charge_time);
-        let session_ended = matches!(state, Some(ChargerState::Done | ChargerState::Disconnected))
-            || matches!(status, Some("chrgr_sts_not_connected"))
-            || (self.is_charging
-                && matches!(status, Some("chrgr_sts_connected_no_chrg"))
-                && !has_remaining_charge_time);
-
-        // Start
-        if !self.is_charging && actively_charging {
-            let session_id = Uuid::new_v4();
-            self.active_session_id = Some(session_id);
-            self.is_charging = true;
-            self.started_at = Some(ts);
-            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
-                self.start_lat = Some(lat);
-                self.start_lng = Some(lng);
-            }
-            self.soc_start = event.battery_level;
-            self.last_charge_ts = Some(ts);
-            self.last_power_ts = Some(ts);
-            self.energy_used_wh_acc = 0.0;
-            self.peak_charge_kw = 0.0;
-            return ChargeEvent::SessionStarted;
+impl ActiveCharge {
+    fn begin(event: &TelemetryEvent) -> Self {
+        let location = valid_location_pair(event.latitude, event.longitude)
+            .map(|(lat, lng)| (Some(lat), Some(lng)))
+            .unwrap_or_default();
+        Self {
+            id: Uuid::new_v4(),
+            started_at: event.ts,
+            location,
+            start_soc: event.battery_level,
+            last_activity: event.ts,
+            grid: ChargeGridEnergy {
+                // The opening frame anchors time; subsequent frames supply power.
+                last_sample_at: Some(event.ts),
+                watt_hours: 0.0,
+                peak_kw: 0.0,
+            },
         }
-
-        if self.is_charging {
-            if actively_charging {
-                self.last_charge_ts = Some(ts);
-            }
-
-            // Timeout: no charging event in 30 min
-            let timed_out = self
-                .last_charge_ts
-                .is_some_and(|last| (ts - last).num_seconds() > CHARGE_TIMEOUT_SECS);
-
-            if session_ended || timed_out {
-                return self.close_session(ts);
-            }
-        }
-
-        ChargeEvent::NoChange
     }
 
-    fn close_session(&mut self, ended_at: DateTime<Utc>) -> ChargeEvent {
-        let started_at = self.started_at.unwrap_or(ended_at);
-        let duration_hours = (ended_at - started_at).num_seconds() as f64 / 3_600.0;
-
-        // energy_added_wh from SOC delta × pack capacity
-        let energy_added_wh = match (self.soc_start, self.last_soc, self.battery_capacity) {
-            (Some(s0), Some(s1), Some(cap)) => {
-                let delta = s1 - s0;
-                if delta > 0.0 {
-                    Some((delta / 100.0) * cap)
-                } else {
-                    None
-                }
+    fn observe(&mut self, event: &TelemetryEvent) {
+        if self.start_soc.is_none() {
+            self.start_soc = event.battery_level;
+        }
+        if self.location == (None, None) {
+            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
+                self.location = (Some(lat), Some(lng));
             }
-            _ => None,
-        };
+        }
+        self.grid.observe(event.ts, event.power_kw);
+    }
 
-        let energy_used_wh = if self.energy_used_wh_acc > 0.0 {
-            Some(self.energy_used_wh_acc)
-        } else {
-            None
-        };
-
-        // Prefer grid-side integrated energy, but fall back to pack-side SOC
-        // delta when Rivian omits power telemetry for the session.
-        let avg_charge_rate_kw = energy_used_wh.or(energy_added_wh).and_then(|wh| {
-            if duration_hours > 0.0 {
-                Some(wh / 1_000.0 / duration_hours)
-            } else {
-                None
-            }
-        });
-
-        // charger_type classification by peak power
-        let charger_type = if self.peak_charge_kw > 0.0 {
-            Some(classify_charger(self.peak_charge_kw))
-        } else {
-            avg_charge_rate_kw.map(classify_charger)
-        };
-        let peak = if self.peak_charge_kw > 0.0 {
-            Some(self.peak_charge_kw)
-        } else {
-            None
-        };
-
-        let session = CompletedChargeSession {
-            session_id: self.active_session_id.unwrap_or_else(Uuid::new_v4),
-            vehicle_id: self.vehicle_id,
-            started_at,
+    fn finish(
+        self,
+        vehicle_id: Uuid,
+        ended_at: DateTime<Utc>,
+        battery: &ChargeBatteryReadings,
+    ) -> CompletedChargeSession {
+        let energy_used_wh = (self.grid.watt_hours > 0.0).then_some(self.grid.watt_hours);
+        let energy_added_wh = battery.added_wh(self.start_soc);
+        let hours = (ended_at - self.started_at).num_seconds() as f64 / 3_600.0;
+        let avg_charge_rate_kw = energy_used_wh
+            .or(energy_added_wh)
+            .filter(|_| hours > 0.0)
+            .map(|wh| wh / 1_000.0 / hours);
+        let peak_charge_kw = (self.grid.peak_kw > 0.0).then_some(self.grid.peak_kw);
+        CompletedChargeSession {
+            session_id: self.id,
+            vehicle_id,
+            started_at: self.started_at,
             ended_at,
-            location_lat: self.start_lat,
-            location_lng: self.start_lng,
-            soc_start: self.soc_start,
-            soc_end: self.last_soc,
-            charge_limit: self.charge_limit,
-            battery_capacity_wh: self.battery_capacity,
+            location_lat: self.location.0,
+            location_lng: self.location.1,
+            soc_start: self.start_soc,
+            soc_end: battery.soc,
+            charge_limit: battery.limit,
+            battery_capacity_wh: battery.capacity_wh,
             energy_used_wh,
             energy_added_wh,
-            peak_charge_kw: peak,
+            peak_charge_kw,
             avg_charge_rate_kw,
-            charger_type,
-        };
-
-        self.active_session_id = None;
-        self.is_charging = false;
-        self.started_at = None;
-        self.start_lat = None;
-        self.start_lng = None;
-        self.soc_start = None;
-        self.last_charge_ts = None;
-        self.last_power_ts = None;
-        self.energy_used_wh_acc = 0.0;
-        self.peak_charge_kw = 0.0;
-
-        ChargeEvent::SessionEnded(session)
+            charger_type: peak_charge_kw.or(avg_charge_rate_kw).map(classify_charger),
+        }
     }
 }
 
@@ -323,6 +336,454 @@ fn classify_charger(peak_kw: f64) -> String {
 mod tests {
     use super::*;
     use chrono::Duration;
+
+    fn charge_core_at(seconds: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000 + seconds, 0).unwrap()
+    }
+
+    fn charge_core_sample(seconds: i64) -> TelemetryEvent {
+        TelemetryEvent::empty(Uuid::from_u128(1), charge_core_at(seconds))
+    }
+
+    fn charge_core_started() -> ChargeDetectorState {
+        let mut detector = ChargeDetectorState::new(Uuid::from_u128(1));
+        let mut start = charge_core_sample(0);
+        start.charger_state = Some(ChargerState::Charging);
+        assert!(matches!(
+            detector.process(&start),
+            ChargeEvent::SessionStarted
+        ));
+        detector
+    }
+
+    fn charge_core_finish(
+        detector: &mut ChargeDetectorState,
+        seconds: i64,
+    ) -> CompletedChargeSession {
+        let mut end = charge_core_sample(seconds);
+        end.charger_state = Some(ChargerState::Done);
+        match detector.process(&end) {
+            ChargeEvent::SessionEnded(session) => session,
+            other => panic!("expected completed session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn charge_core_independent_start_signals_and_conflicting_end() {
+        use crate::models::telemetry::PowerState;
+        for signal in 0..3 {
+            let mut start = charge_core_sample(0);
+            match signal {
+                0 => start.power_state = Some(PowerState::Charging),
+                1 => start.charger_state = Some(ChargerState::Charging),
+                _ => start.charger_status = Some("chrgr_sts_connected_charging".into()),
+            }
+            let mut detector = ChargeDetectorState::new(start.vehicle_id);
+            assert!(matches!(
+                detector.process(&start),
+                ChargeEvent::SessionStarted
+            ));
+            assert!(detector.active_session_id().is_some());
+        }
+        let mut conflict = charge_core_sample(0);
+        conflict.power_state = Some(PowerState::Charging);
+        conflict.charger_state = Some(ChargerState::Done);
+        let mut detector = ChargeDetectorState::new(conflict.vehicle_id);
+        assert!(matches!(
+            detector.process(&conflict),
+            ChargeEvent::SessionStarted
+        ));
+        conflict.ts = charge_core_at(1);
+        assert!(matches!(
+            detector.process(&conflict),
+            ChargeEvent::SessionEnded(_)
+        ));
+    }
+
+    #[test]
+    fn charge_core_power_and_remaining_time_alone_do_not_start() {
+        for remaining in [None, Some(-1), Some(0), Some(1)] {
+            let mut detector = ChargeDetectorState::new(Uuid::from_u128(1));
+            let mut sample = charge_core_sample(0);
+            sample.time_to_end_of_charge_min = remaining;
+            sample.power_kw = Some(-10.0);
+            assert!(matches!(detector.process(&sample), ChargeEvent::NoChange));
+            assert_eq!(detector.active_session_id(), None);
+        }
+    }
+
+    #[test]
+    fn charge_core_end_signals_override_remaining_time_except_connected_idle() {
+        for signal in 0..4 {
+            for remaining in [None, Some(-1), Some(0), Some(1)] {
+                let mut detector = charge_core_started();
+                let mut sample = charge_core_sample(60);
+                sample.time_to_end_of_charge_min = remaining;
+                match signal {
+                    0 => sample.charger_state = Some(ChargerState::Done),
+                    1 => sample.charger_state = Some(ChargerState::Disconnected),
+                    2 => sample.charger_status = Some("chrgr_sts_not_connected".into()),
+                    _ => sample.charger_status = Some("chrgr_sts_connected_no_chrg".into()),
+                }
+                let ended = matches!(detector.process(&sample), ChargeEvent::SessionEnded(_));
+                assert_eq!(ended, signal != 3 || remaining != Some(1));
+            }
+        }
+    }
+
+    #[test]
+    fn charge_core_timeout_uses_whole_seconds_and_refreshes_before_checking() {
+        for milliseconds in [1_800_000, 1_800_999, 1_801_000] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(0);
+            sample.ts += Duration::milliseconds(milliseconds);
+            match detector.process(&sample) {
+                ChargeEvent::SessionEnded(session) => {
+                    assert_eq!(milliseconds, 1_801_000);
+                    assert_eq!(session.ended_at, sample.ts);
+                }
+                ChargeEvent::NoChange => assert!(milliseconds < 1_801_000),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        for remaining in [None, Some(-1), Some(0), Some(1)] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(1_801);
+            sample.time_to_end_of_charge_min = remaining;
+            assert_eq!(
+                matches!(detector.process(&sample), ChargeEvent::NoChange),
+                remaining == Some(1)
+            );
+        }
+        let mut detector = charge_core_started();
+        let mut resumed = charge_core_sample(3_600);
+        resumed.charger_state = Some(ChargerState::Charging);
+        assert!(matches!(detector.process(&resumed), ChargeEvent::NoChange));
+    }
+
+    #[test]
+    fn charge_core_first_power_sets_clock_and_end_power_contributes() {
+        let mut detector = ChargeDetectorState::new(Uuid::from_u128(1));
+        let mut start = charge_core_sample(0);
+        start.charger_state = Some(ChargerState::Charging);
+        start.power_kw = Some(200.0);
+        detector.process(&start);
+        let mut end = charge_core_sample(60);
+        end.charger_state = Some(ChargerState::Done);
+        end.power_kw = Some(-12.0);
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completion");
+        };
+        assert_eq!(session.energy_used_wh, Some(200.0));
+        assert_eq!(session.peak_charge_kw, Some(12.0));
+        assert_eq!(session.avg_charge_rate_kw, Some(12.0));
+        assert_eq!(session.charger_type.as_deref(), Some("ac_l2"));
+    }
+
+    #[test]
+    fn charge_core_power_ceiling_spike_and_classification_boundaries() {
+        for (kw, expected) in [
+            (11.999, Some("ac")),
+            (12.0, Some("ac_l2")),
+            (49.999, Some("ac_l2")),
+            (50.0, Some("dc")),
+            (300.0, Some("dc")),
+            (300.001, None),
+        ] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(60);
+            sample.power_kw = Some(kw);
+            detector.process(&sample);
+            let session = charge_core_finish(&mut detector, 120);
+            assert_eq!(session.charger_type.as_deref(), expected, "{kw}");
+            assert_eq!(session.peak_charge_kw, expected.map(|_| kw));
+        }
+        for (baseline, next, accepted) in
+            [(8.0, 40.0, true), (8.0, 40.001, false), (50.0, 300.0, true)]
+        {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(60);
+            sample.power_kw = Some(baseline);
+            detector.process(&sample);
+            sample.ts = charge_core_at(120);
+            sample.power_kw = Some(next);
+            detector.process(&sample);
+            let session = charge_core_finish(&mut detector, 180);
+            let total =
+                baseline * 1_000.0 / 60.0 + if accepted { next * 1_000.0 / 60.0 } else { 0.0 };
+            assert!((session.energy_used_wh.unwrap() - total).abs() < 1e-9);
+            assert_eq!(
+                session.peak_charge_kw,
+                Some(if accepted { next } else { baseline })
+            );
+        }
+    }
+
+    #[test]
+    fn charge_core_missing_zero_and_nonfinite_power_do_not_add_energy() {
+        for power in [
+            None,
+            Some(0.0),
+            Some(-0.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+        ] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(60);
+            sample.power_kw = power;
+            detector.process(&sample);
+            let session = charge_core_finish(&mut detector, 120);
+            assert_eq!(session.energy_used_wh, None);
+            assert_eq!(session.peak_charge_kw, None);
+            assert_eq!(session.avg_charge_rate_kw, None);
+            assert_eq!(session.charger_type, None);
+        }
+    }
+
+    #[test]
+    fn charge_core_grid_estimate_does_not_depend_on_capacity_quality() {
+        for capacity in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(60);
+            sample.power_kw = Some(12.0);
+            sample.battery_level = Some(40.0);
+            sample.battery_capacity_wh = capacity;
+            detector.process(&sample);
+            sample.ts = charge_core_at(120);
+            sample.battery_level = Some(50.0);
+            sample.charger_state = Some(ChargerState::Done);
+            let ChargeEvent::SessionEnded(session) = detector.process(&sample) else {
+                panic!("expected completion");
+            };
+            assert_eq!(session.energy_used_wh, Some(400.0));
+            assert_eq!(session.avg_charge_rate_kw, Some(12.0));
+            assert_eq!(session.peak_charge_kw, Some(12.0));
+        }
+    }
+
+    #[test]
+    fn charge_core_snapshot_without_power_clock_preserves_identity_and_partial_location() {
+        for energy in [0.0, -1.0, f64::NAN] {
+            let session_id = Uuid::from_u128(20);
+            let mut detector = ChargeDetectorState::from_snapshot(
+                Uuid::from_u128(1),
+                ActiveChargeSessionSnapshot {
+                    session_id,
+                    started_at: charge_core_at(0),
+                    location_lat: Some(30.0),
+                    location_lng: None,
+                    soc_start: Some(40.0),
+                    last_soc: Some(40.0),
+                    charge_limit: None,
+                    battery_capacity_wh: None,
+                    last_charge_ts: charge_core_at(0),
+                    last_power_ts: None,
+                    energy_used_wh: energy,
+                    peak_charge_kw: -1.0,
+                },
+            );
+            let mut sample = charge_core_sample(60);
+            sample.latitude = Some(40.0);
+            sample.longitude = Some(50.0);
+            sample.power_kw = Some(12.0);
+            detector.process(&sample);
+            let session = charge_core_finish(&mut detector, 120);
+            assert_eq!(session.session_id, session_id);
+            assert_eq!(session.energy_used_wh, None);
+            assert_eq!(session.peak_charge_kw, Some(12.0));
+            assert_eq!(
+                (session.location_lat, session.location_lng),
+                (Some(30.0), None)
+            );
+        }
+    }
+
+    #[test]
+    fn charge_core_soc_options_pack_fallback_and_grid_precedence() {
+        for (start_soc, end_soc, capacity, grid_kw, expected_pack, expected_avg) in [
+            (None, None, None, None, None, None),
+            (
+                Some(0.0),
+                Some(10.0),
+                Some(100_000.0),
+                None,
+                Some(10_000.0),
+                Some(10.0),
+            ),
+            (Some(40.0), Some(40.0), Some(100_000.0), None, None, None),
+            (Some(40.0), Some(39.0), Some(100_000.0), None, None, None),
+            (Some(40.0), Some(50.0), None, None, None, None),
+            (
+                Some(40.0),
+                Some(50.0),
+                Some(100_000.0),
+                Some(20.0),
+                Some(10_000.0),
+                Some(20.0),
+            ),
+        ] {
+            let mut detector = ChargeDetectorState::new(Uuid::from_u128(1));
+            let mut sample = charge_core_sample(0);
+            sample.charger_state = Some(ChargerState::Charging);
+            sample.battery_level = start_soc;
+            sample.battery_capacity_wh = capacity;
+            detector.process(&sample);
+            sample.ts = charge_core_at(3_600);
+            sample.charger_state = Some(ChargerState::Done);
+            sample.battery_level = end_soc;
+            sample.power_kw = grid_kw;
+            let ChargeEvent::SessionEnded(session) = detector.process(&sample) else {
+                panic!("expected completion");
+            };
+            assert_eq!(session.energy_added_wh, expected_pack);
+            assert_eq!(session.avg_charge_rate_kw, expected_avg);
+        }
+    }
+
+    #[test]
+    fn charge_core_location_waits_for_complete_finite_pair() {
+        for (lat, lng) in [
+            (None, Some(1.0)),
+            (Some(1.0), None),
+            (Some(0.0), Some(0.0)),
+            (Some(f64::NAN), Some(1.0)),
+            (Some(1.0), Some(f64::INFINITY)),
+        ] {
+            let mut detector = charge_core_started();
+            let mut sample = charge_core_sample(30);
+            sample.latitude = lat;
+            sample.longitude = lng;
+            detector.process(&sample);
+            sample.ts = charge_core_at(60);
+            sample.latitude = Some(0.0);
+            sample.longitude = Some(1.0);
+            detector.process(&sample);
+            let session = charge_core_finish(&mut detector, 90);
+            assert_eq!(
+                (session.location_lat, session.location_lng),
+                (Some(0.0), Some(1.0))
+            );
+        }
+    }
+
+    #[test]
+    fn charge_core_duplicate_timestamp_has_zero_duration() {
+        let mut detector = charge_core_started();
+        let mut sample = charge_core_sample(0);
+        sample.power_kw = Some(12.0);
+        detector.process(&sample);
+        let session = charge_core_finish(&mut detector, 0);
+        assert_eq!(session.energy_used_wh, None);
+        assert_eq!(session.peak_charge_kw, Some(12.0));
+        assert_eq!(session.avg_charge_rate_kw, None);
+    }
+
+    #[test]
+    fn charge_core_restart_matches_uninterrupted_completion_and_identity() {
+        let mut uninterrupted = charge_core_started();
+        let mut sample = charge_core_sample(60);
+        sample.power_kw = Some(12.0);
+        sample.battery_level = Some(40.0);
+        sample.battery_limit = Some(80.0);
+        sample.battery_capacity_wh = Some(100_000.0);
+        sample.latitude = Some(30.0);
+        sample.longitude = Some(-97.0);
+        sample.time_to_end_of_charge_min = Some(10);
+        uninterrupted.process(&sample);
+        let id = uninterrupted.active_session_id().unwrap();
+        let mut restarted = ChargeDetectorState::from_snapshot(
+            sample.vehicle_id,
+            ActiveChargeSessionSnapshot {
+                session_id: id,
+                started_at: charge_core_at(0),
+                location_lat: sample.latitude,
+                location_lng: sample.longitude,
+                soc_start: sample.battery_level,
+                last_soc: sample.battery_level,
+                charge_limit: sample.battery_limit,
+                battery_capacity_wh: sample.battery_capacity_wh,
+                last_charge_ts: sample.ts,
+                last_power_ts: Some(sample.ts),
+                energy_used_wh: 200.0,
+                peak_charge_kw: 12.0,
+            },
+        );
+        sample.ts = charge_core_at(120);
+        sample.battery_level = Some(41.0);
+        sample.charger_state = Some(ChargerState::Done);
+        let actual = restarted.process(&sample);
+        let expected = uninterrupted.process(&sample);
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        let ChargeEvent::SessionEnded(session) = actual else {
+            panic!("expected completion")
+        };
+        assert_eq!(session.session_id, id);
+        assert_eq!(session.energy_used_wh, Some(400.0));
+        assert_eq!(session.energy_added_wh, Some(1_000.0));
+        assert_eq!(restarted.active_session_id(), None);
+    }
+
+    #[test]
+    fn charge_core_next_session_resets_session_fields_but_keeps_vehicle_metadata() {
+        let mut detector = charge_core_started();
+        let mut sample = charge_core_sample(60);
+        sample.battery_level = Some(40.0);
+        sample.battery_limit = Some(80.0);
+        sample.battery_capacity_wh = Some(100_000.0);
+        sample.latitude = Some(30.0);
+        sample.longitude = Some(-97.0);
+        detector.process(&sample);
+        let first = charge_core_finish(&mut detector, 120);
+        sample = charge_core_sample(180);
+        sample.charger_state = Some(ChargerState::Charging);
+        detector.process(&sample);
+        let second = charge_core_finish(&mut detector, 240);
+        assert_ne!(first.session_id, second.session_id);
+        assert_eq!(second.started_at, charge_core_at(180));
+        assert_eq!(
+            (second.location_lat, second.location_lng, second.soc_start),
+            (None, None, None)
+        );
+        assert_eq!(
+            (
+                second.soc_end,
+                second.charge_limit,
+                second.battery_capacity_wh
+            ),
+            (Some(40.0), Some(80.0), Some(100_000.0))
+        );
+        assert_eq!(second.energy_used_wh, None);
+    }
+
+    #[test]
+    fn charge_core_vehicle_instances_keep_independent_sessions() {
+        let mut first = charge_core_started();
+        let mut second = ChargeDetectorState::new(Uuid::from_u128(2));
+        let mut sample = TelemetryEvent::empty(Uuid::from_u128(2), charge_core_at(60));
+        sample.charger_state = Some(ChargerState::Charging);
+        sample.battery_level = Some(60.0);
+        second.process(&sample);
+        let second_id = second.active_session_id();
+        let first_session = charge_core_finish(&mut first, 120);
+        assert_eq!(first_session.vehicle_id, Uuid::from_u128(1));
+        assert_eq!(first_session.soc_start, None);
+        assert_eq!(second.active_session_id(), second_id);
+        sample.ts = charge_core_at(180);
+        sample.charger_state = Some(ChargerState::Done);
+        let ChargeEvent::SessionEnded(second_session) = second.process(&sample) else {
+            panic!("expected completion")
+        };
+        assert_eq!(second_session.vehicle_id, Uuid::from_u128(2));
+        assert_eq!(second_session.soc_start, Some(60.0));
+        assert_ne!(first_session.session_id, second_session.session_id);
+    }
 
     fn event(
         vehicle_id: Uuid,
