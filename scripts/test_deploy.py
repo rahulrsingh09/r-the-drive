@@ -31,10 +31,24 @@ class DeploymentTests(unittest.TestCase):
         self.root_patch.start()
         self.settings, self.values, self.overlay = deploy.configuration(
             'synthetic-install', 'https://vehicle.example.test', 18880, 'synthetic:local')
+        self.docker_implementation = deploy.docker
+        self.docker_patch = patch.object(deploy, 'docker', side_effect=self.local_docker_query)
+        self.docker_patch.start()
 
     def tearDown(self):
+        self.docker_patch.stop()
         self.root_patch.stop()
         self.temporary.cleanup()
+
+    def local_docker_query(self, arguments, **kwargs):
+        responses = {
+            ('compose', 'version'): '2',
+            ('info', '--format', '{{.ServerVersion}}'): '28',
+            ('context', 'inspect'): json.dumps([{
+                'Endpoints': {'docker': {'Host': 'unix:///var/run/docker.sock'}}}]),
+        }
+        self.assertIn(tuple(arguments), responses, 'unexpected Docker action in unit test')
+        return responses[tuple(arguments)]
 
     def write_configuration(self):
         (self.root / '.deploy').mkdir(mode=0o700)
@@ -141,7 +155,7 @@ class DeploymentTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 1, private_input, private_input)
         with patch.object(deploy.subprocess, 'run', return_value=result) as run, \
                 contextlib.redirect_stdout(output), self.assertRaises(RuntimeError) as error:
-            deploy.docker(['exec', '-i', 'synthetic'], input_text=private_input)
+            self.docker_implementation(['exec', '-i', 'synthetic'], input_text=private_input)
         self.assertEqual(run.call_args[1]['input'], private_input)
         self.assertEqual(run.call_args[1]['stdout'], subprocess.PIPE)
         self.assertEqual(run.call_args[1]['stderr'], subprocess.PIPE)
@@ -166,6 +180,96 @@ class DeploymentTests(unittest.TestCase):
                     patch.object(deploy, 'docker', side_effect=['2', '28', context, containers, volumes]), \
                     self.assertRaises(ValueError):
                 deploy.preflight('synthetic-install')
+
+    def test_start_rejects_remote_docker_before_any_installation_action(self):
+        self.write_configuration()
+        before = (self.root / '.env').read_bytes()
+        context = json.dumps([{'Endpoints': {'docker': {'Host': 'ssh://remote.example.test'}}}])
+        with patch.dict(deploy.os.environ, {}, clear=True), \
+                patch.object(deploy, 'docker', side_effect=['2', '28', context]), \
+                patch.object(deploy, 'provision_database') as provision, \
+                patch.object(deploy, 'compose') as compose, \
+                patch.object(deploy, 'local_api', return_value={'setup_required': False}) as api, \
+                patch('builtins.input') as prompt, self.assertRaises(ValueError):
+            deploy.start(self.settings)
+        provision.assert_not_called()
+        compose.assert_not_called()
+        api.assert_not_called()
+        prompt.assert_not_called()
+        self.assertEqual((self.root / '.env').read_bytes(), before)
+
+    def test_named_remote_context_cannot_be_hidden_by_local_docker_host(self):
+        context = json.dumps([{'Endpoints': {'docker': {'Host': 'ssh://remote.example.test'}}}])
+        environment = {'DOCKER_CONTEXT': 'remote-fixture', 'DOCKER_HOST': 'unix:///var/run/docker.sock'}
+        with patch.dict(deploy.os.environ, environment, clear=True), \
+                patch.object(deploy, 'docker', side_effect=['2', '28', context, '', '']) as docker, \
+                self.assertRaises(ValueError):
+            deploy.preflight('synthetic-install')
+        self.assertEqual(docker.call_count, 3)
+
+    def test_named_local_context_takes_precedence_over_docker_host(self):
+        context = json.dumps([{'Endpoints': {'docker': {'Host': 'unix:///var/run/docker.sock'}}}])
+        environment = {'DOCKER_CONTEXT': 'local-fixture', 'DOCKER_HOST': 'ssh://remote.example.test'}
+        with patch.dict(deploy.os.environ, environment, clear=True), \
+                patch.object(deploy, 'docker', side_effect=['2', '28', context]) as docker:
+            deploy.require_local_docker()
+        self.assertEqual(docker.call_count, 3)
+
+    def test_remote_docker_host_is_rejected_without_a_named_context(self):
+        context = json.dumps([{'Endpoints': {'docker': {'Host': 'unix:///var/run/docker.sock'}}}])
+        with patch.dict(deploy.os.environ, {'DOCKER_HOST': 'ssh://remote.example.test'}, clear=True), \
+                patch.object(deploy, 'docker', side_effect=['2', '28', context]), \
+                self.assertRaises(ValueError):
+            deploy.require_local_docker()
+
+    def test_interrupted_proof_cleanup_preserves_stale_files_and_recovers(self):
+        self.write_configuration()
+        stale = self.root / '.deploy/env.next'
+        deploy.private_write(stale, 'retained synthetic interrupted state\n')
+        abandoned = self.root / '.deploy/env.next.abandoned'
+        deploy.private_write(abandoned, 'retained synthetic unique temporary\n')
+        with patch.object(deploy, 'provision_database'), patch.object(deploy, 'compose'), \
+                patch.object(deploy, 'local_api', return_value={'setup_required': False}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            deploy.start(self.settings)
+        self.assertEqual(stale.read_text(), 'retained synthetic interrupted state\n')
+        self.assertEqual(stat.S_IMODE(stale.stat().st_mode), 0o600)
+        self.assertNotIn('PANDA_SETUP_TOKEN=', (self.root / '.env').read_text())
+        self.assertEqual(stat.S_IMODE((self.root / '.env').stat().st_mode), 0o600)
+        self.assertEqual(abandoned.read_text(), 'retained synthetic unique temporary\n')
+        self.assertEqual(set((self.root / '.deploy').glob('env.next*')), {stale, abandoned})
+
+    def test_stale_proof_cleanup_symlink_is_never_followed_or_replaced(self):
+        self.write_configuration()
+        unrelated = self.root / 'unrelated'
+        deploy.private_write(unrelated, 'unrelated synthetic bytes\n')
+        stale = self.root / '.deploy/env.next'
+        stale.symlink_to(unrelated)
+        with patch.object(deploy, 'provision_database'), patch.object(deploy, 'compose'), \
+                patch.object(deploy, 'local_api', return_value={'setup_required': False}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            deploy.start(self.settings)
+        self.assertTrue(stale.is_symlink())
+        self.assertEqual(unrelated.read_text(), 'unrelated synthetic bytes\n')
+        self.assertNotIn('PANDA_SETUP_TOKEN=', (self.root / '.env').read_text())
+
+    def test_failed_proof_replacement_retains_configuration_and_cleans_own_temporary(self):
+        self.write_configuration()
+        before = (self.root / '.env').read_bytes()
+
+        def interrupted_replace(temporary, destination):
+            self.assertEqual(destination, self.root / '.env')
+            self.assertEqual(stat.S_IMODE(temporary.stat().st_mode), 0o600)
+            self.assertEqual((self.root / '.env').read_bytes(), before)
+            raise OSError('synthetic interrupted rename')
+
+        with patch.object(deploy, 'provision_database'), patch.object(deploy, 'compose'), \
+                patch.object(deploy, 'local_api', return_value={'setup_required': False}), \
+                patch.object(Path, 'replace', interrupted_replace), \
+                self.assertRaises(OSError):
+            deploy.start(self.settings)
+        self.assertEqual((self.root / '.env').read_bytes(), before)
+        self.assertEqual(list((self.root / '.deploy').glob('env.next*')), [])
 
     def test_bad_setup_responses_retain_proof_and_never_prompt(self):
         self.write_configuration()

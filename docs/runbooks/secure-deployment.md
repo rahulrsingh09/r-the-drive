@@ -11,10 +11,13 @@ Panda is not approved for direct Internet exposure. The standard production
 Compose stack publishes its web origin on `127.0.0.1:8080` by default.
 `PANDA_HOST_BIND_ADDRESS` explicitly overrides the Docker host interface.
 The stack runs the app as UID/GID `1001`, with a read-only root filesystem, all Linux
-capabilities dropped, `no-new-privileges`, and a bounded `/tmp` tmpfs. Database
-initialization and migrations run inside that same unprivileged app container;
-the production stack has no root init service. Do not weaken these defaults to
-make an origin public.
+capabilities dropped, `no-new-privileges`, and a bounded `/tmp` tmpfs. The helper
+initializes PostgreSQL and installs privileged extensions through the separate
+database-only bootstrap account. The application applies migrations using its
+restricted database account inside the unprivileged app container. The helper
+also uses a short-lived local container to set key-volume ownership before
+generating the keys as UID `1001`; that helper is not a long-lived service.
+Do not weaken the runtime defaults to make an origin public.
 
 Place an authenticated tunnel or identity-aware reverse proxy and host firewall
 rule in front of that origin. A tunnel that only publishes the port

@@ -55,7 +55,11 @@ generates `.env`, `.deploy/settings.json`, `.deploy/compose.json` and the privat
 `.deploy/database-bootstrap-password` file, provisions the database, then starts
 the stack and registers the owner locally. It retains these files and all
 volumes on failure; `python3 scripts/deploy.py start` resumes startup using the
-saved settings.
+saved settings. Both setup and retry reject a remote Docker endpoint before
+provisioning or starting services. Owner-proof removal uses an exclusive
+owner-only temporary file and atomic replacement of `.env`. A retry does not
+overwrite an older interrupted temporary file or follow an older temporary
+symlink; it uses a new file.
 
 ## Database bootstrap and runtime roles
 
@@ -96,18 +100,26 @@ or omit the generated key overlay of an installation created by the helper.
 3. Provision the complete external RSA/AGE bundle using the [key-custody runbook](../runbooks/key-custody.md), and set `PANDA_IMAGE` to the reviewed digest built from the tested source. Existing DB-backed installs must export and migrate their original keys first. Start with your database credential overlay; mounted key files also require the `docker-compose.keys.yml` overlay:
 
    ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml -f compose.local.yml up -d
+   docker compose --env-file .env -f compose/docker-compose.yml \
+     -f compose.local.yml -f compose/docker-compose.keys.yml up -d
    ```
 
 4. Verify it with the same overlay:
 
    ```bash
-   docker compose --env-file .env -f compose/docker-compose.yml -f compose.local.yml ps
+   docker compose --env-file .env -f compose/docker-compose.yml \
+     -f compose.local.yml -f compose/docker-compose.keys.yml ps
    curl http://localhost:8080/health
    ```
 
 5. Configure an authenticated gateway that forwards to port `8080` and supports WebSockets.
 6. Open the HTTPS address and create the first owner account.
+
+Here `compose.local.yml` is the database credential overlay you create for the
+separate bootstrap and application roles. The supplied key overlay requires
+`PANDA_KEYS_SOURCE` to point to your protected key directory. Omit that key
+overlay only when your platform supplies the complete external bundle through
+another explicitly configured mechanism.
 
 ## Persistent files
 

@@ -41,6 +41,7 @@ The stack contains the web application and API, a TimescaleDB/PostgreSQL databas
 | Storage | Persistent Docker volumes, with keys in a separate `<project>-keys` volume | Keeps history across container restarts and keeps encryption/signing keys separate from database storage. Backups still need an off-host copy. |
 | Database access | Restricted application account; a separate bootstrap account installs required extensions | Lets setup prepare the database without giving the running application administrator privileges. The bootstrap password stays in an owner-only `.deploy` file and is mounted only by the database. |
 | Project name | This guide selects `r-the-drive`; omitting `--project` uses `vehicle-history` | Namespaces the installation's containers and volumes. Choose it before first setup. |
+| Optional providers | Weather and S3 backups start disabled; API maps and geocoding remain blocked | Makes external data sharing explicit. Fixed gateway maps require separate gateway configuration. |
 
 **Can you use another host?** Yes: the same installer can set up a fresh installation on another host that meets the Docker and gateway prerequisites. Moving an existing R:The Drive installation also requires a planned transfer of its data, configuration and keys; rerunning setup does not migrate them.
 
@@ -53,6 +54,8 @@ The [setup script](./scripts/deploy.py) builds the application, generates databa
 **Before you start:** use a trusted server with Git, Python 3, Docker Engine and Docker Compose v2, plus persistent storage and enough resources for a Rust/frontend source build. Configure an authenticated HTTPS gateway on that host forwarding to `http://127.0.0.1:8080`. Domain registration, TLS and gateway access policies are covered in the [secure deployment guide](./docs/guides/secure-deployment.md); the script does not provision them.
 
 1. **Get the application.**
+
+   Replace `<repository-url>` with the Git clone URL supplied for this repository.
 
    ```bash
    git clone <repository-url> r-the-drive
@@ -77,7 +80,7 @@ To retry startup or owner creation after a transient failure:
 python3 scripts/deploy.py start
 ```
 
-The installer retains data and keys on failure. If preparation stopped before key generation, inspect the retained state before retrying. See the [installation guide](./docs/guides/getting-started.md) for details and the [deployment guide](./docs/guides/deployment.md) for updates and other deployment paths.
+The installer retains data and keys on failure and rechecks the selected Docker host before retrying. Interrupted setup-proof cleanup uses a new private temporary file; any older temporary file is left untouched. If preparation stopped before key generation, inspect the retained state before retrying. See the [installation guide](./docs/guides/getting-started.md) for details and the [deployment guide](./docs/guides/deployment.md) for updates and other deployment paths.
 
 ## A look inside
 
@@ -99,7 +102,7 @@ These screenshots use synthetic vehicle data.
 
 R:The Drive includes account authentication, session controls, role and vehicle authorization, encrypted vehicle credentials, external key custody, private-origin gateway controls and protected history and recovery workflows. Vehicle connectivity is read-only.
 
-Your telemetry lives in the database and backups you operate. There is no product analytics service. Connections to Rivian and optional map, weather, geocoding or backup providers make the external requests those features require; configure them in External Connections and review the [privacy details](./docs/privacy.md).
+Your telemetry lives in the database and backups you operate. There is no product analytics service. Rivian connectivity is required for live vehicle data. Weather is an optional, initially disabled connection to fixed Open-Meteo endpoints using approximate coordinates; S3 backups require separate configuration. API map and geocoding providers cannot be enabled in Settings. A separately configured gateway can supply fixed public maps. Review [External Connections](./docs/guides/external-connections.md) and the [privacy details](./docs/privacy.md) before enabling optional services.
 
 For setup and operating guidance, see [Security](./docs/security.md), [Secure deployment](./docs/guides/secure-deployment.md) and [Backup and restore](./docs/guides/backup-and-restore.md). Automated checks and local validation results are documented in [BOOTSTRAP_VALIDATION.md](./BOOTSTRAP_VALIDATION.md); hosted release automation requires separate configuration.
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import tempfile
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -99,13 +100,19 @@ def configuration(project, origin, port, image):
     return settings, values, overlay
 
 
-def preflight(project):
+def require_local_docker():
     docker(['compose', 'version'], capture=True)
     docker(['info', '--format', '{{.ServerVersion}}'], capture=True)
     context = json.loads(docker(['context', 'inspect'], capture=True))[0]
-    endpoint = os.environ.get('DOCKER_HOST') or context['Endpoints']['docker']['Host']
+    endpoint = context['Endpoints']['docker']['Host']
+    if not os.environ.get('DOCKER_CONTEXT'):
+        endpoint = os.environ.get('DOCKER_HOST') or endpoint
     if not endpoint.startswith(('unix://', 'npipe://')):
         raise ValueError('Run this script on the Docker server; remote Docker contexts are unsupported.')
+
+
+def preflight(project):
+    require_local_docker()
     containers = docker(['ps', '-aq', '--filter', 'label=com.docker.compose.project=' + project], capture=True)
     volumes = docker(['volume', 'ls', '--format', '{{.Name}}'], capture=True).splitlines()
     if containers or any(v == project + '-keys' or v.startswith(project + '_') for v in volumes):
@@ -186,6 +193,7 @@ def provision_database(settings):
 
 
 def start(settings):
+    require_local_docker()
     provision_database(settings)
     compose(settings, ['up', '-d', '--wait', '--wait-timeout', '600'])
     deadline = time.monotonic() + 180
@@ -219,9 +227,19 @@ def start(settings):
     content = env_path.read_text()
     updated = ''.join(line + '\n' for line in content.splitlines() if not line.startswith('PANDA_SETUP_TOKEN='))
     if updated != content:
-        temporary = ROOT / '.deploy/env.next'
-        private_write(temporary, updated)
-        temporary.replace(env_path)
+        descriptor, name = tempfile.mkstemp(prefix='env.next.', dir=ROOT / '.deploy')
+        temporary = Path(name)
+        try:
+            with os.fdopen(descriptor, 'w') as output:
+                output.write(updated)
+                output.flush()
+                os.fsync(output.fileno())
+            temporary.replace(env_path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
         compose(settings, ['up', '-d', '--wait', '--wait-timeout', '600'])
     print('Local installation is ready. Sign in at ' + settings['origin'])
     print('Your authenticated HTTPS gateway must forward to 127.0.0.1:' + str(settings['port']))

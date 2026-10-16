@@ -18,10 +18,18 @@ Panda still needs to communicate with services that make its features work:
   The fixed HTTP/WSS destinations reject redirects. Charging and departure/preconditioning
   mutations are denied by the backend. Tokens themselves are **not provider-enforced
   read-only**; a compromised server or stolen token retains its provider permissions.
-- **Optional location/media providers:** Open-Meteo, Nominatim, basemaps, Iconify,
-  and new vehicle-artwork downloads are disabled at the API in this fork, even if old saved
-  settings enable them. Custom/self-hosted provider paths and synthetic provider
-  tests are disabled too. Existing local data and artwork are retained. Browser
+- **Optional weather:** disabled on a fresh installation. An administrator can
+  enable approximate weather estimates from the fixed Open-Meteo forecast and
+  archive endpoints. Requests contain coordinates rounded to two decimal places
+  and date ranges, one location per request, without Rivian credentials or
+  account/vehicle identifiers. The shared budget is 200 requests per UTC day,
+  with at least five seconds between admitted requests; synthetic weather tests
+  use the same budget. Custom URLs, exact-coordinate mode, provider credentials
+  and private-network destinations are not supported.
+- **Blocked location/media providers:** Nominatim, API basemaps, Iconify,
+  and new vehicle-artwork downloads remain disabled even if old saved settings
+  enable them. Their custom/self-hosted paths and synthetic provider tests are
+  disabled too. Existing local data and artwork are retained. Browser
   artwork sources must be local, and Google Fonts is no longer requested.
 - **Optional gateway maps:** `ENABLE_FREE_MAPS=true` enables fixed OpenFreeMap
   cartography through the Cloudflare gateway. OpenFreeMap receives map areas and
@@ -36,9 +44,9 @@ Panda still needs to communicate with services that make its features work:
   claim data are governed by that provider's privacy policy and logs. Panda
   does not send vehicle telemetry or Rivian credentials to the OIDC provider.
 
-**Settings > External Connections** reports the effective disabled state of
-optional API providers. Administrators cannot override this deployment guard with
-saved settings. The gateway reports its optional fixed map provider separately
+**Settings > External Connections** reports the effective provider state.
+Weather can be enabled only within the fixed policy above; saved settings cannot
+enable blocked map, geocoding or media providers. The gateway reports its optional fixed map provider separately
 as enabled and read-only. Without it, maps retain trip geometry on a neutral background; missing
 vehicle images use packaged fallbacks. See [external connections](guides/external-connections.md)
 for the disabled custom-provider paths and the requirements for any future opt-in.

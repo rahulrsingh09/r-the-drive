@@ -19,7 +19,7 @@ You will need Docker Compose v2, Git, Python 3, and a trusted host with persiste
 
 ## Bring up R:The Drive
 
-1. Clone the repository and enter it:
+1. Replace `<repository-url>` with the supplied Git clone URL, clone the repository and enter it:
 
    ```bash
    git clone <repository-url> r-the-drive
@@ -39,6 +39,12 @@ You will need Docker Compose v2, Git, Python 3, and a trusted host with persiste
 Generated configuration is ignored by Git, with owner-only permissions. Keys stay in a dedicated external volume mounted read-only in the app. The bootstrap password stays in `.deploy/database-bootstrap-password`, mounted only in the database container. The application port binds to loopback; database and Redis ports are not published.
 
 Use `python3 scripts/deploy.py start` to retry database provisioning, startup or owner creation. A retry verifies the saved application login and existing provisioning state without replacing passwords, roles or data. The helper refuses an existing installation during setup and never deletes data or regenerates existing keys. If preparation stopped before key generation or a required private file is missing, inspect the retained state before retrying. Installations created before separate database provisioning require an operator-reviewed conversion; `start` does not adopt them automatically. See the [deployment guide](./deployment.md#database-bootstrap-and-runtime-roles).
+
+Both commands validate the currently selected Docker endpoint before changing the
+installation. Interrupted setup-proof removal retries with a new owner-only
+temporary file and preserves any older temporary file or symlink. A failed
+replacement keeps the current `.env`; temporary files created by that attempt
+are cleaned up when the process can handle the failure.
 
 ## Installer defaults and options
 
