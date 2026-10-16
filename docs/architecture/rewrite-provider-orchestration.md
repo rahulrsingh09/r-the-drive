@@ -150,3 +150,9 @@ WebSocket diagnostics now truncate at a UTF-8 boundary within the existing
 500-byte prefix limit. Previously a multibyte character crossing byte 500 could
 panic while reporting a provider error. ASCII truncation and short messages are
 unchanged.
+
+The OTA decoder explicitly accepts `getOTAUpdateDetails`, matching its GraphQL
+root. The original automatic camel-case spelling was `getOtaUpdateDetails`, so
+successful provider responses silently left the release-notes URL unchanged.
+That older spelling remains an accepted alias. Tests verify both spellings and
+the resulting database update; no new fetch or polling trigger is added.

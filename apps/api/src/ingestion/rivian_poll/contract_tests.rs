@@ -227,7 +227,7 @@ async fn provider_contract_all_read_adapters_requests_and_persistence() {
         fetch_ota_details("rv",vehicle_id,pool,&client,&t).await.unwrap();
         assert!(REQUESTS.with(|r| r.borrow().is_empty()));
         let row:(String,Value,Option<String>)=sqlx::query_as("SELECT trim,supported_features,ota_release_notes_url FROM panda.vehicles WHERE id=$1").bind(vehicle_id).fetch_one(pool).await.unwrap();
-        assert_eq!(row,("synthetic trim".into(),json!(["synthetic feature"]),None));
+        assert_eq!(row,("synthetic trim".into(),json!(["synthetic feature"]),Some("https://example.invalid/notes".into())));
         let row:(bool,i32)=sqlx::query_as("SELECT enabled,start_time_minutes FROM panda.charging_schedules WHERE vehicle_id=$1").bind(vehicle_id).fetch_one(pool).await.unwrap(); assert_eq!(row,(false,20));
         let count:i64=sqlx::query_scalar("SELECT outbound_graphql_requests FROM panda.rivian_stewardship_counters WHERE vehicle_id=$1").bind(vehicle_id).fetch_one(pool).await.unwrap(); assert_eq!(count,8);
     }).await;
@@ -425,4 +425,22 @@ async fn provider_correction_shutdown_cancels_inflight_poll() {
         result.is_ok(),
         "shutdown must interrupt a poll waiting for database acquisition"
     );
+}
+
+#[test]
+fn provider_correction_ota_root_matches_operation_and_accepts_legacy_spelling() {
+    for root in ["getOTAUpdateDetails", "getOtaUpdateDetails"] {
+        let response: OtaDetailsData = serde_json::from_value(
+            json!({root:{"releaseNotesUrl":"https://example.invalid/notes"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            response
+                .get_ota_update_details
+                .and_then(|value| value.release_notes_url)
+                .as_deref(),
+            Some("https://example.invalid/notes"),
+            "response root {root}"
+        );
+    }
 }

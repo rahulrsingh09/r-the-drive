@@ -1812,6 +1812,7 @@ pub async fn fetch_departure_schedules(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OtaDetailsData {
+    #[serde(rename = "getOTAUpdateDetails", alias = "getOtaUpdateDetails")]
     get_ota_update_details: Option<OtaDetailsPayload>,
 }
 
