@@ -12,6 +12,10 @@ struct CollectorFixture {
 
 impl CollectorFixture {
     async fn new() -> Self {
+        Self::with_migrator(&crate::db::migrations::MIGRATOR).await
+    }
+
+    async fn with_migrator(migrator: &sqlx::migrate::Migrator) -> Self {
         let url = std::env::var("TRIP_DURABILITY_TEST_DATABASE_URL")
             .expect("explicit isolated synthetic TimescaleDB required");
         let options: PgConnectOptions = url.parse().unwrap();
@@ -24,7 +28,7 @@ impl CollectorFixture {
             .await
             .unwrap();
         let pool = PgPool::connect_with(options.database(&name)).await.unwrap();
-        crate::db::migrations::MIGRATOR.run(&pool).await.unwrap();
+        migrator.run(&pool).await.unwrap();
         let owner = Uuid::new_v4();
         let vehicle_id = Uuid::new_v4();
         sqlx::query("INSERT INTO panda.users(id,email,password_hash) VALUES($1,'collector@example.invalid','unused')")
@@ -310,12 +314,20 @@ impl PipelineHarness {
         let (charge_tx, charging) = watch::channel(false);
         let (session_tx, context) = watch::channel(ActiveSessionContext::default());
         let (shutdown, stop) = broadcast::channel(1);
-        let snapshot = load_active_charge_snapshot(&db.pool, db.vehicle_id).await;
-        let started_at = snapshot.as_ref().map(|s| s.started_at);
-        let detector = snapshot.map_or_else(
-            || ChargeDetectorState::new(db.vehicle_id),
-            |s| ChargeDetectorState::from_snapshot(db.vehicle_id, s),
-        );
+        let charge_capture = match charge_capture::ChargeCapture::load(&db.pool, db.vehicle_id)
+            .await
+            .unwrap()
+        {
+            Some(capture) => capture,
+            None => {
+                let snapshot = load_active_charge_snapshot(&db.pool, db.vehicle_id).await;
+                let detector = snapshot.map_or_else(
+                    || ChargeDetectorState::new(db.vehicle_id),
+                    |s| ChargeDetectorState::from_snapshot(db.vehicle_id, s),
+                );
+                charge_capture::ChargeCapture::from_detector(detector)
+            }
+        };
         let period = load_open_state_period(&db.pool, db.vehicle_id)
             .await
             .unwrap();
@@ -330,8 +342,7 @@ impl PipelineHarness {
                 active_session: session_tx,
             },
             capture,
-            detector,
-            started_at,
+            charge_capture,
             period,
         );
         Self {
@@ -944,3 +955,5 @@ async fn charge_restart_documents_lost_arrival_order() {
     println!("RESTART_LIMIT arrival_order: live_wh={:?} restart_wh={:?}, live_peak={:?} restart_peak={:?}; SQL timestamp order cannot recover original arrival order",expected.energy_used_wh,actual.energy_used_wh,expected.peak_charge_kw,actual.peak_charge_kw);
     db.finish().await;
 }
+
+mod charge_durability;

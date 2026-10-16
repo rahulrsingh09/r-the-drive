@@ -3,7 +3,9 @@
 use anyhow::{ensure, Context};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection, PgConnection, PgPool};
+#[cfg(test)]
+use sqlx::Connection;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::ingestion::trip_detector::{
@@ -106,9 +108,17 @@ impl TripCapture {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn save(&mut self, conn: &mut PgConnection) -> anyhow::Result<()> {
-        let snapshot = serde_json::to_value(&self.checkpoint)?;
         let mut tx = conn.begin().await?;
+        let snapshot = self.write(&mut tx).await?;
+        tx.commit().await?;
+        self.acknowledge(snapshot);
+        Ok(())
+    }
+
+    pub(super) async fn write(&self, conn: &mut PgConnection) -> anyhow::Result<serde_json::Value> {
+        let snapshot = serde_json::to_value(&self.checkpoint)?;
         for trip in &self.pending {
             let saved: Option<Uuid> = sqlx::query_scalar(
                 "INSERT INTO panda.pending_trip_completions(trip_id,vehicle_id,trip) \
@@ -119,25 +129,34 @@ impl TripCapture {
             .bind(trip.trip_id)
             .bind(trip.vehicle_id)
             .bind(serde_json::to_value(trip)?)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?;
             ensure!(
                 saved == Some(trip.trip_id),
                 "conflicting pending trip; retaining checkpoint"
             );
         }
-        sqlx::query(
+        let saved: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO panda.active_trip_checkpoints(vehicle_id,snapshot) VALUES($1,$2) \
-             ON CONFLICT(vehicle_id) DO UPDATE SET snapshot=$2,updated_at=now()",
+             ON CONFLICT(vehicle_id) DO UPDATE SET snapshot=$2,updated_at=now() \
+             WHERE active_trip_checkpoints.snapshot=$3 OR active_trip_checkpoints.snapshot=$2 \
+             RETURNING vehicle_id",
         )
         .bind(self.checkpoint.detector.vehicle_id())
         .bind(&snapshot)
-        .execute(&mut *tx)
+        .bind(&self.persisted)
+        .fetch_optional(&mut *conn)
         .await?;
-        tx.commit().await?;
+        ensure!(
+            saved == Some(self.checkpoint.detector.vehicle_id()),
+            "trip checkpoint ownership changed"
+        );
+        Ok(snapshot)
+    }
+
+    pub(super) fn acknowledge(&mut self, snapshot: serde_json::Value) {
         self.persisted = Some(snapshot);
         self.pending.clear();
-        Ok(())
     }
 
     pub(super) async fn verify_reacquired_lock(

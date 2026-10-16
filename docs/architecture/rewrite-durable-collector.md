@@ -10,12 +10,14 @@ and NOTICE remain applicable.
 
 The worker obtains its session advisory lock, loads and validates the trip
 checkpoint, closes any stale recovered fragment at its last observation, and
-commits the checkpoint before starting acquisition. It attempts at most sixteen
-pending trip completions before reading credentials or connecting to Redis.
+initializes the charge checkpoint under the charge-maintenance transaction lock.
+Both checkpoints commit before acquisition starts. It attempts at most sixteen
+pending completions of each kind before reading credentials or connecting to Redis.
 Invalid credentials, failed checkpoint recovery, and a competing collector keep
 acquisition from starting.
 
-Active charge repair and charge reconstruction precede acquisition. The canonical
+Active charge repair and checkpoint recovery precede acquisition. Legacy charge
+reconstruction is used only when no durable charge checkpoint exists. The canonical
 session context is published before startup polls, periodic polls, Parallax and
 the WebSocket collector start. State-period reconciliation finishes before the
 first envelope is processed. The acquisition channels remain bounded at 256.
@@ -33,17 +35,17 @@ in their existing modules.
 2. **Routing** sends envelopes without telemetry to legacy charge projection
    handling. A heartbeat with telemetry updates liveness only. Other envelopes
    with telemetry enter the trip stage, independently of their source label.
-3. **Trip checkpoint** passes a cloned, fused sample to trip detection. Replayed
-   samples bypass fusion and trip processing. The raw sample remains intact.
-   The stage commits the checkpoint and completion outbox atomically before it
-   returns a `CheckpointedTelemetry` value. A failed save retains state, retries
-   with bounded backoff, and blocks downstream stages. Lock reacquisition checks
-   the stored checkpoint before a retry can write.
-4. **Charge association** accepts only checkpointed samples. Parallax never
-   enters the canonical charge detector. Start, ongoing and final samples retain
-   their canonical UUID association; the final context announces closure before
-   downstream writes. The charge row is materialized before any legacy live
-   projection from the same envelope is applied.
+3. **Detector staging and checkpoint** passes a cloned, fused sample to trip
+   detection while preserving the raw sample for charge detection. Replayed
+   samples bypass fusion and trip processing. Parallax bypasses the canonical
+   charge detector. Trip and charge checkpoints, required canonical charge-row
+   identity, and both completion outboxes commit in one transaction. A failed
+   save retries the same candidate and blocks downstream stages; lock
+   reacquisition checks both stored checkpoints.
+4. **Charge association and projection** publishes the committed canonical
+   session context. Start, ongoing and final samples retain their UUID
+   association. The canonical row exists before applying any legacy live
+   projection from the same envelope.
 5. **Telemetry publication and storage** publishes the raw partial snapshot to
    Redis, updates liveness and latest status, evaluates suppression, and writes
    raw telemetry when selected. Fusion output is never persisted in place of
@@ -54,33 +56,34 @@ in their existing modules.
    from changing the charging period or poll cadence without charger-state
    evidence. Capture diagnostics follow these decisions, then software and OTA
    version tracking run.
-7. **Charge completion** removes the live Redis projection and persists the
-   completed session. The outer worker then schedules live and historical API
-   enrichment in their original order.
+7. **Charge completion** removes the live Redis projection and drains the
+   durable charge outbox. The canonical completed row and outbox acknowledgment
+   commit together; optional location/cost and provider-history enrichment remain
+   outside that core transaction.
 
-Maintenance ticks drain one trip completion or reconcile the bounded state tail.
-Shutdown flushes counters, stops acquisition and companion tasks, and releases
-the session lock. The checkpoint's serialized version and detector fields, outbox
-payloads, telemetry columns, session identifiers, and public worker methods are
-unchanged.
+Maintenance ticks retry trip and charge completions or reconcile the bounded
+state tail. Shutdown flushes counters, stops acquisition and companion tasks,
+and releases the session lock. Existing trip checkpoint serialization, telemetry
+columns, session identifiers and public worker methods remain unchanged. The new
+charge checkpoint and outbox formats are described in [Durable charge capture](./durable-charge-capture.md).
 
 ## Durability limits
 
-Trip checkpoint and outbox writes form one transaction. Trip insertion, weather
+Trip and charge checkpoint/outbox writes form one transaction. Trip insertion, weather
 job insertion and outbox removal form another transaction. Retry preserves user
 edits to an already stored trip and rejects conflicting identities. The worker
 must not consume another telemetry sample while its checkpoint save is pending.
 
 Raw-envelope writes, Redis delivery, latest-status updates, raw telemetry writes,
-software tracking and charge completion remain best effort at their existing
-boundaries. In particular, the telemetry suppression gate advances its memory
+software tracking and optional charge enrichment remain best effort at their
+existing boundaries. In particular, the telemetry suppression gate advances its memory
 before a telemetry write succeeds. A checkpoint commit is not a claim that all
 later projections or raw telemetry have committed. The staged design preserves
 these limits rather than implying a single transaction across services.
 
 ## Charge reconstruction
 
-The restart query retains its twelve-hour sample window, two-hour freshness
+The one-time legacy reconstruction query retains its twelve-hour sample window, two-hour freshness
 requirement, active-session eligibility and metadata aggregation. It returns
 ordered power observations for the chosen session. `durable_charge_restart.rs`
 folds those observations using the detector's accepted-power rule: the opening
@@ -104,11 +107,12 @@ reconstructable versus 500 Wh live. A late 24-kW observation arriving after the
 restart calculation, producing 500 Wh versus 400 Wh live. Parallax samples have
 no source discriminator in the shared telemetry row; a stamped 100-kW Parallax
 sample at 1,900 seconds reconstructs 52,777.78 Wh despite being bypassed live.
-These cases are exercised against the disposable database and remain unresolved.
-General restart parity requires a separately owned durable charge checkpoint or
-additional capture provenance/order; the integral correction does not change
-schemas, providers, suppression, arrival ordering or historical data. Metadata
-aggregation and the existing lookback truncation are also unchanged.
+These cases remain limits of legacy reconstruction and are retained as database
+characterization tests. Once a durable charge checkpoint exists, restart uses
+its exact accepted state instead; the new regression suite verifies all three
+cases through that path. Missing historical observations are not retroactively
+recovered. Metadata aggregation and lookback limits apply only to the legacy
+initialization fallback.
 
 ## Verification
 

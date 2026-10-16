@@ -135,6 +135,14 @@ pub async fn reconcile_unassociated_parallax_samples(
 
 pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     let mut tx = pool.begin().await?;
+    let vehicle_id: Uuid = sqlx::query_scalar(
+        "SELECT vehicle_id FROM panda.charge_session_repair_journal WHERE id=$1",
+    )
+    .bind(journal_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("repair journal entry not found"))?;
+    super::charge_sessions::lock_charge_history(&mut tx, vehicle_id).await?;
     let journal = sqlx::query_as::<_, ChargeHistoryRepairJournal>(
         "SELECT before_images,after_images,reference_mappings,reverted_at FROM panda.charge_session_repair_journal WHERE id=$1 FOR UPDATE",
     ).bind(journal_id).fetch_optional(&mut *tx).await?
@@ -144,6 +152,11 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     }
     let survivor = parse_mapping_uuid(&journal.reference_mappings, "survivor_id")?;
     let duplicate = parse_mapping_uuid(&journal.reference_mappings, "duplicate_id")?;
+    anyhow::ensure!(
+        super::charge_sessions::charge_sessions_are_unpinned(&mut tx, vehicle_id, &[survivor])
+            .await?,
+        "cannot roll back repair while a charge checkpoint or completion pins its session"
+    );
 
     let unchanged: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(
@@ -264,6 +277,7 @@ fn parse_mapping_uuid(value: &serde_json::Value, key: &str) -> Result<Uuid> {
 
 pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairStats> {
     let mut tx = pool.begin().await?;
+    super::charge_sessions::lock_charge_history(&mut tx, vehicle_id).await?;
     let candidates = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         WITH ordered AS (
@@ -330,6 +344,15 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
 
     let mut stats = RepairStats::default();
     for (survivor, duplicate) in candidates {
+        if !super::charge_sessions::charge_sessions_are_unpinned(
+            &mut tx,
+            vehicle_id,
+            &[survivor, duplicate],
+        )
+        .await?
+        {
+            continue;
+        }
         let repair_key = format!("active-tail-merge:{survivor}:{duplicate}");
         let journaled = sqlx::query_scalar::<_, bool>(
             r#"
@@ -481,6 +504,13 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
                ORDER BY t.ts LIMIT 1) stop
            WHERE s.vehicle_id=$1 AND s.ended_at IS NULL"#,
     ).bind(vehicle_id).fetch_all(&mut *tx).await?;
+    let mut eligible_closed = Vec::new();
+    for (id, ended_at) in closed {
+        if super::charge_sessions::charge_sessions_are_unpinned(&mut tx, vehicle_id, &[id]).await? {
+            eligible_closed.push((id, ended_at));
+        }
+    }
+    let closed = eligible_closed;
     if !closed.is_empty() {
         let sessions: Vec<_> = closed.iter().map(|(id, _)| *id).collect();
         let ends: Vec<_> = closed.iter().map(|(_, end)| *end).collect();

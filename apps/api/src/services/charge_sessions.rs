@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+mod durability;
+pub(crate) use durability::charge_sessions_are_unpinned;
+pub use durability::lock_charge_history;
+
 pub const CHARGE_SESSION_SOURCE_TELEMETRY: &str = "telemetry";
 pub const CHARGE_SESSION_SOURCE_RIVIAN_API: &str = "rivian_api";
 pub const CHARGE_SESSION_SOURCE_TELEMETRY_AND_API: &str = "telemetry+rivian_api";
@@ -1051,7 +1055,7 @@ struct PayloadReplayRow {
     payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, PartialEq, FromRow)]
 struct CanonicalSessionRow {
     id: Uuid,
     started_at: DateTime<Utc>,
@@ -1601,6 +1605,19 @@ pub async fn canonicalize_charge_sessions(
             if cluster_sessions.len() < 2 {
                 continue;
             }
+            let mut tx = pool.begin().await?;
+            lock_charge_history(&mut tx, vehicle_id).await?;
+            let ids: Vec<_> = cluster_sessions.iter().map(|session| session.id).collect();
+            if !charge_sessions_are_unpinned(&mut tx, vehicle_id, &ids).await? {
+                continue;
+            }
+            let current = sqlx::query_as::<_, CanonicalSessionRow>(
+                "SELECT id,started_at,ended_at,api_started_at,api_ended_at,source FROM panda.charge_sessions \
+                 WHERE vehicle_id=$1 AND id=ANY($2) ORDER BY started_at,id",
+            ).bind(vehicle_id).bind(&ids).fetch_all(&mut *tx).await?;
+            if current != cluster_sessions {
+                continue;
+            }
             let canonical =
                 choose_canonical_session(&cluster_sessions, &aliases_by_session).clone();
             let evidence =
@@ -1615,7 +1632,7 @@ pub async fn canonicalize_charge_sessions(
                 )
                 .bind(canonical.id)
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected();
 
@@ -1624,7 +1641,7 @@ pub async fn canonicalize_charge_sessions(
                 )
                 .bind(canonical.id)
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected();
 
@@ -1633,7 +1650,7 @@ pub async fn canonicalize_charge_sessions(
                 )
                 .bind(canonical.id)
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected();
 
@@ -1678,7 +1695,7 @@ pub async fn canonicalize_charge_sessions(
                 )
                 .bind(canonical.id)
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected();
 
@@ -1734,7 +1751,7 @@ pub async fn canonicalize_charge_sessions(
                 )
                 .bind(canonical.id)
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .rows_affected();
 
@@ -1742,7 +1759,7 @@ pub async fn canonicalize_charge_sessions(
                     "DELETE FROM panda.charge_session_external_aliases WHERE charge_session_id = $1",
                 )
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
 
                 sqlx::query(
@@ -1858,12 +1875,12 @@ pub async fn canonicalize_charge_sessions(
                 )
                 .bind(canonical.id)
                 .bind(duplicate.id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
 
                 sqlx::query("DELETE FROM panda.charge_sessions WHERE id = $1")
                     .bind(duplicate.id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
                 stats.duplicate_rows_deleted += 1;
             }
@@ -1894,8 +1911,9 @@ pub async fn canonicalize_charge_sessions(
             .bind(evidence.source)
             .bind(confidence_for_source(evidence.source))
             .bind(evidence.preferred_external_id.as_deref())
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
+            tx.commit().await?;
             finalize_charge_session_aliases(pool, canonical.id).await?;
             stats.clusters_merged += 1;
         }

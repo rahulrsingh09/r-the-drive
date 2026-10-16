@@ -32,8 +32,7 @@ impl CollectorPipeline {
     pub(super) fn new(
         io: CollectorIo,
         capture: trip_capture::TripCapture,
-        detector: ChargeDetectorState,
-        started_at: Option<DateTime<Utc>>,
+        charge_capture: charge_capture::ChargeCapture,
         active_period: Option<ActiveStatePeriod>,
     ) -> Self {
         let vehicle_id = io.vehicle_id;
@@ -45,8 +44,7 @@ impl CollectorPipeline {
                 fusion: TripSignalFusion::default(),
             },
             charges: ChargeStage {
-                detector,
-                started_at,
+                capture: charge_capture,
             },
             telemetry: TelemetryStage {
                 gate: TelemetryPersistenceGate::new(vehicle_id),
@@ -81,7 +79,7 @@ impl CollectorPipeline {
                         self.io.vehicle_id,
                         update,
                         inbound.received_at,
-                        self.charges.detector.active_session_id(),
+                        self.charges.capture.detector().active_session_id(),
                     )
                     .await;
                 }
@@ -112,14 +110,28 @@ impl CollectorPipeline {
                     source,
                     capturing,
                 };
-                let Some(checkpointed) =
-                    self.trips.checkpoint(&self.io, frame, lock, shutdown).await
-                else {
-                    return ProcessOutcome::CheckpointUnavailable;
+                let staged = self.trips.prepare(&self.io, frame);
+                let associated = match self.charges.associate(staged) {
+                    Ok(sample) => sample,
+                    Err(error) => {
+                        tracing::error!(vehicle_id=%self.io.vehicle_id, %error, "charge observation could not be staged");
+                        return ProcessOutcome::CheckpointUnavailable;
+                    }
                 };
-                let associated = self
-                    .charges
-                    .associate(checkpointed, &self.io.active_session);
+                if !save_collector_checkpoint(
+                    &self.io.pool,
+                    self.io.vehicle_id,
+                    lock,
+                    &mut self.trips.capture,
+                    &mut self.charges.capture,
+                    shutdown,
+                )
+                .await
+                {
+                    return ProcessOutcome::CheckpointUnavailable;
+                }
+                self.charges
+                    .publish_context(&associated, &self.io.active_session);
                 self.charges.materialize(&mut self.io, &associated).await;
                 let persistence = self
                     .telemetry
@@ -134,6 +146,17 @@ impl CollectorPipeline {
                         if let Err(error) = self.io.redis.del::<_, ()>(&live_key).await {
                             tracing::debug!(vehicle_id=%self.io.vehicle_id, err=%error, "live session Redis delete on canonical end failed");
                         }
+                        if let Err(error) =
+                            charge_capture::drain_one(&self.io.pool, self.io.vehicle_id).await
+                        {
+                            tracing::warn!(vehicle_id=%self.io.vehicle_id, session_id=%session.session_id, %error, "charge completion persistence failed; durable retry retained");
+                            trip_capture::record_health(
+                                &self.io.pool,
+                                self.io.vehicle_id,
+                                Some("charge_completion_retry_pending"),
+                            )
+                            .await;
+                        }
                         if let Err(error) = persist_charge_session(&self.io.pool, &session).await {
                             tracing::warn!(vehicle_id=%self.io.vehicle_id, session_id=%session.session_id, error=%error, "worker.persist_charge_session_failed");
                         }
@@ -146,6 +169,14 @@ impl CollectorPipeline {
     }
 
     pub(super) async fn retry_completion(&self) {
+        let charge_error = match charge_capture::drain_one(&self.io.pool, self.io.vehicle_id).await
+        {
+            Ok(_) => None,
+            Err(error) => {
+                tracing::error!(vehicle_id=%self.io.vehicle_id, %error, "charge completion retry failed; durable event retained");
+                Some("charge_completion_retry_pending")
+            }
+        };
         let error = match trip_capture::drain_one(&self.io.pool, self.io.vehicle_id).await {
             Ok(_) => None,
             Err(error) => {
@@ -153,7 +184,8 @@ impl CollectorPipeline {
                 Some("completion_retry_pending")
             }
         };
-        trip_capture::record_health(&self.io.pool, self.io.vehicle_id, error).await;
+        trip_capture::record_health(&self.io.pool, self.io.vehicle_id, error.or(charge_error))
+            .await;
     }
 
     pub(super) async fn reconcile(&mut self) {
@@ -185,14 +217,14 @@ struct TelemetryFrame {
     capturing: bool,
 }
 
-// Only TripStage can release a frame to downstream side effects after commit.
-struct CheckpointedTelemetry {
+// A staged frame is published only after both detector checkpoints commit.
+struct StagedTelemetry {
     frame: TelemetryFrame,
     trip_id: Option<Uuid>,
 }
 
 struct AssociatedTelemetry {
-    checkpointed: CheckpointedTelemetry,
+    checkpointed: StagedTelemetry,
     charge_event: ChargeEvent,
     session_id: Option<Uuid>,
     charge_active: bool,
@@ -204,13 +236,7 @@ struct TripStage {
 }
 
 impl TripStage {
-    async fn checkpoint(
-        &mut self,
-        io: &CollectorIo,
-        frame: TelemetryFrame,
-        lock: &mut PgConnection,
-        shutdown: &mut broadcast::Receiver<()>,
-    ) -> Option<CheckpointedTelemetry> {
+    fn prepare(&mut self, io: &CollectorIo, frame: TelemetryFrame) -> StagedTelemetry {
         let replay = self.capture.is_replay(frame.raw.ts);
         let (sample, fusion) = if replay {
             (frame.raw.clone(), FusionDiagnostics::default())
@@ -231,69 +257,64 @@ impl TripStage {
                 &transition,
             );
         }
-        if !save_trip_checkpoint(&io.pool, io.vehicle_id, lock, &mut self.capture, shutdown).await {
-            return None;
-        }
         let trip_id = match (&transition, replay) {
             (_, true) => None,
             (TripEvent::TripEnded { trip }, false) => Some(trip.trip_id),
             _ => self.capture.detector().active_trip_id(),
         };
-        Some(CheckpointedTelemetry { frame, trip_id })
+        StagedTelemetry { frame, trip_id }
     }
 }
 
 struct ChargeStage {
-    detector: ChargeDetectorState,
-    started_at: Option<DateTime<Utc>>,
+    capture: charge_capture::ChargeCapture,
 }
 
 impl ChargeStage {
-    fn associate(
-        &mut self,
-        checkpointed: CheckpointedTelemetry,
-        signal: &watch::Sender<ActiveSessionContext>,
-    ) -> AssociatedTelemetry {
-        let event = &checkpointed.frame.raw;
-        let transition = if checkpointed.frame.source.is_parallax() {
-            ChargeEvent::NoChange
-        } else {
-            self.detector.process(event)
+    fn associate(&mut self, checkpointed: StagedTelemetry) -> anyhow::Result<AssociatedTelemetry> {
+        let frame = &checkpointed.frame;
+        let transition = self
+            .capture
+            .process(&frame.raw, frame.source, frame.received_at)?;
+        let session_id = match &transition {
+            ChargeEvent::SessionEnded(session) => Some(session.session_id),
+            _ => self.capture.detector().active_session_id(),
         };
-        if matches!(transition, ChargeEvent::SessionStarted) {
-            self.started_at = Some(event.ts);
-        }
-        let context = match &transition {
+        Ok(AssociatedTelemetry {
+            checkpointed,
+            charge_event: transition,
+            session_id,
+            charge_active: self.capture.detector().active_session_id().is_some(),
+        })
+    }
+
+    fn publish_context(
+        &self,
+        sample: &AssociatedTelemetry,
+        signal: &watch::Sender<ActiveSessionContext>,
+    ) {
+        let context = match &sample.charge_event {
             ChargeEvent::SessionEnded(session) => ActiveSessionContext {
                 session_id: None,
                 started_at: Some(session.started_at),
-                ended_at: Some(event.ts),
+                ended_at: Some(session.ended_at),
             },
             _ => ActiveSessionContext {
-                session_id: self.detector.active_session_id(),
-                started_at: self.started_at,
+                session_id: self.capture.detector().active_session_id(),
+                started_at: self
+                    .capture
+                    .detector()
+                    .active_snapshot()
+                    .map(|active| active.started_at),
                 ended_at: None,
             },
         };
         let _ = signal.send(context);
-        if matches!(transition, ChargeEvent::SessionEnded(_)) {
-            self.started_at = None;
-        }
-        let session_id = match &transition {
-            ChargeEvent::SessionEnded(session) => Some(session.session_id),
-            _ => self.detector.active_session_id(),
-        };
-        AssociatedTelemetry {
-            checkpointed,
-            charge_event: transition,
-            session_id,
-            charge_active: self.detector.active_session_id().is_some(),
-        }
     }
 
     async fn materialize(&self, io: &mut CollectorIo, sample: &AssociatedTelemetry) {
         let frame = &sample.checkpointed.frame;
-        if let Some(session_id) = sample.session_id {
+        if let Some(session_id) = sample.session_id.filter(|_| frame.source.is_parallax()) {
             if let Err(error) =
                 ensure_active_charge_session(&io.pool, io.vehicle_id, session_id, &frame.raw).await
             {

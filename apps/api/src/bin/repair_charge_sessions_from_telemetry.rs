@@ -44,6 +44,32 @@ async fn main() -> Result<()> {
 }
 
 async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u64> {
+    let vehicles: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT vehicle_id FROM timeseries.telemetry ORDER BY vehicle_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut repaired = 0;
+    for vehicle_id in vehicles {
+        let mut tx = pool.begin().await?;
+        panda_api::services::charge_sessions::lock_charge_history(&mut tx, vehicle_id).await?;
+        let pinned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM panda.active_charge_checkpoints WHERE vehicle_id=$1 AND active_session_id IS NOT NULL) \
+             OR EXISTS(SELECT 1 FROM panda.pending_charge_completions WHERE vehicle_id=$1)",
+        ).bind(vehicle_id).fetch_one(&mut *tx).await?;
+        if pinned {
+            continue;
+        }
+        repaired += repair_vehicle_charge_sessions(&mut tx, vehicle_id).await?;
+        tx.commit().await?;
+    }
+    Ok(repaired)
+}
+
+async fn repair_vehicle_charge_sessions(
+    conn: &mut sqlx::PgConnection,
+    vehicle_id: uuid::Uuid,
+) -> Result<u64> {
     let repaired: i64 = sqlx::query_scalar(
         r#"
         WITH evidence AS (
@@ -51,9 +77,10 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
                 t.*,
                 LAG(t.ts) OVER (PARTITION BY t.vehicle_id ORDER BY t.ts) AS prev_ts
             FROM timeseries.telemetry t
-            WHERE t.charger_state = 'charging'
-               OR t.charger_status = 'chrgr_sts_connected_charging'
-               OR COALESCE(t.time_to_end_of_charge_min, 0) > 0
+            WHERE t.vehicle_id = $1
+              AND (t.charger_state = 'charging'
+                OR t.charger_status = 'chrgr_sts_connected_charging'
+                OR COALESCE(t.time_to_end_of_charge_min, 0) > 0)
         ),
         marked AS (
             SELECT
@@ -284,7 +311,8 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
         FROM stamped
         "#
     )
-    .fetch_one(pool)
+    .bind(vehicle_id)
+    .fetch_one(conn)
     .await?;
 
     Ok(repaired as u64)
@@ -414,3 +442,7 @@ async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {
 
     Ok(repaired)
 }
+
+#[cfg(test)]
+#[path = "../ingestion/worker/durable_collector_tests/charge_repair_cli.rs"]
+mod durable_charge_tests;
