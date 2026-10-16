@@ -18,34 +18,7 @@ use crate::{
     },
 };
 
-/// Returns the vehicle's stored factory capacity (from vehicles.battery_capacity_wh), falling
-/// back to the max ever observed value in telemetry. Used as the "new" baseline for health %.
-async fn resolve_usable_new_wh(
-    pool: &sqlx::PgPool,
-    vehicle_id: uuid::Uuid,
-) -> Result<Option<f64>, crate::errors::AppError> {
-    let stored: Option<f64> =
-        sqlx::query_scalar("SELECT battery_capacity_wh FROM panda.vehicles WHERE id = $1")
-            .bind(vehicle_id)
-            .fetch_optional(pool)
-            .await?
-            .flatten();
-
-    if let Some(w) = stored.filter(|&w| w > 10000.0) {
-        return Ok(Some(w));
-    }
-
-    let max_ever: Option<f64> = sqlx::query_scalar(
-        "SELECT max(battery_capacity_wh) FROM timeseries.telemetry \
-         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-
-    Ok(max_ever)
-}
+mod workflow;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -97,20 +70,11 @@ async fn get_soc(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 7);
-
-    let points = sqlx::query_as::<_, TimeSeriesPoint>(
-        "SELECT ts, battery_level AS value
-         FROM timeseries.telemetry
-         WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND battery_level IS NOT NULL
-         ORDER BY ts",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(points))
+    Ok(Json(
+        workflow::Window::new(vid, &p, 7)
+            .series(&state.pool, workflow::Signal::Soc)
+            .await?,
+    ))
 }
 
 async fn get_range(
@@ -123,20 +87,11 @@ async fn get_range(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
-
-    let points = sqlx::query_as::<_, TimeSeriesPoint>(
-        "SELECT ts, distance_to_empty_mi AS value
-         FROM timeseries.telemetry
-         WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND distance_to_empty_mi IS NOT NULL
-         ORDER BY ts",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(points))
+    Ok(Json(
+        workflow::Window::new(vid, &p, 30)
+            .series(&state.pool, workflow::Signal::Range)
+            .await?,
+    ))
 }
 
 async fn get_capacity(
@@ -149,18 +104,11 @@ async fn get_capacity(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
-
-    let points = sqlx::query_as::<_, TimeSeriesPoint>(
-        "SELECT ts, battery_capacity_wh AS value FROM timeseries.telemetry \
-         WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND battery_capacity_wh IS NOT NULL ORDER BY ts",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(points))
+    Ok(Json(
+        workflow::Window::new(vid, &p, 365)
+            .series(&state.pool, workflow::Signal::Capacity)
+            .await?,
+    ))
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -209,32 +157,11 @@ async fn get_degradation(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
-    let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
-
-    let rows = sqlx::query_as::<_, DegradationPoint>(
-        "SELECT
-             ts,
-             odometer_miles AS odometer_mi,
-             COALESCE(battery_capacity_wh / 1000.0, 0.0) AS usable_kwh,
-             NULL::float8 AS rated_kwh,
-             CASE WHEN $2 > 0
-                  THEN battery_capacity_wh / $2 * 100.0
-                  ELSE NULL END AS capacity_pct
-          FROM timeseries.telemetry
-          WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
-            AND ts >= $3 AND ts <= $4
-          ORDER BY ts",
-    )
-    .bind(vid)
-    .bind(usable_new_wh.unwrap_or(0.0))
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(Json(rows))
+    Ok(Json(
+        workflow::Window::new(vid, &p, 365)
+            .degradation(&state.pool)
+            .await?,
+    ))
 }
 
 async fn get_health(
@@ -247,64 +174,11 @@ async fn get_health(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-
-    let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
-
-    // Average of daily-peak capacity readings over the last 30 days
-    let usable_now_wh: Option<f64> = sqlx::query_scalar(
-        "SELECT avg(daily_max) FROM (
-             SELECT max(battery_capacity_wh) AS daily_max
-             FROM timeseries.telemetry
-             WHERE vehicle_id = $1
-               AND battery_capacity_wh > 10000
-               AND ts >= now() - INTERVAL '30 days'
-             GROUP BY date_trunc('day', ts)
-         ) sub",
-    )
-    .bind(vid)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
-
-    let charges = sqlx::query!(
-        "SELECT COUNT(*) AS charge_count,
-                SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS total_added_kwh,
-                SUM(GREATEST(COALESCE(kwh_added, energy_added_wh / 1000.0), COALESCE(energy_used_wh / 1000.0, 0))) AS total_used_kwh
-         FROM panda.charge_sessions
-         WHERE vehicle_id=$1 AND COALESCE(kwh_added, energy_added_wh / 1000.0) > 0.01",
-        vid
-    )
-    .fetch_one(&state.pool)
-    .await?;
-
-    let usable_now_kwh = usable_now_wh.map(|w| w / 1000.0);
-    let usable_new_kwh = usable_new_wh.map(|w| w / 1000.0);
-    let total_added = charges.total_added_kwh;
-    let total_used = charges.total_used_kwh;
-    let battery_health_pct = match (usable_now_kwh, usable_new_kwh) {
-        (Some(now), Some(new)) if new > 0.0 => Some((now / new * 100.0).min(100.0)),
-        _ => None,
-    };
-    let charging_cycles = match (total_added, usable_new_kwh) {
-        (Some(added), Some(new)) if new > 0.0 => Some((added / new).floor()),
-        _ => None,
-    };
-    let charging_efficiency_pct = match (total_added, total_used) {
-        (Some(added), Some(used)) if used > 0.0 => Some(added / used * 100.0),
-        _ => None,
-    };
-
-    Ok(Json(serde_json::json!({
-        "usable_now_kwh": usable_now_kwh,
-        "usable_new_kwh": usable_new_kwh,
-        "battery_health_pct": battery_health_pct,
-        "estimated_degradation_pct": battery_health_pct.map(|pct| (100.0 - pct).max(0.0)),
-        "charging_cycles": charging_cycles,
-        "charge_count": charges.charge_count,
-        "total_energy_added_kwh": total_added,
-        "total_energy_used_kwh": total_used,
-        "charging_efficiency_pct": charging_efficiency_pct,
-    })))
+    Ok(Json(
+        workflow::HealthEvidence::load(&state.pool, vid)
+            .await?
+            .project(),
+    ))
 }
 
 async fn get_mileage(
@@ -317,77 +191,11 @@ async fn get_mileage(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 730);
-    let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
-    let vehicle_model: Option<String> =
-        sqlx::query_scalar("SELECT model FROM panda.vehicles WHERE id = $1")
-            .bind(vid)
-            .fetch_optional(&state.pool)
-            .await?;
-
-    let samples = sqlx::query_as::<_, BatteryMileageSampleRow>(
-        "SELECT
-             ts AS bucket,
-             odometer_miles,
-             battery_capacity_wh,
-             distance_to_empty_mi,
-             battery_level
-         FROM timeseries.telemetry
-         WHERE vehicle_id = $1
-           AND battery_capacity_wh > 10000
-           AND ts >= $2
-           AND ts <= $3
-          ORDER BY ts",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let usable_new_wh = usable_new_wh.unwrap_or(0.0);
-    let rows = samples
-        .iter()
-        .map(|sample| {
-            let usable_kwh = sample
-                .battery_capacity_wh
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .map(|capacity_wh| {
-                    if capacity_wh > 1000.0 {
-                        capacity_wh / 1000.0
-                    } else {
-                        capacity_wh
-                    }
-                });
-            let range_mi = normalize_remaining_range_miles_strict(
-                sample.distance_to_empty_mi,
-                sample.battery_level,
-                sample.battery_capacity_wh,
-                vehicle_model.as_deref(),
-            );
-            let degradation_pct = match (usable_kwh, usable_new_wh > 0.0) {
-                (Some(usable_kwh), true) => {
-                    Some((100.0 - (usable_kwh * 1000.0 / usable_new_wh * 100.0)).max(0.0))
-                }
-                _ => None,
-            };
-
-            BatteryMileagePoint {
-                ts: sample.bucket,
-                odometer_mi: sample.odometer_miles.filter(|value| value.is_finite()),
-                usable_kwh,
-                range_mi,
-                projected_max_range_mi: projected_full_charge_range_miles(
-                    range_mi,
-                    sample.battery_level,
-                ),
-                degradation_pct,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    Ok(Json(rows))
+    Ok(Json(
+        workflow::Window::new(vid, &p, 730)
+            .mileage(&state.pool)
+            .await?,
+    ))
 }
 
 async fn get_phantom_drain(
@@ -400,36 +208,11 @@ async fn get_phantom_drain(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
-    let periods = fetch_validated_idle_drain_periods_for_chart(&state.pool, vid, from, to).await?;
-
-    let mut by_day = BTreeMap::<NaiveDate, (f64, f64)>::new();
-    for period in periods {
-        let Some(day) = period.period_start.map(|ts| ts.date_naive()) else {
-            continue;
-        };
-        let duration = period.duration_hours.unwrap_or(0.0);
-        let soc_lost = period.soc_lost_pct.unwrap_or(0.0);
-        let entry = by_day.entry(day).or_insert((0.0, 0.0));
-        entry.0 += soc_lost;
-        entry.1 += duration;
-    }
-
-    let points = by_day
-        .into_iter()
-        .map(|(day, (total_soc_lost, hours_parked))| PhantomDrainPoint {
-            day: Some(day),
-            total_soc_lost: Some(total_soc_lost),
-            avg_drain_rate: if hours_parked > 0.0 {
-                Some(total_soc_lost / hours_parked)
-            } else {
-                None
-            },
-            hours_parked: Some(hours_parked),
-        })
-        .collect::<Vec<_>>();
-
-    Ok(Json(points))
+    Ok(Json(
+        workflow::Window::new(vid, &p, 90)
+            .phantom(&state.pool)
+            .await?,
+    ))
 }
 
 #[cfg(test)]

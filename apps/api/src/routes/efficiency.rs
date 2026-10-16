@@ -18,6 +18,8 @@ use crate::{
     },
 };
 
+mod workflow;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/efficiency/summary", get(get_summary))
@@ -128,37 +130,10 @@ struct TrendSample {
 }
 
 fn with_rolling_24h(samples: Vec<TrendSample>) -> Vec<TrendPoint> {
-    let mut window = VecDeque::new();
-    let mut distance_total = 0.0;
-    let mut weighted_efficiency_total = 0.0;
-
+    let mut rolling = workflow::RollingEfficiency::default();
     samples
         .into_iter()
-        .map(|sample| {
-            window.push_back((
-                sample.ts,
-                sample.distance_miles,
-                sample.trip_efficiency_wh_mi,
-            ));
-            distance_total += sample.distance_miles;
-            weighted_efficiency_total += sample.distance_miles * sample.trip_efficiency_wh_mi;
-
-            while window
-                .front()
-                .is_some_and(|(ts, _, _)| *ts < sample.ts - chrono::Duration::hours(24))
-            {
-                let (_, distance_miles, efficiency_wh_mi) = window.pop_front().unwrap();
-                distance_total -= distance_miles;
-                weighted_efficiency_total -= distance_miles * efficiency_wh_mi;
-            }
-
-            TrendPoint {
-                ts: sample.ts,
-                trip_efficiency_wh_mi: Some(sample.trip_efficiency_wh_mi),
-                rolling_24h_wh_mi: (distance_total > 0.0)
-                    .then_some(weighted_efficiency_total / distance_total),
-            }
-        })
+        .map(|sample| rolling.observe(sample))
         .collect()
 }
 
@@ -211,38 +186,12 @@ async fn get_summary(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
-    let sql = format!("SELECT COALESCE(SUM(t.distance_miles) FILTER (WHERE t.efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS total_distance_miles,
-                COALESCE(SUM(distance_miles * efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS weighted_efficiency_wh_mi,
-                COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
-                COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS efficiency_miles,
-                PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL) AS p10,
-                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL) AS p90
-         FROM panda.trips t
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-           AND t.distance_miles > 0{}", sql_predicate("t", 4, 5, 6));
-    let row = sqlx::query_as::<_, SummaryRow>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_one(&state.pool)
-        .await?;
-
-    let avg_wh_per_mi =
-        weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi);
-
-    Ok(Json(serde_json::json!({
-        "avg_wh_per_mi":  avg_wh_per_mi,
-        "total_miles":    row.total_miles,
-        "efficiency_miles": row.efficiency_miles,
-        "coverage_percent": if row.total_miles > 0.0 { row.efficiency_miles / row.total_miles * 100.0 } else { 0.0 },
-        "p10_wh_per_mi":  row.p10.unwrap_or(0.0),
-        "p90_wh_per_mi":  row.p90.unwrap_or(0.0),
-    })))
+    Ok(Json(
+        workflow::Plan::new(vid, &p, tag_filter, workflow::View::Summary)
+            .summary(&state.pool)
+            .await?,
+    ))
 }
 
 async fn get_by_mode(
@@ -256,7 +205,6 @@ async fn get_by_mode(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 180);
 
     #[derive(sqlx::FromRow)]
     struct ModeRow {
@@ -266,21 +214,8 @@ async fn get_by_mode(
         avg_wh_per_mi: Option<f64>,
     }
 
-    let sql = format!("SELECT t.drive_mode, COUNT(*) AS trip_count,
-                COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
-                (SUM(distance_miles * efficiency_wh_per_mile) / NULLIF(SUM(distance_miles), 0))::float8 AS avg_wh_per_mi
-         FROM panda.trips t
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-           AND t.drive_mode IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 0{}
-         GROUP BY t.drive_mode ORDER BY avg_wh_per_mi", sql_predicate("t", 4, 5, 6));
-    let rows = sqlx::query_as::<_, ModeRow>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
+    let rows: Vec<ModeRow> = workflow::Plan::new(vid, &p, tag_filter, workflow::View::Mode)
+        .rows(&state.pool)
         .await?;
 
     Ok(Json(serde_json::json!(rows
@@ -305,31 +240,11 @@ async fn get_vs_temp_binned(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let sql = format!("SELECT
-           (floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) * 10 - 32) * 5.0/9.0        AS temp_c_low,
-           ((floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) + 1) * 10 - 32) * 5.0/9.0  AS temp_c_high,
-           (sum(t.distance_miles * t.efficiency_wh_per_mile) / nullif(sum(t.distance_miles), 0)) AS avg_efficiency_wh_mi,
-           count(*) AS trip_count,
-           sum(t.distance_miles) AS total_miles,
-           CASE WHEN sum(t.duration_seconds) > 0
-                THEN sum(t.distance_miles) / (sum(t.duration_seconds) / 3600.0)
-                END AS avg_speed_mph
-         FROM panda.trips t
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-           AND t.outside_temp_c IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL
-           AND t.distance_miles > 0
-         {} GROUP BY 1, 2 ORDER BY 1", sql_predicate("t", 4, 5, 6));
-    let rows = sqlx::query_as::<_, VsTempPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
-        .await?;
+    let rows: Vec<VsTempPoint> =
+        workflow::Plan::new(vid, &p, tag_filter, workflow::View::Temperature)
+            .rows(&state.pool)
+            .await?;
 
     Ok(Json(rows))
 }
@@ -345,28 +260,9 @@ async fn get_trend(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
-    let sql = format!(
-        "SELECT
-             t.started_at AS ts,
-             t.efficiency_wh_per_mile AS trip_efficiency_wh_mi,
-             t.distance_miles
-         FROM panda.trips t
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-           AND t.efficiency_wh_per_mile IS NOT NULL
-           AND t.distance_miles > 0
-         {} ORDER BY t.started_at",
-        sql_predicate("t", 4, 5, 6)
-    );
-    let samples = sqlx::query_as::<_, TrendSample>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
+    let samples: Vec<TrendSample> = workflow::Plan::new(vid, &p, tag_filter, workflow::View::Trend)
+        .rows(&state.pool)
         .await?;
 
     Ok(Json(with_rolling_24h(samples)))
@@ -383,29 +279,11 @@ async fn get_range_vs_temp(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let sql = format!(
-        "SELECT t.id,
-                t.distance_miles,
-                t.efficiency_wh_per_mile,
-                t.outside_temp_c AS avg_temp_c
-         FROM panda.trips t
-         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-           AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0
-           AND t.outside_temp_c IS NOT NULL
-         {} ORDER BY t.started_at DESC LIMIT 500",
-        sql_predicate("t", 4, 5, 6)
-    );
-    let rows = sqlx::query_as::<_, RangeVsTempRow>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
-        .await?;
+    let rows: Vec<RangeVsTempRow> =
+        workflow::Plan::new(vid, &p, tag_filter, workflow::View::RangeTemperature)
+            .rows(&state.pool)
+            .await?;
 
     Ok(Json(serde_json::json!(rows
         .iter()
@@ -429,39 +307,8 @@ async fn get_by_tag(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
-    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
-    let predicate = sql_predicate("t", 4, 5, 6);
-    let sql = format!(
-        "WITH cohort AS (
-           SELECT t.* FROM panda.trips t
-           WHERE t.vehicle_id=$1 AND t.started_at >= $2 AND t.started_at <= $3
-             AND t.distance_miles > 0 {predicate}
-         ), grouped AS (
-           SELECT tt.id AS tag_id, tt.name AS tag_name, c.id AS trip_id,
-                  c.distance_miles, c.efficiency_wh_per_mile
-           FROM cohort c
-           JOIN panda.trip_tag_assignments tta ON tta.trip_id=c.id
-           JOIN panda.trip_tags tt ON tt.id=tta.tag_id
-           UNION ALL
-           SELECT NULL::uuid, 'Untagged'::text, c.id, c.distance_miles, c.efficiency_wh_per_mile
-           FROM cohort c
-           WHERE NOT EXISTS (SELECT 1 FROM panda.trip_tag_assignments tta WHERE tta.trip_id=c.id)
-         )
-         SELECT tag_id, tag_name, COUNT(*)::bigint AS trip_count,
-                COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
-                COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS efficiency_miles,
-                COALESCE(SUM(distance_miles * efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS weighted_efficiency_wh_mi
-         FROM grouped GROUP BY tag_id, tag_name
-         ORDER BY tag_id IS NULL, lower(tag_name), tag_id"
-    );
-    let rows = sqlx::query_as::<_, ByTagRow>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
+    let rows: Vec<ByTagRow> = workflow::Plan::new(vid, &p, tag_filter, workflow::View::Tags)
+        .rows(&state.pool)
         .await?;
 
     Ok(Json(rows.into_iter().map(|row| {
