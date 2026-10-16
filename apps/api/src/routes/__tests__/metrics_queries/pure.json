@@ -1,0 +1,4929 @@
+[
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": -1,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 0,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 1,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 59,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 60,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 61,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 359,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 360,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 361,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 1439,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 1440,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 1441,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 10079,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 10080,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "auto",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "1min",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "minute"
+    }
+  },
+  {
+    "bucket": "5min",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "5min"
+    }
+  },
+  {
+    "bucket": "15min",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "15min"
+    }
+  },
+  {
+    "bucket": "1h",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "hour"
+    }
+  },
+  {
+    "bucket": "1d",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "day"
+    }
+  },
+  {
+    "bucket": "full",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Ok": "raw"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "bucket",
+    "minutes": 10081,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": null,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 0,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 1,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 2,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 95,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        95
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 96,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 97,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": null,
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": null,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 0,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 1,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 2,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 95,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        95
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 96,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 97,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": null,
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": null,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 0,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 1,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 2,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 95,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 96,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 97,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": null,
+    "max": 18446744073709551615,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": null,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 0,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 1,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 2,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 95,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        95
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 96,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 97,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "compact",
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "compact",
+        "hour",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": null,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 0,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 1,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 2,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        2
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 95,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        95
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 96,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 97,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "compact",
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "compact",
+        "raw",
+        96
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": null,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 0,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 1,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 2,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 95,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 96,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 97,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "compact",
+    "max": 18446744073709551615,
+    "result": {
+      "Err": "Validation error: unsupported bucket: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": null,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 0,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 1,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 2,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 95,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 96,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 97,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "full",
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": null,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 0,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 1,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 2,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 95,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 96,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 97,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "full",
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": null,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 0,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 1,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 2,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 95,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 96,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 97,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "full",
+    "max": 18446744073709551615,
+    "result": {
+      "Ok": [
+        "full",
+        "raw",
+        null
+      ]
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": null,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 0,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 1,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 2,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 95,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 96,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 97,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": null,
+    "case": "density",
+    "density": "invalid",
+    "max": 18446744073709551615,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": null,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 0,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 1,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 2,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 95,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 96,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 97,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "raw",
+    "case": "density",
+    "density": "invalid",
+    "max": 18446744073709551615,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": null,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 0,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 1,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 2,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 95,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 96,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 97,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "bucket": "invalid",
+    "case": "density",
+    "density": "invalid",
+    "max": 18446744073709551615,
+    "result": {
+      "Err": "Validation error: unsupported density: invalid"
+    }
+  },
+  {
+    "case": "sampling",
+    "length": 0,
+    "max": 2,
+    "points": []
+  },
+  {
+    "case": "sampling",
+    "length": 0,
+    "max": 3,
+    "points": []
+  },
+  {
+    "case": "sampling",
+    "length": 0,
+    "max": 96,
+    "points": []
+  },
+  {
+    "case": "sampling",
+    "length": 1,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 1,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 1,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 2,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 2,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 2,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 3,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 3,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 3,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 95,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 95,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:47Z",
+        "value": 47.0
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 95,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      },
+      {
+        "ts": "2026-01-01T00:00:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:04Z",
+        "value": 4.0
+      },
+      {
+        "ts": "2026-01-01T00:00:05Z",
+        "value": 5.0
+      },
+      {
+        "ts": "2026-01-01T00:00:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:07Z",
+        "value": 7.0
+      },
+      {
+        "ts": "2026-01-01T00:00:08Z",
+        "value": 8.0
+      },
+      {
+        "ts": "2026-01-01T00:00:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:10Z",
+        "value": 10.0
+      },
+      {
+        "ts": "2026-01-01T00:00:11Z",
+        "value": 11.0
+      },
+      {
+        "ts": "2026-01-01T00:00:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:13Z",
+        "value": 13.0
+      },
+      {
+        "ts": "2026-01-01T00:00:14Z",
+        "value": 14.0
+      },
+      {
+        "ts": "2026-01-01T00:00:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:16Z",
+        "value": 16.0
+      },
+      {
+        "ts": "2026-01-01T00:00:17Z",
+        "value": 17.0
+      },
+      {
+        "ts": "2026-01-01T00:00:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:19Z",
+        "value": 19.0
+      },
+      {
+        "ts": "2026-01-01T00:00:20Z",
+        "value": 20.0
+      },
+      {
+        "ts": "2026-01-01T00:00:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:22Z",
+        "value": 22.0
+      },
+      {
+        "ts": "2026-01-01T00:00:23Z",
+        "value": 23.0
+      },
+      {
+        "ts": "2026-01-01T00:00:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:25Z",
+        "value": 25.0
+      },
+      {
+        "ts": "2026-01-01T00:00:26Z",
+        "value": 26.0
+      },
+      {
+        "ts": "2026-01-01T00:00:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:28Z",
+        "value": 28.0
+      },
+      {
+        "ts": "2026-01-01T00:00:29Z",
+        "value": 29.0
+      },
+      {
+        "ts": "2026-01-01T00:00:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:31Z",
+        "value": 31.0
+      },
+      {
+        "ts": "2026-01-01T00:00:32Z",
+        "value": 32.0
+      },
+      {
+        "ts": "2026-01-01T00:00:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:34Z",
+        "value": 34.0
+      },
+      {
+        "ts": "2026-01-01T00:00:35Z",
+        "value": 35.0
+      },
+      {
+        "ts": "2026-01-01T00:00:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:37Z",
+        "value": 37.0
+      },
+      {
+        "ts": "2026-01-01T00:00:38Z",
+        "value": 38.0
+      },
+      {
+        "ts": "2026-01-01T00:00:39Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:40Z",
+        "value": 40.0
+      },
+      {
+        "ts": "2026-01-01T00:00:41Z",
+        "value": 41.0
+      },
+      {
+        "ts": "2026-01-01T00:00:42Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:43Z",
+        "value": 43.0
+      },
+      {
+        "ts": "2026-01-01T00:00:44Z",
+        "value": 44.0
+      },
+      {
+        "ts": "2026-01-01T00:00:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:46Z",
+        "value": 46.0
+      },
+      {
+        "ts": "2026-01-01T00:00:47Z",
+        "value": 47.0
+      },
+      {
+        "ts": "2026-01-01T00:00:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:49Z",
+        "value": 49.0
+      },
+      {
+        "ts": "2026-01-01T00:00:50Z",
+        "value": 50.0
+      },
+      {
+        "ts": "2026-01-01T00:00:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:52Z",
+        "value": 52.0
+      },
+      {
+        "ts": "2026-01-01T00:00:53Z",
+        "value": 53.0
+      },
+      {
+        "ts": "2026-01-01T00:00:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:55Z",
+        "value": 55.0
+      },
+      {
+        "ts": "2026-01-01T00:00:56Z",
+        "value": 56.0
+      },
+      {
+        "ts": "2026-01-01T00:00:57Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:58Z",
+        "value": 58.0
+      },
+      {
+        "ts": "2026-01-01T00:00:59Z",
+        "value": 59.0
+      },
+      {
+        "ts": "2026-01-01T00:01:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:01Z",
+        "value": 61.0
+      },
+      {
+        "ts": "2026-01-01T00:01:02Z",
+        "value": 62.0
+      },
+      {
+        "ts": "2026-01-01T00:01:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:04Z",
+        "value": 64.0
+      },
+      {
+        "ts": "2026-01-01T00:01:05Z",
+        "value": 65.0
+      },
+      {
+        "ts": "2026-01-01T00:01:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:07Z",
+        "value": 67.0
+      },
+      {
+        "ts": "2026-01-01T00:01:08Z",
+        "value": 68.0
+      },
+      {
+        "ts": "2026-01-01T00:01:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:10Z",
+        "value": 70.0
+      },
+      {
+        "ts": "2026-01-01T00:01:11Z",
+        "value": 71.0
+      },
+      {
+        "ts": "2026-01-01T00:01:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:13Z",
+        "value": 73.0
+      },
+      {
+        "ts": "2026-01-01T00:01:14Z",
+        "value": 74.0
+      },
+      {
+        "ts": "2026-01-01T00:01:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:16Z",
+        "value": 76.0
+      },
+      {
+        "ts": "2026-01-01T00:01:17Z",
+        "value": 77.0
+      },
+      {
+        "ts": "2026-01-01T00:01:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:19Z",
+        "value": 79.0
+      },
+      {
+        "ts": "2026-01-01T00:01:20Z",
+        "value": 80.0
+      },
+      {
+        "ts": "2026-01-01T00:01:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:22Z",
+        "value": 82.0
+      },
+      {
+        "ts": "2026-01-01T00:01:23Z",
+        "value": 83.0
+      },
+      {
+        "ts": "2026-01-01T00:01:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:25Z",
+        "value": 85.0
+      },
+      {
+        "ts": "2026-01-01T00:01:26Z",
+        "value": 86.0
+      },
+      {
+        "ts": "2026-01-01T00:01:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:28Z",
+        "value": 88.0
+      },
+      {
+        "ts": "2026-01-01T00:01:29Z",
+        "value": 89.0
+      },
+      {
+        "ts": "2026-01-01T00:01:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:31Z",
+        "value": 91.0
+      },
+      {
+        "ts": "2026-01-01T00:01:32Z",
+        "value": 92.0
+      },
+      {
+        "ts": "2026-01-01T00:01:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 96,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:35Z",
+        "value": 95.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 96,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:47Z",
+        "value": 47.0
+      },
+      {
+        "ts": "2026-01-01T00:01:35Z",
+        "value": 95.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 96,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      },
+      {
+        "ts": "2026-01-01T00:00:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:04Z",
+        "value": 4.0
+      },
+      {
+        "ts": "2026-01-01T00:00:05Z",
+        "value": 5.0
+      },
+      {
+        "ts": "2026-01-01T00:00:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:07Z",
+        "value": 7.0
+      },
+      {
+        "ts": "2026-01-01T00:00:08Z",
+        "value": 8.0
+      },
+      {
+        "ts": "2026-01-01T00:00:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:10Z",
+        "value": 10.0
+      },
+      {
+        "ts": "2026-01-01T00:00:11Z",
+        "value": 11.0
+      },
+      {
+        "ts": "2026-01-01T00:00:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:13Z",
+        "value": 13.0
+      },
+      {
+        "ts": "2026-01-01T00:00:14Z",
+        "value": 14.0
+      },
+      {
+        "ts": "2026-01-01T00:00:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:16Z",
+        "value": 16.0
+      },
+      {
+        "ts": "2026-01-01T00:00:17Z",
+        "value": 17.0
+      },
+      {
+        "ts": "2026-01-01T00:00:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:19Z",
+        "value": 19.0
+      },
+      {
+        "ts": "2026-01-01T00:00:20Z",
+        "value": 20.0
+      },
+      {
+        "ts": "2026-01-01T00:00:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:22Z",
+        "value": 22.0
+      },
+      {
+        "ts": "2026-01-01T00:00:23Z",
+        "value": 23.0
+      },
+      {
+        "ts": "2026-01-01T00:00:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:25Z",
+        "value": 25.0
+      },
+      {
+        "ts": "2026-01-01T00:00:26Z",
+        "value": 26.0
+      },
+      {
+        "ts": "2026-01-01T00:00:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:28Z",
+        "value": 28.0
+      },
+      {
+        "ts": "2026-01-01T00:00:29Z",
+        "value": 29.0
+      },
+      {
+        "ts": "2026-01-01T00:00:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:31Z",
+        "value": 31.0
+      },
+      {
+        "ts": "2026-01-01T00:00:32Z",
+        "value": 32.0
+      },
+      {
+        "ts": "2026-01-01T00:00:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:34Z",
+        "value": 34.0
+      },
+      {
+        "ts": "2026-01-01T00:00:35Z",
+        "value": 35.0
+      },
+      {
+        "ts": "2026-01-01T00:00:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:37Z",
+        "value": 37.0
+      },
+      {
+        "ts": "2026-01-01T00:00:38Z",
+        "value": 38.0
+      },
+      {
+        "ts": "2026-01-01T00:00:39Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:40Z",
+        "value": 40.0
+      },
+      {
+        "ts": "2026-01-01T00:00:41Z",
+        "value": 41.0
+      },
+      {
+        "ts": "2026-01-01T00:00:42Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:43Z",
+        "value": 43.0
+      },
+      {
+        "ts": "2026-01-01T00:00:44Z",
+        "value": 44.0
+      },
+      {
+        "ts": "2026-01-01T00:00:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:46Z",
+        "value": 46.0
+      },
+      {
+        "ts": "2026-01-01T00:00:47Z",
+        "value": 47.0
+      },
+      {
+        "ts": "2026-01-01T00:00:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:49Z",
+        "value": 49.0
+      },
+      {
+        "ts": "2026-01-01T00:00:50Z",
+        "value": 50.0
+      },
+      {
+        "ts": "2026-01-01T00:00:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:52Z",
+        "value": 52.0
+      },
+      {
+        "ts": "2026-01-01T00:00:53Z",
+        "value": 53.0
+      },
+      {
+        "ts": "2026-01-01T00:00:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:55Z",
+        "value": 55.0
+      },
+      {
+        "ts": "2026-01-01T00:00:56Z",
+        "value": 56.0
+      },
+      {
+        "ts": "2026-01-01T00:00:57Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:58Z",
+        "value": 58.0
+      },
+      {
+        "ts": "2026-01-01T00:00:59Z",
+        "value": 59.0
+      },
+      {
+        "ts": "2026-01-01T00:01:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:01Z",
+        "value": 61.0
+      },
+      {
+        "ts": "2026-01-01T00:01:02Z",
+        "value": 62.0
+      },
+      {
+        "ts": "2026-01-01T00:01:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:04Z",
+        "value": 64.0
+      },
+      {
+        "ts": "2026-01-01T00:01:05Z",
+        "value": 65.0
+      },
+      {
+        "ts": "2026-01-01T00:01:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:07Z",
+        "value": 67.0
+      },
+      {
+        "ts": "2026-01-01T00:01:08Z",
+        "value": 68.0
+      },
+      {
+        "ts": "2026-01-01T00:01:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:10Z",
+        "value": 70.0
+      },
+      {
+        "ts": "2026-01-01T00:01:11Z",
+        "value": 71.0
+      },
+      {
+        "ts": "2026-01-01T00:01:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:13Z",
+        "value": 73.0
+      },
+      {
+        "ts": "2026-01-01T00:01:14Z",
+        "value": 74.0
+      },
+      {
+        "ts": "2026-01-01T00:01:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:16Z",
+        "value": 76.0
+      },
+      {
+        "ts": "2026-01-01T00:01:17Z",
+        "value": 77.0
+      },
+      {
+        "ts": "2026-01-01T00:01:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:19Z",
+        "value": 79.0
+      },
+      {
+        "ts": "2026-01-01T00:01:20Z",
+        "value": 80.0
+      },
+      {
+        "ts": "2026-01-01T00:01:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:22Z",
+        "value": 82.0
+      },
+      {
+        "ts": "2026-01-01T00:01:23Z",
+        "value": 83.0
+      },
+      {
+        "ts": "2026-01-01T00:01:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:25Z",
+        "value": 85.0
+      },
+      {
+        "ts": "2026-01-01T00:01:26Z",
+        "value": 86.0
+      },
+      {
+        "ts": "2026-01-01T00:01:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:28Z",
+        "value": 88.0
+      },
+      {
+        "ts": "2026-01-01T00:01:29Z",
+        "value": 89.0
+      },
+      {
+        "ts": "2026-01-01T00:01:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:31Z",
+        "value": 91.0
+      },
+      {
+        "ts": "2026-01-01T00:01:32Z",
+        "value": 92.0
+      },
+      {
+        "ts": "2026-01-01T00:01:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      },
+      {
+        "ts": "2026-01-01T00:01:35Z",
+        "value": 95.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 97,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:36Z",
+        "value": null
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 97,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:36Z",
+        "value": null
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 97,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      },
+      {
+        "ts": "2026-01-01T00:00:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:04Z",
+        "value": 4.0
+      },
+      {
+        "ts": "2026-01-01T00:00:05Z",
+        "value": 5.0
+      },
+      {
+        "ts": "2026-01-01T00:00:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:07Z",
+        "value": 7.0
+      },
+      {
+        "ts": "2026-01-01T00:00:08Z",
+        "value": 8.0
+      },
+      {
+        "ts": "2026-01-01T00:00:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:10Z",
+        "value": 10.0
+      },
+      {
+        "ts": "2026-01-01T00:00:11Z",
+        "value": 11.0
+      },
+      {
+        "ts": "2026-01-01T00:00:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:13Z",
+        "value": 13.0
+      },
+      {
+        "ts": "2026-01-01T00:00:14Z",
+        "value": 14.0
+      },
+      {
+        "ts": "2026-01-01T00:00:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:16Z",
+        "value": 16.0
+      },
+      {
+        "ts": "2026-01-01T00:00:17Z",
+        "value": 17.0
+      },
+      {
+        "ts": "2026-01-01T00:00:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:19Z",
+        "value": 19.0
+      },
+      {
+        "ts": "2026-01-01T00:00:20Z",
+        "value": 20.0
+      },
+      {
+        "ts": "2026-01-01T00:00:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:22Z",
+        "value": 22.0
+      },
+      {
+        "ts": "2026-01-01T00:00:23Z",
+        "value": 23.0
+      },
+      {
+        "ts": "2026-01-01T00:00:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:25Z",
+        "value": 25.0
+      },
+      {
+        "ts": "2026-01-01T00:00:26Z",
+        "value": 26.0
+      },
+      {
+        "ts": "2026-01-01T00:00:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:28Z",
+        "value": 28.0
+      },
+      {
+        "ts": "2026-01-01T00:00:29Z",
+        "value": 29.0
+      },
+      {
+        "ts": "2026-01-01T00:00:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:31Z",
+        "value": 31.0
+      },
+      {
+        "ts": "2026-01-01T00:00:32Z",
+        "value": 32.0
+      },
+      {
+        "ts": "2026-01-01T00:00:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:34Z",
+        "value": 34.0
+      },
+      {
+        "ts": "2026-01-01T00:00:35Z",
+        "value": 35.0
+      },
+      {
+        "ts": "2026-01-01T00:00:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:37Z",
+        "value": 37.0
+      },
+      {
+        "ts": "2026-01-01T00:00:38Z",
+        "value": 38.0
+      },
+      {
+        "ts": "2026-01-01T00:00:39Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:40Z",
+        "value": 40.0
+      },
+      {
+        "ts": "2026-01-01T00:00:41Z",
+        "value": 41.0
+      },
+      {
+        "ts": "2026-01-01T00:00:42Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:43Z",
+        "value": 43.0
+      },
+      {
+        "ts": "2026-01-01T00:00:44Z",
+        "value": 44.0
+      },
+      {
+        "ts": "2026-01-01T00:00:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:46Z",
+        "value": 46.0
+      },
+      {
+        "ts": "2026-01-01T00:00:47Z",
+        "value": 47.0
+      },
+      {
+        "ts": "2026-01-01T00:00:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:49Z",
+        "value": 49.0
+      },
+      {
+        "ts": "2026-01-01T00:00:50Z",
+        "value": 50.0
+      },
+      {
+        "ts": "2026-01-01T00:00:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:52Z",
+        "value": 52.0
+      },
+      {
+        "ts": "2026-01-01T00:00:53Z",
+        "value": 53.0
+      },
+      {
+        "ts": "2026-01-01T00:00:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:55Z",
+        "value": 55.0
+      },
+      {
+        "ts": "2026-01-01T00:00:56Z",
+        "value": 56.0
+      },
+      {
+        "ts": "2026-01-01T00:00:57Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:58Z",
+        "value": 58.0
+      },
+      {
+        "ts": "2026-01-01T00:00:59Z",
+        "value": 59.0
+      },
+      {
+        "ts": "2026-01-01T00:01:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:01Z",
+        "value": 61.0
+      },
+      {
+        "ts": "2026-01-01T00:01:02Z",
+        "value": 62.0
+      },
+      {
+        "ts": "2026-01-01T00:01:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:04Z",
+        "value": 64.0
+      },
+      {
+        "ts": "2026-01-01T00:01:05Z",
+        "value": 65.0
+      },
+      {
+        "ts": "2026-01-01T00:01:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:07Z",
+        "value": 67.0
+      },
+      {
+        "ts": "2026-01-01T00:01:08Z",
+        "value": 68.0
+      },
+      {
+        "ts": "2026-01-01T00:01:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:10Z",
+        "value": 70.0
+      },
+      {
+        "ts": "2026-01-01T00:01:11Z",
+        "value": 71.0
+      },
+      {
+        "ts": "2026-01-01T00:01:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:13Z",
+        "value": 73.0
+      },
+      {
+        "ts": "2026-01-01T00:01:14Z",
+        "value": 74.0
+      },
+      {
+        "ts": "2026-01-01T00:01:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:16Z",
+        "value": 76.0
+      },
+      {
+        "ts": "2026-01-01T00:01:17Z",
+        "value": 77.0
+      },
+      {
+        "ts": "2026-01-01T00:01:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:19Z",
+        "value": 79.0
+      },
+      {
+        "ts": "2026-01-01T00:01:20Z",
+        "value": 80.0
+      },
+      {
+        "ts": "2026-01-01T00:01:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:22Z",
+        "value": 82.0
+      },
+      {
+        "ts": "2026-01-01T00:01:23Z",
+        "value": 83.0
+      },
+      {
+        "ts": "2026-01-01T00:01:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:25Z",
+        "value": 85.0
+      },
+      {
+        "ts": "2026-01-01T00:01:26Z",
+        "value": 86.0
+      },
+      {
+        "ts": "2026-01-01T00:01:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:28Z",
+        "value": 88.0
+      },
+      {
+        "ts": "2026-01-01T00:01:29Z",
+        "value": 89.0
+      },
+      {
+        "ts": "2026-01-01T00:01:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:31Z",
+        "value": 91.0
+      },
+      {
+        "ts": "2026-01-01T00:01:32Z",
+        "value": 92.0
+      },
+      {
+        "ts": "2026-01-01T00:01:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      },
+      {
+        "ts": "2026-01-01T00:01:36Z",
+        "value": null
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 101,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:40Z",
+        "value": 100.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 101,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:50Z",
+        "value": 50.0
+      },
+      {
+        "ts": "2026-01-01T00:01:40Z",
+        "value": 100.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 101,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:01Z",
+        "value": 1.0
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      },
+      {
+        "ts": "2026-01-01T00:00:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:04Z",
+        "value": 4.0
+      },
+      {
+        "ts": "2026-01-01T00:00:05Z",
+        "value": 5.0
+      },
+      {
+        "ts": "2026-01-01T00:00:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:07Z",
+        "value": 7.0
+      },
+      {
+        "ts": "2026-01-01T00:00:08Z",
+        "value": 8.0
+      },
+      {
+        "ts": "2026-01-01T00:00:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:10Z",
+        "value": 10.0
+      },
+      {
+        "ts": "2026-01-01T00:00:11Z",
+        "value": 11.0
+      },
+      {
+        "ts": "2026-01-01T00:00:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:13Z",
+        "value": 13.0
+      },
+      {
+        "ts": "2026-01-01T00:00:14Z",
+        "value": 14.0
+      },
+      {
+        "ts": "2026-01-01T00:00:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:16Z",
+        "value": 16.0
+      },
+      {
+        "ts": "2026-01-01T00:00:17Z",
+        "value": 17.0
+      },
+      {
+        "ts": "2026-01-01T00:00:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:20Z",
+        "value": 20.0
+      },
+      {
+        "ts": "2026-01-01T00:00:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:22Z",
+        "value": 22.0
+      },
+      {
+        "ts": "2026-01-01T00:00:23Z",
+        "value": 23.0
+      },
+      {
+        "ts": "2026-01-01T00:00:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:25Z",
+        "value": 25.0
+      },
+      {
+        "ts": "2026-01-01T00:00:26Z",
+        "value": 26.0
+      },
+      {
+        "ts": "2026-01-01T00:00:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:28Z",
+        "value": 28.0
+      },
+      {
+        "ts": "2026-01-01T00:00:29Z",
+        "value": 29.0
+      },
+      {
+        "ts": "2026-01-01T00:00:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:31Z",
+        "value": 31.0
+      },
+      {
+        "ts": "2026-01-01T00:00:32Z",
+        "value": 32.0
+      },
+      {
+        "ts": "2026-01-01T00:00:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:34Z",
+        "value": 34.0
+      },
+      {
+        "ts": "2026-01-01T00:00:35Z",
+        "value": 35.0
+      },
+      {
+        "ts": "2026-01-01T00:00:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:37Z",
+        "value": 37.0
+      },
+      {
+        "ts": "2026-01-01T00:00:38Z",
+        "value": 38.0
+      },
+      {
+        "ts": "2026-01-01T00:00:40Z",
+        "value": 40.0
+      },
+      {
+        "ts": "2026-01-01T00:00:41Z",
+        "value": 41.0
+      },
+      {
+        "ts": "2026-01-01T00:00:42Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:43Z",
+        "value": 43.0
+      },
+      {
+        "ts": "2026-01-01T00:00:44Z",
+        "value": 44.0
+      },
+      {
+        "ts": "2026-01-01T00:00:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:46Z",
+        "value": 46.0
+      },
+      {
+        "ts": "2026-01-01T00:00:47Z",
+        "value": 47.0
+      },
+      {
+        "ts": "2026-01-01T00:00:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:49Z",
+        "value": 49.0
+      },
+      {
+        "ts": "2026-01-01T00:00:50Z",
+        "value": 50.0
+      },
+      {
+        "ts": "2026-01-01T00:00:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:52Z",
+        "value": 52.0
+      },
+      {
+        "ts": "2026-01-01T00:00:53Z",
+        "value": 53.0
+      },
+      {
+        "ts": "2026-01-01T00:00:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:55Z",
+        "value": 55.0
+      },
+      {
+        "ts": "2026-01-01T00:00:56Z",
+        "value": 56.0
+      },
+      {
+        "ts": "2026-01-01T00:00:57Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:58Z",
+        "value": 58.0
+      },
+      {
+        "ts": "2026-01-01T00:01:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:01Z",
+        "value": 61.0
+      },
+      {
+        "ts": "2026-01-01T00:01:02Z",
+        "value": 62.0
+      },
+      {
+        "ts": "2026-01-01T00:01:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:04Z",
+        "value": 64.0
+      },
+      {
+        "ts": "2026-01-01T00:01:05Z",
+        "value": 65.0
+      },
+      {
+        "ts": "2026-01-01T00:01:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:07Z",
+        "value": 67.0
+      },
+      {
+        "ts": "2026-01-01T00:01:08Z",
+        "value": 68.0
+      },
+      {
+        "ts": "2026-01-01T00:01:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:10Z",
+        "value": 70.0
+      },
+      {
+        "ts": "2026-01-01T00:01:11Z",
+        "value": 71.0
+      },
+      {
+        "ts": "2026-01-01T00:01:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:13Z",
+        "value": 73.0
+      },
+      {
+        "ts": "2026-01-01T00:01:14Z",
+        "value": 74.0
+      },
+      {
+        "ts": "2026-01-01T00:01:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:16Z",
+        "value": 76.0
+      },
+      {
+        "ts": "2026-01-01T00:01:17Z",
+        "value": 77.0
+      },
+      {
+        "ts": "2026-01-01T00:01:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:20Z",
+        "value": 80.0
+      },
+      {
+        "ts": "2026-01-01T00:01:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:22Z",
+        "value": 82.0
+      },
+      {
+        "ts": "2026-01-01T00:01:23Z",
+        "value": 83.0
+      },
+      {
+        "ts": "2026-01-01T00:01:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:25Z",
+        "value": 85.0
+      },
+      {
+        "ts": "2026-01-01T00:01:26Z",
+        "value": 86.0
+      },
+      {
+        "ts": "2026-01-01T00:01:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:28Z",
+        "value": 88.0
+      },
+      {
+        "ts": "2026-01-01T00:01:29Z",
+        "value": 89.0
+      },
+      {
+        "ts": "2026-01-01T00:01:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:31Z",
+        "value": 91.0
+      },
+      {
+        "ts": "2026-01-01T00:01:32Z",
+        "value": 92.0
+      },
+      {
+        "ts": "2026-01-01T00:01:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      },
+      {
+        "ts": "2026-01-01T00:01:35Z",
+        "value": 95.0
+      },
+      {
+        "ts": "2026-01-01T00:01:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:37Z",
+        "value": 97.0
+      },
+      {
+        "ts": "2026-01-01T00:01:38Z",
+        "value": 98.0
+      },
+      {
+        "ts": "2026-01-01T00:01:40Z",
+        "value": 100.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 200,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:03:19Z",
+        "value": 199.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 200,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:39Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:03:19Z",
+        "value": 199.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 200,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:02Z",
+        "value": 2.0
+      },
+      {
+        "ts": "2026-01-01T00:00:04Z",
+        "value": 4.0
+      },
+      {
+        "ts": "2026-01-01T00:00:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:08Z",
+        "value": 8.0
+      },
+      {
+        "ts": "2026-01-01T00:00:10Z",
+        "value": 10.0
+      },
+      {
+        "ts": "2026-01-01T00:00:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:14Z",
+        "value": 14.0
+      },
+      {
+        "ts": "2026-01-01T00:00:16Z",
+        "value": 16.0
+      },
+      {
+        "ts": "2026-01-01T00:00:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:20Z",
+        "value": 20.0
+      },
+      {
+        "ts": "2026-01-01T00:00:23Z",
+        "value": 23.0
+      },
+      {
+        "ts": "2026-01-01T00:00:25Z",
+        "value": 25.0
+      },
+      {
+        "ts": "2026-01-01T00:00:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:29Z",
+        "value": 29.0
+      },
+      {
+        "ts": "2026-01-01T00:00:31Z",
+        "value": 31.0
+      },
+      {
+        "ts": "2026-01-01T00:00:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:35Z",
+        "value": 35.0
+      },
+      {
+        "ts": "2026-01-01T00:00:37Z",
+        "value": 37.0
+      },
+      {
+        "ts": "2026-01-01T00:00:39Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:41Z",
+        "value": 41.0
+      },
+      {
+        "ts": "2026-01-01T00:00:43Z",
+        "value": 43.0
+      },
+      {
+        "ts": "2026-01-01T00:00:46Z",
+        "value": 46.0
+      },
+      {
+        "ts": "2026-01-01T00:00:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:50Z",
+        "value": 50.0
+      },
+      {
+        "ts": "2026-01-01T00:00:52Z",
+        "value": 52.0
+      },
+      {
+        "ts": "2026-01-01T00:00:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:00:56Z",
+        "value": 56.0
+      },
+      {
+        "ts": "2026-01-01T00:00:58Z",
+        "value": 58.0
+      },
+      {
+        "ts": "2026-01-01T00:01:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:02Z",
+        "value": 62.0
+      },
+      {
+        "ts": "2026-01-01T00:01:04Z",
+        "value": 64.0
+      },
+      {
+        "ts": "2026-01-01T00:01:07Z",
+        "value": 67.0
+      },
+      {
+        "ts": "2026-01-01T00:01:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:11Z",
+        "value": 71.0
+      },
+      {
+        "ts": "2026-01-01T00:01:13Z",
+        "value": 73.0
+      },
+      {
+        "ts": "2026-01-01T00:01:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:17Z",
+        "value": 77.0
+      },
+      {
+        "ts": "2026-01-01T00:01:19Z",
+        "value": 79.0
+      },
+      {
+        "ts": "2026-01-01T00:01:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:23Z",
+        "value": 83.0
+      },
+      {
+        "ts": "2026-01-01T00:01:25Z",
+        "value": 85.0
+      },
+      {
+        "ts": "2026-01-01T00:01:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:32Z",
+        "value": 92.0
+      },
+      {
+        "ts": "2026-01-01T00:01:34Z",
+        "value": 94.0
+      },
+      {
+        "ts": "2026-01-01T00:01:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:38Z",
+        "value": 98.0
+      },
+      {
+        "ts": "2026-01-01T00:01:40Z",
+        "value": 100.0
+      },
+      {
+        "ts": "2026-01-01T00:01:42Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:44Z",
+        "value": 104.0
+      },
+      {
+        "ts": "2026-01-01T00:01:46Z",
+        "value": 106.0
+      },
+      {
+        "ts": "2026-01-01T00:01:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:53Z",
+        "value": 113.0
+      },
+      {
+        "ts": "2026-01-01T00:01:55Z",
+        "value": 115.0
+      },
+      {
+        "ts": "2026-01-01T00:01:57Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:59Z",
+        "value": 119.0
+      },
+      {
+        "ts": "2026-01-01T00:02:01Z",
+        "value": 121.0
+      },
+      {
+        "ts": "2026-01-01T00:02:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:05Z",
+        "value": 125.0
+      },
+      {
+        "ts": "2026-01-01T00:02:07Z",
+        "value": 127.0
+      },
+      {
+        "ts": "2026-01-01T00:02:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:11Z",
+        "value": 131.0
+      },
+      {
+        "ts": "2026-01-01T00:02:14Z",
+        "value": 134.0
+      },
+      {
+        "ts": "2026-01-01T00:02:16Z",
+        "value": 136.0
+      },
+      {
+        "ts": "2026-01-01T00:02:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:20Z",
+        "value": 140.0
+      },
+      {
+        "ts": "2026-01-01T00:02:22Z",
+        "value": 142.0
+      },
+      {
+        "ts": "2026-01-01T00:02:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:26Z",
+        "value": 146.0
+      },
+      {
+        "ts": "2026-01-01T00:02:28Z",
+        "value": 148.0
+      },
+      {
+        "ts": "2026-01-01T00:02:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:32Z",
+        "value": 152.0
+      },
+      {
+        "ts": "2026-01-01T00:02:35Z",
+        "value": 155.0
+      },
+      {
+        "ts": "2026-01-01T00:02:37Z",
+        "value": 157.0
+      },
+      {
+        "ts": "2026-01-01T00:02:39Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:41Z",
+        "value": 161.0
+      },
+      {
+        "ts": "2026-01-01T00:02:43Z",
+        "value": 163.0
+      },
+      {
+        "ts": "2026-01-01T00:02:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:47Z",
+        "value": 167.0
+      },
+      {
+        "ts": "2026-01-01T00:02:49Z",
+        "value": 169.0
+      },
+      {
+        "ts": "2026-01-01T00:02:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:02:53Z",
+        "value": 173.0
+      },
+      {
+        "ts": "2026-01-01T00:02:55Z",
+        "value": 175.0
+      },
+      {
+        "ts": "2026-01-01T00:02:58Z",
+        "value": 178.0
+      },
+      {
+        "ts": "2026-01-01T00:03:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:03:02Z",
+        "value": 182.0
+      },
+      {
+        "ts": "2026-01-01T00:03:04Z",
+        "value": 184.0
+      },
+      {
+        "ts": "2026-01-01T00:03:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:03:08Z",
+        "value": 188.0
+      },
+      {
+        "ts": "2026-01-01T00:03:10Z",
+        "value": 190.0
+      },
+      {
+        "ts": "2026-01-01T00:03:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:03:14Z",
+        "value": 194.0
+      },
+      {
+        "ts": "2026-01-01T00:03:16Z",
+        "value": 196.0
+      },
+      {
+        "ts": "2026-01-01T00:03:19Z",
+        "value": 199.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 10001,
+    "max": 2,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:46:40Z",
+        "value": 10000.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 10001,
+    "max": 3,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:23:20Z",
+        "value": 5000.0
+      },
+      {
+        "ts": "2026-01-01T02:46:40Z",
+        "value": 10000.0
+      }
+    ]
+  },
+  {
+    "case": "sampling",
+    "length": 10001,
+    "max": 96,
+    "points": [
+      {
+        "ts": "2026-01-01T00:00:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:01:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:03:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:05:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:07:01Z",
+        "value": 421.0
+      },
+      {
+        "ts": "2026-01-01T00:08:46Z",
+        "value": 526.0
+      },
+      {
+        "ts": "2026-01-01T00:10:31Z",
+        "value": 631.0
+      },
+      {
+        "ts": "2026-01-01T00:12:16Z",
+        "value": 736.0
+      },
+      {
+        "ts": "2026-01-01T00:14:02Z",
+        "value": 842.0
+      },
+      {
+        "ts": "2026-01-01T00:15:47Z",
+        "value": 947.0
+      },
+      {
+        "ts": "2026-01-01T00:17:32Z",
+        "value": 1052.0
+      },
+      {
+        "ts": "2026-01-01T00:19:17Z",
+        "value": 1157.0
+      },
+      {
+        "ts": "2026-01-01T00:21:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:22:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:24:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:26:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:28:04Z",
+        "value": 1684.0
+      },
+      {
+        "ts": "2026-01-01T00:29:49Z",
+        "value": 1789.0
+      },
+      {
+        "ts": "2026-01-01T00:31:34Z",
+        "value": 1894.0
+      },
+      {
+        "ts": "2026-01-01T00:33:20Z",
+        "value": 2000.0
+      },
+      {
+        "ts": "2026-01-01T00:35:05Z",
+        "value": 2105.0
+      },
+      {
+        "ts": "2026-01-01T00:36:50Z",
+        "value": 2210.0
+      },
+      {
+        "ts": "2026-01-01T00:38:35Z",
+        "value": 2315.0
+      },
+      {
+        "ts": "2026-01-01T00:40:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:42:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:43:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:45:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T00:47:22Z",
+        "value": 2842.0
+      },
+      {
+        "ts": "2026-01-01T00:49:07Z",
+        "value": 2947.0
+      },
+      {
+        "ts": "2026-01-01T00:50:52Z",
+        "value": 3052.0
+      },
+      {
+        "ts": "2026-01-01T00:52:37Z",
+        "value": 3157.0
+      },
+      {
+        "ts": "2026-01-01T00:54:23Z",
+        "value": 3263.0
+      },
+      {
+        "ts": "2026-01-01T00:56:08Z",
+        "value": 3368.0
+      },
+      {
+        "ts": "2026-01-01T00:57:53Z",
+        "value": 3473.0
+      },
+      {
+        "ts": "2026-01-01T00:59:38Z",
+        "value": 3578.0
+      },
+      {
+        "ts": "2026-01-01T01:01:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:03:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:04:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:06:40Z",
+        "value": 4000.0
+      },
+      {
+        "ts": "2026-01-01T01:08:25Z",
+        "value": 4105.0
+      },
+      {
+        "ts": "2026-01-01T01:10:10Z",
+        "value": 4210.0
+      },
+      {
+        "ts": "2026-01-01T01:11:55Z",
+        "value": 4315.0
+      },
+      {
+        "ts": "2026-01-01T01:13:41Z",
+        "value": 4421.0
+      },
+      {
+        "ts": "2026-01-01T01:15:26Z",
+        "value": 4526.0
+      },
+      {
+        "ts": "2026-01-01T01:17:11Z",
+        "value": 4631.0
+      },
+      {
+        "ts": "2026-01-01T01:18:56Z",
+        "value": 4736.0
+      },
+      {
+        "ts": "2026-01-01T01:20:42Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:22:27Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:24:12Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:25:57Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:27:43Z",
+        "value": 5263.0
+      },
+      {
+        "ts": "2026-01-01T01:29:28Z",
+        "value": 5368.0
+      },
+      {
+        "ts": "2026-01-01T01:31:13Z",
+        "value": 5473.0
+      },
+      {
+        "ts": "2026-01-01T01:32:58Z",
+        "value": 5578.0
+      },
+      {
+        "ts": "2026-01-01T01:34:44Z",
+        "value": 5684.0
+      },
+      {
+        "ts": "2026-01-01T01:36:29Z",
+        "value": 5789.0
+      },
+      {
+        "ts": "2026-01-01T01:38:14Z",
+        "value": 5894.0
+      },
+      {
+        "ts": "2026-01-01T01:40:00Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:41:45Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:43:30Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:45:15Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T01:47:01Z",
+        "value": 6421.0
+      },
+      {
+        "ts": "2026-01-01T01:48:46Z",
+        "value": 6526.0
+      },
+      {
+        "ts": "2026-01-01T01:50:31Z",
+        "value": 6631.0
+      },
+      {
+        "ts": "2026-01-01T01:52:16Z",
+        "value": 6736.0
+      },
+      {
+        "ts": "2026-01-01T01:54:02Z",
+        "value": 6842.0
+      },
+      {
+        "ts": "2026-01-01T01:55:47Z",
+        "value": 6947.0
+      },
+      {
+        "ts": "2026-01-01T01:57:32Z",
+        "value": 7052.0
+      },
+      {
+        "ts": "2026-01-01T01:59:17Z",
+        "value": 7157.0
+      },
+      {
+        "ts": "2026-01-01T02:01:03Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:02:48Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:04:33Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:06:18Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:08:04Z",
+        "value": 7684.0
+      },
+      {
+        "ts": "2026-01-01T02:09:49Z",
+        "value": 7789.0
+      },
+      {
+        "ts": "2026-01-01T02:11:34Z",
+        "value": 7894.0
+      },
+      {
+        "ts": "2026-01-01T02:13:20Z",
+        "value": 8000.0
+      },
+      {
+        "ts": "2026-01-01T02:15:05Z",
+        "value": 8105.0
+      },
+      {
+        "ts": "2026-01-01T02:16:50Z",
+        "value": 8210.0
+      },
+      {
+        "ts": "2026-01-01T02:18:35Z",
+        "value": 8315.0
+      },
+      {
+        "ts": "2026-01-01T02:20:21Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:22:06Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:23:51Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:25:36Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:27:22Z",
+        "value": 8842.0
+      },
+      {
+        "ts": "2026-01-01T02:29:07Z",
+        "value": 8947.0
+      },
+      {
+        "ts": "2026-01-01T02:30:52Z",
+        "value": 9052.0
+      },
+      {
+        "ts": "2026-01-01T02:32:37Z",
+        "value": 9157.0
+      },
+      {
+        "ts": "2026-01-01T02:34:23Z",
+        "value": 9263.0
+      },
+      {
+        "ts": "2026-01-01T02:36:08Z",
+        "value": 9368.0
+      },
+      {
+        "ts": "2026-01-01T02:37:53Z",
+        "value": 9473.0
+      },
+      {
+        "ts": "2026-01-01T02:39:38Z",
+        "value": 9578.0
+      },
+      {
+        "ts": "2026-01-01T02:41:24Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:43:09Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:44:54Z",
+        "value": null
+      },
+      {
+        "ts": "2026-01-01T02:46:40Z",
+        "value": 10000.0
+      }
+    ]
+  },
+  {
+    "case": "bounds",
+    "lifetime": false,
+    "result": [
+      "2026-01-03T00:00:00Z",
+      "2026-01-01T00:00:00Z"
+    ]
+  },
+  {
+    "case": "bounds",
+    "lifetime": true,
+    "result": [
+      "1970-01-01T00:00:00Z",
+      "2026-01-01T00:00:00Z"
+    ]
+  },
+  {
+    "case": "lookup",
+    "name": "total_trips",
+    "result": {
+      "Ok": "total_trips"
+    },
+    "series": true
+  },
+  {
+    "case": "lookup",
+    "name": "unknown",
+    "result": {
+      "Err": "Validation error: unknown metric: unknown"
+    },
+    "series": false
+  },
+  {
+    "case": "lookup",
+    "name": "",
+    "result": {
+      "Err": "Validation error: unknown metric: "
+    },
+    "series": false
+  },
+  {
+    "case": "lookup",
+    "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "result": {
+      "Err": "Validation error: unknown metric: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "series": false
+  },
+  {
+    "case": "lookup",
+    "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "result": {
+      "Err": "Validation error: metric identifier is invalid"
+    },
+    "series": false
+  },
+  {
+    "case": "lookup",
+    "name": "total_trips\n",
+    "result": {
+      "Err": "Validation error: metric identifier is invalid"
+    },
+    "series": false
+  }
+]

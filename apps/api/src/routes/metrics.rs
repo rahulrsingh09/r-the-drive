@@ -1542,3 +1542,7 @@ mod tests {
         assert_eq!(resolve_bucket(Some("raw"), from, to).unwrap(), "raw");
     }
 }
+
+#[cfg(test)]
+#[path = "__tests__/metrics_queries/contracts.rs"]
+mod query_contracts;

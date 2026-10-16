@@ -1,0 +1,89 @@
+[
+  {
+    "case": "blocked query deadline",
+    "endpoint": "value",
+    "observed_response_variants": [
+      {
+        "body": {
+          "error": {
+            "code": "DEPENDENCY_UNAVAILABLE",
+            "message": "Metric query deadline exceeded"
+          }
+        },
+        "headers": {
+          "access-control-allow-credentials": "true",
+          "access-control-expose-headers": "etag",
+          "content-length": "86",
+          "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+          "content-type": "application/json",
+          "referrer-policy": "no-referrer",
+          "strict-transport-security": "max-age=31536000; includeSubDomains",
+          "vary": "accept-encoding",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY",
+          "x-panda-ratelimit-class": "auth_read",
+          "x-ratelimit-limit": "<rate clock/count>",
+          "x-ratelimit-remaining": "<rate clock/count>",
+          "x-ratelimit-whitelisted": "<rate clock/count>"
+        },
+        "status": 503,
+        "wire": "{\"error\":{\"code\":\"DEPENDENCY_UNAVAILABLE\",\"message\":\"Metric query deadline exceeded\"}}"
+      },
+      {
+        "body": {
+          "error": {
+            "code": "INTERNAL",
+            "message": "Database error"
+          }
+        },
+        "headers": {
+          "access-control-allow-credentials": "true",
+          "access-control-expose-headers": "etag",
+          "content-length": "56",
+          "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+          "content-type": "application/json",
+          "referrer-policy": "no-referrer",
+          "strict-transport-security": "max-age=31536000; includeSubDomains",
+          "vary": "accept-encoding",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY",
+          "x-panda-ratelimit-class": "auth_read",
+          "x-ratelimit-limit": "<rate clock/count>",
+          "x-ratelimit-remaining": "<rate clock/count>",
+          "x-ratelimit-whitelisted": "<rate clock/count>"
+        },
+        "status": 500,
+        "wire": "{\"error\":{\"code\":\"INTERNAL\",\"message\":\"Database error\"}}"
+      }
+    ]
+  },
+  {
+    "case": "blocked query deadline",
+    "endpoint": "series",
+    "output": {
+      "body_error": "metric response interrupted",
+      "headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "etag",
+        "content-security-policy": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "accept-encoding",
+        "x-accel-buffering": "no",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-panda-ratelimit-class": "auth_read",
+        "x-ratelimit-limit": "<rate clock/count>",
+        "x-ratelimit-remaining": "<rate clock/count>",
+        "x-ratelimit-whitelisted": "<rate clock/count>"
+      },
+      "status": 200
+    }
+  },
+  {
+    "admission_released": true,
+    "case": "client disconnect",
+    "evidence_unchanged": true
+  }
+]
