@@ -210,13 +210,15 @@ async fn error_output(error: AppError) -> Value {
     json!({"status":status,"headers":headers,"body":serde_json::from_slice::<Value>(&body).unwrap(),"diagnostic":diagnostic})
 }
 
+fn evidence_path(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("DEMO_CONTRACT_ARTIFACT_DIR")
+        .map(|root| std::path::PathBuf::from(root).join(name))
+}
+
 fn evidence(name: &str, value: &Value) {
-    let root = std::path::PathBuf::from(std::env::var("DEMO_CONTRACT_ARTIFACT_DIR").unwrap());
-    std::fs::write(
-        root.join(format!("{name}.json")),
-        serde_json::to_vec(value).unwrap(),
-    )
-    .unwrap();
+    if let Some(path) = evidence_path(&format!("{name}.json")) {
+        std::fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -665,12 +667,9 @@ async fn demo_generation_legacy_refresh_test_remains_incompatible_with_protected
         .unwrap();
     let mut log = result.stdout;
     log.extend(result.stderr);
-    std::fs::write(
-        std::path::PathBuf::from(std::env::var("DEMO_CONTRACT_ARTIFACT_DIR").unwrap())
-            .join("legacy-regression.log"),
-        &log,
-    )
-    .unwrap();
+    if let Some(path) = evidence_path("legacy-regression.log") {
+        std::fs::write(path, &log).unwrap();
+    }
     assert!(
         !result.status.success(),
         "legacy test assumes history deletion is allowed"
