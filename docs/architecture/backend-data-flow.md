@@ -8,6 +8,29 @@ Backend contributors changing auth, ingestion, storage, or route behavior.
 
 This document is canonical for the high-level backend flow. Update it when the API runtime path or ingestion architecture changes materially.
 
+## Database function resolution
+
+The shared application pool sets each connection's search path to
+`pg_catalog, panda, public, pg_temp`. Built-ins resolve first, the trusted
+application schema provides `cube`/`earthdistance` functions, types and operators,
+and `public` retains the existing TimescaleDB helpers. Temporary types resolve
+last. Neither `$user` nor a caller-supplied schema is added. The supported schema
+setup does not grant `CREATE` on `panda` or `public` to `PUBLIC`; these schemas
+must remain unavailable for object creation by untrusted roles.
+
+The migration pool is separate and retains its explicit `public` search path.
+Application connections opened before migration and connections added later
+receive the same application configuration. This changes no schema, extension
+ownership, role attribute or history privilege.
+
+Qualifying scalar calls can work with earthdistance 1.2, whose SQL bodies bind
+their dependencies at creation. Retained 1.1 installations also have nested
+function/type lookups in string bodies, and application geofence queries use
+extension operators. Configuring the shared connection covers these existing
+queries without changing extension definitions or requiring fixture-only
+search-path overrides. The pool configuration does not install or upgrade
+extensions.
+
 ## Flow Summary
 
 1. User authenticates with Panda through the auth routes.
