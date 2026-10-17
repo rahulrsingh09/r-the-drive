@@ -70,6 +70,7 @@
     "globals": "^17.7.0",
     "knip": "^6.27.0",
     "prettier": "^3.9.5",
+    "vite": "catalog:",
     "yaml": "^2.9.0",
     "turbo": "^2.10.5"
   },

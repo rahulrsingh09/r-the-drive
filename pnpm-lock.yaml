@@ -160,6 +160,9 @@ importers:
       turbo:
         specifier: ^2.10.5
         version: 2.10.5
+      vite:
+        specifier: 'catalog:'
+        version: 8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.49.0)(yaml@2.9.0)
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
