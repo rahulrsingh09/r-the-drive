@@ -71,6 +71,6 @@ export function chargingDayGeometry(days: PreparedDay[], left: number, top: numb
       sessionCount += group.sessionCount;
       return segment;
     });
-    return { ...day, x, y, barHeight, clippedBarHeight, totalLabelY: top + innerHeight - (day.totalEnergyKwh / axisSpan) * renderHeight - 8, sessionCount, segments };
+    return { ...day, x, y, barHeight, clippedBarHeight, totalLabelY: top + innerHeight - (day.totalEnergyKwh / axisSpan) * renderHeight - 8, labelX: left + slotWidth * index + slotWidth / 2, sessionCount, segments };
   });
 }

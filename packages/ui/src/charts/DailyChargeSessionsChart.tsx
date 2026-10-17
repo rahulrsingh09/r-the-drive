@@ -114,7 +114,10 @@ export function DailyChargingBarChart({
     null
   );
   const suppressDayClickRef = React.useRef(false);
-  const [hoverState, setHoverState] = React.useState<HoverState | null>(null);
+  const [hoverState, updateHover] = React.useReducer((current: HoverState | null, event: HoverState | string) => {
+    if (typeof event !== 'string') return event;
+    return current?.dayLocal === event ? null : current;
+  }, null);
   const [zoomRange, setZoomRange] = React.useReducer((current: [number, number] | null, action: [number, number] | number | null) => {
     if (typeof action !== 'number') return action;
     if (!current || action < 2) return null;
@@ -142,48 +145,19 @@ export function DailyChargingBarChart({
     return GROUP_ORDER.flatMap(key => counts.has(key) ? [GROUP_META[key]] : []);
   }, [days, variant]);
 
-  const activeDay = React.useMemo(
-    () =>
-      hoverState
-        ? (visibleDays.find((day) => day.day_local === hoverState.dayLocal) ?? null)
-        : null,
-    [visibleDays, hoverState]
-  );
-
-  const setDayHoverFromEvent = React.useCallback(
-    (dayLocal: string, event: React.MouseEvent<SVGElement> | React.PointerEvent<SVGElement>) => {
-      const bounds = chartRef.current?.getBoundingClientRect();
-      if (!bounds) {
-        return;
-      }
-
-      setHoverState({
-        dayLocal,
-        x: event.clientX - bounds.left,
-        y: event.clientY - bounds.top,
-        containerWidth: bounds.width,
-        containerHeight: bounds.height,
-      });
-    },
-    []
-  );
-
-  const isDaySelected = React.useCallback(
-    (dayLocal: string) => selectedDayLocal != null && selectedDayLocal === dayLocal,
-    [selectedDayLocal]
-  );
-
-  const handleDaySelect = React.useCallback(
-    (dayLocal: string) => {
-      if (suppressDayClickRef.current) {
-        suppressDayClickRef.current = false;
-        return;
-      }
-      if (!onDayClick) return;
-      onDayClick(isDaySelected(dayLocal) ? null : dayLocal);
-    },
-    [isDaySelected, onDayClick]
-  );
+  const dayLookup = new Map<string, PreparedDay>();
+  for (const day of visibleDays) if (!dayLookup.has(day.day_local)) dayLookup.set(day.day_local, day);
+  const activeDay = hoverState ? dayLookup.get(hoverState.dayLocal) ?? null : null;
+  const setDayHoverFromEvent = (dayLocal: string, event: React.MouseEvent<SVGElement> | React.PointerEvent<SVGElement>) => {
+    const rect = chartRef.current?.getBoundingClientRect();
+    if (rect) updateHover({ dayLocal, x: event.clientX - rect.left, y: event.clientY - rect.top, containerWidth: rect.width, containerHeight: rect.height });
+  };
+  const isDaySelected = (dayLocal: string) => selectedDayLocal != null && selectedDayLocal === dayLocal;
+  const handleDaySelect = (dayLocal: string) => {
+    const suppressed = suppressDayClickRef.current;
+    suppressDayClickRef.current = false;
+    if (!suppressed) onDayClick?.(dayLocal === selectedDayLocal ? null : dayLocal);
+  };
 
   if (loading) {
     return <ChartSkeleton height={height} />;
@@ -228,13 +202,11 @@ export function DailyChargingBarChart({
       : 74
     : 0;
   const tooltipWidth = 288;
-  const getDayIndexFromEvent = (event: React.PointerEvent<SVGSVGElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (bounds.width <= 0) return null;
-    const chartX = ((event.clientX - bounds.left) / bounds.width) * width;
-    if (!Number.isFinite(chartX)) return null;
-    const index = Math.floor((chartX - margin.left) / slotWidth);
-    return Math.max(0, Math.min(visibleDays.length - 1, index));
+  const selectDayAt = (clientX: number, bounds: DOMRect) => {
+    const localX = ((clientX - bounds.left) / bounds.width) * width;
+    const projected = Math.floor((localX - margin.left) / slotWidth);
+    return bounds.width > 0 && Number.isFinite(localX)
+      ? Math.max(0, Math.min(visibleDays.length - 1, projected)) : null;
   };
   const selectionBounds = selection
     ? ([Math.min(selection[0], selection[1]), Math.max(selection[0], selection[1])] as [
@@ -246,32 +218,21 @@ export function DailyChargingBarChart({
   const selectionWidth = selectionBounds
     ? (selectionBounds[1] - selectionBounds[0] + 1) * slotWidth
     : 0;
-  const labelPositions = visibleDays.map(
-    (_, dayIndex) => margin.left + slotWidth * dayIndex + slotWidth / 2
-  );
   const axisLabelIndices = selectAdaptiveAxisLabelIndices(
-    visibleDays.map((day) => formatDayLabel(day.day_local)),
-    labelPositions
+    geometry.map(day => formatDayLabel(day.day_local)), geometry.map(day => day.labelX),
   );
-  const valueLabelIndices = selectValueLabelIndices(
-    visibleDays.map((day, dayIndex) => {
-      const valueText = formatSmartNumber(day.totalEnergyKwh, day.totalEnergyKwh >= 100 ? 0 : 1);
-      const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
-      return {
-        index: dayIndex,
-        value: day.totalEnergyKwh,
-        x: labelPositions[dayIndex] ?? 0,
-        y: Math.max(margin.top + 10, margin.top + innerHeight - barHeight - 8),
-        width: measureChartText(valueText),
-      };
-    })
-  );
+  const valueLabels = geometry.map((day, index) => ({
+    index, value: day.totalEnergyKwh, x: day.labelX,
+    y: Math.max(margin.top + 10, day.totalLabelY),
+    width: measureChartText(formatSmartNumber(day.totalEnergyKwh, day.totalEnergyKwh >= 100 ? 0 : 1)),
+  }));
+  const valueLabelIndices = selectValueLabelIndices(valueLabels);
   const valueLabelIndexSet = new Set(valueLabelIndices);
   const axisLabelIndexSet = new Set(axisLabelIndices);
 
   const chartPointer = (event: React.PointerEvent<SVGSVGElement>) => {
     if (event.type === 'pointercancel') { selectionRef.current = null; setSelection(null); return; }
-    const index = getDayIndexFromEvent(event);
+    const index = selectDayAt(event.clientX, event.currentTarget.getBoundingClientRect());
     if (event.type === 'pointerdown') {
       if (visibleDays.length < 2 || index == null) return;
       selectionRef.current = { pointerId: event.pointerId, start: index, current: index };
@@ -467,16 +428,12 @@ export function DailyChargingBarChart({
                   onPointerMove={(event) => setDayHoverFromEvent(day.day_local, event)}
                   onPointerDown={(event) => setDayHoverFromEvent(day.day_local, event)}
                   onPointerLeave={() =>
-                    setHoverState((current) =>
-                      current?.dayLocal === day.day_local ? null : current
-                    )
+                    updateHover(day.day_local)
                   }
                   onMouseEnter={(event) => setDayHoverFromEvent(day.day_local, event)}
                   onMouseMove={(event) => setDayHoverFromEvent(day.day_local, event)}
                   onMouseLeave={() =>
-                    setHoverState((current) =>
-                      current?.dayLocal === day.day_local ? null : current
-                    )
+                    updateHover(day.day_local)
                   }
                   onClick={() => handleDaySelect(day.day_local)}
                   onKeyDown={(event) => {

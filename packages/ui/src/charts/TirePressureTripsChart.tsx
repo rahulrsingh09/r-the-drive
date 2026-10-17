@@ -45,19 +45,19 @@ const TIRE_SERIES = [
 ] as const;
 
 function tripLabel(trip: TirePressureTimelineTrip) {
-  const start = trip.start_place || trip.start_address;
-  const end = trip.end_place || trip.end_address;
-  if (start && end) return `${start} → ${end}`;
-  if (start) return `${start} → Trip`;
-  if (end) return `Trip → ${end}`;
-  return `Trip ${trip.id.slice(0, 8)}`;
+  const places = [trip.start_place || trip.start_address, trip.end_place || trip.end_address];
+  return places.some(Boolean) ? places.map(place => place || 'Trip').join(' → ') : `Trip ${trip.id.slice(0, 8)}`;
 }
 
 function tripDetails(trip: TirePressureTimelineTrip) {
-  const duration = trip.duration_min != null ? formatDuration(trip.duration_min) : null;
-  const distance = trip.distance_miles != null ? formatMiles(trip.distance_miles) : null;
-  const when = `${formatAppDateTime(trip.started_at)}–${formatAppDateTime(trip.ended_at)}`;
-  return [when, duration, distance].filter(Boolean).join(' · ');
+  const pieces = [`${formatAppDateTime(trip.started_at)}–${formatAppDateTime(trip.ended_at)}`];
+  for (const [value, format] of [[trip.duration_min, formatDuration], [trip.distance_miles, formatMiles]] as const) {
+    if (value != null) {
+      const text = format(value);
+      if (text) pieces.push(text);
+    }
+  }
+  return pieces.filter(Boolean).join(' · ');
 }
 
 function convertedPressure(value: number | null, factor: number) {

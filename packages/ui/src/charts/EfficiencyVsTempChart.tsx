@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { thresholdColor } from './chartPresentation';
 import {
   ResponsiveContainer, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Cell,
@@ -23,11 +24,7 @@ export interface EfficiencyVsTempChartProps {
 
 function toF(c: number) { return Math.round(c * 9 / 5 + 32); }
 
-function barColor(efficiency: number): string {
-  if (efficiency < 300) return CHART_COLORS.success;
-  if (efficiency < 380) return CHART_COLORS.warning;
-  return CHART_COLORS.danger;
-}
+const EFFICIENCY_BANDS = [[300, CHART_COLORS.success], [380, CHART_COLORS.warning]] as const;
 
 export function EfficiencyVsTempChart({
   data,
@@ -37,13 +34,15 @@ export function EfficiencyVsTempChart({
 }: EfficiencyVsTempChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
 
-  const chartData = data.map((d) => ({
-    ...d,
-    label: unit === 'f'
-      ? `${toF(d.temp_c_low)}°`
-      : `${d.temp_c_low}°`,
-    efficiency: d.avg_efficiency_wh_mi,
-  }));
+  const chartData: Array<EfficiencyVsTempPoint & { label: string; efficiency: number | null }> = [];
+  const cells: React.ReactNode[] = [];
+  const temperature = unit === 'f' ? toF : (value: number) => value;
+  for (const entry of data) {
+    const efficiency = entry.avg_efficiency_wh_mi;
+    const fill = efficiency === null ? CHART_COLORS.muted : thresholdColor(efficiency, EFFICIENCY_BANDS, 'below');
+    cells.push(<Cell key={`cell-${cells.length}`} fill={fill} fillOpacity={CHART_BAR_STYLE.fillOpacity} />);
+    chartData.push({ ...entry, label: `${temperature(entry.temp_c_low)}°`, efficiency });
+  }
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -75,13 +74,7 @@ export function EfficiencyVsTempChart({
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar dataKey="efficiency" radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]} fillOpacity={CHART_BAR_STYLE.fillOpacity} isAnimationActive={false}>
-          {chartData.map((entry, idx) => (
-            <Cell
-              key={`cell-${idx}`}
-              fill={entry.efficiency !== null ? barColor(entry.efficiency) : CHART_COLORS.muted}
-              fillOpacity={CHART_BAR_STYLE.fillOpacity}
-            />
-          ))}
+          {cells}
         </Bar>
       </BarChart>
     </ResponsiveContainer>

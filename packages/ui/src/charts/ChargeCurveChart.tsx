@@ -6,7 +6,8 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { formatPercent, formatKwh, formatSmartNumber } from '../lib/utils';
+import { formatSmartNumber } from '../lib/utils';
+import { chargeTooltip } from './chartPresentation';
 
 export interface ChargeCurvePoint {
   soc: number;
@@ -51,11 +52,7 @@ export function ChargeCurveChart({
         <Tooltip
           content={
             <ChartTooltip
-              formatter={(v, name) =>
-                name === 'power_kw'
-                  ? [formatKwh(v ?? 0), 'Power']
-                  : [formatPercent(v ?? 0), 'SoC']
-              }
+              formatter={chargeTooltip}
             />
           }
           cursor={TOOLTIP_CURSOR_STYLE}

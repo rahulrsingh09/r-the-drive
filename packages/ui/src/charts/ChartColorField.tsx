@@ -73,6 +73,13 @@ export function ChartColorField({ value, onChange, label = 'Color', className, a
     }
   }
   if (automaticActive) current = automatic.color;
+  const selection = colorSelection(value, automaticActive);
+  const selectedToken = selection.token;
+  const semanticChoices = SEMANTIC_COLORS.map(choice => ({
+    ...choice,
+    selected: choice.token === selectedToken,
+    choose: () => onChange({ mode: 'token', token: choice.token }),
+  }));
 
   return <div className={cn('grid gap-2', className)}>
     <span className="text-xs font-medium text-fg-secondary">{label}</span>
@@ -97,18 +104,18 @@ export function ChartColorField({ value, onChange, label = 'Color', className, a
               <span>{automatic.label ?? 'Automatic'}</span>
               <span className="text-[11px] text-fg-tertiary">Theme default</span>
             </button>
-            <ThemeSeriesPicker value={value} onChange={onChange} automaticActive={automaticActive} />
+            <ThemeSeriesPicker selected={selection.series} onChange={onChange} />
           </div>
         </fieldset>
       ) : null}
-      {!automatic ? <ThemeSeriesPicker value={value} onChange={onChange} /> : null}
+      {!automatic ? <ThemeSeriesPicker selected={selection.series} onChange={onChange} /> : null}
       <fieldset>
         <legend className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-fg-tertiary">Semantic and status</legend>
         <div className="flex flex-wrap gap-1.5">
-          {SEMANTIC_COLORS.map(({ token, label: itemLabel }) => <button key={token} type="button" onClick={() => onChange({ mode: 'token', token })} className={cn('inline-flex min-h-8 items-center gap-2 rounded-lg border px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent', !automaticActive && value.mode === 'token' && value.token === token ? 'border-accent bg-accent-muted text-fg' : 'border-border bg-bg-surface text-fg-secondary hover:border-border-strong')}><span className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: getChartColor(token) }} />{itemLabel}</button>)}
+          {semanticChoices.map(({ token, label: itemLabel, selected, choose }) => <button key={token} type="button" onClick={choose} className={cn('inline-flex min-h-8 items-center gap-2 rounded-lg border px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent', selected ? 'border-accent bg-accent-muted text-fg' : 'border-border bg-bg-surface text-fg-secondary hover:border-border-strong')}><span className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: getChartColor(token) }} />{itemLabel}</button>)}
         </div>
       </fieldset>
-      <button type="button" onClick={() => setPickerOpen(true)} className={cn('flex min-h-10 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent', !automaticActive && value.mode === 'custom' ? 'border-accent bg-accent-muted' : 'border-border bg-bg-surface hover:border-border-strong')}>
+      <button type="button" onClick={() => setPickerOpen(true)} className={cn('flex min-h-10 items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent', selection.custom ? 'border-accent bg-accent-muted' : 'border-border bg-bg-surface hover:border-border-strong')}>
         <span className="inline-flex items-center gap-2 text-fg"><Pipette className="h-4 w-4" />Custom color</span>
         <span className="inline-flex items-center gap-2 font-mono text-xs text-fg-secondary"><span className="h-4 w-4 rounded border border-border" style={{ backgroundColor: current }} />{value.mode === 'custom' ? (isDark ? value.dark : value.light) : 'Open picker'}</span>
       </button>
@@ -117,17 +124,30 @@ export function ChartColorField({ value, onChange, label = 'Color', className, a
   </div>;
 }
 
-function ThemeSeriesPicker({ value, onChange, automaticActive = false }: Pick<ChartColorFieldProps, 'value' | 'onChange'> & { automaticActive?: boolean }) {
-  const selectedSeries = !automaticActive && value.mode === 'token' && isSeriesColorToken(value.token) ? value.token : '';
+function colorSelection(value: ChartColorDefinition, automatic: boolean) {
+  const selection: { token: ChartColorToken | null; series: SeriesColorToken | ''; custom: boolean } = { token: null, series: '', custom: false };
+  if (automatic) return selection;
+  switch (value.mode) {
+    case 'custom': selection.custom = true; break;
+    case 'token':
+      selection.token = value.token;
+      if (isSeriesColorToken(value.token)) selection.series = value.token;
+  }
+  return selection;
+}
+
+function ThemeSeriesPicker({ selected, onChange }: { selected: SeriesColorToken | ''; onChange: ChartColorFieldProps['onChange'] }) {
+  const changeSeries = (token: SeriesColorToken | '') => {
+    if (token === '') return;
+    onChange({ mode: 'token', token });
+  };
 
   return (
     <div className="grid gap-1.5">
       <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-tertiary">Theme accents</span>
       <SelectPicker<SeriesColorToken | ''>
-        value={selectedSeries}
-        onChange={(token) => {
-          if (token) onChange({ mode: 'token', token });
-        }}
+        value={selected}
+        onChange={changeSeries}
         aria-label="Theme accent color"
         className="w-full"
         size="sm"

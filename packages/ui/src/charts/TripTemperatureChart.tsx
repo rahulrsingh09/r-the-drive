@@ -1,3 +1,4 @@
+import { elapsedTripLabel as formatElapsed } from './chartPresentation';
 import { tripTooltipFormatter } from './chartFormatters';
 import * as React from 'react';
 import {
@@ -34,11 +35,7 @@ export interface TripTemperatureChartProps {
   onActiveElapsedSChange?: (value: number | null) => void;
 }
 
-function formatElapsed(seconds: number) {
-  const min = Math.floor(seconds / 60);
-  const sec = Math.max(0, Math.floor(seconds % 60));
-  return `${min}:${String(sec).padStart(2, '0')}`;
-}
+
 
 const formatTooltip = tripTooltipFormatter('temperature');
 

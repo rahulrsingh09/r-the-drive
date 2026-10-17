@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { capacityTooltip, thresholdColor } from './chartPresentation';
 import {
   ResponsiveContainer, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
@@ -31,10 +32,8 @@ export function DegradationChart({
 }: DegradationChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
 
-  const latestPct = data[data.length - 1]?.capacity_pct ?? 100;
-  const color = latestPct > 95 ? CHART_COLORS.success
-    : latestPct > 88 ? CHART_COLORS.warning
-    : CHART_COLORS.danger;
+  const capacityBands = [[95, CHART_COLORS.success], [88, CHART_COLORS.warning]] as const;
+  const color = thresholdColor(data.at(-1)?.capacity_pct ?? 100, capacityBands, 'above');
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -69,10 +68,7 @@ export function DegradationChart({
         <Tooltip
           content={<ChartTooltip
             labelFormatter={(v: string) => formatAppDate(v)}
-            formatter={(v, name) => {
-              if (name === 'capacity_pct') return [`${(v ?? 0).toFixed(1)}%`, 'Capacity'];
-              return [`${(v ?? 0).toFixed(1)} kWh`, 'Usable'];
-            }}
+            formatter={capacityTooltip}
             multiLine
           />}
           cursor={TOOLTIP_CURSOR_STYLE}

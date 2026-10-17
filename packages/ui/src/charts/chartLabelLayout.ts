@@ -17,25 +17,26 @@ export interface ValueLabelCandidate {
 const FALLBACK_GLYPH_WIDTH = 0.62;
 
 /** Measures with the chart font when canvas is available, and stays deterministic in SSR/jsdom. */
+function chartTextMeasurer(font: typeof CHART_FONT) {
+  let context: CanvasRenderingContext2D | null = null;
+  try {
+    if (typeof document !== 'undefined') context = document.createElement('canvas').getContext('2d');
+    if (context) context.font = `${font.fontWeight} ${font.fontSize}px ${font.fontFamily}`;
+  } catch { context = null; }
+  return (text: string) => {
+    let width = 0;
+    try { width = context?.measureText(text).width ?? 0; } catch { /* Canvas measurement is optional. */ }
+    return Number.isFinite(width) && width > 0 ? width : Math.max(1, text.length * font.fontSize * FALLBACK_GLYPH_WIDTH);
+  };
+}
+
 export function measureChartText(text: string, font = CHART_FONT): number {
-  if (typeof document !== 'undefined') {
-    try {
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      if (context) {
-        context.font = `${font.fontWeight} ${font.fontSize}px ${font.fontFamily}`;
-        const measured = context.measureText(text).width;
-        if (Number.isFinite(measured) && measured > 0) return measured;
-      }
-    } catch {
-      // Canvas is optional (not available in SSR and some test environments).
-    }
-  }
-  return Math.max(1, text.length * font.fontSize * FALLBACK_GLYPH_WIDTH);
+  return chartTextMeasurer(font)(text);
 }
 
 export function measureChartLabels(labels: string[], font = CHART_FONT): ChartLabelMeasure[] {
-  return labels.map((text) => ({ text, width: measureChartText(text, font) }));
+  const measure = chartTextMeasurer(font);
+  return labels.map(text => ({ text, width: measure(text) }));
 }
 
 export interface AxisLabelLayoutOptions {
@@ -52,7 +53,7 @@ export function selectAdaptiveAxisLabelIndices(
   const count = Math.min(labels.length, xPositions.length);
   if (!count) return [];
   const gap = options.minSpacing ?? 12;
-  const boxes = labels.slice(0, count).map((label, index) => ({ center: xPositions[index] ?? 0, radius: measureChartText(label, options.font) / 2 }));
+  const boxes = measureChartLabels(labels.slice(0, count), options.font).map((label, index) => ({ center: xPositions[index] ?? 0, radius: label.width / 2 }));
   const compatible = (a: number, b: number) => Math.abs(boxes[a]!.center - boxes[b]!.center) >= boxes[a]!.radius + boxes[b]!.radius + gap;
   const chosen = [0];
   for (let index = 1; index < count - 1; index += 1) {

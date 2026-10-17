@@ -21,6 +21,9 @@ export interface EfficiencyTrendChartProps {
   showBrush?: boolean;
 }
 
+const EFFICIENCY_LABELS = new Map([['trip_efficiency_wh_mi', 'Trip efficiency']]);
+const efficiencyLabel = (key: string) => EFFICIENCY_LABELS.get(key) ?? '24-hour avg';
+
 export function EfficiencyTrendChart({
   data,
   loading = false,
@@ -56,7 +59,7 @@ export function EfficiencyTrendChart({
             labelFormatter={(v: string) => formatAppDateTime(v)}
             formatter={(v, name) => [
               v !== undefined ? `${v.toFixed(0)} Wh/mi` : '—',
-              name === 'trip_efficiency_wh_mi' ? 'Trip efficiency' : '24-hour avg',
+              efficiencyLabel(name),
             ]}
             multiLine
           />}
@@ -67,7 +70,7 @@ export function EfficiencyTrendChart({
           iconType="circle"
           iconSize={8}
           wrapperStyle={{ fontSize: 11, color: CHART_COLORS.muted, paddingTop: 8 }}
-          formatter={(v) => v === 'trip_efficiency_wh_mi' ? 'Trip efficiency' : '24-hour avg'}
+          formatter={efficiencyLabel}
         />
 
         <Line

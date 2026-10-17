@@ -75,16 +75,28 @@ export function filterTimeSeriesValues(
     if (valid && start == null) start = index;
   }
   for (const [first, end] of runs) {
-    let entered = first;
-    let departed = first;
+    const membership = { from: new Uint32Array(end - first), to: new Uint32Array(end - first) };
+    for (const side of ['from', 'to'] as const) {
+      let sample = first;
+      for (let center = first; center < end; center += 1) {
+        const cutoff = side === 'from' ? times[center]! - radius : times[center]! + radius;
+        while (sample < end && (side === 'from' ? times[sample]! < cutoff : times[sample]! <= cutoff)) sample += 1;
+        membership[side][center - first] = sample;
+      }
+    }
+    let previousFrom = first;
+    let previousTo = first;
     let total = 0;
-    for (let index = first; index < end; index += 1) {
-      const lower = times[index]! - radius;
-      const upper = times[index]! + radius;
-      while (entered < end && times[entered]! <= upper) total += result[entered++]!;
-      // Departures use the emitted reading, preserving the established filter recurrence.
-      while (departed < entered && times[departed]! < lower) total -= result[departed++]!;
-      if (entered > departed) result[index] = total / (entered - departed);
+    for (let offset = 0; offset < end - first; offset += 1) {
+      const from = membership.from[offset]!;
+      const to = membership.to[offset]!;
+      for (let sample = previousTo; sample < to; sample += 1) total += result[sample]!;
+      // Removal reads emitted values; substituting raw inputs changes the established recurrence.
+      for (let sample = previousFrom; sample < from; sample += 1) total -= result[sample]!;
+      const count = to - from;
+      if (count > 0) result[first + offset] = total / count;
+      previousFrom = from;
+      previousTo = to;
     }
   }
   return result;

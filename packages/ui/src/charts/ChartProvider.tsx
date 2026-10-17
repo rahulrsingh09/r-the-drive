@@ -48,13 +48,17 @@ export const CHART_SERIES_TOKENS = Array.from(
 );
 
 function chartPalette(palette: ThemePalette): Record<ChartPaletteKey, string> {
-  const definition = BUILT_IN_THEMES[palette];
-  const keys: ChartPaletteKey[] = [...CHART_COLOR_TOKENS, 'yellow', 'orange'];
-  return Object.fromEntries(keys.map((key) => {
-    const alias = definition.chartAliases[key];
-    const value = typeof alias === 'string' ? definition.tokens.dark[alias as keyof typeof definition.tokens.dark] : alias?.dark ?? definition.tokens.dark.accent;
-    return [key, value];
-  })) as Record<ChartPaletteKey, string>;
+  const { chartAliases, tokens } = BUILT_IN_THEMES[palette];
+  const result = {} as Record<ChartPaletteKey, string>;
+  const references: Array<[ChartPaletteKey, keyof typeof tokens.dark]> = [];
+  for (const key of [...CHART_COLOR_TOKENS, 'yellow', 'orange'] as ChartPaletteKey[]) {
+    const alias = chartAliases[key];
+    result[key] = tokens.dark.accent;
+    if (typeof alias === 'string') references.push([key, alias as keyof typeof tokens.dark]);
+    else result[key] = alias?.dark ?? tokens.dark.accent;
+  }
+  for (const [key, token] of references) result[key] = tokens.dark[token];
+  return result;
 }
 
 export const CHART_PALETTES: Record<ThemePalette, Record<ChartPaletteKey, string>> = {

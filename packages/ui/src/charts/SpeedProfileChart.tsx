@@ -7,6 +7,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { formatMph } from '../lib/utils';
+import { elapsedProfileLabel } from './chartPresentation';
 
 export interface SpeedPoint {
   elapsed_s: number;
@@ -19,10 +20,8 @@ export interface SpeedProfileChartProps {
   height?: number;
 }
 
-function formatElapsed(s: number): string {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return sec === 0 ? `${m}m` : `${m}:${String(sec).padStart(2, '0')}`;
+function formatElapsed(seconds: number): string {
+  return elapsedProfileLabel(seconds);
 }
 
 export function SpeedProfileChart({

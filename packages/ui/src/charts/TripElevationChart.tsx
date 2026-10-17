@@ -1,3 +1,4 @@
+import { nullableProjection, elapsedTripLabel as formatElapsed } from './chartPresentation';
 import * as React from 'react';
 import {
   ResponsiveContainer,
@@ -29,11 +30,7 @@ export interface TripElevationChartProps {
 
 const M_TO_FT = 3.28084;
 
-function formatElapsed(seconds: number) {
-  const min = Math.floor(seconds / 60);
-  const sec = Math.max(0, Math.floor(seconds % 60));
-  return `${min}:${String(sec).padStart(2, '0')}`;
-}
+
 
 const MARKERS = {
   altitude_m: { r: 2, strokeWidth: 0, fill: CHART_COLORS.teal },
@@ -46,10 +43,7 @@ export function TripElevationChart({
   activeElapsedS = null,
   onActiveElapsedSChange,
 }: TripElevationChartProps) {
-  const chartData = data.map((point) => ({
-    elapsed_s: point.elapsed_s,
-    altitude_ft: point.altitude_m != null ? point.altitude_m * M_TO_FT : null,
-  }));
+  const chartData = nullableProjection(data, point => point.altitude_m ?? null, point => ({ elapsed_s: point.elapsed_s }), 'altitude_ft', M_TO_FT);
   const measurements = useTripMeasurements(data, MARKERS, activeElapsedS, onActiveElapsedSChange);
 
   if (loading) {

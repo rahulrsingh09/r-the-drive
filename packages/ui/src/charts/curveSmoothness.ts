@@ -53,21 +53,15 @@ export function clampedControlPoints(
   index: number,
   smoothness: CurveSmoothness,
 ): [CurvePoint, CurvePoint] {
-  const first = points[index]!;
-  const second = points[index + 1]!;
-  const before = points[Math.max(0, index - 1)]!;
-  const after = points[Math.min(points.length - 1, index + 2)]!;
+  const neighbors = [points[Math.max(0, index - 1)]!, points[index]!, points[index + 1]!, points[Math.min(points.length - 1, index + 2)]!];
+  const controls: [CurvePoint, CurvePoint] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
   const tension = curveTension(smoothness);
-  const minY = Math.min(first.y, second.y);
-  const maxY = Math.max(first.y, second.y);
-  return [
-    {
-      x: first.x + (second.x - before.x) * tension,
-      y: Math.min(maxY, Math.max(minY, first.y + (second.y - before.y) * tension)),
-    },
-    {
-      x: second.x - (after.x - first.x) * tension,
-      y: Math.min(maxY, Math.max(minY, second.y - (after.y - first.y) * tension)),
-    },
-  ];
+  for (const axis of ['x', 'y'] as const) {
+    const [before, first, second, after] = neighbors.map(point => point[axis]) as [number, number, number, number];
+    const projected = [first + (second - before) * tension, second - (after - first) * tension];
+    for (const end of [0, 1] as const) {
+      controls[end][axis] = axis === 'x' ? projected[end]! : Math.min(Math.max(first, second), Math.max(Math.min(first, second), projected[end]!));
+    }
+  }
+  return controls;
 }

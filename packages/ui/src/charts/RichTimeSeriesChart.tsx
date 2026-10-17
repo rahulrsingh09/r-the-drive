@@ -90,23 +90,21 @@ export function getRichTimeIntervalBandGeometry(
   plotHeight: number,
   bandRatio = 0.3,
 ): RichTimeIntervalBandGeometry {
-  const safePlotHeight = Math.max(0, plotHeight);
-  const safeLaneCount = Math.max(1, laneCount);
-  const safeRatio = Math.min(0.45, Math.max(0.2, bandRatio));
-  const bandHeight = safePlotHeight * safeRatio;
-  const bandTop = plotTop + safePlotHeight - bandHeight;
-  const laneHeight = bandHeight / safeLaneCount;
-  const laneTop = bandTop + Math.min(Math.max(0, lane), safeLaneCount - 1) * laneHeight;
-  const height = Math.max(4, laneHeight * 0.72);
-  const top = laneTop + Math.max(0, (laneHeight - height) / 2);
-  const hitHeight = Math.max(44, laneHeight);
-  const hitTop = safePlotHeight < hitHeight
-    ? plotTop
-    : Math.min(
-        plotTop + safePlotHeight - hitHeight,
-        Math.max(plotTop, laneTop + (laneHeight - hitHeight) / 2),
-      );
-  return { bandTop, bandHeight, laneTop, laneHeight, top, height, hitTop, hitHeight };
+  const plot = { top: plotTop, height: Math.max(0, plotHeight) };
+  const count = Math.max(1, laneCount);
+  const bandHeight = plot.height * Math.min(0.45, Math.max(0.2, bandRatio));
+  const bandTop = plot.top + plot.height - bandHeight;
+  const laneHeight = bandHeight / count;
+  const laneTop = bandTop + Math.min(Math.max(0, lane), count - 1) * laneHeight;
+  const sizes = { visual: Math.max(4, laneHeight * 0.72), hit: Math.max(44, laneHeight) };
+  const positions = { visual: 0, hit: 0 };
+  for (const kind of ['visual', 'hit'] as const) {
+    const offset = (laneHeight - sizes[kind]) / 2;
+    if (kind === 'visual') positions[kind] = laneTop + Math.max(0, offset);
+    else if (plot.height < sizes[kind]) positions[kind] = plot.top;
+    else positions[kind] = Math.min(plot.top + plot.height - sizes[kind], Math.max(plot.top, laneTop + offset));
+  }
+  return { bandTop, bandHeight, laneTop, laneHeight, top: positions.visual, height: sizes.visual, hitTop: positions.hit, hitHeight: sizes.hit };
 }
 
 /** Assign overlapping intervals to the smallest available horizontal lane. */
@@ -304,20 +302,20 @@ function toSeconds(value: string | number | Date) {
   return Math.floor(new Date(value).getTime() / 1000);
 }
 
+const DATE_LABEL_POLICIES = [
+  { maximum: 86400, tooltip: formatAppTime, axis: formatAppTime },
+  { maximum: 3 * 86400, tooltip: (date: Date) => formatAppDateTime(date, { month: 'short', day: 'numeric' }), axis: (date: Date) => formatAppDate(date, { month: 'short', day: 'numeric', year: undefined }) },
+  { maximum: 90 * 86400, tooltip: (date: Date) => formatAppDate(date, { month: 'short', day: 'numeric' }), axis: (date: Date) => formatAppDate(date, { month: 'short', day: 'numeric', year: undefined }) },
+  { maximum: Infinity, tooltip: (date: Date) => formatAppDate(date, { month: 'short', year: '2-digit' }), axis: (date: Date) => formatAppDate(date, { month: 'short', year: '2-digit', day: undefined }) },
+];
+
+function dateLabel(seconds: number, span: number, target: 'tooltip' | 'axis') {
+  const policy = DATE_LABEL_POLICIES.find(option => span <= option.maximum) ?? DATE_LABEL_POLICIES[3]!;
+  return policy[target](new Date(seconds * 1000));
+}
+
 function formatDateForSpan(seconds: number, spanSeconds: number) {
-  const d = new Date(seconds * 1000);
-  if (spanSeconds <= 24 * 3600) {
-    // Sub-24h: time only with minutes — e.g. "9:30 PM"
-    return formatAppTime(d);
-  }
-  if (spanSeconds <= 3 * 86400) {
-    // Sub-3d: date + time with minutes — e.g. "May 9, 9:30 PM"
-    return formatAppDateTime(d, { month: 'short', day: 'numeric' });
-  }
-  if (spanSeconds <= 90 * 86400) {
-    return formatAppDate(d, { month: 'short', day: 'numeric' });
-  }
-  return formatAppDate(d, { month: 'short', year: '2-digit' });
+  return dateLabel(seconds, spanSeconds, 'tooltip');
 }
 
 export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) {
@@ -343,30 +341,32 @@ export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) 
 
 /** Axis labels intentionally become calendar dates for multi-day views. */
 export function formatAxisDateForSpan(seconds: number, spanSeconds: number) {
-  if (spanSeconds <= 24 * 3600) return formatDateForSpan(seconds, spanSeconds);
-  const d = new Date(seconds * 1000);
-  if (spanSeconds <= 90 * 86400) return formatAppDate(d, { month: 'short', day: 'numeric', year: undefined });
-  return formatAppDate(d, { month: 'short', year: '2-digit', day: undefined });
+  return dateLabel(seconds, spanSeconds, 'axis');
 }
 
 /** Avoid repeated date labels from uPlot's hourly automatic splits. */
 export function getCalendarDateSplits(startSeconds: number, endSeconds: number, maximum = 7) {
-  if (endSeconds - startSeconds <= 24 * 3600) return undefined;
-  const spanDays = Math.ceil((endSeconds - startSeconds) / 86400);
-  const safeMaximum = Math.max(2, Math.floor(maximum));
-  const stepDays = Math.max(1, Math.ceil(spanDays / (safeMaximum - 1)));
-  const cursor = new Date(startSeconds * 1000);
-  cursor.setHours(0, 0, 0, 0);
-  if (cursor.getTime() / 1000 < startSeconds) cursor.setDate(cursor.getDate() + 1);
-  const splits: number[] = [];
-  while (cursor.getTime() / 1000 <= endSeconds) {
-    splits.push(cursor.getTime() / 1000);
-    cursor.setDate(cursor.getDate() + stepDays);
+  const duration = endSeconds - startSeconds;
+  if (duration <= 86400) return undefined;
+  const limit = Math.max(2, Math.floor(maximum));
+  const stride = Math.max(1, Math.ceil(Math.ceil(duration / 86400) / (limit - 1)));
+  const day = new Date(startSeconds * 1000);
+  day.setHours(0, 0, 0, 0);
+  const ticks: number[] = [];
+  for (let time = day.getTime() / 1000; time <= endSeconds; time = day.getTime() / 1000) {
+    if (time < startSeconds) {
+      day.setDate(day.getDate() + 1);
+      continue;
+    }
+    ticks.push(time);
+    // Local date increments preserve DST; elapsed 86400-second steps do not.
+    day.setDate(day.getDate() + stride);
   }
-  if (splits.length === 1 && safeMaximum >= 2 && endSeconds > splits[0]!) {
-    splits.push(endSeconds);
+  switch (ticks.length) {
+    case 0: return undefined;
+    case 1: return limit >= 2 && endSeconds > ticks[0]! ? [...ticks, endSeconds] : ticks;
+    default: return ticks;
   }
-  return splits.length ? splits : undefined;
 }
 
 export function formatAxisDateValuesForScale(
@@ -388,10 +388,11 @@ export function getResponsiveCalendarTickMaximum(plotWidth: number) {
 }
 
 export function formatChartNumber(value: number | null | undefined, unit?: string, precision = 0) {
-  if (value == null || !Number.isFinite(value)) return '-';
-  const decimals = Math.max(0, precision);
-  const formatted = decimals > 0 ? formatNumber(value, decimals) : formatSmartNumber(value, 0);
-  return unit ? `${formatted} ${unit}` : formatted;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  const format = precision > 0 ? formatNumber : formatSmartNumber;
+  const parts = [format(value, precision > 0 ? precision : 0)];
+  if (unit) parts.push(unit);
+  return parts.join(' ');
 }
 
 /** Carry the most recent finite reading across missing samples for tooltip display. */
@@ -484,11 +485,8 @@ function buildStackedBarPaths(
 
 
 function estimateYLabelWidth(labels: string[]): number {
-  let maxLen = 4;
-  for (const label of labels) {
-    if (label.length > maxLen) maxLen = label.length;
-  }
-  return Math.min(maxLen * 7 + 16, 110);
+  const widths = labels.map(label => label.length * 7 + 16);
+  return Math.min(110, Math.max(44, ...widths));
 }
 
 export function buildRichTimeSeriesUPlotSeries(
@@ -692,21 +690,19 @@ export function RichTimeSeriesChart({
     measure();
     return observeChartFrame(legend, measure);
   }, [legendVisible, loading, hasData]);
-  const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
+  const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort(), [hiddenKeys]);
 
-  const structureKey = React.useMemo(
-    () =>
-      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${timeFilter}|${smoothness}|${stepInterpolation}|` +
-      `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
-      `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|${xAxisLabel ?? ''}|${yAxisLabel ?? ''}|${yRightAxisLabel ?? ''}|${showLegend ? '1' : '0'}|${showGrid ? '1' : '0'}|${showTooltip ? '1' : '0'}|${showPoints ? '1' : '0'}|` +
-      `${cursorSyncKey ?? ''}|${controlledCursor}|${connectGaps ? 'connect-gaps' : ''}|` +
-      `${interactionMode}|${intervalBandRatio}|` +
-      `${packedIntervals.map((item) => `${item.id}:${item.start}:${item.end}:${item.lane}`).join('|')}|` +
-      `${referenceLines.map((line) => `${line.value}:${line.color ?? ''}`).join('|')}|` +
-      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.strokeWidth ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
-      `|${hiddenKeySignature}|${isDark ? 'dark' : 'light'}|${palette}|${themeRevision}`,
-    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, xAxisLabel, yAxisLabel, yRightAxisLabel, showLegend, showGrid, showTooltip, showPoints, cursorSyncKey, controlledCursor, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines, isDark, palette, themeRevision],
-  );
+  const structureKey = JSON.stringify({
+    frame: [chartHeight, isDark, palette, themeRevision],
+    axes: [xTime, xUnit ?? '', yRightUnit ?? '', xAxisLabel ?? '', yAxisLabel ?? '', yRightAxisLabel ?? ''],
+    ranges: [xRange, yRange, yRightRange, xSplits].map(range => range?.join(',') ?? ''),
+    rendering: [mode, timeFilter, smoothness, stepInterpolation, Boolean(xSecondaryFormatter), showLegend, showGrid, showTooltip, showPoints, connectGaps],
+    interaction: [cursorSyncKey ?? '', controlledCursor, interactionMode, intervalBandRatio],
+    intervals: packedIntervals.map(item => [item.id, String(item.start), String(item.end), item.lane]),
+    references: referenceLines.map(line => [line.value, line.color ?? '']),
+    series: series.map(item => [item.key, item.label, item.mode ?? '', item.color ?? '', item.strokeWidth ?? '', item.yScale ?? '', item.stackId ?? '', Boolean(item.tooltipOnly)]),
+    hidden: hiddenKeySignature,
+  }, (_key, value: unknown) => typeof value === 'number' && !Number.isFinite(value) ? String(value) : value);
 
   React.useEffect(() => {
     changeHiddenKeys({ valid: new Set(series.map(item => item.key)) });
@@ -764,18 +760,10 @@ export function RichTimeSeriesChart({
             }
         : {}),
       values: (u, vals) => {
-        if (xValueFormatterRef.current) {
-          return vals.map((v) => xValueFormatterRef.current!(v));
-        }
-        if (xTimeRef.current) {
-          return formatAxisDateValuesForScale(
-            vals,
-            u.scales.x?.min,
-            u.scales.x?.max,
-            xSpan
-          );
-        }
-        return vals.map((v) => formatChartNumber(v, xUnitRef.current, 0));
+        const custom = xValueFormatterRef.current;
+        const numeric = (value: number) => formatChartNumber(value, xUnitRef.current, 0);
+        if (custom || !xTimeRef.current) return vals.map(value => (custom ?? numeric)(value));
+        return formatAxisDateValuesForScale(vals, u.scales.x?.min, u.scales.x?.max, xSpan);
       },
     };
 
@@ -965,12 +953,12 @@ export function RichTimeSeriesChart({
       hooks: {
         setScale: [
           (u, key) => {
-            if (key !== 'x') return;
-            const scale = u.scales.x;
-            if (scale?.min == null || scale.max == null) return;
-            const nextZoomed = isZoomedXRange([scale.min, scale.max], fullXRange);
-            setIsZoomed((current) => current === nextZoomed ? current : nextZoomed);
-            requestAnimationFrame(updateOverlay);
+            const limits = key === 'x' ? u.scales.x : undefined;
+            const domain = limits?.min == null || limits.max == null ? null : [limits.min, limits.max] as [number, number];
+            if (domain) {
+              setIsZoomed(isZoomedXRange(domain, fullXRange));
+              requestAnimationFrame(updateOverlay);
+            }
           },
         ],
         setCursor: [cursorController.read],
@@ -982,15 +970,12 @@ export function RichTimeSeriesChart({
 
     const chart = chartRef.current;
     applyCursorSelectionRef.current = () => cursorController.apply(chart);
-    const rangeFromScale = (scale: uPlot.Scale | undefined): [number, number] | undefined => (
-      scale?.min != null && scale.max != null && Number.isFinite(scale.min) && Number.isFinite(scale.max)
-        ? [scale.min, scale.max]
-        : undefined
-    );
-    onResolvedAxisRangesRef.current?.({
-      ...(rangeFromScale(chart.scales.y) ? { y: rangeFromScale(chart.scales.y)! } : {}),
-      ...(rangeFromScale(chart.scales.y2) ? { y2: rangeFromScale(chart.scales.y2)! } : {}),
-    });
+    const resolved: { y?: [number, number]; y2?: [number, number] } = {};
+    for (const side of ['y', 'y2'] as const) {
+      const limits = [chart.scales[side]?.min, chart.scales[side]?.max];
+      if (limits.every(value => value != null && Number.isFinite(value))) resolved[side] = limits as [number, number];
+    }
+    onResolvedAxisRangesRef.current?.(resolved);
     requestAnimationFrame(updateOverlay);
     const touchCleanup = controlledCursor
       ? attachChartScrubbing(chart, (index) => onCursorIndexChangeRef.current?.(index))
@@ -1027,6 +1012,22 @@ export function RichTimeSeriesChart({
     applyCursorSelectionRef.current?.();
   }, [activeCursorIndex, alignedData, structureKey, loading, hasData]);
 
+  const intervalViews = overlay.bars.map(interval => ({
+    interval,
+    active: intervalHover === interval.id,
+    color: interval.color ?? CHART_COLORS.violet,
+    accessibleLabel: [interval.label, ...(interval.details ? [interval.details] : [])].join(': '),
+    title: [interval.label, ...(interval.details ? [interval.details] : [])].join(' — '),
+    tooltipText: interval.label + (interval.details ? `\n${interval.details}` : ''),
+  }));
+  const activeInterval = intervalHover ? intervalViews.find(view => view.interval.id === intervalHover) : undefined;
+  const resetZoom = () => {
+    const values = alignedDataRef.current[0] as number[];
+    const available = values.length >= 2 ? [values[0]!, values[values.length - 1]!] : null;
+    const range = available && (xRange ?? available);
+    if (range) chartRef.current?.setScale('x', { min: range[0]!, max: range[1]! });
+  };
+
   if (loading) return <ChartSkeleton height={height} />;
 
   if (!hasData) {
@@ -1056,9 +1057,7 @@ export function RichTimeSeriesChart({
       style={{ height }}
     >
       <div className="relative min-h-0 flex-1" style={{ height: chartHeight }}>
-        {overlay.bars.map((interval) => {
-          const isActive = intervalHover === interval.id;
-          const color = interval.color ?? CHART_COLORS.violet;
+        {intervalViews.map(({ interval, active: isActive, color }) => {
           return (
             <span
               key={`interval-visual-${interval.id}`}
@@ -1112,8 +1111,7 @@ export function RichTimeSeriesChart({
             {yRightUnit}
           </span>
         ) : null}
-        {overlay.bars.map((interval) => {
-          const isActive = intervalHover === interval.id;
+        {intervalViews.map(({ interval, active: isActive, accessibleLabel, title }) => {
           return (
             <button
               key={interval.id}
@@ -1129,8 +1127,8 @@ export function RichTimeSeriesChart({
                 height: interval.hitHeight,
                 minWidth: 12,
               }}
-              aria-label={`${interval.label}${interval.details ? `: ${interval.details}` : ''}`}
-              title={`${interval.label}${interval.details ? ` — ${interval.details}` : ''}`}
+              aria-label={accessibleLabel}
+              title={title}
               onMouseEnter={() => setIntervalHover(interval.id)}
               onMouseLeave={() => setIntervalHover(null)}
               onFocus={() => setIntervalHover(interval.id)}
@@ -1144,28 +1142,19 @@ export function RichTimeSeriesChart({
             </button>
           );
         })}
-        {intervalHover ? (() => {
-          const active = overlay.bars.find((bar) => bar.id === intervalHover);
-          if (!active) return null;
-          return (
-            <div
-              className="pointer-events-none absolute z-30 max-w-[min(22rem,calc(100%-1rem))] whitespace-pre-wrap rounded-md border border-border-strong bg-bg-surface/95 px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
-              style={{ left: Math.min(active.left, Math.max(8, (rootRef.current?.clientWidth ?? 320) - 180)), top: Math.max(8, active.top - 48) }}
-            >
-              {active.label}{active.details ? `\n${active.details}` : ''}
-            </div>
-          );
-        })() : null}
+        {activeInterval ? (
+          <div
+            className="pointer-events-none absolute z-30 max-w-[min(22rem,calc(100%-1rem))] whitespace-pre-wrap rounded-md border border-border-strong bg-bg-surface/95 px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
+            style={{ left: Math.min(activeInterval.interval.left, Math.max(8, (rootRef.current?.clientWidth ?? 320) - 180)), top: Math.max(8, activeInterval.interval.top - 48) }}
+          >
+            {activeInterval.tooltipText}
+          </div>
+        ) : null}
       </div>
       {isZoomed ? (
         <button
           type="button"
-          onClick={() => {
-            const chart = chartRef.current;
-            const values = alignedDataRef.current[0] as number[];
-            if (!chart || values.length < 2) return;
-            chart.setScale('x', { min: xRange?.[0] ?? values[0]!, max: xRange?.[1] ?? values[values.length - 1]! });
-          }}
+          onClick={resetZoom}
           className="absolute right-3 top-3 z-20 flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center rounded-md border border-border bg-bg-surface/95 text-fg-secondary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
           aria-label="Return to full chart view"
           title="Return to full chart view"

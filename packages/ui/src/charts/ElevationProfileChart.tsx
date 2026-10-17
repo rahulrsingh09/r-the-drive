@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { nullableProjection } from './chartPresentation';
 import {
   ResponsiveContainer, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -30,12 +31,7 @@ export function ElevationProfileChart({
 }: ElevationProfileChartProps) {
   if (loading) return <ChartSkeleton height={height} />;
 
-  const chartData = data.map((d) => ({
-    ts: d.ts,
-    elev: d.value !== null
-      ? unit === 'ft' ? d.value * M_TO_FT : d.value
-      : null,
-  }));
+  const chartData = nullableProjection(data, point => point.value, point => ({ ts: point.ts }), 'elev', unit === 'ft' ? M_TO_FT : 1);
 
   return (
     <ResponsiveContainer width="100%" height={height}>

@@ -144,15 +144,23 @@ export function EfficiencyPillBarChart({
 }
 
 function PillSegments({ filledCount, tone = 'accent', seriesColor }: { filledCount: number; tone?: EfficiencyPillBarDatum['tone']; seriesColor?: string }) {
+  const filled = tone === 'neutral'
+    ? { className: 'bg-fg-tertiary/70', style: undefined }
+    : { className: seriesColor ? '' : 'bg-accent/85', style: seriesColor ? { backgroundColor: seriesColor } : undefined };
+  const slots = Array.from({ length: SEGMENT_COUNT }, (_, index) => ({
+    index,
+    paint: index < filledCount ? filled : { className: 'bg-bg-elevated', style: undefined },
+    active: index < filledCount && tone === 'accent' ? true : undefined,
+  }));
   return (
     <span className="flex min-w-0 items-center gap-[2px]" data-efficiency-pill-bar="true" data-efficiency-pill-tone={tone}>
-      {Array.from({ length: SEGMENT_COUNT }, (_, i) => (
+      {slots.map(({ index, paint, active }) => (
         <span
-          key={i}
+          key={index}
           aria-hidden="true"
-          data-efficiency-pill-filled={i < filledCount && tone === 'accent' ? true : undefined}
-          className={`h-[14px] min-w-0 flex-1 rounded-[3px] ${i < filledCount ? tone === 'neutral' ? 'bg-fg-tertiary/70' : seriesColor ? '' : 'bg-accent/85' : 'bg-bg-elevated'}`}
-          style={i < filledCount && tone !== 'neutral' && seriesColor ? { backgroundColor: seriesColor } : undefined}
+          data-efficiency-pill-filled={active}
+          className={`h-[14px] min-w-0 flex-1 rounded-[3px] ${paint.className}`}
+          style={paint.style}
         />
       ))}
     </span>
