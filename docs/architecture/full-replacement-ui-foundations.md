@@ -22,6 +22,8 @@ Color conversion uses explicit RGB/LMS/Lab matrices and shared channel conversio
 
 Theme application materializes CSS variables, chart aliases, series colors, color pairs, and brand assets in one projection. A runtime snapshot is published after its document properties are applied. Authentication reset still selects the safe built-in default without reading theme preferences from browser storage. The bundled chart renderer is unchanged.
 
+Drive-mode aliases use an own-key family registry. Unknown names such as `constructor` and `__proto__` follow the existing fallback text rule instead of raising the inherited prototype-lookup exception; dedicated baseline/candidate regression evidence records this edge-case correction.
+
 Vehicle status uses explicit Boolean and level reading rules followed by one availability/result assembly. Tire presentation shares health-band definitions. Charging cells share the precedence between current live measurements and completed historical measurements. Phantom-drain metric cells share missing-value, precision, and class rules.
 
 ## Client diagnostics
@@ -32,6 +34,6 @@ Authentication routes, vehicle connection failures, authentication operations, a
 
 ## Verification and retained contracts
 
-`fullReplacementUiFoundationsContracts.test.tsx` captures baseline outputs for color models, formatting, dates, vehicle presentation, theme materialization, primitive markup, and table markup. Its snapshots were recorded before implementation edits and are retained unchanged. `fullReplacementUiFoundationsInteractions.test.tsx` covers mobile placement, keyboard navigation, dialog focus, sidebar cleanup, chart choice, tooltip descriptions, table sorting/visibility, and editor transitions. `fullReplacementUiFoundationsDiagnostics.test.ts` records the credential-disclosure regression and cleanup/deduplication assertions. Existing tests and goldens remain unchanged.
+`fullReplacementUiFoundationsContracts.test.tsx` captures baseline outputs for color models, formatting, dates, vehicle presentation, theme materialization, primitive markup, and table markup. Its snapshots were recorded before implementation edits and are retained unchanged. `fullReplacementUiFoundationsInteractions.test.tsx` covers mobile placement, keyboard navigation, dialog focus, sidebar cleanup, chart choice, tooltip descriptions, table sorting/visibility, and editor transitions. `fullReplacementUiFoundationsDiagnostics.test.ts` records the credential-disclosure regression and cleanup/deduplication assertions. `fullReplacementUiFoundationsEdges.test.ts` covers prototype-safe unknown drive labels, missing-measurement storage behavior, and incomplete availability metadata. Existing tests and goldens remain unchanged.
 
 Fixed JSX templates, column schemas, token data, direct event bindings, public compatibility adapters, and small numerical kernels are individually listed in the scope review inventory. Retaining those contracts is explicit; it is not a claim that their source text was independently rewritten. No licensing or attribution change accompanies this work.
