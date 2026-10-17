@@ -54,12 +54,8 @@ impl SecurityAuditEvent {
 
     pub fn failure(event_type: &'static str, actor_id: Option<Uuid>) -> Self {
         Self {
-            event_type,
-            actor_id,
-            target: None,
-            request_id: None,
             outcome: AuditOutcome::Failure,
-            metadata: Value::Object(Default::default()),
+            ..Self::success(event_type, actor_id)
         }
     }
 
@@ -77,10 +73,14 @@ impl SecurityAuditEvent {
     /// Invalid or non-UUID values are deliberately ignored rather than copied
     /// into audit metadata.
     pub fn request_id_from_headers(mut self, headers: &axum::http::HeaderMap) -> Self {
-        self.request_id = headers
+        let parsed = match headers
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| Uuid::parse_str(value).ok());
+        {
+            Some(value) => Uuid::parse_str(value).ok(),
+            None => None,
+        };
+        self.request_id = parsed;
         self
     }
 
@@ -109,18 +109,30 @@ pub async fn prune_expired(pool: &PgPool) -> Result<u64, AppError> {
     Ok(result.rows_affected())
 }
 
+const RETENTION_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn next_retention_tick(
+    scheduled: tokio::time::Instant,
+    observed: tokio::time::Instant,
+) -> tokio::time::Instant {
+    if observed <= scheduled + Duration::from_millis(5) {
+        return scheduled + RETENTION_PERIOD;
+    }
+    let remainder = (observed - scheduled).as_nanos() % RETENTION_PERIOD.as_nanos();
+    observed + RETENTION_PERIOD - Duration::from_nanos(remainder as u64)
+}
+
 pub fn start_retention_worker(pool: PgPool) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut scheduled = tokio::time::Instant::now();
         loop {
-            interval.tick().await;
-            match prune_expired(&pool).await {
-                Ok(removed) if removed > 0 => {
-                    tracing::info!(removed, "expired security audit events pruned")
-                }
-                Ok(_) => {}
-                Err(error) => tracing::error!(error = ?error, "security audit retention failed"),
+            tokio::time::sleep_until(scheduled).await;
+            scheduled = next_retention_tick(scheduled, tokio::time::Instant::now());
+            let outcome = prune_expired(&pool).await;
+            if let Err(error) = outcome {
+                tracing::error!(error = ?error, "security audit retention failed");
+            } else if let Ok(removed @ 1..) = outcome {
+                tracing::info!(removed, "expired security audit events pruned");
             }
         }
     })
@@ -130,22 +142,15 @@ async fn insert<'e, E>(executor: E, event: &SecurityAuditEvent) -> Result<(), Ap
 where
     E: sqlx::Executor<'e, Database = Postgres>,
 {
-    // `detail` remains populated for legacy readers. The migration that adds
-    // structured columns is intentionally additive so older readers continue
-    // to work during a rolling upgrade.
-    let detail = format!(
-        "outcome={} target={}",
-        event.outcome.as_str(),
-        event.target.as_deref().unwrap_or("none")
-    );
+    // Derive the legacy detail from the same bound values as the structured row.
     sqlx::query(
-        "INSERT INTO panda.security_events \
-         (event_type, user_id, detail, target, request_id, outcome, metadata, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now())",
+        "INSERT INTO panda.security_events
+         (event_type, user_id, target, request_id, outcome, metadata, detail, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 'outcome=' || $5 || ' target=' || COALESCE($3, 'none'), now())",
     )
     .bind(event.event_type)
     .bind(event.actor_id)
-    .bind(detail)
     .bind(&event.target)
     .bind(event.request_id)
     .bind(event.outcome.as_str())
@@ -190,5 +195,28 @@ mod tests {
     #[test]
     fn retention_contract_is_one_year() {
         assert_eq!(SECURITY_EVENT_RETENTION_DAYS, 365);
+    }
+}
+
+#[cfg(test)]
+mod full_replacement_edge_sessions_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn retention_deadlines_match_the_original_interval_skip_contract() {
+        for late in [
+            Duration::ZERO,
+            Duration::from_millis(5),
+            Duration::from_secs(100),
+            RETENTION_PERIOD * 3 + Duration::from_secs(100),
+        ] {
+            let start = tokio::time::Instant::now();
+            let mut original = tokio::time::interval_at(start, RETENTION_PERIOD);
+            original.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tokio::time::advance(late).await;
+            let next = next_retention_tick(start, tokio::time::Instant::now());
+            original.tick().await;
+            assert_eq!(original.tick().await, next);
+        }
     }
 }

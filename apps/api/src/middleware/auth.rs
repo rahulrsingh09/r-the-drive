@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use axum::{
     extract::FromRequestParts,
-    http::{header::AUTHORIZATION, request::Parts, Method},
+    http::{header::AUTHORIZATION, request::Parts, HeaderMap, Method},
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
@@ -28,8 +28,7 @@ pub struct AuthUser {
     pub user_id: Uuid,
     pub default_vehicle_id: Option<Uuid>,
     pub api_access_level: Option<String>,
-    /// The one vehicle an integration key may read. Session-authenticated users
-    /// have no key scope and continue to rely on their memberships.
+    /// Integration keys retain their single-vehicle scope independently of memberships.
     pub api_vehicle_id: Option<Uuid>,
 }
 
@@ -46,12 +45,11 @@ impl std::fmt::Debug for JwtKeys {
 
 impl JwtKeys {
     pub fn new(private_pem: &str, public_pem: &str) -> anyhow::Result<Self> {
-        Ok(Self {
-            encoding: jsonwebtoken::EncodingKey::from_rsa_pem(private_pem.as_bytes())
-                .map_err(|e| anyhow::anyhow!("invalid JWT private key: {e}"))?,
-            decoding: jsonwebtoken::DecodingKey::from_rsa_pem(public_pem.as_bytes())
-                .map_err(|e| anyhow::anyhow!("invalid JWT public key: {e}"))?,
-        })
+        let encoding = jsonwebtoken::EncodingKey::from_rsa_pem(private_pem.as_bytes())
+            .map_err(|error| anyhow::anyhow!("invalid JWT private key: {error}"))?;
+        let decoding = DecodingKey::from_rsa_pem(public_pem.as_bytes())
+            .map_err(|error| anyhow::anyhow!("invalid JWT public key: {error}"))?;
+        Ok(Self { encoding, decoding })
     }
 }
 
@@ -63,11 +61,29 @@ pub struct AppState {
     pub age_key: String,
     pub config: crate::config::Config,
     pub resources: Arc<crate::services::resource_limits::ResourceLimits>,
-    /// Short-lived in-memory cache for address search results: normalised query -> (cached_at, json).
-    /// Rate limiting is handled by the shared scheduler in `services::nominatim`.
+    /// Address result cache; services::nominatim owns the shared request scheduler.
     pub nominatim_cache: Arc<tokio::sync::RwLock<HashMap<String, (Instant, serde_json::Value)>>>,
-    /// Handle for sending commands to the ingestion supervisor.
     pub supervisor: SupervisorHandle,
+}
+
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+pub(crate) fn decode_access_claims(token: &str, key: &DecodingKey) -> Option<Claims> {
+    if token.is_empty() {
+        return None;
+    }
+    let mut policy = Validation::new(Algorithm::RS256);
+    policy.leeway = 0;
+    policy.set_issuer(&["panda.app"]);
+    decode::<Claims>(token, key, &policy)
+        .ok()
+        .map(|verified| verified.claims)
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -77,45 +93,26 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let auth_header = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AppError::Unauthorized)?;
-
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or(AppError::Unauthorized)?;
-
-        if token.starts_with("panda_") {
-            return authenticate_api_key(parts.method.clone(), parts.uri.path(), state, token)
-                .await;
+        let token = bearer_token(&parts.headers).ok_or(AppError::Unauthorized)?;
+        match token.starts_with("panda_") {
+            true => {
+                authenticate_api_key(parts.method.clone(), parts.uri.path(), state, token).await
+            }
+            false => {
+                let claims = parts
+                    .extensions
+                    .get::<DecodingKey>()
+                    .and_then(|key| decode_access_claims(token, key))
+                    .ok_or(AppError::Unauthorized)?;
+                crate::services::sessions::require_enabled_session(&state.pool, &claims).await?;
+                Ok(Self {
+                    user_id: claims.sub,
+                    default_vehicle_id: claims.default_vehicle_id,
+                    api_access_level: None,
+                    api_vehicle_id: None,
+                })
+            }
         }
-
-        // Retrieve JWT public key from extensions (set by router middleware).
-        let decoding_key = parts
-            .extensions
-            .get::<DecodingKey>()
-            .ok_or(AppError::Unauthorized)?;
-
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&["panda.app"]);
-        // Pin leeway to 0 — do not rely on library defaults. Tokens have a
-        // 15-minute lifetime; clock skew tolerance must be explicit and minimal.
-        validation.leeway = 0;
-
-        let claims = decode::<Claims>(token, decoding_key, &validation)
-            .map_err(|_| AppError::Unauthorized)?
-            .claims;
-
-        crate::services::sessions::require_enabled_session(&state.pool, &claims).await?;
-
-        Ok(AuthUser {
-            user_id: claims.sub,
-            default_vehicle_id: claims.default_vehicle_id,
-            api_access_level: None,
-            api_vehicle_id: None,
-        })
     }
 }
 
@@ -125,130 +122,114 @@ async fn authenticate_api_key(
     state: &AppState,
     token: &str,
 ) -> Result<AuthUser, AppError> {
+    let route_allowed = is_integration_read_request(&method, path);
     let hash = hash_api_key(token);
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
-        r#"
-        SELECT k.user_id, k.vehicle_id, k.access_level
-        FROM panda.api_keys k
-        JOIN panda.users u ON u.id = k.user_id
-        WHERE k.key_hash = $1
-          AND k.revoked_at IS NULL
-          AND u.is_disabled = FALSE
-          AND (k.expires_at IS NULL OR k.expires_at > now())
-        "#,
+    let selected = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        "SELECT user_id, vehicle_id, access_level FROM panda.api_keys
+         WHERE key_hash=$1 AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > now())
+           AND user_id IN (SELECT id FROM panda.users WHERE NOT is_disabled)",
     )
     .bind(hash.as_slice())
     .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
-
-    match row.2.as_str() {
-        "read" if is_integration_read_request(&method, path) => {}
-        _ => {
-            tracing::warn!(
-                method = %method,
-                path,
-                access_level = %row.2,
-                "API key request denied by integration read scope"
-            );
-            return Err(AppError::Forbidden);
-        }
+    .await?;
+    let (user_id, vehicle_id, access_level) = selected.ok_or(AppError::Unauthorized)?;
+    if !route_allowed || access_level != "read" {
+        tracing::warn!(method = %method, path, access_level = %access_level,
+            "API key request denied by integration read scope");
+        return Err(AppError::Forbidden);
     }
-
-    // Only update last_used_at at most once per minute to avoid an UPDATE on every request.
     sqlx::query(
-        "UPDATE panda.api_keys \
-         SET last_used_at = now(), updated_at = now() \
-         WHERE key_hash = $1 \
-           AND (last_used_at IS NULL OR last_used_at < now() - INTERVAL '1 minute')",
+        "UPDATE panda.api_keys SET last_used_at=now(), updated_at=now()
+         WHERE key_hash=$1 AND (last_used_at IS NULL OR last_used_at < now()-INTERVAL '1 minute')",
     )
     .bind(hash.as_slice())
     .execute(&state.pool)
     .await?;
-
     Ok(AuthUser {
-        user_id: row.0,
-        default_vehicle_id: Some(row.1),
-        api_access_level: Some(row.2),
-        api_vehicle_id: Some(row.1),
+        user_id,
+        default_vehicle_id: Some(vehicle_id),
+        api_access_level: Some(access_level),
+        api_vehicle_id: Some(vehicle_id),
     })
 }
 
 pub fn require_vehicle_access(auth: &AuthUser, vehicle_id: Uuid) -> Result<(), AppError> {
-    if let Some(scoped_vehicle_id) = auth.api_vehicle_id {
-        if scoped_vehicle_id != vehicle_id {
-            return Err(AppError::Forbidden);
-        }
+    match auth.api_vehicle_id {
+        Some(scope) if scope != vehicle_id => Err(AppError::Forbidden),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
-/// Integration keys may read only this deliberate, stable data surface.  The
-/// list is kept here with authentication so adding a route cannot accidentally
-/// make it available just because it happens to use GET.  `metrics/batch` and
-/// the Grafana compatibility calls are read operations despite using POST.
 fn is_integration_read_request(method: &Method, path: &str) -> bool {
-    // The protected API router is nested below `/v1`, so Axum passes the
-    // inner route path (`/vehicles`, `/api/catalog`, ...) to extractors. Keep
-    // accepting the fully-qualified form in unit tests and direct callers.
     let path = path.strip_prefix("/v1").unwrap_or(path);
-
-    if *method == Method::POST {
-        return matches!(
-            path,
-            "/metrics/batch"
-                | "/grafana/search"
-                | "/grafana/query"
-                | "/grafana/annotations"
-                | "/grafana/tag-keys"
-                | "/grafana/tag-values"
-        );
+    match *method {
+        Method::POST => [
+            "/metrics/batch",
+            "/grafana/search",
+            "/grafana/query",
+            "/grafana/annotations",
+            "/grafana/tag-keys",
+            "/grafana/tag-values",
+        ]
+        .contains(&path),
+        Method::GET => {
+            ["/api/catalog", "/vehicles"].contains(&path)
+                || [
+                    "/battery/",
+                    "/metrics/",
+                    "/trips",
+                    "/charging",
+                    "/efficiency/",
+                    "/dashboard/overview/",
+                    "/grafana",
+                ]
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
+                || is_scoped_vehicle_read_path(path)
+        }
+        _ => false,
     }
-
-    if *method != Method::GET {
-        return false;
-    }
-
-    path == "/api/catalog"
-        || path == "/vehicles"
-        || path.starts_with("/battery/")
-        || path.starts_with("/metrics/")
-        || path.starts_with("/trips")
-        || path.starts_with("/charging")
-        || path.starts_with("/efficiency/")
-        || path.starts_with("/dashboard/overview/")
-        || path.starts_with("/grafana")
-        || is_scoped_vehicle_read_path(path)
 }
 
 fn is_scoped_vehicle_read_path(path: &str) -> bool {
     let path = path.strip_prefix("/v1").unwrap_or(path);
-    let Some(suffix) = path.strip_prefix("/vehicles/") else {
+    let Some((_, endpoint)) = path
+        .strip_prefix("/vehicles/")
+        .and_then(|suffix| suffix.split_once('/'))
+    else {
         return false;
     };
-    matches!(
-        suffix.split('/').skip(1).collect::<Vec<_>>().as_slice(),
-        ["status"]
-            | ["images"]
-            | ["raw-data"]
-            | ["telemetry", "lanes"]
-            | ["health"]
-            | ["idle-drain"]
-            | ["parked-energy"]
-            | ["state-timeline"]
-            | ["locations"]
-            | ["live-session"]
-            | ["charging-sessions"]
-            | ["charging-sessions", _]
-            | ["charging-sessions", _, "curve"]
-            | ["costs"]
-            | ["drives", _, "power"]
-            | ["charging-schedule"]
-            | ["departure-schedules"]
-            | ["wallboxes"]
-            | ["ota-details"]
-            | ["backfill-status"]
-    )
+    const ENDPOINTS: &[&str] = &[
+        "status",
+        "images",
+        "raw-data",
+        "telemetry/lanes",
+        "health",
+        "idle-drain",
+        "parked-energy",
+        "state-timeline",
+        "locations",
+        "live-session",
+        "charging-sessions",
+        "charging-sessions/*",
+        "charging-sessions/*/curve",
+        "costs",
+        "drives/*/power",
+        "charging-schedule",
+        "departure-schedules",
+        "wallboxes",
+        "ota-details",
+        "backfill-status",
+    ];
+    ENDPOINTS.iter().any(|pattern| {
+        let mut actual = endpoint.split('/');
+        pattern.split('/').all(|expected| {
+            actual
+                .next()
+                .is_some_and(|part| expected == "*" || part == expected)
+        }) && actual.next().is_none()
+    })
 }
 
 pub fn issue_access_token(
@@ -265,21 +246,21 @@ pub fn issue_session_access_token(
     sid: Option<Uuid>,
     keys: &JwtKeys,
 ) -> anyhow::Result<String> {
-    use jsonwebtoken::{encode, Header};
-    let now = chrono::Utc::now().timestamp();
+    let issued = chrono::Utc::now().timestamp();
     let claims = Claims {
         sub: user_id,
-        iss: "panda.app".into(),
-        exp: now + 900, // 15 min
-        iat: now,
         default_vehicle_id,
         sid,
+        iss: String::from("panda.app"),
+        iat: issued,
+        exp: issued + 900,
     };
-    Ok(encode(
-        &Header::new(Algorithm::RS256),
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(Algorithm::RS256),
         &claims,
         &keys.encoding,
-    )?)
+    )
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
