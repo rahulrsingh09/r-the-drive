@@ -172,10 +172,6 @@ pub async fn test_connection(settings: &S3Settings) -> Result<()> {
             .await
             .context("S3 read probe body failed")?;
         anyhow::ensure!(
-            downloaded.len() <= payload.len(),
-            "S3 read probe returned an oversized body"
-        );
-        anyhow::ensure!(
             downloaded == payload.as_bytes(),
             "S3 read probe returned different bytes"
         );

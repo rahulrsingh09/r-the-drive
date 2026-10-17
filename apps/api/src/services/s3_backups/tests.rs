@@ -103,3 +103,79 @@ fn full_replacement_locator_and_prefix_contract() {
         );
     }
 }
+
+#[tokio::test]
+async fn full_replacement_probe_preserves_mismatch_error_and_deletes_oversized_response() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Method, Request, Response},
+        routing::any,
+        Router,
+    };
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    };
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let payload = Arc::new(Mutex::new(Vec::new()));
+    let deleted = Arc::new(AtomicBool::new(false));
+    let cleanup = deleted.clone();
+    let router = Router::new().fallback(any(move |request: Request<Body>| {
+        let payload = payload.clone();
+        let deleted = deleted.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let bytes = match parts.method {
+                Method::PUT => {
+                    let bytes = to_bytes(body, 1024).await.unwrap().to_vec();
+                    *payload.lock().unwrap() = bytes;
+                    Vec::new()
+                }
+                Method::GET if parts.uri.query().is_some_and(|query| query.contains("list-type=")) => {
+                    let key = url::form_urlencoded::parse(parts.uri.query().unwrap().as_bytes())
+                        .find(|(name, _)| name == "prefix").unwrap().1.into_owned();
+                    format!("<ListBucketResult><Contents><Key>{key}</Key></Contents></ListBucketResult>").into_bytes()
+                }
+                Method::GET => {
+                    let mut bytes = payload.lock().unwrap().clone();
+                    bytes.extend_from_slice(b"excess response bytes");
+                    bytes
+                }
+                Method::DELETE => {
+                    deleted.store(true, Ordering::SeqCst);
+                    Vec::new()
+                }
+                _ => panic!("unexpected probe request"),
+            };
+            Response::new(Body::from(bytes))
+        }
+    }));
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let settings = S3Settings {
+        endpoint: endpoint.clone(),
+        region: "fixture".into(),
+        bucket: "fixture".into(),
+        prefix: "archives".into(),
+        access_key: "synthetic-access".into(),
+        secret_key: "synthetic-secret".into(),
+        policy: crate::services::s3_transport::S3Policy {
+            development_origin: Some(endpoint.parse().unwrap()),
+            ..Default::default()
+        },
+    };
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        test_connection(&settings),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    task.abort();
+    assert!(
+        cleanup.load(Ordering::SeqCst),
+        "probe object must be deleted after mismatch"
+    );
+    assert_eq!(error.to_string(), "S3 read probe returned different bytes");
+}
