@@ -144,7 +144,7 @@ function BrandPreview({ resolved }: { resolved: ReturnType<typeof resolveTheme> 
   return (
     <div className="grid gap-4 rounded-xl border border-border bg-bg-elevated/35 p-4 sm:grid-cols-2">
       <div className="grid min-h-36 place-items-center rounded-lg border border-border bg-bg-page p-5">
-        <img src={resolved.brandAssets.wordmark[effectiveMode]} alt="Panda wordmark preview" className="max-h-16 max-w-full" />
+        <img src={resolved.brandAssets.wordmark[effectiveMode]} alt="R:The Drive wordmark preview" className="max-h-16 max-w-full" />
       </div>
       <div className="grid content-center gap-2">
         <p className="text-sm font-medium text-fg">{isVector ? 'RAD vector artwork' : 'Raster-backed fallback'}</p>

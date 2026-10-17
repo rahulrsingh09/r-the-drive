@@ -102,7 +102,7 @@ export function useConnectionFlow(refreshVehicleId: string | undefined, owner: s
       ]);
       if (!active()) return;
       notifyVehicleCredentialsRefreshed(refreshVehicleId);
-      dispatch({ type: 'saved', id: refreshVehicleId, vehicle, waiting: refreshed.telemetry_status === 'connected' ? null : refreshed.telemetry_error ?? 'Credentials were refreshed. Panda is still waiting for vehicle data and will keep retrying.' });
+      dispatch({ type: 'saved', id: refreshVehicleId, vehicle, waiting: refreshed.telemetry_status === 'connected' ? null : refreshed.telemetry_error ?? 'Credentials were refreshed. R:The Drive is still waiting for vehicle data and will keep retrying.' });
       return;
     }
     switch (result.vehicles.length) {

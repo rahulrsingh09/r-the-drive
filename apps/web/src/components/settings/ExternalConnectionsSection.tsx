@@ -216,7 +216,7 @@ function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boole
               <div>
                 <CardTitle>GitHub Releases</CardTitle>
                 <p className="mt-1 max-w-3xl text-sm text-fg-tertiary">
-                  Optionally check GitHub’s latest stable release directly from this browser. The request contains no user, vehicle, or usage data. Panda receives no check counts or results, and checks run only while this app is open.
+                  Optionally check GitHub’s latest stable release directly from this browser. The request contains no user, vehicle, or usage data. R:The Drive receives no check counts or results, and checks run only while this app is open.
                 </p>
               </div>
               <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1 text-sm text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
@@ -630,7 +630,7 @@ function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerTo
   type ProviderFields = { fields: Array<[keyof UpdateExternalConnectionBody, string, string?]>; credential?: 'key' | 'token'; autocomplete?: boolean };
   const providers = new Map<string, ProviderFields>([
     ['open_meteo', { fields: [['forecast_url', 'Forecast URL'], ['archive_url', 'Archive URL']], credential: 'key' }],
-    ['nominatim', { fields: [['base_url', 'Nominatim base URL'], ['request_identifier', 'Request identifier / contact', 'Panda project identifier']], autocomplete: true }],
+    ['nominatim', { fields: [['base_url', 'Nominatim base URL'], ['request_identifier', 'Request identifier / contact', 'R:The Drive project identifier']], autocomplete: true }],
     ['basemap', { fields: [['light_url_template', 'Light XYZ template', 'https://tiles/{z}/{x}/{y}.png'], ['dark_url_template', 'Dark XYZ template (optional)'], ['attribution', 'Attribution'], ['attribution_url', 'Attribution URL']], credential: 'token' }],
   ]);
   const provider = providers.get(connection.id);

@@ -965,7 +965,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                   <div>
                                     <p className="text-sm font-medium text-fg">Vehicle Access</p>
                                     <p className="text-xs text-fg-tertiary">
-                                      Owners can add existing Panda users, adjust roles, and remove access.
+                                      Owners can add existing R:The Drive users, adjust roles, and remove access.
                                     </p>
                                   </div>
                                   <Button
@@ -1371,7 +1371,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                       <p className="text-xs uppercase tracking-wider text-fg-tertiary">Time zone</p>
                       <p className="mt-1 text-sm text-fg">Application time zone</p>
                       <p className="mt-1 text-xs text-fg-tertiary">
-                        All Panda dates, charts, local-day groupings, and scheduled backups use this time zone.
+                        All R:The Drive dates, charts, local-day groupings, and scheduled backups use this time zone.
                         {!canManageBackups ? ' An administrator manages this shared setting.' : ''}
                       </p>
                     </div>

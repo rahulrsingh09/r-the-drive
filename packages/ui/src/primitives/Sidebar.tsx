@@ -204,7 +204,7 @@ export function Sidebar({
         >
           <img
             src={brandAssets.wordmark}
-            alt="Panda"
+            alt="R:The Drive"
             className="h-[1.5625rem] w-auto"
             style={{ transform: 'translateY(10%)' }}
           />
@@ -242,7 +242,7 @@ export function Sidebar({
             >
               <img
                 src={brandAssets.wordmark}
-                alt="Panda"
+                alt="R:The Drive"
                 className="h-[1.5625rem] w-auto"
                 style={{ transform: 'translateY(10%)' }}
               />
@@ -300,7 +300,7 @@ export function Sidebar({
             >
               <img
                 src={brandAssets.logo}
-                alt="Panda logo"
+                alt="R:The Drive logo"
                 className="h-[80%] w-auto"
               />
             </button>
@@ -310,7 +310,7 @@ export function Sidebar({
                 <div className="flex h-full min-w-0 items-center justify-start pl-1 overflow-hidden">
                   <img
                     src={brandAssets.wordmark}
-                    alt="Panda"
+                    alt="R:The Drive"
                     className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
                     style={{ transform: 'translateY(15%)' }}
                   />

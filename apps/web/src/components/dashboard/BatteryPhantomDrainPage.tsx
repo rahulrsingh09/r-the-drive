@@ -78,7 +78,7 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold text-fg">Panda battery-change estimate</h2>
+          <h2 className="text-base font-semibold text-fg">R:The Drive battery-change estimate</h2>
           <p className="text-xs text-fg-tertiary">
             Derived from validated parked sessions and retained when Rivian&apos;s breakdown is unavailable.
           </p>

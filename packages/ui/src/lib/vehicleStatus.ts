@@ -77,7 +77,7 @@ export function buildAvailabilityTooltip(label: string, availability: StatusAvai
   switch (state) {
     case 'invalid': return `${label} is currently unavailable because Rivian marked the sensor as invalid.`;
     case 'historical': return availability.lastSeenAt ? `${label} is showing the last known value from ${formatDateTimeShort(availability.lastSeenAt)} because the latest vehicle event did not include a new reading.` : null;
-    case 'never_seen': return `${label} is unavailable because Panda has not stored a reading for this field yet. This may mean the vehicle has not emitted it or Rivian does not expose it for this model.`;
+    case 'never_seen': return `${label} is unavailable because R:The Drive has not stored a reading for this field yet. This may mean the vehicle has not emitted it or Rivian does not expose it for this model.`;
     default: return null;
   }
 }

@@ -181,7 +181,7 @@ export function AuthenticationSection() {
           tested. Environment overrides can disable SSO immediately if the provider fails.
         </div>
         <form className="grid gap-4" onSubmit={submit}>
-          <Group title="Sign-in options" description="Choose how people enter Panda after SSO is configured and tested.">
+          <Group title="Sign-in options" description="Choose how people enter R:The Drive after SSO is configured and tested.">
             <div className="grid gap-3 md:grid-cols-2">
               {toggle('oidc_enabled', 'Enable SSO')}
               {toggle('password_login_enabled', 'Allow password login')}
@@ -190,7 +190,7 @@ export function AuthenticationSection() {
             <p className="text-xs text-fg-tertiary">Automatic sign-in starts SSO when the login page opens and the provider is available. If SSO fails, the login page stays available for a manual retry. Turn off password login separately to hide the password form.</p>
             {textField('button_label', 'SSO button label')}
           </Group>
-          <Group title="Provider connection" description="Connect Panda to your OIDC provider.">
+          <Group title="Provider connection" description="Connect R:The Drive to your OIDC provider.">
             <div className="grid gap-4 md:grid-cols-2">
               {textField('issuer_url', 'Issuer URL')}
               {textField('public_base_url', 'Public base URL')}
@@ -215,7 +215,7 @@ export function AuthenticationSection() {
               {toggle('auto_link_verified_email', 'Link verified existing emails')}
             </div>
             <p className="text-xs text-fg-tertiary">When enabled, both options accept any verified email domain from this provider by default. Open advanced account access only if you want to restrict domains or require a provider claim.</p>
-            {form.auto_link_verified_email === true && <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-fg-secondary"><strong className="text-fg">Automatic account linking is on.</strong>{' '}Anyone whose verified email from this provider matches an existing Panda account can sign in to that account. If the provider can reassign addresses or serves users outside your organization, add restrictions below or ask users to connect SSO from their signed-in account.</div>}
+            {form.auto_link_verified_email === true && <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-fg-secondary"><strong className="text-fg">Automatic account linking is on.</strong>{' '}Anyone whose verified email from this provider matches an existing R:The Drive account can sign in to that account. If the provider can reassign addresses or serves users outside your organization, add restrictions below or ask users to connect SSO from their signed-in account.</div>}
             <Button type="button" size="sm" variant="secondary" aria-expanded={showAdvancedAccess} aria-controls="advanced-account-access" onClick={() => dispatch({ type: 'advanced' })}>
               {showAdvancedAccess ? 'Hide advanced account access' : 'Show advanced account access'}
             </Button>

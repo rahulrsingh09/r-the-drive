@@ -203,7 +203,7 @@ describe('BatteryPhantomDrainPage', () => {
     expect(screen.getByTestId('phantom-drain-periods-table')).not.toHaveClass('bg-bg-elevated');
     expect(screen.getByText('Parked Energy')).toBeInTheDocument();
     expect(screen.getByText('Rivian reported')).toBeInTheDocument();
-    expect(screen.getByText('Panda battery-change estimate')).toBeInTheDocument();
+    expect(screen.getByText('R:The Drive battery-change estimate')).toBeInTheDocument();
     expect(screen.getByTestId('parked-energy-metrics')).toHaveClass('grid', 'grid-cols-3');
 
     expect(screen.getByPlaceholderText('Search periods')).toBeInTheDocument();
@@ -238,6 +238,6 @@ describe('BatteryPhantomDrainPage', () => {
     render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
 
     expect(screen.queryByTestId('parked-energy-panel')).not.toBeInTheDocument();
-    expect(screen.getByText('Panda battery-change estimate')).toBeInTheDocument();
+    expect(screen.getByText('R:The Drive battery-change estimate')).toBeInTheDocument();
   });
 });

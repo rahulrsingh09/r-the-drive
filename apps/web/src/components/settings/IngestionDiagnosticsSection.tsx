@@ -17,7 +17,7 @@ export function IngestionDiagnosticsSection({ vehicles }: { vehicles: Vehicle[] 
       <CardHeader><CardTitle>Ingestion capture</CardTitle></CardHeader>
       <CardContent className="grid gap-3">
         <p className="text-sm text-fg-secondary">
-          Record what Panda receives from Rivian while you reproduce a problem, then download one file to share.
+          Record what R:The Drive receives from Rivian while you reproduce a problem, then download one file to share.
           A capture keeps Parallax and legacy frames, decoded values, and ingestion decisions for up to an hour.
           It never includes coordinates, credentials, the VIN, or vehicle names, and it is deleted 24 hours after it stops.
         </p>

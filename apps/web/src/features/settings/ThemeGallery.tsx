@@ -52,7 +52,7 @@ function ThemeGallerySession() {
 
   const selected = preference.data?.preferences.selection;
   const choices: Array<{ theme: (typeof BUILT_IN_THEMES)[ThemePalette]; selection: ThemePreferencesV2['selection']; name: string; description: string }> = [];
-  const descriptions = { classic: 'The original Panda visual system.', rad: 'Bright gold, vivid vermilion, and adventure teal.' };
+  const descriptions = { classic: 'The original R:The Drive visual system.', rad: 'Bright gold, vivid vermilion, and adventure teal.' };
   for (const themeId of ['classic', 'rad'] as const) {
     const theme = BUILT_IN_THEMES[themeId];
     choices.push({ theme, selection: { kind: 'builtin', themeId }, name: theme.name, description: descriptions[themeId] });

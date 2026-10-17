@@ -27,7 +27,7 @@ export function DashboardLibrarySection({
           <details className="group rounded-xl border border-border bg-bg-elevated/35">
             <summary className="cursor-pointer list-none px-3 py-3 text-sm font-medium text-fg marker:hidden">How dashboard defaults and personal copies work</summary>
             <div className="grid gap-2 border-t border-border px-3 py-3 text-sm text-fg-secondary">
-              <p><strong className="text-fg">System defaults</strong> are shared within this Panda installation.</p>
+              <p><strong className="text-fg">System defaults</strong> are shared within this R:The Drive installation.</p>
               <p><strong className="text-fg">My dashboards</strong> are private to your account. A saved personal copy with the same page name is active for you and takes precedence without changing the system default.</p>
               <p>Saved layouts remain available to open and export.</p>
             </div>

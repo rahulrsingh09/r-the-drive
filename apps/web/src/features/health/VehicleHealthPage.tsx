@@ -659,7 +659,7 @@ function formatAcquisitionStatusTooltip(extended: VehicleHealth['extended_teleme
     <div className="grid gap-2 leading-4">
       <div className="grid gap-0.5">
         <span className="font-medium text-fg">Parallax acquisition</span>
-        <span>This is Panda&apos;s integrated Parallax acquisition WebSocket, separate from the canonical vehicle telemetry connection.</span>
+        <span>This is R:The Drive&apos;s integrated Parallax acquisition WebSocket, separate from the canonical vehicle telemetry connection.</span>
       </div>
       <div className="grid gap-0.5 border-t border-border pt-2">
         <span className="font-medium text-fg">What the status means</span>

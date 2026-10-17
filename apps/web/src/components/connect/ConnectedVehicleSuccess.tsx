@@ -28,7 +28,7 @@ export function ConnectedVehicleSuccess({
   const { title, message: readinessMessage } = {
     ready: { title: 'Vehicle connected', message: `${vehicleName} is connected and telemetry is available.` },
     attention: { title: 'Vehicle saved', message: `${vehicleName} was saved, but its telemetry collector needs attention. Open the dashboard to review vehicle health.` },
-    waiting: { title: 'Vehicle saved', message: initialWaitingMessage ?? `${vehicleName} was saved. Panda is starting its telemetry collector; a sleeping vehicle may take a little while to report.` },
+    waiting: { title: 'Vehicle saved', message: initialWaitingMessage ?? `${vehicleName} was saved. R:The Drive is starting its telemetry collector; a sleeping vehicle may take a little while to report.` },
   }[readiness];
   const telemetryAvailable = readiness === 'ready';
 

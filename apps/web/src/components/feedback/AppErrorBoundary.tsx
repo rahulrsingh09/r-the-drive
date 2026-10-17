@@ -38,7 +38,7 @@ function AppFailure() {
   return (
       <main className="flex min-h-screen items-center justify-center bg-bg-page p-6" role="alert">
         <Card className="w-full max-w-md text-center">
-          <h1 className="text-lg font-semibold text-fg">Panda needs to reload</h1>
+          <h1 className="text-lg font-semibold text-fg">R:The Drive needs to reload</h1>
           <p className="mt-2 text-sm text-fg-secondary">
             The app hit an unexpected error. Reload to try again.
           </p>

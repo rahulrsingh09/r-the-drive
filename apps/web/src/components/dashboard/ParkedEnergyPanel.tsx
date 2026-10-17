@@ -53,7 +53,7 @@ export function ParkedEnergyPanel({
             <Badge variant="accent">Rivian reported</Badge>
           </div>
           <p className="mt-1 text-xs text-fg-tertiary">
-            Vehicle-reported energy use by system. This is separate from Panda&apos;s battery-change estimate below.
+            Vehicle-reported energy use by system. This is separate from R:The Drive&apos;s battery-change estimate below.
           </p>
         </div>
         <div role="group" aria-label="Parked energy window" className="grid w-full grid-cols-[1.25fr_1fr_1fr] gap-1 rounded-lg border border-border bg-bg-elevated p-1 lg:w-auto lg:shrink-0">

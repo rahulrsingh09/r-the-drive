@@ -1261,7 +1261,7 @@ export function BackupSection() {
                 <p className="mt-1 text-sm text-fg-tertiary">
                   This replaces the current users, dashboards, telemetry, settings, and artwork with{' '}
                   <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
-                  Panda creates a required safety package first, stops its API and ingestion
+                  R:The Drive creates a required safety package first, stops its API and ingestion
                   workers, restores the package, and starts cleanly on the restored data.
                 </p>
               </div>
@@ -1372,7 +1372,7 @@ export function BackupSection() {
                 <RotateCcw className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-fg">Restoring Panda</p>
+                <p className="text-sm font-semibold text-fg">Restoring R:The Drive</p>
                 <p className="mt-1 text-sm text-fg-tertiary">{activeRestore.job.message}</p>
               </div>
               {activeRestore.job.phase !== 'failed' && (
@@ -1466,7 +1466,7 @@ export function BackupSection() {
               <p className="text-sm font-medium text-fg">Choose a recovery package</p>
               <p className="mt-1 text-xs leading-relaxed text-fg-tertiary">
                 Select a backup already in the local catalog or import a package from another
-                Panda installation. A safety backup is created before any restore begins.
+                R:The Drive installation. A safety backup is created before any restore begins.
               </p>
             </div>
 

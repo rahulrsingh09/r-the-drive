@@ -29,7 +29,7 @@ export function ConnectContent() {
         subtitle={
           refreshVehicle
             ? `Update encrypted credentials for ${refreshVehicle.display_name}.`
-            : 'Connect your Rivian account so Panda can securely prepare telemetry access.'
+            : 'Connect your Rivian account so R:The Drive can securely prepare telemetry access.'
         }
         className="min-h-[calc(100vh-3rem)] justify-center [&>div:first-child]:justify-center [&>div:first-child>div]:text-center"
       >
@@ -114,7 +114,7 @@ const steps = [
   },
   {
     label: 'Vehicle saved',
-    description: 'Panda encrypts tokens and sets the first connected vehicle as default.',
+    description: 'R:The Drive encrypts tokens and sets the first connected vehicle as default.',
     icon: Car,
   },
 ];

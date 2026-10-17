@@ -24,7 +24,7 @@ export function getFeedHealthIssue(status?: FeedHealthStatus | null) {
   } : {
     key: `unhealthy:${status.worker_health ?? 'unknown'}:${status.telemetry_stale_reason ?? 'unknown'}`,
     title: 'Vehicle feed unhealthy',
-    message: 'Panda is not receiving fresh vehicle telemetry. Open Health for collector details.',
+    message: 'R:The Drive is not receiving fresh vehicle telemetry. Open Health for collector details.',
   };
   return { ...notice, message: status.worker_health_msg ?? notice.message };
 }

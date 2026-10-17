@@ -91,7 +91,7 @@ export function AccountIdentitySection() {
           <div>
             <p className="text-sm font-medium text-fg">Set a recovery password</p>
             <p className="mt-1 text-xs text-fg-tertiary">
-              SSO is currently this account’s only sign-in method. Panda will ask the provider
+              SSO is currently this account’s only sign-in method. R:The Drive will ask the provider
               to verify you again before saving this password.
             </p>
           </div>
