@@ -1,7 +1,8 @@
 import { widgetChartCapabilities } from './chartCapabilities';
 import { scatterBuckets, scatterPalette } from './scatterProjection';
 import { resolveWidgetOptions } from '../widgetOptions';
-import { efficiencyProjection, efficiencyRows, efficiencyTimeline } from './efficiencyProjection';
+import { efficiencyProjection, efficiencyRows, efficiencyTimeline, efficiencyTagState } from './efficiencyProjection';
+import { predictWeightedLine } from './weightedRegression';
 import { useWidgetDialogDismiss, useCompatibleWidgetMedia } from '../widgetLifecycle';
 import { mileageProjection } from './mileageProjection';
 import { canonicalSeriesStyle, chartDomain, chartMark, projectTimestampValues } from './chartProjection';
@@ -982,22 +983,16 @@ function EfficiencyTagsSource({ chartDefinition, ctx, height }: ActiveDashboardC
     ctx.tripTagFilter
   );
   const tags = useTripTags(ctx.vehicleId);
-  if (tags.isError) {
-    return <EfficiencyTagsCatalogError height={height} onRetry={() => void tags.refetch()} />;
+  const state = efficiencyTagState(tags, isLoading, ctx.canManageTripTags, ctx.tripTagFilter);
+  switch (state.view) {
+    case 'error':
+      return <EfficiencyTagsCatalogError height={height} onRetry={() => void tags.refetch()} />;
+    case 'onboarding':
+      return <EfficiencyTagsOnboarding height={height} canManage={state.canManage} />;
+    case 'chart':
+      return <EfficiencyTagsChart data={data} height={height} loading={state.loading}
+        hasTagFilter={state.hasTagFilter} chartDefinition={chartDefinition} />;
   }
-  if (!tags.isLoading && (tags.data ?? []).length === 0) {
-    return <EfficiencyTagsOnboarding height={height} canManage={Boolean(ctx.canManageTripTags)} />;
-  }
-  const hasTagFilter = Boolean(ctx.tripTagFilter?.tagIds.length || ctx.tripTagFilter?.untagged);
-  return (
-    <EfficiencyTagsChart
-      data={data}
-      loading={isLoading || tags.isLoading}
-      height={height}
-      hasTagFilter={hasTagFilter}
-      chartDefinition={chartDefinition}
-    />
-  );
 }
 
 function EfficiencyTagsCatalogError({ height, onRetry }: { height: number; onRetry: () => void }) {
@@ -1596,17 +1591,7 @@ function weightedLinearPrediction(
   points: Array<{ x: number; y: number; weight: number }>,
   atX: number
 ) {
-  const moments = [0, 0, 0, 0, 0];
-  for (const point of points) {
-    const contributions = [point.weight, point.weight * point.x, point.weight * point.y, point.weight * point.x * point.x, point.weight * point.x * point.y];
-    for (let index = 0; index < moments.length; index++) moments[index]! += contributions[index]!;
-  }
-  const [weight, x, y, xx, xy] = moments as [number, number, number, number, number];
-  if (weight === 0) return null;
-  const determinant = weight * xx - x ** 2;
-  if (Math.abs(determinant) < Number.EPSILON) return Math.max(0, y / weight);
-  const slope = (weight * xy - x * y) / determinant;
-  return Math.max(0, (y - slope * x) / weight + slope * atX);
+  return predictWeightedLine(points, atX);
 }
 
 function weightedPercentile(points: Array<{ y: number; weight: number }>, quantile: number) {

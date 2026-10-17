@@ -6,6 +6,31 @@ import {
   whPerMileToMiPerKwh,
 } from '@panda/ui/lib/utils';
 
+type TagChartState =
+  | { view: 'error' }
+  | { view: 'onboarding'; canManage: boolean }
+  | { view: 'chart'; loading: boolean; hasTagFilter: boolean };
+
+export function efficiencyTagState(
+  catalog: { isError: boolean; isLoading: boolean; data: unknown[] | undefined },
+  dataLoading: boolean,
+  canManage: boolean | undefined,
+  filter: { tagIds: string[]; untagged: boolean } | undefined
+): TagChartState {
+  const phase = catalog.isError ? 'failed'
+    : catalog.isLoading ? 'pending'
+      : catalog.data?.length ? 'available' : 'empty';
+  switch (phase) {
+    case 'failed': return { view: 'error' };
+    case 'empty': return { view: 'onboarding', canManage: Boolean(canManage) };
+    default: return {
+      view: 'chart',
+      loading: phase === 'pending' || dataLoading,
+      hasTagFilter: Boolean(filter?.untagged || filter?.tagIds.length),
+    };
+  }
+}
+
 export function efficiencyProjection() {
   const metric = getUnitSystem() === 'metric';
   const energy = getEfficiencyDisplay() === 'energy_per_distance';

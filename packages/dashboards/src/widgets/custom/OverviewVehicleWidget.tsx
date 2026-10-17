@@ -1,8 +1,8 @@
 import { formatWidgetChargeTime } from '../widgetLifecycle';
-import React, { useState } from 'react';
+import React from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Package, PackageOpen, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@panda/hooks';
+import { AuthenticatedVehicleArtwork, useVehicleArtwork } from '@panda/hooks';
 import { formatDriveMode } from '@panda/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@panda/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@panda/ui/lib/vehicleTires';
@@ -14,6 +14,7 @@ import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { overviewArtwork, useVehicleArtworkFrame, closurePresentation } from './vehiclePresentation';
 import { useWidgetBounds } from '../widgetLifecycle';
+import { useWidgetVehicle } from './useWidgetVehicle';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -57,22 +58,8 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
 };
 
 function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
-  const { defaultVehicleId } = useAuth();
-  const vehicleId = ctx.vehicleId ?? defaultVehicleId;
-  const { data: status } = useCurrentVehicleStatus(vehicleId);
-  const { data: vehicles } = useVehicles();
-  const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
-
-  return (
-    <CurrentVehicleStatePanel
-      status={status}
-      images={activeVehicle?.images}
-      vehicleName={activeVehicle?.display_name}
-      vehicleModel={activeVehicle?.model}
-      isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false}
-      targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
-    />
-  );
+  const snapshot = useWidgetVehicle(ctx.vehicleId);
+  return <CurrentVehicleStatePanel {...snapshot} />;
 }
 
 export function CurrentVehicleStatePanel({
@@ -230,19 +217,24 @@ function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function ChargingGlyph({ status }: { status: VehicleStatus | null | undefined }) {
-  const charging = isCharging(status);
-  const pluggedIn = isVehiclePluggedIn(status);
-  const state = charging ? 'charging' : pluggedIn ? 'connected' : 'disconnected';
-  const label = charging ? 'Charging' : pluggedIn ? 'Connected, not charging' : 'Not connected';
+  const connection = Number(isVehiclePluggedIn(status));
+  const activity = Number(isCharging(status));
+  const { state, label, tone } = [
+    { state: 'disconnected', label: 'Not connected', tone: 'text-fg-tertiary' },
+    { state: 'connected', label: 'Connected, not charging', tone: 'text-fg-tertiary' },
+    { state: 'charging', label: 'Charging', tone: 'text-accent' },
+    { state: 'charging', label: 'Charging', tone: 'text-accent' },
+  ][activity * 2 + connection]!;
+  const Icon = [PiPlugsFill, PiPlugsConnectedFill][connection]!;
   return (
     <span
       data-testid="overview-charging-glyph"
       data-charging-state={state}
       aria-label={label}
       title={label}
-      className={`inline-flex items-center justify-center ${charging ? 'text-accent' : 'text-fg-tertiary'}`}
+      className={`inline-flex items-center justify-center ${tone}`}
     >
-      {pluggedIn ? <PiPlugsConnectedFill className="h-4 w-4" /> : <PiPlugsFill className="h-4 w-4" />}
+      <Icon className="h-4 w-4" />
     </span>
   );
 }
@@ -357,47 +349,37 @@ function VehicleOverheadLayers({
   isR1tFallback: boolean;
   artworkNudgeRight: boolean;
 }) {
+  const [layerMode, reportFallback] = React.useReducer(
+    (_mode: 'primary' | 'fallback', fallback: boolean) => fallback ? 'fallback' : 'primary',
+    'primary'
+  );
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
     width: 'var(--vehicle-frame-height)',
     left: '50%',
     transform: 'translate(-50%, -50%) rotate(90deg)',
   } as React.CSSProperties;
+  const fallbackTransforms = [imageStyle.transform];
+  if (isR1tFallback) fallbackTransforms.push(`scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`);
   const fallbackProps = {
     style: {
       ...imageStyle,
-      // The shared rear/front lock anchors sit at 4% and 102%. Center only
-      // the packaged demo fallback at their midpoint, leaving Rivian artwork
-      // and all annotations on their established coordinates.
       left: artworkNudgeRight ? '53%' : '50%',
-      transform: isR1tFallback
-        ? `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`
-        : imageStyle.transform,
+      transform: fallbackTransforms.join(' '),
     },
   };
-  const [usingFallback, setUsingFallback] = useState(false);
+  const layers = [
+    { key: 'base', source: base, alt: vehicleName ?? 'Rivian vehicle',
+      fallbackSource: fallbackBase, fallbackProps, onFallbackChange: reportFallback },
+    ...overlays.map((source) => ({ key: `overlay:${source}`, source, alt: '' })),
+  ].filter((_layer, index) => index === 0 || layerMode === 'primary');
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
-      <AuthenticatedVehicleArtwork
-        source={base}
-        fallbackSource={fallbackBase}
-        alt={vehicleName ?? 'Rivian vehicle'}
-        className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
-        style={imageStyle}
-        fallbackProps={fallbackProps}
-        onFallbackChange={setUsingFallback}
-      />
-      {!usingFallback
-        ? overlays.map((overlayUrl) => (
-            <AuthenticatedVehicleArtwork
-              key={overlayUrl}
-              source={overlayUrl}
-              alt=""
-              className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
-              style={imageStyle}
-            />
-          ))
-        : null}
+      {layers.map(({ key, ...props }) => (
+        <AuthenticatedVehicleArtwork key={key} {...props}
+          className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
+          style={imageStyle} />
+      ))}
     </div>
   );
 }

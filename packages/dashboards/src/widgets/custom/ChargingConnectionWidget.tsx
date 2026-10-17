@@ -1,7 +1,7 @@
 import { formatWidgetChargeTime } from '../widgetLifecycle';
 import React from 'react';
 import { Zap } from 'lucide-react';
-import { AuthenticatedVehicleArtwork, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@panda/hooks';
+import { AuthenticatedVehicleArtwork, useChargingSummary } from '@panda/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@panda/ui/lib/utils';
 import { isVehicleCharging } from '@panda/types';
 import type { VehicleStatus } from '@panda/types';
@@ -9,6 +9,7 @@ import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { chargingArtwork, chargeGauge } from './vehiclePresentation';
+import { useWidgetVehicle } from './useWidgetVehicle';
 
 type ChargingCropFamily = 'R1T' | 'R1S' | 'default';
 
@@ -66,21 +67,16 @@ function ChargingConnectionWidget({
   instance: WidgetInstance;
   ctx: WidgetCtx;
 }) {
-  const { defaultVehicleId } = useAuth();
-  const vehicleId = ctx.vehicleId ?? defaultVehicleId;
-  const { data: status } = useCurrentVehicleStatus(vehicleId);
-  const { data: vehicles } = useVehicles();
+  const { status, images, vehicleModel, isDemoVehicle } = useWidgetVehicle(ctx.vehicleId);
   const { data: summary } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
-  const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
   const pluggedIn = ctx.visibilityState
     ? ctx.visibilityState['vehicle-connection'] === 'plugged'
     : isVehiclePluggedIn(status);
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
-  const isDemoVehicle = activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false;
-  const cropFamily = chargingCropFamily(activeVehicle?.model);
-  const { fallback: fallbackChargingSource, light: chargingSideLight, dark: chargingSideDark } = chargingArtwork(activeVehicle?.images, activeVehicle?.model, isDemoVehicle);
+  const cropFamily = chargingCropFamily(vehicleModel);
+  const { fallback: fallbackChargingSource, light: chargingSideLight, dark: chargingSideDark } = chargingArtwork(images, vehicleModel, isDemoVehicle);
   const imageMode = 'side-charging';
   const displaySideLight = chargingSideLight ?? fallbackChargingSource;
   const displaySideDark = chargingSideDark ?? fallbackChargingSource;
@@ -275,11 +271,12 @@ function VehicleSideImage({
   darkClassName: string;
   cropConfig: ChargingCropConfig;
 }) {
-  const translateY = cropConfig.translateY ?? 0;
-  const transform =
-    translateY === 0
-      ? `translateX(${cropConfig.translateX}%) scale(${cropConfig.scale})`
-      : `translate(${cropConfig.translateX}%, ${translateY}%) scale(${cropConfig.scale})`;
+  const translation = [`${cropConfig.translateX}%`];
+  if (cropConfig.translateY != null && cropConfig.translateY !== 0) translation.push(`${cropConfig.translateY}%`);
+  const transform = [
+    `translate${translation.length === 1 ? 'X' : ''}(${translation.join(', ')})`,
+    `scale(${cropConfig.scale})`,
+  ].join(' ');
   return (
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <AuthenticatedVehicleArtwork

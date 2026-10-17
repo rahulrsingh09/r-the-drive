@@ -47,20 +47,24 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
   const [catalogNotice, setCatalogNotice] = React.useState('');
   const [createError, setCreateError] = React.useState('');
 
+  const wasOpen = React.useRef(false);
   React.useEffect(() => {
-    if (!open) return;
-    setActiveIndex(0);
-    requestAnimationFrame(() => searchRef.current?.focus());
-  }, [open]);
-
-  React.useEffect(() => {
-    if (!open || isMobile) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!triggerRef.current?.parentElement?.contains(target)) setOpen(false);
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (opening) {
+      setActiveIndex(0);
+      requestAnimationFrame(() => searchRef.current?.focus());
+    }
+    const subscriptions: Array<[string, EventListener]> = [];
+    if (open && !isMobile) subscriptions.push(['mousedown', (event) => {
+      const inside = triggerRef.current?.parentElement?.contains(event.target as Node);
+      if (inside) return;
+      setOpen(false);
+    }]);
+    for (const [event, listener] of subscriptions) document.addEventListener(event, listener);
+    return () => {
+      for (const [event, listener] of subscriptions) document.removeEventListener(event, listener);
     };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
   }, [isMobile, open]);
 
   React.useEffect(() => {

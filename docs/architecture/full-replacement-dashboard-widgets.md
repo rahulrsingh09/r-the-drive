@@ -88,8 +88,11 @@ owned by the dashboard renderer and web shell, outside this widget boundary.
 chart definition. `scatterProjection.ts` indexes numeric samples into the six
 established power buckets and prepares their color ramp once. The regression keeps
 its original accumulation order and weighted least-squares expressions; changing
-expression grouping would change floating-point results. Those expressions are
-reviewed as retained formulas, rather than claimed as new algorithms.
+expression grouping would change floating-point results. `weightedRegression.ts`
+prepares five ordered moment columns and classifies the fit as absent, constant,
+or linear before evaluating it. The determinant, slope, intercept, and clamp
+equations remain individually retained; the preparation and solver structure
+are replacements.
 
 `tableControls.ts` shares pagination boundary rules and builds distinct clear,
 add, and replace tag commands. `schedulePresentation.ts` prepares schedule display
@@ -97,6 +100,23 @@ fields and comfort pills in their established order. `sensorReadings.ts` shares
 finite-sample selection between metric fallback eligibility and sprite rendering.
 Recovery checks also cover live zero readings, absent selected rows, numeric edge
 cases, widget display controls under an edit query, and saved widget geometry.
+
+The final residual review replaces the overview and charging widgets' repeated
+vehicle selection with `useWidgetVehicle`. Its catalog index keeps the first
+matching vehicle and preserves explicit demo flags ahead of legacy identity
+prefixes. Overhead artwork is rendered from a layer plan: fallback reports change
+the active layers independently for each theme, suppressing door overlays only
+while that theme uses fallback art. Existing coordinates and fallback transforms
+are unchanged.
+
+Efficiency tag sources derive an explicit error, onboarding, or chart state.
+Catalog errors take precedence over stale data, and an empty loaded catalog takes
+precedence over efficiency loading. Management permission affects onboarding
+copy. The tag picker's effect owns focus on opening and desktop dismissal
+subscriptions together; a breakpoint change does not reset its active option.
+`fullReplacementDashboardWidgets.residual.test.tsx` characterizes these controls,
+and `fullReplacementDashboardWidgets.weightedRegression.test.ts` checks the
+numeric fit classifications and accumulation behavior.
 
 Integration follow-up: the root owner must register
 `architecture/full-replacement-dashboard-widgets` exactly once in
