@@ -244,7 +244,7 @@ impl DatabaseFixture {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(last, 1_000_031);
+        assert_eq!(last, 1_000_032);
         Self {
             admin,
             pool,
