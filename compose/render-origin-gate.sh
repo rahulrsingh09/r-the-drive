@@ -2,35 +2,35 @@
 set -eu
 export LC_ALL=C
 
+fail() { printf '%s\n' "$1" >&2; exit 1; }
 destination=${1:-/tmp/panda-origin-gate.conf}
 token=${PANDA_GATEWAY_TOKEN:-}
-case "${PANDA_REQUIRE_GATEWAY:-false}" in
-  true|1) required=1 ;;
-  false|0|'') required=0 ;;
-  *) echo "Invalid gateway requirement setting." >&2; exit 1 ;;
+requirement=${PANDA_REQUIRE_GATEWAY:-false}
+case "$requirement" in
+  true|1|false|0|'') ;;
+  *) fail 'Invalid gateway requirement setting.' ;;
 esac
 
-if [ -z "$token" ]; then
-  if [ "$required" = 1 ]; then
-    echo "The required origin gateway token is missing." >&2
-    exit 1
-  fi
-else
-  case "$token" in
-    *[!A-Za-z0-9_-]*) echo "Invalid origin gateway token format." >&2; exit 1 ;;
-  esac
-  if [ "${#token}" -lt 43 ] || [ "${#token}" -gt 128 ]; then
-    echo "Invalid origin gateway token length." >&2
-    exit 1
-  fi
-fi
+default=1
+case "$token" in
+  '')
+    case "$requirement" in true|1) fail 'The required origin gateway token is missing.' ;; esac
+    ;;
+  *[!A-Za-z0-9_-]*) fail 'Invalid origin gateway token format.' ;;
+  *)
+    length=${#token}
+    [ "$length" -ge 43 ] && [ "$length" -le 128 ] || fail 'Invalid origin gateway token length.'
+    default=0
+    ;;
+esac
 
 umask 077
-temporary=$(mktemp "${destination}.XXXXXX")
-trap 'rm -f "$temporary"' EXIT HUP INT TERM
-if [ -n "$token" ]; then
-  printf 'map $http_x_panda_edge $panda_origin_authorized {\n    default 0;\n    ~^%s$ 1;\n}\n' "$token" > "$temporary"
-else
-  printf 'map $http_x_panda_edge $panda_origin_authorized {\n    default 1;\n}\n' > "$temporary"
-fi
-mv "$temporary" "$destination"
+staging=$(mktemp "${destination}.XXXXXX")
+trap 'rm -f "$staging"' 0
+trap 'exit 1' HUP INT TERM
+{
+  printf 'map $http_x_panda_edge $panda_origin_authorized {\n    default %s;\n' "$default"
+  [ "$default" = 1 ] || printf '    ~^%s$ 1;\n' "$token"
+  printf '}\n'
+} > "$staging"
+mv "$staging" "$destination"
