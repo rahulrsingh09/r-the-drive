@@ -828,3 +828,7 @@ fn support_audit(pool: sqlx::PgPool, event: &'static str, user_id: Option<Uuid>,
         }
     });
 }
+
+#[cfg(test)]
+#[path = "full_replacement_identity_policy_tests.rs"]
+mod full_replacement_identity_policy_tests;

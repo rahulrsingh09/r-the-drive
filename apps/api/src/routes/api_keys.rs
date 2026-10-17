@@ -269,8 +269,8 @@ async fn rotate_api_key(
     require_session_auth(&auth)?;
     let mut tx = state.pool.begin().await?;
     let current = sqlx::query(
-        "SELECT vehicle_id, COALESCE(name, label, 'API key') AS name, access_level\
-         FROM panda.api_keys\
+        "SELECT vehicle_id, COALESCE(name, label, 'API key') AS name, access_level
+         FROM panda.api_keys
          WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL FOR UPDATE",
     )
     .bind(id)
@@ -291,8 +291,8 @@ async fn rotate_api_key(
 
     let overlap_expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
     sqlx::query(
-        "UPDATE panda.api_keys\
-         SET expires_at = $2, updated_at = now()\
+        "UPDATE panda.api_keys
+         SET expires_at = $2, updated_at = now()
          WHERE id = $1",
     )
     .bind(id)
