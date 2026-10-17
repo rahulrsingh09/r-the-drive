@@ -17,7 +17,9 @@ when no boundaries remain. The 320px preload margin and mobile heights remain
 unchanged.
 
 `DashboardRenderer` derives visibility and data requirements only from live
-vehicle state. Hidden widgets remain in the supplied configuration; the existing
+vehicle state. It removes a caller's legacy `ctx.visibilityState` override
+before passing context to data providers or widgets, while preserving chart
+preferences and automatic widget height callbacks. Hidden widgets remain in the supplied configuration; the existing
 view projection and responsive grid determine what is displayed. `WidgetChrome`
 always renders its view frame and ignores its former editor callbacks. There is
 no lazy grid editor, drag or resize overlay, palette, widget form, editor drawer,
@@ -44,6 +46,11 @@ capability vocabularies remain explicit; the established chart renderer output
 is unchanged. Settings capabilities compose three independent policies: source
 filter support, X-domain ownership, and ordered axis descriptors. Axis units
 either come from a fixed renderer contract or the definition's primary unit.
+Routing, legacy mileage fingerprints, and legacy icon names use maps containing
+only their declared keys. Object prototype names cannot select a route,
+trigger mileage normalization, or resolve to a non-string icon value.
+Legacy trip-stat normalization indexes metric IDs separately from stat aliases,
+preserves metric precedence, and leaves unknown aliases untouched.
 
 `WidgetHost` resolves the registry component, composes its optional keyed
 presentation, then assembles title/content slots and frame attributes. Title
@@ -69,7 +76,9 @@ window. Input arrays are never sorted or mutated.
 
 Icon search uses
 abort-scoped requests through the existing proxy and ignores canceled results.
-Iconify's direct fetch path remains disabled.
+The icon grid decodes labels when its list changes and uses one selection
+handler for button, icon, and label clicks. Grid whitespace cannot select an
+icon. Iconify's direct fetch path remains disabled.
 
 Existing shared query planning, vehicle placeholder isolation, metric projection,
 layout bounds, and bounded expression evaluation remain in place. Local

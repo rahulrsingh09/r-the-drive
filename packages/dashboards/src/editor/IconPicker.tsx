@@ -261,29 +261,32 @@ function IconGrid({
   selected: string;
   onSelect: (id: string) => void;
 }) {
+  const entries = useMemo(() => icons.map(id => ({ id, label: id.split(':')[1] ?? id })), [icons]);
+  const selectFromGrid = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest('button');
+    if (button?.parentElement === event.currentTarget) onSelect(button.title);
+  };
+
   return (
-    <div className="grid grid-cols-4 gap-2">
-      {icons.map((id) => {
-        const isSelected = id === selected;
-        return (
+    <div className="grid grid-cols-4 gap-2" onClick={selectFromGrid}>
+      {entries.map(({ id, label }) => (
           <button
             key={id}
             type="button"
             title={id}
-            onClick={() => onSelect(id)}
             className={`flex aspect-square w-full flex-col items-center justify-center gap-1.5 rounded-xl border transition-all ${
-              isSelected
+              id === selected
                 ? 'border-accent bg-accent/15 text-accent'
                 : 'border-border bg-bg-surface text-fg-secondary hover:border-accent/60 hover:bg-accent/8 hover:text-accent'
             }`}
           >
             <Icon icon={id} className="h-7 w-7" />
             <span className="max-w-full truncate px-1 text-[8px] leading-tight text-fg-tertiary">
-              {id.split(':')[1] ?? id}
+              {label}
             </span>
           </button>
-        );
-      })}
+      ))}
     </div>
   );
 }

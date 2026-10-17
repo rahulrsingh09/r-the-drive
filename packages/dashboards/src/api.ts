@@ -22,12 +22,15 @@ interface DashboardRecord {
   config?: unknown;
 }
 
-const LEGACY_TRIP_SENSORS: Record<string, { definitionId: string; valueMode?: string }> = {
+const LEGACY_TRIP_SENSORS = new Map<string, { definitionId: string; valueMode?: string }>(Object.entries({
   miles: { definitionId: 'trip_miles', valueMode: 'sum' },
   count: { definitionId: 'total_trips', valueMode: 'sum' },
   efficiency: { definitionId: 'avg_efficiency' },
   duration: { definitionId: 'avg_trip_duration', valueMode: 'avg' },
-};
+}));
+const LEGACY_TRIP_METRICS = new Map(
+  Array.from(LEGACY_TRIP_SENSORS.values(), sensor => [sensor.definitionId, sensor]),
+);
 
 function normalizeWidget(widget: WidgetInstance, charging: boolean): WidgetInstance {
   let result = widget;
@@ -39,8 +42,8 @@ function normalizeWidget(widget: WidgetInstance, charging: boolean): WidgetInsta
     }
     if (widget.definitionId === 'trips.stat') {
       const options = widget.options ?? {};
-      const byMetric = Object.values(LEGACY_TRIP_SENSORS).find(sensor => sensor.definitionId === options.metric);
-      const sensor = byMetric ?? (typeof options.stat === 'string' ? LEGACY_TRIP_SENSORS[options.stat] : undefined);
+      const byMetric = typeof options.metric === 'string' ? LEGACY_TRIP_METRICS.get(options.metric) : undefined;
+      const sensor = byMetric ?? (typeof options.stat === 'string' ? LEGACY_TRIP_SENSORS.get(options.stat) : undefined);
       if (sensor) {
         const nextOptions = { ...options };
         delete nextOptions.stat;

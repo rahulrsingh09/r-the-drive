@@ -11,7 +11,7 @@ interface LegacyMileageBaseline {
   definition: ChartDefinitionV1;
 }
 
-const LEGACY_MILEAGE_BASELINES: Record<string, LegacyMileageBaseline> = {
+const LEGACY_MILEAGE_BASELINES = new Map<string, LegacyMileageBaseline>(Object.entries({
   'battery-capacity-mileage': {
     primaryField: 'usable_kwh',
     definition: legacyMileageDefinition({
@@ -31,7 +31,7 @@ const LEGACY_MILEAGE_BASELINES: Record<string, LegacyMileageBaseline> = {
       primaryColor: { mode: 'token', token: 'emerald' },
     }),
   },
-};
+}));
 
 /**
  * Repairs the two exact incomplete mileage-chart definitions shipped by the
@@ -41,7 +41,7 @@ const LEGACY_MILEAGE_BASELINES: Record<string, LegacyMileageBaseline> = {
  * field must still match the obsolete baseline.
  */
 export function normalizeLegacyBundledChartRecord(record: ChartRecord): ChartRecord {
-  const baseline = LEGACY_MILEAGE_BASELINES[record.slug];
+  const baseline = LEGACY_MILEAGE_BASELINES.get(record.slug);
   if (!baseline || !matchesLegacyMileageBaseline(record.config, baseline.definition)) return record;
   const bundled = getBundledChartDefinition(record.slug);
   if (!bundled) return record;

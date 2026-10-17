@@ -11,9 +11,8 @@ export interface DashboardVisibilityState {
 }
 
 /**
- * The transient scenario selected by the dashboard editor. This is deliberately
- * kept separate from DashboardConfig so previewing a condition can never be
- * persisted with a dashboard draft.
+ * Legacy caller type retained for compatibility. DashboardRenderer ignores
+ * scenario overrides and derives visibility from live vehicle status.
  */
 export type DashboardPreviewState = DashboardVisibilityState;
 

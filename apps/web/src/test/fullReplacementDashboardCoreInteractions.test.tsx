@@ -148,4 +148,20 @@ describe('dashboard core interaction boundaries', () => {
     expect(screen.queryByPlaceholderText('Search icons…')).toBeNull();
     expect(proxy.mock.calls.every(([path]) => path.startsWith('/v1/external/iconify/search?'))).toBe(true);
   });
+  it.each(['button', 'icon', 'label'] as const)('selects a recent icon through its %s and ignores grid whitespace', (target) => {
+    localStorage.setItem('panda:icon-picker:recent', JSON.stringify(['lucide:car', 'mdi:home']));
+    const onChange = vi.fn();
+    render(<IconPicker value="mdi:home" onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /Change/ }));
+    const button = screen.getByTitle('lucide:car');
+    const grid = button.parentElement!;
+    expect(grid).toHaveClass('grid', 'grid-cols-4', 'gap-2');
+    expect(screen.getByTitle('mdi:home')).toHaveClass('border-accent', 'bg-accent/15', 'text-accent');
+    fireEvent.click(grid);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(target === 'button' ? button : button.querySelector(target === 'icon' ? 'i' : 'span')!);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('lucide:car');
+    expect(JSON.parse(localStorage.getItem('panda:icon-picker:recent')!)).toEqual(['lucide:car', 'mdi:home']);
+    expect(proxy).not.toHaveBeenCalled();
+  });
 });

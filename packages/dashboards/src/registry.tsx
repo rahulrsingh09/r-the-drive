@@ -28,7 +28,7 @@ export interface WidgetCtx {
   chargeSessionEnergyKwh?: number | null;
   updateWidgetOptions?: (widgetId: string, patch: Record<string, unknown>) => void;
   updateWidgetLayout?: (widgetId: string, nextHeight: number) => void;
-  /** Temporary editor preview state; absent in normal dashboard view mode. */
+  /** Legacy preview input; DashboardRenderer removes it before mounting widgets. */
   visibilityState?: DashboardVisibilityState;
   /** Trip-page-only server filter; omitted by every other dashboard. */
   tripTagFilter?: {

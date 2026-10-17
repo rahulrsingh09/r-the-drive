@@ -20,6 +20,12 @@ export interface DashboardRendererProps {
 }
 
 export function DashboardRenderer({ config, ctx }: DashboardRendererProps) {
+  const viewCtx = React.useMemo(() => {
+    if (!('visibilityState' in ctx)) return ctx;
+    const liveContext = { ...ctx };
+    delete liveContext.visibilityState;
+    return liveContext;
+  }, [ctx]);
   const widgets = Array.isArray(config.widgets) ? config.widgets : [];
   const hasVisibilityRules = hasDashboardVisibilityRules(widgets);
   const { defaultVehicleId } = useAuth();
@@ -37,8 +43,8 @@ export function DashboardRenderer({ config, ctx }: DashboardRendererProps) {
   );
 
   return (
-    <DashboardDataProvider ctx={ctx} requirements={requirements}>
-      <DashboardGrid widgets={liveWidgets} ctx={ctx} />
+    <DashboardDataProvider ctx={viewCtx} requirements={requirements}>
+      <DashboardGrid widgets={liveWidgets} ctx={viewCtx} />
     </DashboardDataProvider>
   );
 }

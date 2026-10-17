@@ -63,7 +63,7 @@ type DashboardChartRouting = Pick<DashboardChartDefinition, 'source' | 'defaultS
  * Renderer routing and widget layout are application metadata, not a second
  * chart configuration. Every visual/data setting comes from ChartDefinitionV1.
  */
-const CHART_ROUTING: Record<string, DashboardChartRouting> = {
+const CHART_ROUTING = new Map<string, DashboardChartRouting>(Object.entries({
   'battery-capacity-mileage': {
     source: 'battery_capacity_mileage',
     defaultSize: { w: 6, h: 4 },
@@ -126,7 +126,7 @@ const CHART_ROUTING: Record<string, DashboardChartRouting> = {
     defaultSize: { w: 12, h: 7 },
     minSize: { w: 6, h: 5 },
   },
-};
+}));
 
 /**
  * Fields the established renderer for each bundled chart can consume. This is
@@ -308,7 +308,7 @@ function axisCapability(label: string, unit?: string): DashboardChartAxisCapabil
 function compileChartCatalog(charts: typeof BUNDLED_CHART_DEFINITIONS) {
   const definitions: DashboardChartDefinition[] = [];
   for (const chart of charts) {
-    const routing = CHART_ROUTING[chart.slug];
+    const routing = CHART_ROUTING.get(chart.slug);
     if (!routing) throw new Error(`Missing renderer routing for bundled chart: ${chart.slug}`);
     const config = ChartDefinitionV1Schema.parse(chart) as ChartDefinitionV1;
     const primary = config.series[0];

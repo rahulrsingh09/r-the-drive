@@ -75,4 +75,40 @@ describe('bundled catalog derivation', () => {
       'Missing renderer routing for bundled chart: no-route',
     );
   });
+
+  it.each(['constructor', 'toString', '__proto__'])('rejects an inherited routing key: %s', async (slug) => {
+    vi.resetModules();
+    vi.doMock('../../../../packages/dashboards/src/charts/defaults', () => ({
+      BUNDLED_CHART_DEFINITIONS: [{ ...structuredClone(BUNDLED_CHART_DEFINITIONS[0]!), slug }],
+    }));
+    await expect(import('../../../../packages/dashboards/src/charts/catalog')).rejects.toThrow(
+      `Missing renderer routing for bundled chart: ${slug}`,
+    );
+  });
+
+  it('derives metadata from parsed values and preserves raw inputs', async () => {
+    const chart = structuredClone(BUNDLED_CHART_DEFINITIONS[0]!);
+    chart.axes.y.unit = '  kWh  ';
+    chart.display.emptyTitle = '  Waiting for samples  ';
+    const raw = { ...chart, sources: chart.sources.map(({ params: _params, filters: _filters, ...source }) => source) };
+    const before = structuredClone(raw);
+    vi.resetModules();
+    vi.doMock('../../../../packages/dashboards/src/charts/defaults', () => ({ BUNDLED_CHART_DEFINITIONS: [raw] }));
+    const catalog = await import('../../../../packages/dashboards/src/charts/catalog');
+    expect(catalog.getChartDefinition(chart.slug)).toMatchObject({
+      yUnit: 'kWh', emptyTitle: 'Waiting for samples',
+      config: { sources: [expect.objectContaining({ params: {}, filters: [] })] },
+    });
+    expect(raw).toEqual(before);
+  });
+
+  it('rejects invalid configuration before attempting derived-series reads', async () => {
+    const chart = { ...structuredClone(BUNDLED_CHART_DEFINITIONS[0]!), series: null };
+    vi.resetModules();
+    vi.doMock('../../../../packages/dashboards/src/charts/defaults', () => ({ BUNDLED_CHART_DEFINITIONS: [chart] }));
+    await expect(import('../../../../packages/dashboards/src/charts/catalog')).rejects.toMatchObject({
+      name: 'ZodError',
+      issues: expect.arrayContaining([expect.objectContaining({ path: ['series'] })]),
+    });
+  });
 });
