@@ -44,20 +44,19 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     },
     ref
   ) => {
+    const blocked = Boolean(disabled || loading);
+    const icons = [iconLeft, iconRight].map((icon, index) => icon && <span key={index} className="shrink-0">{icon}</span>);
+    if (loading) icons.splice(0, 2, <Loader2 className="h-4 w-4 animate-spin" />, null);
     return (
       <button
         ref={ref}
-        disabled={disabled || loading}
+        disabled={blocked}
         className={cn(base, variants[variant], sizes[size], className)}
         {...props}
       >
-        {loading ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          iconLeft && <span className="shrink-0">{iconLeft}</span>
-        )}
+        {icons[0]}
         {children}
-        {!loading && iconRight && <span className="shrink-0">{iconRight}</span>}
+        {icons[1]}
       </button>
     );
   }

@@ -1,3 +1,4 @@
+import { leaveFocus } from '../lib/controlEvents';
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../lib/utils';
@@ -21,7 +22,7 @@ export function Tooltip({
   className,
   contentClassName,
 }: TooltipProps) {
-  const { open, setOpen } = useDisclosure();
+  const { open, setOpen, show, hide } = useDisclosure();
   const [position, setPosition] = React.useState<{ top: number; left: number; visibility: 'hidden' | 'visible' }>({
     top: 0,
     left: 0,
@@ -65,21 +66,19 @@ export function Tooltip({
     describedChild = React.cloneElement(children, ids.length ? { 'aria-describedby': ids.join(' ') } : {});
   }
 
+  function reveal(event: React.SyntheticEvent) {
+    if (event.type === 'pointerdown' && (event as React.PointerEvent).pointerType !== 'touch') return;
+    show();
+  }
   return (
     <span
       ref={rootRef}
       className={cn('relative inline-flex', className)}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onPointerDown={(event) => {
-        if (event.pointerType === 'touch') setOpen(true);
-      }}
-      onFocus={() => setOpen(true)}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setOpen(false);
-        }
-      }}
+      onMouseEnter={reveal}
+      onMouseLeave={hide}
+      onPointerDown={reveal}
+      onFocus={reveal}
+      onBlur={leaveFocus(hide)}
     >
       <span ref={triggerRef} className="inline-flex">
         {describedChild}

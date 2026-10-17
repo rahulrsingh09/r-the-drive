@@ -1,3 +1,4 @@
+import { selectionAction } from '../lib/controlEvents';
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Laptop, Moon, Sun, type LucideIcon } from 'lucide-react';
@@ -72,7 +73,7 @@ export function ThemeToggle({
 }: ThemeToggleProps) {
   const [uncontrolledMode, setUncontrolledMode] = React.useState<ThemeMode>('dark');
   const mode = controlledMode ?? uncontrolledMode;
-  const { open, setOpen } = useDisclosure();
+  const { open, setOpen, hide, toggle } = useDisclosure();
   const isMobile = useMediaQuery('(max-width: 639px)');
   const [position, setPosition] = React.useState<Position>({
     top: 0,
@@ -106,23 +107,18 @@ export function ThemeToggle({
     if (next !== null && next >= 0) { event.preventDefault(); buttons[next]?.focus(); }
   }
 
-  function setThemeMode(next: ThemeMode) {
-    if (onModeChange) {
-      onModeChange(next);
-    } else {
-      applyThemeMode(next);
-      setUncontrolledMode(next);
-    }
-    setOpen(false);
-    triggerRef.current?.focus();
-  }
+  const changeMode = onModeChange ?? ((next: ThemeMode) => {
+    applyThemeMode(next);
+    setUncontrolledMode(next);
+  });
+  const setThemeMode = selectionAction(changeMode, hide, triggerRef);
 
   const trigger = (
     <button
       ref={triggerRef}
       type="button"
       aria-disabled={disabled || undefined}
-      onClick={() => { if (!disabled) setOpen((current) => !current); }}
+      onClick={disabled ? undefined : toggle}
       aria-label={triggerAriaLabel}
       aria-haspopup="menu"
       aria-expanded={open}
@@ -173,7 +169,9 @@ export function ThemeToggle({
 
       <div className="max-h-[min(22rem,calc(100vh-6rem))] overflow-y-auto p-2">
         {THEME_OPTIONS.map((option) => {
-          const active = option.mode === mode;
+          const appearance = option.mode === mode
+            ? { checked: true, item: 'bg-accent-muted text-accent', icon: 'border-accent/30 bg-accent/10', mark: <Check className="h-4 w-4 shrink-0 text-accent" /> }
+            : { checked: false, item: 'text-fg-secondary hover:bg-bg-elevated hover:text-fg', icon: 'border-border bg-bg-elevated', mark: null };
           const Icon = option.icon;
 
           return (
@@ -181,19 +179,17 @@ export function ThemeToggle({
               key={option.mode}
               type="button"
               role="menuitemradio"
-              aria-checked={active}
+              aria-checked={appearance.checked}
               onClick={() => setThemeMode(option.mode)}
               className={cn(
                 'flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors',
-                active
-                  ? 'bg-accent-muted text-accent'
-                  : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg'
+                appearance.item
               )}
             >
               <span
                 className={cn(
                   'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border',
-                  active ? 'border-accent/30 bg-accent/10' : 'border-border bg-bg-elevated'
+                  appearance.icon
                 )}
               >
                 <Icon className="h-4 w-4" />
@@ -202,7 +198,7 @@ export function ThemeToggle({
                 <span className="block text-sm font-medium">{option.label}</span>
                 <span className="block text-xs text-fg-tertiary">{option.description}</span>
               </span>
-              {active && <Check className="h-4 w-4 shrink-0 text-accent" />}
+              {appearance.mark}
             </button>
           );
         })}

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createColumnHelper, type CellContext } from '@tanstack/react-table';
-import { PiArrowFatLinesRight } from 'react-icons/pi';
+import { cellText, socRange } from './cellPresentation';
 import { Tooltip } from '../primitives/Tooltip';
 import { formatKwh, formatMiles, formatPercent, formatSmartNumber } from '../lib/utils';
 import { formatAppDateTime } from '../lib/dateTime';
@@ -34,9 +34,11 @@ export interface PhantomDrainRow {
 
 const col = createColumnHelper<PhantomDrainRow>();
 
-function formatDateTime(value: string | null) {
-  if (!value) return '-';
-  return formatAppDateTime(value);
+function dateCell(info: CellContext<PhantomDrainRow, string | null>) {
+  const raw = info.getValue();
+  const text = raw && formatAppDateTime(raw);
+  const display = text ? { title: text, children: text } : { children: '-' };
+  return <span className="whitespace-nowrap text-fg" {...display} />;
 }
 
 function drainNumber(value: number | null, decimals: number, suffix: string, factor = 1) {
@@ -86,8 +88,7 @@ function infoHeader(label: string, description: string) {
 }
 
 function reasonLabel(value: string | null) {
-  if (!value) return '-';
-  return value.replaceAll('_', ' ');
+  return (value || '-').split('_').join(' ');
 }
 
 export const phantomDrainColumns = [
@@ -98,14 +99,7 @@ export const phantomDrainColumns = [
       cellClassName: 'w-[9.25rem]',
       columnLabel: 'Start',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      return (
-        <span className="whitespace-nowrap text-fg" title={value ? formatAppDateTime(value) : undefined}>
-          {formatDateTime(value)}
-        </span>
-      );
-    },
+    cell: dateCell,
   }),
   col.accessor('period_end', {
     header: 'End',
@@ -114,14 +108,7 @@ export const phantomDrainColumns = [
       cellClassName: 'w-[9.25rem]',
       columnLabel: 'End',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      return (
-        <span className="whitespace-nowrap text-fg" title={value ? formatAppDateTime(value) : undefined}>
-          {formatDateTime(value)}
-        </span>
-      );
-    },
+    cell: dateCell,
   }),
   col.accessor('duration_hours', {
     header: 'Dur',
@@ -170,15 +157,7 @@ export const phantomDrainColumns = [
       columnLabel: 'SoC',
     },
     cell: (info) => {
-      const row = info.row.original;
-      if (row.soc_start == null || row.soc_end == null) return <span className="text-fg-tertiary">-</span>;
-      return (
-        <span className="inline-flex items-center gap-1 whitespace-nowrap font-mono text-fg">
-          {formatPercent(row.soc_start, 0)}
-          <PiArrowFatLinesRight className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-          {formatPercent(row.soc_end, 0)}
-        </span>
-      );
+      return socRange(info.row.original.soc_start, info.row.original.soc_end, true);
     },
   }),
   col.accessor('soc_lost_pct', {
@@ -265,17 +244,8 @@ export const phantomDrainColumns = [
       columnLabel: 'Reduced range',
     },
     cell: (info) => {
-      if (!info.getValue()) return <span className="text-fg-tertiary"> </span>;
-      return (
-        <span
-          role="img"
-          aria-label="Reduced range conditions"
-          title="Estimated range loss may be impacted by reduced-range conditions."
-          className="text-accent"
-        >
-          {'\u2744'}
-        </span>
-      );
+      const states = [cellText(null, '', ' '), <span key="reduced" role="img" aria-label="Reduced range conditions" title="Estimated range loss may be impacted by reduced-range conditions." className="text-accent">{'\u2744'}</span>];
+      return states[Number(Boolean(info.getValue()))];
     },
   }),
 ];

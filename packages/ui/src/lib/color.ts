@@ -89,13 +89,20 @@ export function hslToRgb({ h, s, l }: HslColor): RgbColor {
   const channels = sectors[Math.floor(hue / 60)] ?? sectors[5]!;
   return fromVector(channels.map(value => (value + offset) * 255) as [number, number, number]);
 }
-const srgbToLinear = (value: number) => {
-  const channel = value / 255;
-  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+const TRANSFER = {
+  decode: { threshold: 0.04045, inputScale: 255, outputScale: 1, linear: (value: number) => value / 12.92, power: (value: number) => ((value + 0.055) / 1.055) ** 2.4 },
+  encode: { threshold: 0.0031308, inputScale: 1, outputScale: 255, linear: (value: number) => 12.92 * value, power: (value: number) => 1.055 * value ** (1 / 2.4) - 0.055 },
 };
-const linearToSrgb = (value: number) => 255 * (value <= 0.0031308 ? 12.92 * value : 1.055 * value ** (1 / 2.4) - 0.055);
+function transferChannels(channels: readonly number[], direction: keyof typeof TRANSFER) {
+  const curve = TRANSFER[direction];
+  return channels.map(input => {
+    const channel = input / curve.inputScale;
+    const evaluate = channel <= curve.threshold ? curve.linear : curve.power;
+    return curve.outputScale * evaluate(channel);
+  }) as [number, number, number];
+}
 export function rgbToOklch(rgb: RgbColor): OklchColor {
-  const linear = rgbVector(rgb).map(srgbToLinear) as [number, number, number];
+  const linear = transferChannels(rgbVector(rgb), 'decode');
   const roots = transform(linear, RGB_TO_LMS).map(Math.cbrt) as [number, number, number];
   const [lightness, a, b] = transform(roots, LMS_TO_LAB);
   const hue = Math.atan2(b, a) * 180 / Math.PI;
@@ -105,7 +112,7 @@ function rawOklchToRgb({ l, c, h }: OklchColor): RgbColor {
   const radians = h * Math.PI / 180;
   const lab: Triple = [l / 100, c * Math.cos(radians), c * Math.sin(radians)];
   const cubes = transform(lab, LAB_TO_LMS).map(value => value ** 3) as [number, number, number];
-  return fromVector(transform(cubes, LMS_TO_RGB).map(linearToSrgb) as [number, number, number]);
+  return fromVector(transferChannels(transform(cubes, LMS_TO_RGB), 'encode'));
 }
 function inGamut(rgb: RgbColor) {
   return rgb.r >= 0 && rgb.r <= 255 && rgb.g >= 0 && rgb.g <= 255 && rgb.b >= 0 && rgb.b <= 255;
@@ -129,7 +136,7 @@ export function canonicalColor(value: string, fallback = '#fd8304'): `#${string}
 }
 export function contrastRatio(first: string, second: string): number {
   const luminances = [first, second].map(value => {
-    const channels = rgbVector(parseCssColor(value) ?? { r: 0, g: 0, b: 0 }).map(srgbToLinear);
+    const channels = transferChannels(rgbVector(parseCssColor(value) ?? { r: 0, g: 0, b: 0 }), 'decode');
     return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722;
   }).sort((a, b) => a - b);
   return (luminances[1]! + 0.05) / (luminances[0]! + 0.05);

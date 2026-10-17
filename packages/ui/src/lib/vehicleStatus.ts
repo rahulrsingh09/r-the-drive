@@ -1,3 +1,4 @@
+import { statusLabel } from './statusLabel';
 import type {
   VehicleStatus,
   VehicleStatusAvailabilityReason,
@@ -176,5 +177,5 @@ function formatDateTimeShort(value: string) {
   return Number.isNaN(Date.parse(value)) ? 'an unknown time' : formatAppDateTime(value, { month: 'short', day: 'numeric' });
 }
 function titleCase(value: string) {
-  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return statusLabel(value, /[_-]+/);
 }

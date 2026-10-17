@@ -1,3 +1,4 @@
+import { numericInput, backdropAction } from '../lib/controlEvents';
 import * as React from 'react';
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import type { DashboardTimeframe, PresetKey } from '@panda/types';
@@ -90,9 +91,7 @@ export function DateRangePicker({
       {open ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/70 p-4 backdrop-blur-sm sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-1 sm:block sm:w-max sm:bg-transparent sm:p-0 sm:backdrop-blur-none"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setOpen(false);
-          }}
+          onMouseDown={backdropAction(() => setOpen(false))}
         >
           <div
             role="dialog"
@@ -216,9 +215,10 @@ function DateTimeRow({
   onHour: (hours: number) => void;
   onMinute: (minutes: number) => void;
 }) {
-  const appParts = getAppDateParts(value);
-  const hours = appParts?.hour ?? value.getHours();
-  const minutes = snapMinuteToOption(appParts?.minute ?? value.getMinutes());
+  const time = getAppDateParts(value) ?? { hour: value.getHours(), minute: value.getMinutes() };
+  const hours = time.hour;
+  const minutes = snapMinuteToOption(time.minute);
+  const timeOptions = (values: number[]) => values.map(number => ({ value: String(number), label: String(number).padStart(2, '0') }));
 
   return (
     <div
@@ -252,26 +252,20 @@ function DateTimeRow({
             className="min-w-0 flex-1"
             triggerClassName="h-7 rounded-md px-1 text-xs"
             value={String(hours)}
-            onChange={(value) => onHour(Number(value))}
+            onChange={numericInput(onHour)}
             aria-label={`${label} hour`}
             size="sm"
-            options={Array.from({ length: 24 }, (_, index) => ({
-              value: String(index),
-              label: index.toString().padStart(2, '0'),
-            }))}
+            options={timeOptions(Array.from({ length: 24 }, (_, index) => index))}
           />
           <span className="text-fg-tertiary">:</span>
           <SelectPicker
             className="min-w-0 flex-1"
             triggerClassName="h-7 rounded-md px-1 text-xs"
             value={String(minutes)}
-            onChange={(value) => onMinute(Number(value))}
+            onChange={numericInput(onMinute)}
             aria-label={`${label} minute`}
             size="sm"
-            options={[0, 15, 30, 45].map((minute) => ({
-              value: String(minute),
-              label: minute.toString().padStart(2, '0'),
-            }))}
+            options={timeOptions([0, 15, 30, 45])}
           />
         </div>
       </div>

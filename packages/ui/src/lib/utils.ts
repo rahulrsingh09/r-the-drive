@@ -197,17 +197,21 @@ export function formatEfficiencyValue(value: Numeric): string {
 export function formatEnergyPerDistance(value: Numeric): string {
   return measurement(value, () => getUnitPreferences().distance_unit === 'kilometers' ? ['Wh/km', 0, MILES_TO_KM, true] : ['Wh/mi', 0, 1]);
 }
+function efficiencyConversion(value: Numeric, reciprocal: boolean, metric: boolean): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (!reciprocal) return value / MILES_TO_KM;
+  if (!(value > 0)) return null;
+  const distance = 1000 / value;
+  return metric ? distance * MILES_TO_KM : distance;
+}
 export function whPerMileToMiPerKwh(value: Numeric): number | null {
-  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) return null;
-  return 1000 / value;
+  return efficiencyConversion(value, true, false);
 }
 export function whPerMileToKmPerKwh(value: Numeric): number | null {
-  const miPerKwh = whPerMileToMiPerKwh(value);
-  return miPerKwh === null ? null : miPerKwh * MILES_TO_KM;
+  return efficiencyConversion(value, true, true);
 }
 export function whPerMileToWhPerKm(value: Numeric): number | null {
-  if (value === null || value === undefined || !Number.isFinite(value)) return null;
-  return value / MILES_TO_KM;
+  return efficiencyConversion(value, false, true);
 }
 export function formatPressure(value: Numeric): string {
   return measurement(value, () => MEASUREMENTS[getUnitPreferences().pressure_unit]);

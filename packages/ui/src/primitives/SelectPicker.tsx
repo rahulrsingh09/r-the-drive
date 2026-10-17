@@ -1,3 +1,4 @@
+import { selectionAction } from '../lib/controlEvents';
 import * as React from 'react';
 import { OverlayPortal } from './ResponsiveDialog';
 import { Check, ChevronDown } from 'lucide-react';
@@ -42,7 +43,7 @@ export function SelectPicker<TValue extends string = string>({
   size = 'md',
   align = 'left',
 }: SelectPickerProps<TValue>) {
-  const { open, setOpen } = useDisclosure();
+  const { open, setOpen, hide } = useDisclosure();
   const [activeIndex, setActiveIndex] = React.useState(-1);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
@@ -88,11 +89,7 @@ export function SelectPicker<TValue extends string = string>({
       setOpen(true);
     }
   }
-  function selectOption(nextValue: TValue) {
-    onChange(nextValue);
-    setOpen(false);
-    triggerRef.current?.focus({ preventScroll: true });
-  }
+  const selectOption = selectionAction(onChange, hide, triggerRef, true);
   function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (disabled || !['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return;
     event.preventDefault();
@@ -166,12 +163,8 @@ export function SelectPicker<TValue extends string = string>({
           {options.length > 0 ? (
             options.map((option, index) => {
               const isSelected = option.value === value;
-              const optionAriaLabel =
-                typeof option.label === 'string'
-                  ? typeof option.description === 'string'
-                    ? `${option.label} ${option.description}`
-                    : option.label
-                  : undefined;
+              const text = [option.label, option.description].filter(item => typeof item === 'string');
+              const optionAriaLabel = typeof option.label === 'string' ? text.join(' ') : undefined;
               return (
                 <button
                   key={option.value}

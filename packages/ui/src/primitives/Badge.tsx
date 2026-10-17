@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
+import { presentationClasses } from '../lib/presentationClasses';
 
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   variant?: 'default' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
@@ -29,19 +30,17 @@ export function Badge({
   children,
   ...props
 }: BadgeProps) {
+  const markers = dot ? [<span key="dot" className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />] : [];
   return (
     <span
       className={cn(
         'inline-flex items-center font-medium rounded-md',
-        variants[variant],
-        sizes[size],
+        presentationClasses([[variant, variants], [size, sizes]]),
         className
       )}
       {...props}
     >
-      {dot && (
-        <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
-      )}
+      {markers}
       {children}
     </span>
   );

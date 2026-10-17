@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
+import { presentationClasses } from '../lib/presentationClasses';
 
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   glass?: boolean;
@@ -27,11 +28,11 @@ export function Card({
       data-ui-card
       className={cn(
         'rounded-xl border border-border',
-        glass
-          ? 'bg-bg-glass backdrop-blur-md'
-          : 'bg-bg-surface',
-        hoverable && 'transition-all duration-150 hover:border-border-strong hover:shadow-md cursor-pointer',
-        paddings[padding],
+        presentationClasses([
+          [glass, { true: 'bg-bg-glass backdrop-blur-md', false: 'bg-bg-surface' }],
+          [hoverable, { true: 'transition-all duration-150 hover:border-border-strong hover:shadow-md cursor-pointer' }],
+          [padding, paddings],
+        ]),
         className
       )}
       {...props}

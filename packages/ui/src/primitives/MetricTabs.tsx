@@ -32,7 +32,19 @@ export function MetricTabs({
   children,
   className,
 }: MetricTabsProps) {
-  const useDropdown = tabs.length > dropdownThreshold;
+  const entries = tabs.map(tab => ({
+    value: tab.key, label: tab.label,
+    select: () => onChange(tab.key),
+    icon: tab.icon && <span className="w-3.5 h-3.5">{tab.icon}</span>,
+    className: cn('flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all duration-150',
+      tab.key === active ? 'bg-accent text-bg-page shadow-sm' : 'text-fg-secondary hover:text-fg hover:bg-bg-overlay'),
+  }));
+  let control: React.ReactNode;
+  if (entries.length <= dropdownThreshold) {
+    control = <div className="flex items-center gap-0.5 bg-bg-elevated border border-border rounded-lg p-0.5">
+      {entries.map(entry => <button key={entry.value} onClick={entry.select} className={entry.className}>{entry.icon}{entry.label}</button>)}
+    </div>;
+  } else control = <SelectPicker value={active} onChange={onChange} aria-label={title ?? 'Select metric'} size="sm" options={entries} />;
   return (
     <div data-metric-tabs className={cn('bg-bg-surface border border-border rounded-xl', className)}>
       {/* Header row */}
@@ -46,33 +58,7 @@ export function MetricTabs({
 
         <div className="flex items-center gap-3">
           {/* Tab bar or dropdown */}
-          {useDropdown ? (
-            <SelectPicker
-              value={active}
-              onChange={onChange}
-              aria-label={title ?? 'Select metric'}
-              size="sm"
-              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
-            />
-          ) : (
-            <div className="flex items-center gap-0.5 bg-bg-elevated border border-border rounded-lg p-0.5">
-              {tabs.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => onChange(t.key)}
-                  className={cn(
-                    'flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all duration-150',
-                    t.key === active
-                      ? 'bg-accent text-bg-page shadow-sm'
-                      : 'text-fg-secondary hover:text-fg hover:bg-bg-overlay'
-                  )}
-                >
-                  {t.icon && <span className="w-3.5 h-3.5">{t.icon}</span>}
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          )}
+          {control}
 
           {actions}
         </div>

@@ -1,3 +1,4 @@
+import { numericInput } from '../lib/controlEvents';
 import * as React from 'react';
 import { cn } from '../lib/utils';
 import { SelectPicker } from '../primitives/SelectPicker';
@@ -31,7 +32,10 @@ export function TableControls({
   searchLabel,
   className,
 }: TableControlsProps) {
-  const itemLabelPlural = totalItems === 1 ? itemLabel : `${itemLabel}s`;
+  const labels = [itemLabel, `${itemLabel}s`];
+  const itemLabelPlural = labels[Number(totalItems !== 1)];
+  const pageOptions = Array.from(rowsPerPageOptions, value => { const text = String(value); return { value: text, label: text }; });
+  const pageCount = Math.max(totalPages, 1);
 
   return (
     <div className={cn('flex shrink-0 flex-wrap items-center justify-between gap-3', className)}>
@@ -52,15 +56,15 @@ export function TableControls({
           <SelectPicker
             className="min-w-[4.5rem]"
             value={String(rowsPerPage)}
-            onChange={(value) => onRowsPerPageChange(Number(value))}
+            onChange={numericInput(onRowsPerPageChange)}
             aria-label="Rows per page"
             size="sm"
-            options={rowsPerPageOptions.map((option) => ({ value: String(option), label: String(option) }))}
+            options={pageOptions}
           />
         </label>
 
         <p className="text-xs text-fg-tertiary">
-          Page {page} of {Math.max(totalPages, 1)} | {totalItems} {itemLabelPlural}
+          Page {page} of {pageCount} | {totalItems} {itemLabelPlural}
         </p>
       </div>
     </div>

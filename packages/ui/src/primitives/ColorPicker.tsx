@@ -1,3 +1,4 @@
+import { numericInput, keyAction, selectionAction } from '../lib/controlEvents';
 import * as React from 'react';
 import { ArrowLeftRight, Copy, Palette } from 'lucide-react';
 import type { ThemeColorPair } from '@panda/themes';
@@ -26,11 +27,10 @@ const DEFAULT_SWATCHES: ColorPickerSwatch[] = Array.from({ length: 16 }, (_, ind
 });
 
 function concrete(value: string) {
-  const variable = /^var\((--[^)]+)\)$/.exec(value)?.[1];
-  if (variable && typeof window !== 'undefined') {
-    return canonicalColor(window.getComputedStyle(document.documentElement).getPropertyValue(variable).trim());
-  }
-  return canonicalColor(value);
+  const match = value.match(/^var\((--[^)]+)\)$/);
+  const style = match && typeof window !== 'undefined' ? window.getComputedStyle(document.documentElement) : null;
+  const resolved = style ? style.getPropertyValue(match![1]!).trim() : value;
+  return canonicalColor(resolved);
 }
 
 export function ColorPicker({
@@ -49,11 +49,13 @@ export function ColorPicker({
   if (!open) return null;
   const setColor = (color: string) => send({ type: 'color', color });
   const setOklch = (patch: Partial<typeof oklch>) => setColor(oklchToHex({ ...oklch, ...patch }));
+  const close = () => onOpenChange(false);
+  const apply = selectionAction(onApply, close);
   const background = contrastBackground ? concrete(contrastBackground[mode]) : null;
   const ratio = background ? contrastRatio(active, background) : null;
 
   return (
-    <ResponsiveDialog titleId={titleId} onClose={() => onOpenChange(false)} className="sm:max-w-2xl">
+    <ResponsiveDialog titleId={titleId} onClose={close} className="sm:max-w-2xl">
       <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-4 sm:px-5">
         <div>
           <h2 id={titleId} className="text-base font-semibold text-fg">{title}</h2>
@@ -97,7 +99,7 @@ export function ColorPicker({
                 {(['hex', 'rgb', 'hsl', 'oklch'] as const).map((item) => <button key={item} type="button" onClick={() => send({ type: 'format', format: item })} className={cn('min-h-8 rounded-lg border px-3 text-xs font-medium uppercase', format === item ? 'border-accent bg-accent-muted text-fg' : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong')}>{item}</button>)}
               </div>
               <div className="flex gap-2">
-                <input aria-label={`${format.toUpperCase()} color`} value={input} onChange={(event) => send({ type: 'input', input: event.target.value })} onBlur={parseInput} onKeyDown={(event) => { if (event.key === 'Enter') parseInput(); }} className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg-elevated px-3 font-mono text-base text-fg outline-none focus:border-accent focus:ring-1 focus:ring-accent sm:text-sm" />
+                <input aria-label={`${format.toUpperCase()} color`} value={input} onChange={(event) => send({ type: 'input', input: event.target.value })} onBlur={parseInput} onKeyDown={keyAction('Enter', parseInput)} className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg-elevated px-3 font-mono text-base text-fg outline-none focus:border-accent focus:ring-1 focus:ring-accent sm:text-sm" />
                 <Button type="button" variant="secondary" onClick={parseInput}>Set</Button>
               </div>
               {error ? <p className="text-xs text-status-danger" role="alert">{error}</p> : null}
@@ -126,8 +128,8 @@ export function ColorPicker({
       <div className="flex items-center justify-between gap-3 border-t border-border bg-bg-elevated/40 px-4 py-3 sm:px-5">
         <span className="inline-flex items-center gap-2 text-xs text-fg-tertiary"><Palette className="h-4 w-4" /> Colors save as canonical sRGB hex.</span>
         <div className="flex gap-2">
-          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button type="button" onClick={() => { onApply(draft); onOpenChange(false); }}>Apply</Button>
+          <Button type="button" variant="secondary" onClick={close}>Cancel</Button>
+          <Button type="button" onClick={() => apply(draft)}>Apply</Button>
         </div>
       </div>
     </ResponsiveDialog>
@@ -136,9 +138,10 @@ export function ColorPicker({
 
 function ColorRange({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void }) {
   const id = React.useId();
+  const input = { value, min, max, step, onChange: numericInput(onChange) };
   return <div className="grid grid-cols-[5rem_minmax(0,1fr)_4.5rem] items-center gap-3">
     <label htmlFor={id} className="text-xs text-fg-secondary">{label}</label>
-    <input id={id} type="range" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} className="w-full accent-[color:var(--rm-accent)]" />
-    <input aria-label={`${label} value`} type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} className="h-9 rounded-lg border border-border bg-bg-surface px-2 text-right text-sm text-fg outline-none focus:border-accent" />
+    <input id={id} type="range" {...input} className="w-full accent-[color:var(--rm-accent)]" />
+    <input aria-label={`${label} value`} type="number" {...input} className="h-9 rounded-lg border border-border bg-bg-surface px-2 text-right text-sm text-fg outline-none focus:border-accent" />
   </div>;
 }

@@ -21,6 +21,10 @@ export function EmptyState({
   action,
   className,
 }: EmptyStateProps) {
+  const supporting = [
+    { visible: Boolean(description), element: <p key="description" className="mt-1 text-sm text-fg-tertiary max-w-xs">{description}</p> },
+    { visible: Boolean(action), element: <Button key="action" variant={action?.variant ?? 'secondary'} size="sm" className="mt-4" onClick={action?.onClick}>{action?.label}</Button> },
+  ];
   return (
     <div className={cn('flex flex-col items-center justify-center py-16 text-center', className)}>
       {icon && (
@@ -29,19 +33,7 @@ export function EmptyState({
         </div>
       )}
       <h3 className="text-base font-semibold text-fg">{title}</h3>
-      {description && (
-        <p className="mt-1 text-sm text-fg-tertiary max-w-xs">{description}</p>
-      )}
-      {action && (
-        <Button
-          variant={action.variant ?? 'secondary'}
-          size="sm"
-          className="mt-4"
-          onClick={action.onClick}
-        >
-          {action.label}
-        </Button>
-      )}
+      {supporting.filter(slot => slot.visible).map(slot => slot.element)}
     </div>
   );
 }

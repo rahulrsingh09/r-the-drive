@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
+import { cellText } from './cellPresentation';
 import { Badge } from '../primitives/Badge';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '../lib/utils';
 import { chargeSample, chargeTimes, chargeType } from './chargePresentation';
@@ -81,16 +82,8 @@ export const chargingColumns = [
     enableSorting: false,
     cell: (info) => {
       const vendor = info.getValue();
-      const isFree = info.row.original.is_free_session;
-      if (!vendor) return <span className="text-fg-tertiary">—</span>;
-      return (
-        <span className="flex items-center gap-1.5">
-          <span className="text-fg-secondary text-sm">{vendor}</span>
-          {isFree && (
-            <Badge variant="success" size="sm">Free</Badge>
-          )}
-        </span>
-      );
+      const free = info.row.original.is_free_session && <Badge variant="success" size="sm">Free</Badge>;
+      return vendor ? <span className="flex items-center gap-1.5"><span className="text-fg-secondary text-sm">{vendor}</span>{free}</span> : cellText(null, '', '—');
     },
   }),
   col.accessor('charger_type', {
@@ -153,11 +146,9 @@ export const chargingColumns = [
   col.accessor('cost_usd', {
     header: 'Cost',
     cell: (info) => {
-      const row = info.row.original;
-      const v = info.getValue();
-      return v !== null ? (
-        <span className="font-mono text-accent">{formatCurrency(v)}</span>
-      ) : row.ended_at == null ? <span className="text-fg-tertiary">Pending</span> : <span className="text-fg-tertiary">—</span>;
+      const value = info.getValue();
+      const missing = info.row.original.ended_at == null ? 'Pending' : '—';
+      return cellText(value === null ? null : formatCurrency(value), 'font-mono text-accent', missing);
     },
   }),
 ];

@@ -16,20 +16,20 @@ export function resolveTripLocation(trip: Record<string, unknown>, kind: 'start'
   if (named) return { label: named, title: named, source: 'place' };
   const lat = trip[`${kind}_lat`], lng = trip[`${kind}_lng`];
   const located = typeof lat === 'number' && Number.isFinite(lat) && typeof lng === 'number' && Number.isFinite(lng) && !(lat === 0 && lng === 0);
-  const nearest = located ? places.map(place => ({ place, distance: distanceMeters(lat, lng, place.latitude, place.longitude) }))
-    .filter(candidate => candidate.distance <= candidate.place.radius_m)
-    .sort((a, b) => a.distance - b.distance)[0]?.place : undefined;
+  let nearest: Place | undefined;
+  if (located) {
+    const latitudeWeight = Math.cos((lat * Math.PI) / 180);
+    let minimum = Infinity;
+    for (const place of places) {
+      const halfAngles = [place.latitude - lat, place.longitude - lng].map(degrees => Math.sin(((degrees * Math.PI) / 180) / 2) ** 2);
+      const chord = halfAngles[0]! + latitudeWeight * Math.cos((place.latitude * Math.PI) / 180) * halfAngles[1]!;
+      const distance = 12_742_000 * Math.atan2(Math.sqrt(chord), Math.sqrt(1 - chord));
+      if (distance <= place.radius_m && distance < minimum) { nearest = place; minimum = distance; }
+    }
+  }
   if (nearest) return { label: nearest.name, title: nearest.address?.display_name ?? nearest.name, source: 'place' };
   const address = labelFrom(ADDRESS_FIELDS);
   const source = address ? 'address' : located ? 'coordinates' : 'unavailable';
   const label = address ?? (located ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : TRIP_LOCATION_UNAVAILABLE_COPY);
   return { source, label, title: label };
-}
-function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const earthRadius = 6_371_000;
-  const toRad = (value: number) => (value * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * earthRadius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }

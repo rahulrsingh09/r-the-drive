@@ -3,13 +3,12 @@ import { createColumnHelper, type ColumnDef } from '@tanstack/react-table';
 import { Tag } from 'lucide-react';
 import { FaInfo } from 'react-icons/fa6';
 import { LuTags } from 'react-icons/lu';
-import { PiArrowFatLinesRight } from 'react-icons/pi';
+import { cellText, socRange } from './cellPresentation';
 import { Badge } from '../primitives/Badge';
 import { Tooltip } from '../primitives/Tooltip';
 import {
   formatMiles,
   formatDuration,
-  formatPercent,
   formatEfficiencyValue,
   getEfficiencyUnitLabel,
 } from '../lib/utils';
@@ -49,7 +48,6 @@ interface CreateTripColumnsOptions {
 }
 
 export function createTripColumns(places: Place[] = [], options: CreateTripColumnsOptions = {}) {
-  const includeTags = options.includeTags ?? true;
   const columns: ColumnDef<TripRow, any>[] = [
     col.accessor('started_at', {
       header: () => <span>Date</span>,
@@ -95,15 +93,7 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
         headerContentClassName: 'w-full justify-center',
       },
       cell: (info) => {
-        const row = info.row.original;
-        if (row.soc_start === null || row.soc_end === null) return <span className="text-fg-tertiary">-</span>;
-        return (
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-fg">
-            {formatPercent(row.soc_start)}
-            <PiArrowFatLinesRight className="h-3.5 w-3.5 text-fg-tertiary" />
-            {formatPercent(row.soc_end)}
-          </span>
-        );
+        return socRange(info.row.original.soc_start, info.row.original.soc_end);
       },
     }),
     col.accessor('efficiency_wh_mi', {
@@ -114,15 +104,12 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
         headerContentClassName: 'w-full justify-center',
       },
       cell: (info) => {
-        const v = info.getValue();
-        return v !== null ? (
-          <span className="inline-flex items-baseline justify-center gap-1 whitespace-nowrap font-mono text-fg">
-            <span>{formatEfficiencyValue(v)}</span>
-            <span className="text-[11px] font-normal text-fg-tertiary">{getEfficiencyUnitLabel()}</span>
-          </span>
-        ) : (
-          <span className="text-fg-tertiary">-</span>
-        );
+        const value = info.getValue();
+        if (value === null) return cellText(null, '');
+        const text = [formatEfficiencyValue(value), getEfficiencyUnitLabel()];
+        return <span className="inline-flex items-baseline justify-center gap-1 whitespace-nowrap font-mono text-fg">
+          <span>{text[0]}</span><span className="text-[11px] font-normal text-fg-tertiary">{text[1]}</span>
+        </span>;
       },
     }),
     col.accessor('drive_mode', {
@@ -135,18 +122,13 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
       },
       cell: (info) => {
         const mode = info.getValue();
-        if (!mode) return <span className="text-fg-tertiary">-</span>;
-        return (
-          <Badge size="sm" className={`mx-auto max-w-[6.5rem] truncate ${getDriveModeBadgeClass(mode)}`} title={formatDriveMode(mode)}>
-            {formatDriveMode(mode)}
-          </Badge>
-        );
+        const label = mode ? formatDriveMode(mode) : '-';
+        return mode ? <Badge size="sm" className={`mx-auto max-w-[6.5rem] truncate ${getDriveModeBadgeClass(mode)}`} title={label}>{label}</Badge> : cellText(null, '');
       },
     }),
   ];
 
-  if (includeTags) {
-    columns.push(
+  const optional = [{ enabled: options.includeTags ?? true, column:
       col.accessor('tags', {
         header: 'Tags',
         enableSorting: false,
@@ -157,7 +139,10 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
         },
         cell: (info) => {
           const tags: TripTag[] = info.getValue() ?? [];
-          if (tags.length === 0) return <span className="text-fg-tertiary">—</span>;
+          const badges = tags.map(tag => <TripTagBadge key={tag.id} tag={tag} />);
+          if (!badges.length) return cellText(null, '', '—');
+          const count = new Intl.PluralRules('en-US').select(tags.length);
+          const tagLabel = { one: 'tag', other: 'tags' }[count === 'one' ? 'one' : 'other'];
           return (
             <Tooltip
               align="end"
@@ -165,7 +150,7 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
                 <div className="space-y-2">
                   <p className="font-medium text-fg">Trip tags</p>
                   <div className="flex flex-wrap gap-1">
-                    {tags.map((tag) => <TripTagBadge key={tag.id} tag={tag} />)}
+                    {badges}
                   </div>
                 </div>
               )}
@@ -173,7 +158,7 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
             >
               <button
                 type="button"
-                aria-label={`Show ${tags.length} tag${tags.length === 1 ? '' : 's'} for trip`}
+                aria-label={`Show ${tags.length} ${tagLabel} for trip`}
                 title="Show trip tags"
                 onClick={(event) => event.stopPropagation()}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-bg-surface p-1 text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
@@ -184,11 +169,9 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
           );
         },
       }),
-    );
-  }
+    },
 
-  if (options.onInfoClick) {
-    columns.push(
+    { enabled: Boolean(options.onInfoClick), column:
       col.display({
         id: 'details',
         header: '',
@@ -204,10 +187,7 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
               type="button"
               aria-label="Open trip details"
               title="Open trip details"
-              onClick={(event) => {
-                event.stopPropagation();
-                options.onInfoClick?.(info.row.original.id);
-              }}
+              onClick={isolateAction(() => options.onInfoClick?.(info.row.original.id))}
               className="inline-flex h-full w-full items-center justify-center rounded-md border border-border bg-bg-surface p-1 text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
             >
               <FaInfo className="h-full w-full" />
@@ -215,14 +195,15 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
           </div>
         ),
       }),
-    );
-  }
+    },
 
-  return columns;
+  ];
+  return columns.concat(optional.flatMap(entry => entry.enabled ? [entry.column] : []));
 }
 
 export function TripTagBadge({ tag }: { tag: Pick<TripTag, 'name' | 'color_token'> }) {
-  const variant = tag.color_token === 'neutral' ? 'default' : tag.color_token;
+  const variants = { neutral: 'default', accent: 'accent', info: 'info', success: 'success', warning: 'warning', danger: 'danger' } as const;
+  const variant = variants[tag.color_token];
   const name = formatTripTagName(tag.name);
   return (
     <Badge size="sm" variant={variant} className="max-w-[8rem] truncate" title={name}>
@@ -233,14 +214,18 @@ export function TripTagBadge({ tag }: { tag: Pick<TripTag, 'name' | 'color_token
 }
 
 export function formatTripTagName(value: string) {
-  const normalized = value.trim().replace(/\s+/g, ' ');
-  return normalized ? `${normalized.charAt(0).toLocaleUpperCase()}${normalized.slice(1)}` : normalized;
+  const words = value.match(/\S+/g);
+  if (!words) return '';
+  const normalized = words.join(' ');
+  return normalized[0]!.toLocaleUpperCase() + normalized.substring(1);
 }
 
 export const tripColumns = createTripColumns();
 
 function locationColumn(kind: 'start' | 'end', header: string, places: Place[]) {
-  return col.accessor(kind === 'start' ? 'started_at' : 'ended_at', {
+  const field = { start: 'started_at', end: 'ended_at' } as const;
+  const locate = (trip: TripRow) => resolveTripLocation(trip as unknown as Record<string, unknown>, kind, places);
+  return col.accessor(field[kind], {
     id: kind,
     header,
     enableSorting: false,
@@ -250,8 +235,7 @@ function locationColumn(kind: 'start' | 'end', header: string, places: Place[]) 
       cellClassName: 'min-w-0',
     },
     cell: (info) => {
-      const trip = info.row.original as unknown as Record<string, unknown>;
-      const location = resolveTripLocation(trip, kind, places);
+      const location = locate(info.row.original);
       return (
         <span className="block w-full min-w-0 max-w-full truncate font-medium text-fg text-sm" title={location.title}>
           {location.label}
@@ -259,4 +243,11 @@ function locationColumn(kind: 'start' | 'end', header: string, places: Place[]) 
       );
     },
   });
+}
+
+function isolateAction(action: () => void) {
+  return (event: React.MouseEvent) => {
+    event.stopPropagation();
+    action();
+  };
 }

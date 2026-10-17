@@ -26,9 +26,16 @@ export function StatCard({
   accent = false,
   className,
 }: StatCardProps) {
-  const hasDelta = delta !== undefined;
-  const isPositive = (delta ?? 0) > 0;
-  const isNeutral = delta === 0;
+  let change: React.ReactNode = detail ? <div className="mt-2 text-xs text-fg-tertiary">{detail}</div> : null;
+  if (delta !== undefined) {
+    const sign = delta === 0 ? 0 : delta > 0 ? 1 : 2;
+    const styles = ['text-fg-tertiary', 'text-status-positive', 'text-status-danger'];
+    const Glyph = [Minus, TrendingUp, TrendingDown][sign]!;
+    const prefix = sign === 1 ? '+' : '';
+    change = <div className={cn('mt-2 flex items-center gap-1 text-xs font-medium', styles[sign])}>
+      <Glyph className="h-3 w-3" /><span>{prefix}{delta}{deltaLabel && ` ${deltaLabel}`}</span>
+    </div>;
+  }
 
   return (
     <Card
@@ -56,27 +63,7 @@ export function StatCard({
         {unit && <span className="text-sm text-fg-tertiary">{unit}</span>}
       </div>
 
-      {hasDelta && (
-        <div className={cn(
-          'mt-2 flex items-center gap-1 text-xs font-medium',
-          isNeutral ? 'text-fg-tertiary' : isPositive ? 'text-status-positive' : 'text-status-danger'
-        )}>
-          {isNeutral ? (
-            <Minus className="h-3 w-3" />
-          ) : isPositive ? (
-            <TrendingUp className="h-3 w-3" />
-          ) : (
-            <TrendingDown className="h-3 w-3" />
-          )}
-          <span>
-            {isPositive ? '+' : ''}{delta}
-            {deltaLabel && ` ${deltaLabel}`}
-          </span>
-        </div>
-      )}
-      {detail && !hasDelta ? (
-        <div className="mt-2 text-xs text-fg-tertiary">{detail}</div>
-      ) : null}
+      {change}
     </Card>
   );
 }

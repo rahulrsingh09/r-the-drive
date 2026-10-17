@@ -1,3 +1,4 @@
+import { backdropAction } from '../lib/controlEvents';
 import * as React from 'react';
 import {
   BatteryFull, TrendingUp,
@@ -62,16 +63,16 @@ export function Sidebar({
 }: SidebarProps) {
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = React.useState(defaultCollapsed);
   const collapsed = collapsedProp ?? uncontrolledCollapsed;
-  const setCollapsed = React.useCallback(
-    (next: boolean | ((current: boolean) => boolean)) => {
-      const nextValue = typeof next === 'function' ? next(collapsed) : next;
-      if (collapsedProp === undefined) {
-        setUncontrolledCollapsed(nextValue);
-      }
-      onCollapsedChange?.(nextValue);
-    },
-    [collapsed, collapsedProp, onCollapsedChange]
-  );
+  const collapseWriters = React.useMemo(() => {
+    const writers: Array<(value: boolean) => void> = [];
+    if (collapsedProp === undefined) writers.push(setUncontrolledCollapsed);
+    if (onCollapsedChange) writers.push(onCollapsedChange);
+    return writers;
+  }, [collapsedProp, onCollapsedChange]);
+  const setCollapsed = React.useCallback((update: React.SetStateAction<boolean>) => {
+    const value = typeof update === 'function' ? update(collapsed) : update;
+    for (const write of collapseWriters) write(value);
+  }, [collapseWriters, collapsed]);
   const { open: mobileOpen, setOpen: setMobileOpen } = useDisclosure();
   const mobileMenuButtonRef = React.useRef<HTMLButtonElement>(null);
   const mobileCloseButtonRef = React.useRef<HTMLButtonElement>(null);
@@ -79,16 +80,13 @@ export function Sidebar({
   const restoreFocusOnCloseRef = React.useRef(true);
   const { brandAssets } = useThemeRuntime();
 
-  const closeMobileNavigation = React.useCallback((restoreFocus = true) => {
+  const navigationTransition = React.useCallback((opening: boolean, restoreFocus: boolean) => {
     restoreFocusOnCloseRef.current = restoreFocus;
-    setMobileOpen(false);
+    if (opening) lastMobileFocusRef.current = mobileMenuButtonRef.current ?? document.activeElement as HTMLElement | null;
+    setMobileOpen(opening);
   }, []);
-
-  const openMobileNavigation = React.useCallback(() => {
-    lastMobileFocusRef.current = mobileMenuButtonRef.current ?? document.activeElement as HTMLElement | null;
-    restoreFocusOnCloseRef.current = true;
-    setMobileOpen(true);
-  }, []);
+  const closeMobileNavigation = React.useCallback((restoreFocus = true) => navigationTransition(false, restoreFocus), [navigationTransition]);
+  const openMobileNavigation = React.useCallback(() => navigationTransition(true, true), [navigationTransition]);
 
   React.useEffect(() => {
     if (!mobileOpen) return;
@@ -221,9 +219,7 @@ export function Sidebar({
           aria-modal="true"
           aria-label="Navigation"
           data-mobile-navigation="true"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) closeMobileNavigation();
-          }}
+          onClick={backdropAction(closeMobileNavigation)}
           className="fixed inset-0 z-[60] flex min-h-[100dvh] flex-col bg-bg-surface pt-[max(0.75rem,env(safe-area-inset-top))] lg:hidden"
         >
           <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">

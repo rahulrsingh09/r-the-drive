@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
+import { presentationClasses } from '../lib/presentationClasses';
 
 export interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {
   rounded?: boolean;
@@ -10,7 +11,7 @@ export function Skeleton({ className, rounded = false, ...props }: SkeletonProps
     <div
       className={cn(
         'animate-pulse bg-bg-elevated',
-        rounded ? 'rounded-full' : 'rounded-lg',
+        presentationClasses([[rounded, { true: 'rounded-full', false: 'rounded-lg' }]]),
         className
       )}
       {...props}
@@ -19,7 +20,8 @@ export function Skeleton({ className, rounded = false, ...props }: SkeletonProps
 }
 
 export function ChartSkeleton({ className, height = 240 }: { className?: string; height?: number }) {
-  const bars = [52, 68, 44, 74, 58, 86, 63, 49, 78, 56, 71, 61];
+  const bars = [52, 68, 44, 74, 58, 86, 63, 49, 78, 56, 71, 61].map(height => ({ height: `${height}%` }));
+  const ticks = (count: number, className: string) => Array.from({ length: count }, (_, index) => <Skeleton key={index} className={className} />);
 
   return (
     <div
@@ -28,24 +30,20 @@ export function ChartSkeleton({ className, height = 240 }: { className?: string;
     >
       <div className="flex items-end gap-2" style={{ height: Math.max(120, height - 54) }}>
         <div className="flex h-full flex-col justify-between py-1">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="w-8 h-2.5" />
-          ))}
+          {ticks(5, "w-8 h-2.5")}
         </div>
         <div className="flex h-full flex-1 items-end gap-1">
-          {bars.map((barHeight, i) => (
+          {bars.map((style, i) => (
             <Skeleton
               key={i}
               className="flex-1"
-              style={{ height: `${barHeight}%` }}
+              style={style}
             />
           ))}
         </div>
       </div>
       <div className="flex justify-between pl-10">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="w-10 h-2.5" />
-        ))}
+        {ticks(6, "w-10 h-2.5")}
       </div>
     </div>
   );

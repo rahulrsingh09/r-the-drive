@@ -1,3 +1,4 @@
+import { statusLabel } from './statusLabel';
 import { formatPressure } from './utils';
 
 export const DEFAULT_TARGET_TIRE_PRESSURE_PSI = 40;
@@ -96,6 +97,5 @@ export function getTireHealthLegend(targetPsi?: number | null | undefined): Tire
   }));
 }
 function prettifyTireStatus(value: string | null | undefined) {
-  if (!value) return '-';
-  return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  return statusLabel(value || '-', /_/, 'chrgr_sts_');
 }
