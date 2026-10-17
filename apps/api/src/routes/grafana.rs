@@ -45,14 +45,15 @@ const ALLOWED_METRICS: &[&str] = &[
 ];
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/grafana", get(health_check))
-        .route("/grafana/search", post(search))
-        .route("/grafana/query", post(query))
-        .route("/grafana/annotations", post(annotations))
-        .route("/grafana/tag-keys", post(tag_keys))
-        .route("/grafana/tag-values", post(tag_values))
-        .layer(DefaultBodyLimit::max(64 * 1024))
+    super::route_table([
+        ("/grafana", get(health_check)),
+        ("/grafana/search", post(search)),
+        ("/grafana/query", post(query)),
+        ("/grafana/annotations", post(annotations)),
+        ("/grafana/tag-keys", post(tag_keys)),
+        ("/grafana/tag-values", post(tag_values)),
+    ])
+    .layer(DefaultBodyLimit::max(64 * 1024))
 }
 
 /// Grafana health check — returns 200 OK with empty body.

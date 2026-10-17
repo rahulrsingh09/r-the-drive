@@ -9,7 +9,7 @@ use crate::{
         require_vehicle_manager_access, require_vehicle_membership, require_vehicle_read_access,
     },
     errors::AppError,
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    middleware::auth::{AppState, AuthUser},
     services::cost::recompute_charge_session_cost,
 };
 use axum::{
@@ -18,46 +18,46 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, Utc};
-use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/charging", get(list_sessions))
-        .route("/charging/chart-series", get(get_chart_series))
-        .route("/charging/summary", get(get_summary))
-        .route("/charging/sessions", get(list_sessions))
-        .route("/charging/sessions/{id}/curve", get(get_session_curve))
-        .route("/charging/sessions/{id}", get(get_session))
-        .route("/charging/{id}/curve", get(get_session_curve))
-        .route("/charging/{id}", get(get_session))
-        .route("/charging/{id}", patch(update_session_location))
-        .route("/charging/curve-analysis", get(get_curve_analysis))
-        .route(
+    super::route_table([
+        ("/charging", get(list_sessions)),
+        ("/charging/chart-series", get(get_chart_series)),
+        ("/charging/summary", get(get_summary)),
+        ("/charging/sessions", get(list_sessions)),
+        ("/charging/sessions/{id}/curve", get(get_session_curve)),
+        ("/charging/sessions/{id}", get(get_session)),
+        ("/charging/{id}/curve", get(get_session_curve)),
+        ("/charging/{id}", get(get_session)),
+        ("/charging/{id}", patch(update_session_location)),
+        ("/charging/curve-analysis", get(get_curve_analysis)),
+        (
             "/vehicles/{vehicle_id}/charging-sessions",
             get(list_sessions_path),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/charging-sessions/{id}/curve",
             get(get_session_curve_path),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/charging-sessions/{id}",
             get(get_session_path),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/charging-sessions/{id}",
             patch(update_session_location_path),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/charging-networks",
             get(list_network_preferences),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/charging-networks/{vendor}",
             patch(update_network_preference),
-        )
-        .route("/vehicles/{vehicle_id}/costs", get(get_summary_path))
+        ),
+        ("/vehicles/{vehicle_id}/costs", get(get_summary_path)),
+    ])
 }
 #[derive(Deserialize)]
 struct SessionListParams {
@@ -302,13 +302,7 @@ fn resolve_time_bounds(
     lifetime: bool,
     default_days: i64,
 ) -> (DateTime<Utc>, DateTime<Utc>) {
-    let resolved_to = to.unwrap_or_else(Utc::now);
-    let resolved_from = if lifetime {
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
-    } else {
-        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
-    };
-    (resolved_from, resolved_to)
+    super::time_bounds(from, to, lifetime, default_days)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -436,7 +430,7 @@ struct ChartSeriesSessionSourceRow {
     peak_power_kw: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 struct ChargeChartSeriesSession {
     session_id: Uuid,
     day_local: String,
@@ -448,7 +442,7 @@ struct ChargeChartSeriesSession {
     location_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 struct ChargeChartSeriesDay {
     day_local: String,
     day_start: DateTime<Utc>,
@@ -457,17 +451,9 @@ struct ChargeChartSeriesDay {
 }
 
 fn normalize_capacity_kwh(raw: f64) -> Option<f64> {
-    if !raw.is_finite() || raw <= 0.0 {
-        return None;
-    }
-
-    // Some sources report capacity in Wh while others report kWh.
-    let kwh = if raw > 1_000.0 { raw / 1000.0 } else { raw };
-    if (40.0..=300.0).contains(&kwh) {
-        Some(kwh)
-    } else {
-        None
-    }
+    [(40.0..=300.0, 1.0), (40_000.0..=300_000.0, 1000.0)]
+        .into_iter()
+        .find_map(|(bounds, divisor)| bounds.contains(&raw).then_some(raw / divisor))
 }
 
 async fn list_sessions(
@@ -475,11 +461,8 @@ async fn list_sessions(
     auth: AuthUser,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vehicle_id = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vehicle_id)?;
-    list_sessions_response(&state, auth.user_id, vehicle_id, p).await
+    let vehicle = p.vehicle_id;
+    ChargeRead::History(p).respond(&state, &auth, vehicle).await
 }
 
 async fn get_session(
@@ -488,11 +471,10 @@ async fn get_session(
     Path(id): Path<Uuid>,
     Query(p): Query<VehicleParam>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vehicle_id = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vehicle_id)?;
-    get_session_response(&state, auth.user_id, vehicle_id, id).await
+    let vehicle = p.vehicle_id;
+    ChargeRead::Session(id)
+        .respond(&state, &auth, vehicle)
+        .await
 }
 
 async fn get_session_curve(
@@ -501,11 +483,8 @@ async fn get_session_curve(
     Path(id): Path<Uuid>,
     Query(p): Query<VehicleParam>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vid)?;
-    get_session_curve_response(&state, auth.user_id, vid, id).await
+    let vehicle = p.vehicle_id;
+    ChargeRead::Curve(id).respond(&state, &auth, vehicle).await
 }
 
 async fn update_session_location(
@@ -515,11 +494,7 @@ async fn update_session_location(
     Query(p): Query<VehicleParam>,
     Json(payload): Json<SessionLocationUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vehicle_id = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    update_charge_session(&state.pool, &auth, vehicle_id, id, payload).await?;
-    get_session_response(&state, auth.user_id, vehicle_id, id).await
+    change_session_location(&state, &auth, p.vehicle_id, id, payload).await
 }
 
 async fn update_session_location_path(
@@ -528,8 +503,7 @@ async fn update_session_location_path(
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<SessionLocationUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    update_charge_session(&state.pool, &auth, vehicle_id, id, payload).await?;
-    get_session_response(&state, auth.user_id, vehicle_id, id).await
+    change_session_location(&state, &auth, Some(vehicle_id), id, payload).await
 }
 
 async fn update_charge_session(
@@ -548,23 +522,16 @@ async fn list_network_preferences(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<Vec<ChargingNetworkPreferenceRow>>, AppError> {
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-    let rows = sqlx::query_as::<_, ChargingNetworkPreferenceRow>(
-        r#"SELECT MIN(trim(cs.network_vendor)) AS network_vendor,
-                  COALESCE(pref.cost_mode, 'automatic') AS cost_mode,
-                  COUNT(*)::int8 AS session_count
-             FROM panda.charge_sessions cs
-             LEFT JOIN panda.vehicle_charging_network_preferences pref
-               ON pref.vehicle_id=cs.vehicle_id
-              AND pref.vendor_normalized=lower(trim(cs.network_vendor))
-            WHERE cs.vehicle_id=$1
-              AND cs.network_vendor IS NOT NULL AND trim(cs.network_vendor) <> ''
-            GROUP BY lower(trim(cs.network_vendor)), pref.cost_mode
-            ORDER BY lower(MIN(trim(cs.network_vendor)))"#,
-    )
-    .bind(vehicle_id)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(rows))
+    let preferences = sqlx::query_as::<_, ChargingNetworkPreferenceRow>(
+        "WITH vendors AS (
+           SELECT lower(trim(network_vendor)) AS normalized,MIN(trim(network_vendor)) AS network_vendor,COUNT(*)::int8 AS session_count
+           FROM panda.charge_sessions WHERE vehicle_id=$1 AND network_vendor IS NOT NULL AND trim(network_vendor)<>''
+           GROUP BY lower(trim(network_vendor))
+         ) SELECT v.network_vendor,COALESCE(p.cost_mode,'automatic') AS cost_mode,v.session_count
+         FROM vendors v LEFT JOIN panda.vehicle_charging_network_preferences p
+         ON p.vehicle_id=$1 AND p.vendor_normalized=v.normalized ORDER BY lower(v.network_vendor)")
+        .bind(vehicle_id).fetch_all(&state.pool).await?;
+    Ok(Json(preferences))
 }
 
 async fn update_network_preference(
@@ -584,8 +551,8 @@ async fn list_sessions_path(
     Path(vehicle_id): Path<Uuid>,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    list_sessions_response(&state, auth.user_id, vehicle_id, p).await
+    let vehicle = Some(vehicle_id);
+    ChargeRead::History(p).respond(&state, &auth, vehicle).await
 }
 
 async fn get_session_path(
@@ -593,8 +560,10 @@ async fn get_session_path(
     auth: AuthUser,
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    get_session_response(&state, auth.user_id, vehicle_id, id).await
+    let vehicle = Some(vehicle_id);
+    ChargeRead::Session(id)
+        .respond(&state, &auth, vehicle)
+        .await
 }
 
 async fn get_session_curve_path(
@@ -602,8 +571,8 @@ async fn get_session_curve_path(
     auth: AuthUser,
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    get_session_curve_response(&state, auth.user_id, vehicle_id, id).await
+    let vehicle = Some(vehicle_id);
+    ChargeRead::Curve(id).respond(&state, &auth, vehicle).await
 }
 
 async fn get_summary_path(
@@ -612,8 +581,8 @@ async fn get_summary_path(
     Path(vehicle_id): Path<Uuid>,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    get_summary_response(&state, auth.user_id, vehicle_id, p).await
+    let vehicle = Some(vehicle_id);
+    ChargeRead::Summary(p).respond(&state, &auth, vehicle).await
 }
 
 async fn get_summary(
@@ -621,11 +590,8 @@ async fn get_summary(
     auth: AuthUser,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vehicle_id = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vehicle_id)?;
-    get_summary_response(&state, auth.user_id, vehicle_id, p).await
+    let vehicle = p.vehicle_id;
+    ChargeRead::Summary(p).respond(&state, &auth, vehicle).await
 }
 
 async fn get_chart_series(
@@ -633,11 +599,8 @@ async fn get_chart_series(
     auth: AuthUser,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vehicle_id = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vehicle_id)?;
-    get_chart_series_response(&state, auth.user_id, vehicle_id, p).await
+    let vehicle = p.vehicle_id;
+    ChargeRead::Chart(p).respond(&state, &auth, vehicle).await
 }
 
 async fn get_curve_analysis(
@@ -645,37 +608,18 @@ async fn get_curve_analysis(
     auth: AuthUser,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vehicle_id = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
+    use futures::{StreamExt, TryStreamExt};
+    let vehicle_id = super::VehicleRequest::select(&auth, p.vehicle_id)?
+        .read(&state)
+        .await?
+        .id;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let sessions = sqlx::query_as::<_, CurveAnalysisSessionRow>(
-        r#"SELECT
-               cs.id,
-               cs.started_at,
-               cs.ended_at,
-               'dc'::text AS charger_type,
-               cs.soc_start,
-               cs.soc_end
-           FROM panda.charge_sessions cs
-           WHERE cs.vehicle_id=$1
-             AND cs.started_at >= $2
-             AND cs.started_at <= $3
-             AND cs.ended_at IS NOT NULL
-             AND cs.is_home IS DISTINCT FROM true
-             AND lower(COALESCE(cs.charger_type, '')) = ANY(ARRAY['dc', 'dcfc'])
-           ORDER BY cs.started_at ASC, cs.id ASC"#,
-    )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
+    let sessions = CurveSelection::Completed { from, to }
+        .load::<CurveAnalysisSessionRow>(&state.pool, vehicle_id)
+        .await?;
 
-    let curve_rows = try_join_all(
+    let curve_rows = futures::stream::iter(
         sessions
             .into_iter()
             .filter(|session| session.charger_type.as_deref() == Some("dc"))
@@ -693,6 +637,8 @@ async fn get_curve_analysis(
                 )
             }),
     )
+    .buffered(4)
+    .try_collect::<Vec<_>>()
     .await?
     .into_iter()
     .flatten()
@@ -760,24 +706,9 @@ async fn get_chart_series_response(
 
     let (daily, daily_sessions) = build_charge_chart_series(rows);
 
-    Ok(Json(serde_json::json!({
-        "daily": daily.iter().map(|day| serde_json::json!({
-            "day_local": day.day_local,
-            "day_start": day.day_start,
-            "total_energy_kwh": day.total_energy_kwh,
-            "session_count": day.session_count,
-        })).collect::<Vec<_>>(),
-        "daily_sessions": daily_sessions.iter().map(|session| serde_json::json!({
-            "session_id": session.session_id,
-            "day_local": session.day_local,
-            "day_start": session.day_start,
-            "started_at": session.started_at,
-            "energy_added_kwh": session.energy_added_kwh,
-            "cost_usd": session.cost_usd,
-            "charger_type": session.charger_type,
-            "location_name": session.location_name,
-        })).collect::<Vec<_>>(),
-    })))
+    Ok(Json(
+        serde_json::json!({"daily":daily,"daily_sessions":daily_sessions}),
+    ))
 }
 
 fn build_charge_chart_series(
@@ -839,30 +770,24 @@ fn normalize_chart_charger_type(
     network_vendor: Option<&str>,
     peak_power_kw: Option<f64>,
 ) -> Option<String> {
-    let explicit = charger_type.map(|value| value.trim().to_ascii_lowercase());
-    match explicit.as_deref() {
-        Some("dc") | Some("dcfc") => return Some("DC".to_string()),
-        Some("ac") | Some("ac_l2") => return Some("AC".to_string()),
-        _ => {}
-    }
-
-    let vendor = network_vendor
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if ["tesla", "rivian", "electrify america", "evgo"].contains(&vendor.as_str()) {
-        return Some("DC".to_string());
-    }
-
-    peak_power_kw.and_then(|value| {
-        if !value.is_finite() {
-            None
-        } else if value < 20.0 {
-            Some("AC".to_string())
-        } else {
-            Some("DC".to_string())
-        }
-    })
+    let explicit = charger_type.unwrap_or_default().trim().to_ascii_lowercase();
+    let declared = [("dc", "DC"), ("dcfc", "DC"), ("ac", "AC"), ("ac_l2", "AC")]
+        .into_iter()
+        .find_map(|(alias, kind)| (explicit == alias).then_some(kind));
+    let kind = declared
+        .or_else(|| {
+            let network = network_vendor.unwrap_or_default().trim();
+            ["tesla", "rivian", "electrify america", "evgo"]
+                .iter()
+                .any(|vendor| network.eq_ignore_ascii_case(vendor))
+                .then_some("DC")
+        })
+        .or_else(|| {
+            peak_power_kw
+                .filter(|power| power.is_finite())
+                .map(|power| if power < 20.0 { "AC" } else { "DC" })
+        });
+    kind.map(str::to_owned)
 }
 
 async fn get_session_response(
@@ -881,27 +806,21 @@ async fn get_session_curve_response(
     id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
-
-    let session = sqlx::query_as::<_, SessionBoundsRow>(
-        "SELECT id, started_at, ended_at, charger_type, soc_start, soc_end FROM panda.charge_sessions WHERE id=$1 AND vehicle_id=$2",
-    )
-    .bind(id)
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(serde_json::json!(
-        load_curve(
-            &state.pool,
-            vehicle_id,
-            session.id,
-            session.started_at,
-            session.ended_at,
-            session.charger_type.as_deref(),
-        )
+    let session = CurveSelection::Id(id)
+        .load::<SessionBoundsRow>(&state.pool, vehicle_id)
         .await?
-    )))
+        .pop()
+        .ok_or(AppError::NotFound)?;
+    let samples = load_curve(
+        &state.pool,
+        vehicle_id,
+        session.id,
+        session.started_at,
+        session.ended_at,
+        session.charger_type.as_deref(),
+    )
+    .await?;
+    Ok(Json(serde_json::json!(samples)))
 }
 
 async fn get_summary_response(
@@ -1236,3 +1155,94 @@ mod workflow_contract_tests;
 #[cfg(test)]
 #[path = "__tests__/derived_charge_series.rs"]
 mod derived_series_tests;
+
+enum ChargeRead {
+    History(SessionListParams),
+    Session(Uuid),
+    Curve(Uuid),
+    Summary(SessionListParams),
+    Chart(SessionListParams),
+}
+
+impl ChargeRead {
+    async fn respond(
+        self,
+        state: &AppState,
+        auth: &AuthUser,
+        vehicle: Option<Uuid>,
+    ) -> Result<Json<serde_json::Value>, AppError> {
+        let request = super::VehicleRequest::select(auth, vehicle)?;
+        let (user_id, vehicle_id) = (request.auth.user_id, request.id);
+        match self {
+            Self::History(params) => {
+                list_sessions_response(state, user_id, vehicle_id, params).await
+            }
+            Self::Session(id) => get_session_response(state, user_id, vehicle_id, id).await,
+            Self::Curve(id) => get_session_curve_response(state, user_id, vehicle_id, id).await,
+            Self::Summary(params) => get_summary_response(state, user_id, vehicle_id, params).await,
+            Self::Chart(params) => {
+                get_chart_series_response(state, user_id, vehicle_id, params).await
+            }
+        }
+    }
+}
+
+async fn change_session_location(
+    state: &AppState,
+    auth: &AuthUser,
+    vehicle: Option<Uuid>,
+    id: Uuid,
+    payload: SessionLocationUpdate,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let vehicle_id = vehicle.ok_or_else(|| AppError::Validation("vehicle_id required".into()))?;
+    update_charge_session(&state.pool, auth, vehicle_id, id, payload).await?;
+    get_session_response(state, auth.user_id, vehicle_id, id).await
+}
+
+enum CurveSelection {
+    Id(Uuid),
+    Completed {
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    },
+}
+impl CurveSelection {
+    async fn load<T>(self, pool: &sqlx::PgPool, vehicle: Uuid) -> Result<Vec<T>, AppError>
+    where
+        T: for<'row> sqlx::FromRow<'row, sqlx::postgres::PgRow> + Send + Unpin,
+    {
+        let kind = match self {
+            Self::Id(_) => "charger_type",
+            Self::Completed { .. } => "'dc'::text AS charger_type",
+        };
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+            "SELECT id,started_at,ended_at,soc_start,soc_end,",
+        );
+        query
+            .push(kind)
+            .push(" FROM panda.charge_sessions WHERE vehicle_id=")
+            .push_bind(vehicle);
+        match self {
+            Self::Id(id) => {
+                query.push(" AND id=").push_bind(id);
+            }
+            Self::Completed { from, to } => {
+                query
+                    .push(" AND started_at>=")
+                    .push_bind(from)
+                    .push(" AND started_at<=")
+                    .push_bind(to)
+                    .push(
+                        " AND ended_at IS NOT NULL AND is_home IS DISTINCT FROM true
+                        AND lower(COALESCE(charger_type,''))=ANY(ARRAY['dc','dcfc'])
+                        ORDER BY started_at,id",
+                    );
+            }
+        }
+        query
+            .build_query_as()
+            .fetch_all(pool)
+            .await
+            .map_err(AppError::from)
+    }
+}

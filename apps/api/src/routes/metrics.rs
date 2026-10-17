@@ -26,12 +26,13 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/metrics/catalog", get(get_catalog))
-        .route("/metrics/value", get(get_value))
-        .route("/metrics/series", get(get_series))
-        .route("/metrics/batch", post(get_batch))
-        .layer(DefaultBodyLimit::max(64 * 1024))
+    super::route_table([
+        ("/metrics/catalog", get(get_catalog)),
+        ("/metrics/value", get(get_value)),
+        ("/metrics/series", get(get_series)),
+        ("/metrics/batch", post(get_batch)),
+    ])
+    .layer(DefaultBodyLimit::max(64 * 1024))
 }
 
 #[derive(Clone, Copy)]
@@ -149,13 +150,7 @@ fn resolve_time_bounds(
     lifetime: bool,
     default_days: i64,
 ) -> (DateTime<Utc>, DateTime<Utc>) {
-    let resolved_to = to.unwrap_or_else(Utc::now);
-    let resolved_from = if lifetime {
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
-    } else {
-        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
-    };
-    (resolved_from, resolved_to)
+    super::time_bounds(from, to, lifetime, default_days)
 }
 
 fn resolve_bucket(
@@ -163,29 +158,34 @@ fn resolve_bucket(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<&'static str, AppError> {
-    match requested.unwrap_or("auto") {
-        "auto" => {
-            let minutes = (to - from).num_minutes();
-            if minutes <= 60 {
-                Ok("minute")
-            } else if minutes <= 6 * 60 {
-                Ok("5min")
-            } else if minutes <= 24 * 60 {
-                Ok("15min")
-            } else if minutes <= 7 * 24 * 60 {
-                Ok("hour")
-            } else {
-                Ok("day")
-            }
-        }
-        "minute" | "1min" => Ok("minute"),
-        "5min" => Ok("5min"),
-        "15min" => Ok("15min"),
-        "hour" | "1h" => Ok("hour"),
-        "day" | "1d" => Ok("day"),
-        "raw" | "full" => Ok("raw"),
-        other => Err(AppError::Validation(format!("unsupported bucket: {other}"))),
+    let requested = requested.unwrap_or("auto");
+    if requested == "auto" {
+        let minutes = (to - from).num_minutes();
+        return Ok([
+            (60, "minute"),
+            (360, "5min"),
+            (1440, "15min"),
+            (10080, "hour"),
+        ]
+        .into_iter()
+        .find_map(|(limit, name)| (minutes <= limit).then_some(name))
+        .unwrap_or("day"));
     }
+    [
+        ("minute", "minute"),
+        ("1min", "minute"),
+        ("5min", "5min"),
+        ("15min", "15min"),
+        ("hour", "hour"),
+        ("1h", "hour"),
+        ("day", "day"),
+        ("1d", "day"),
+        ("raw", "raw"),
+        ("full", "raw"),
+    ]
+    .into_iter()
+    .find_map(|(alias, name)| (requested == alias).then_some(name))
+    .ok_or_else(|| AppError::Validation(format!("unsupported bucket: {requested}")))
 }
 
 fn resolve_batch_density(
@@ -231,40 +231,43 @@ async fn get_value(
     auth: AuthUser,
     Query(p): Query<ValueParams>,
 ) -> Result<Json<MetricValueResponse>, AppError> {
-    let vid = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vid)?;
-    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let vehicle = super::VehicleRequest::select(&auth, p.vehicle_id)?
+        .read(&state)
+        .await?;
     let metric = find_metric(&p.metric)?;
-
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let permit = state
         .resources
         .heavy(auth.user_id, &state.config.security)?;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(state.config.security.metrics_timeout_seconds),
-        async {
-            let mut tx = crate::services::admitted_read::AdmittedRead::begin(
-                &state.pool,
-                permit,
-                state.config.security.metrics_timeout_seconds,
-            )
-            .await?;
-            let (value, ts) =
-                metric_value(&mut tx, vid, metric, from, to, &TripTagFilter::default()).await?;
-            tx.commit().await?;
-            Ok(Json(MetricValueResponse {
-                metric: metric.id.to_owned(),
-                value,
-                unit: metric.unit,
-                label: metric.label,
-                ts,
-            }))
-        },
-    )
-    .await
-    .map_err(|_| AppError::DependencyUnavailable("Metric query deadline exceeded".into()))?
+    let seconds = state.config.security.metrics_timeout_seconds;
+    let operation = async {
+        let mut read =
+            crate::services::admitted_read::AdmittedRead::begin(&state.pool, permit, seconds)
+                .await?;
+        let result = metric_value(
+            &mut read,
+            vehicle.id,
+            metric,
+            from,
+            to,
+            &TripTagFilter::default(),
+        )
+        .await?;
+        read.commit().await?;
+        Ok(Json(MetricValueResponse {
+            metric: metric.id.to_owned(),
+            value: result.0,
+            unit: metric.unit,
+            label: metric.label,
+            ts: result.1,
+        }))
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(seconds), operation).await {
+        Ok(result) => result,
+        Err(_) => Err(AppError::DependencyUnavailable(
+            "Metric query deadline exceeded".into(),
+        )),
+    }
 }
 
 async fn get_series(
@@ -272,34 +275,29 @@ async fn get_series(
     auth: AuthUser,
     Query(p): Query<SeriesParams>,
 ) -> Result<axum::response::Response, AppError> {
-    let vid = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vid)?;
-    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let vehicle = super::VehicleRequest::select(&auth, p.vehicle_id)?
+        .read(&state)
+        .await?;
     let metric = find_metric(&p.metric)?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
-
-    let query = metric_series(metric, bucket, &TripTagFilter::default())?;
+    let tag_filter = TripTagFilter::default();
+    let query = metric_series(metric, bucket, &tag_filter)?;
+    let request = StreamRequest {
+        vehicle_id: vehicle.id,
+        from,
+        to,
+        tag_filter,
+        metrics: vec![(metric, false, true, Some(query))],
+        bucket,
+        density: "full",
+        max_points: None,
+        standalone: true,
+    };
     let permit = state
         .resources
         .heavy(auth.user_id, &state.config.security)?;
-    Ok(stream_metrics(
-        state,
-        StreamRequest {
-            vehicle_id: vid,
-            from,
-            to,
-            tag_filter: TripTagFilter::default(),
-            metrics: vec![(metric, false, true, Some(query))],
-            bucket,
-            density: "full",
-            max_points: None,
-            standalone: true,
-        },
-        permit,
-    ))
+    Ok(stream_metrics(state, request, permit))
 }
 
 async fn get_batch(
@@ -413,29 +411,19 @@ fn stream_metrics(
         response::IntoResponse,
     };
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut output = MetricOutput {
-            sender: sender.clone(),
+            sender,
             buffer: Vec::with_capacity(64 * 1024),
         };
-        let result = tokio::select! {
-            biased;
-            _ = sender.closed() => return,
-            result = tokio::time::timeout(std::time::Duration::from_secs(state.config.security.metrics_timeout_seconds),
-                streaming::produce(&state, &request, &mut output, permit)) => result.unwrap_or_else(|_| Err(AppError::DependencyUnavailable("Metric request timed out".into()))),
-        };
-        if let Err(error) = result {
-            tracing::warn!(?error, "metric response interrupted");
-            let _ = sender
-                .send(Err(std::io::Error::other("metric response interrupted")))
-                .await;
-        }
+        output.produce(state, request, permit).await;
     });
-    use futures::StreamExt;
-    let stream = futures::stream::unfold(receiver, |mut receiver| async move {
-        receiver.recv().await.map(|chunk| (chunk, receiver))
-    })
-    .fuse();
+    let stream = futures::stream::unfold(
+        (receiver, MetricTask(task)),
+        |(mut receiver, task)| async move {
+            receiver.recv().await.map(|chunk| (chunk, (receiver, task)))
+        },
+    );
     (
         [
             ("content-type", "application/json"),
@@ -459,8 +447,15 @@ impl MetricOutput {
         Ok(())
     }
     async fn json(&mut self, value: &impl Serialize) -> Result<(), AppError> {
-        self.write(&serde_json::to_vec(value).map_err(|e| AppError::Internal(e.into()))?)
-            .await
+        let original_len = self.buffer.len();
+        if let Err(error) = serde_json::to_writer(&mut self.buffer, value) {
+            self.buffer.truncate(original_len);
+            return Err(AppError::Internal(error.into()));
+        }
+        if self.buffer.len() >= 64 * 1024 {
+            self.flush().await?;
+        }
+        Ok(())
     }
     async fn flush(&mut self) -> Result<(), AppError> {
         if !self.buffer.is_empty() {
@@ -638,3 +633,36 @@ mod tests {
 #[cfg(test)]
 #[path = "__tests__/metrics_queries/contracts.rs"]
 mod query_contracts;
+
+struct MetricTask(tokio::task::JoinHandle<()>);
+impl Drop for MetricTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+impl MetricOutput {
+    async fn produce(
+        &mut self,
+        state: AppState,
+        request: StreamRequest,
+        permit: crate::services::resource_limits::ResourcePermit,
+    ) {
+        let sender = self.sender.clone();
+        let deadline =
+            std::time::Duration::from_secs(state.config.security.metrics_timeout_seconds);
+        let result = tokio::select! {
+            biased;
+            _ = sender.closed() => return,
+            completed = tokio::time::timeout(deadline, streaming::produce(&state, &request, self, permit)) => completed,
+        };
+        let failure = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error,
+            Err(_) => AppError::DependencyUnavailable("Metric request timed out".into()),
+        };
+        tracing::warn!(error = ?failure, "metric response interrupted");
+        let _ = sender
+            .send(Err(std::io::Error::other("metric response interrupted")))
+            .await;
+    }
+}

@@ -1,3 +1,68 @@
+#[tokio::test]
+#[ignore = "requires unique disposable restricted-role database and loopback S3 fixture"]
+async fn full_replacement_remote_catalog_download_and_cleanup() {
+    use crate::services::s3_backups::workflow_test_transport::{head, reply, Fake};
+    use sha2::{Digest, Sha256};
+
+    let db = DatabaseFixture::new().await;
+    let root = support::temporary_directory();
+    let mut state = app(&db, root.path()).await;
+    sqlx::query("INSERT INTO panda.users(id,email,password_hash,role) VALUES($1,'remote-fixture@example.invalid','inert','admin')")
+        .bind(id(1)).execute(&db.pool).await.unwrap();
+    let package = support::package();
+    let checksum = hex::encode(Sha256::digest(&package));
+    let listing = format!(
+        "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>fixture/package.rma.tar.gz</Key><Size>{}</Size></Contents></ListBucketResult>",
+        package.len()
+    );
+    let fake = Fake::new("query-route-remote", vec![
+        reply("GET", 200, listing.into_bytes()),
+        head("2026-01-02T03:04:05Z", &checksum),
+        reply("GET", 200, package.clone()),
+        reply("GET", 200, package.clone()),
+        reply("GET", 200, package.clone()),
+    ]).await;
+    state.config.panda_env = Some("test".into());
+    state.config.security.s3_allow_development_garage = true;
+    state.config.s3_endpoint = Some(fake.settings.endpoint.clone());
+    state.config.s3_access_key = Some(fake.settings.access_key.clone());
+    state.config.s3_secret_key = Some(fake.settings.secret_key.clone());
+    fs::create_dir_all(&state.config.backup_artifact_dir).await.unwrap();
+    sqlx::query(
+        "INSERT INTO panda.backup_settings(id,enabled,frequency,run_at,day_of_week,local_enabled,s3_enabled,bucket,prefix)
+         VALUES(TRUE,FALSE,'weekly','03:00',0,TRUE,TRUE,'bucket','fixture')
+         ON CONFLICT(id) DO UPDATE SET s3_enabled=TRUE,bucket='bucket',prefix='fixture'")
+        .execute(&db.pool).await.unwrap();
+    reconcile_s3_catalog(&state).await.unwrap();
+    let mut artifacts = load_artifacts(&state).await.unwrap();
+    assert_eq!(artifacts.len(), 1);
+    let mut artifact = artifacts.pop().unwrap();
+    assert_eq!(artifact.storage_path, "s3://bucket/fixture/package.rma.tar.gz");
+    assert_eq!(artifact.checksum_sha256, checksum);
+    assert_eq!(artifact.manifest["restore_availability"], "available");
+    let staged = materialize_artifact(&state, &artifact).await.unwrap();
+    assert_eq!(fs::read(&staged.path).await.unwrap(), package);
+    let staged_path = staged.path.clone();
+    drop(staged);
+    assert!(!std::path::Path::new(&staged_path).exists());
+
+    let application = router().layer(Extension(state.jwt_keys.decoding.clone())).with_state(state.clone());
+    let response = application.oneshot(Request::builder()
+        .uri(format!("/admin/backups/artifacts/{}/download", artifact.id))
+        .header("authorization", format!("Bearer {}", token(&state, 1)))
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(to_bytes(response.into_body(), 200000).await.unwrap().as_ref(), package);
+
+    artifact.checksum_sha256 = "incorrect-catalog-checksum".into();
+    assert!(matches!(materialize_artifact(&state, &artifact).await, Err(AppError::Validation(_))));
+    let staging = std::path::Path::new(&state.config.backup_artifact_dir).join(".remote-staging");
+    assert!(std::fs::read_dir(staging).unwrap().next().is_none());
+    assert_eq!(fake.finish().as_array().unwrap().len(), 5);
+    db.cleanup().await;
+}
+
 use super::*;
 use axum::{body::to_bytes, http::Request, Extension};
 use serde_json::json;
@@ -6,6 +71,57 @@ use tower::ServiceExt;
 
 use crate::services::backups::workflow_test_support as support;
 use support::{id, DatabaseFixture};
+
+#[tokio::test]
+#[ignore = "requires unique disposable restricted-role database and loopback restore supervisor"]
+async fn full_replacement_restore_handoff_checkpoints_and_rejection() {
+    use crate::services::s3_backups::workflow_test_transport::{reply, Fake};
+    let db = DatabaseFixture::new().await;
+    let root = support::temporary_directory();
+    let mut state = app(&db, root.path()).await;
+    fs::create_dir_all(&state.config.backup_artifact_dir).await.unwrap();
+    fs::write(restore_jobs::agent_key_path(&state.config), "synthetic-agent-key\n").await.unwrap();
+    sqlx::query(
+        "INSERT INTO panda.backup_artifacts(id,storage_type,file_name,storage_path,size_bytes,checksum_sha256,manifest)
+         VALUES($1,'s3','fixture.rma.tar.gz','s3://fixture/fixture.rma.tar.gz',0,'fixture','{}')")
+        .bind(id(700)).execute(&db.pool).await.unwrap();
+    for (index, status) in [200, 503].into_iter().enumerate() {
+        let job_id = id(710 + index as u128);
+        let request_id = id(720 + index as u128);
+        sqlx::query(
+            "INSERT INTO panda.backup_restore_requests(id,artifact_id,status,confirmation_phrase)
+             VALUES($1,$2,'pending','RESTORE')")
+            .bind(request_id).bind(id(700)).execute(&db.pool).await.unwrap();
+        let job: restore_jobs::RestoreJob = serde_json::from_value(json!({
+            "id":job_id, "artifact_id":id(700), "artifact_path":"/synthetic/unopened.rma.tar.gz",
+            "restore_request_id":request_id, "phase":"queued", "progress_percent":5,
+            "message":"Restore queued", "capability_sha256":"synthetic-capability-digest",
+            "created_at":"2026-01-01T00:00:00Z", "updated_at":"2026-01-01T00:00:00Z"
+        })).unwrap();
+        restore_jobs::write(&state.config, &job).await.unwrap();
+        let fake = Fake::new("query-route-supervisor", vec![reply("POST", status, vec![])]).await;
+        state.config.restore_agent_url = fake.settings.endpoint.clone();
+        let result = prepare_and_handoff_restore(state.clone(), job_id).await;
+        if status == 200 {
+            result.unwrap();
+        } else {
+            assert!(matches!(result, Err(AppError::DependencyUnavailable(ref message))
+                if message == "Restore supervisor rejected the job with status 503 Service Unavailable."));
+        }
+        let stored = restore_jobs::read(&state.config, job_id).await.unwrap();
+        assert!(matches!(stored.phase, restore_jobs::RestorePhase::PreparingCandidate));
+        assert_eq!(stored.progress_percent, 15);
+        let snapshot = stored.catalog_snapshot.unwrap();
+        assert!(snapshot.restore_requests.iter().any(|request| request.id == request_id && request.status == "running"));
+        let request_status: String = sqlx::query_scalar("SELECT status FROM panda.backup_restore_requests WHERE id=$1")
+            .bind(request_id).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(request_status, "running");
+        let calls = fake.finish();
+        assert_eq!(calls[0]["path"], format!("/internal/jobs/{job_id}/execute"));
+        assert_eq!(calls[0]["bytes"], 0);
+    }
+    db.cleanup().await;
+}
 
 async fn app(db: &DatabaseFixture, root: &std::path::Path) -> AppState {
     let keys = crate::keys::bootstrap_development_keys(&db.pool)

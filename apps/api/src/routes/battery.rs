@@ -21,14 +21,15 @@ use crate::{
 mod workflow;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/battery/soc", get(get_soc))
-        .route("/battery/range", get(get_range))
-        .route("/battery/capacity", get(get_capacity))
-        .route("/battery/health", get(get_health))
-        .route("/battery/mileage", get(get_mileage))
-        .route("/battery/phantom-drain", get(get_phantom_drain))
-        .route("/battery/degradation", get(get_degradation))
+    super::route_table([
+        ("/battery/soc", get(get_soc)),
+        ("/battery/range", get(get_range)),
+        ("/battery/capacity", get(get_capacity)),
+        ("/battery/health", get(get_health)),
+        ("/battery/mileage", get(get_mileage)),
+        ("/battery/phantom-drain", get(get_phantom_drain)),
+        ("/battery/degradation", get(get_degradation)),
+    ])
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,13 +52,7 @@ fn resolve_time_bounds(
     lifetime: bool,
     default_days: i64,
 ) -> (DateTime<Utc>, DateTime<Utc>) {
-    let resolved_to = to.unwrap_or_else(Utc::now);
-    let resolved_from = if lifetime {
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
-    } else {
-        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
-    };
-    (resolved_from, resolved_to)
+    super::time_bounds(from, to, lifetime, default_days)
 }
 
 async fn get_soc(

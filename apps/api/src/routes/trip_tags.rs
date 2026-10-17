@@ -23,19 +23,20 @@ const MAX_BATCH_TRIPS: usize = 500;
 const MAX_BATCH_TAGS: usize = 50;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
+    super::route_table([
+        (
             "/vehicles/{vehicle_id}/trip-tags",
             get(list_tags).post(create_tag),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/trip-tags/{tag_id}",
             patch(update_tag).delete(delete_tag),
-        )
-        .route(
+        ),
+        (
             "/vehicles/{vehicle_id}/trip-tags/assignments",
             post(update_assignments),
-        )
+        ),
+    ])
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -85,9 +86,20 @@ struct AssignmentResponse {
 /// Unicode spellings from creating visually indistinguishable catalog entries;
 /// whitespace and Unicode lowercasing make lookup/collision behavior explicit.
 fn normalize_name(raw: &str) -> Result<(String, String), AppError> {
-    let display = raw.nfc().collect::<String>();
-    let display = display.split_whitespace().collect::<Vec<_>>().join(" ");
-    if display.is_empty() || display.chars().count() > 64 {
+    let mut display = String::new();
+    let mut separator = false;
+    for character in raw.nfc() {
+        if character.is_whitespace() {
+            separator = !display.is_empty();
+        } else {
+            if separator {
+                display.push(' ');
+                separator = false;
+            }
+            display.push(character);
+        }
+    }
+    if !(1..=64).contains(&display.chars().take(65).count()) {
         return Err(AppError::Validation(
             "tag name must contain 1 to 64 non-whitespace characters".into(),
         ));
@@ -130,29 +142,10 @@ async fn create_tag(
     Json(body): Json<CreateTagBody>,
 ) -> Result<Json<TripTagResponse>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    let (name, normalized_name) = normalize_name(&body.name)?;
-    let color_token = validate_color_token(body.color_token)?;
-    let tag = sqlx::query_as::<_, TripTagResponse>(
-        "INSERT INTO panda.trip_tags (vehicle_id, name, normalized_name, color_token, created_by)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, vehicle_id, name, color_token, created_by, created_at, updated_at",
-    )
-    .bind(vehicle_id)
-    .bind(name)
-    .bind(normalized_name)
-    .bind(color_token)
-    .bind(auth.user_id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(
-        |error| match error.as_database_error().and_then(|db| db.code()) {
-            Some(code) if code == "23505" => {
-                AppError::Conflict("a tag with that name already exists".into())
-            }
-            _ => AppError::Database(error),
-        },
-    )?;
-    Ok(Json(tag))
+    TagChange::prepare(None, Some(body.name), body.color_token)?
+        .persist(&state, vehicle_id, auth.user_id)
+        .await
+        .map(Json)
 }
 
 async fn update_tag(
@@ -162,40 +155,10 @@ async fn update_tag(
     Json(body): Json<UpdateTagBody>,
 ) -> Result<Json<TripTagResponse>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    if body.name.is_none() && body.color_token.is_none() {
-        return Err(AppError::Validation(
-            "at least one tag field is required".into(),
-        ));
-    }
-    let named = body.name.as_deref().map(normalize_name).transpose()?;
-    let color_token = body
-        .color_token
-        .map(|token| validate_color_token(Some(token)))
-        .transpose()?;
-    let tag = sqlx::query_as::<_, TripTagResponse>(
-        "UPDATE panda.trip_tags
-         SET name=COALESCE($3, name), normalized_name=COALESCE($4, normalized_name),
-             color_token=COALESCE($5, color_token), updated_at=now()
-         WHERE id=$1 AND vehicle_id=$2
-         RETURNING id, vehicle_id, name, color_token, created_by, created_at, updated_at",
-    )
-    .bind(tag_id)
-    .bind(vehicle_id)
-    .bind(named.as_ref().map(|(name, _)| name))
-    .bind(named.as_ref().map(|(_, normalized)| normalized))
-    .bind(color_token)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(
-        |error| match error.as_database_error().and_then(|db| db.code()) {
-            Some(code) if code == "23505" => {
-                AppError::Conflict("a tag with that name already exists".into())
-            }
-            _ => AppError::Database(error),
-        },
-    )?
-    .ok_or(AppError::NotFound)?;
-    Ok(Json(tag))
+    TagChange::prepare(Some(tag_id), body.name, body.color_token)?
+        .persist(&state, vehicle_id, auth.user_id)
+        .await
+        .map(Json)
 }
 
 async fn delete_tag(
@@ -204,15 +167,15 @@ async fn delete_tag(
     Path((vehicle_id, tag_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
-    let result = sqlx::query("DELETE FROM panda.trip_tags WHERE id=$1 AND vehicle_id=$2")
-        .bind(tag_id)
-        .bind(vehicle_id)
-        .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound);
-    }
-    Ok(Json(serde_json::json!({ "ok": true })))
+    let removed: Option<Uuid> = sqlx::query_scalar(
+        "DELETE FROM panda.trip_tags WHERE (id,vehicle_id)=($1,$2) RETURNING id",
+    )
+    .bind(tag_id)
+    .bind(vehicle_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    removed.ok_or(AppError::NotFound)?;
+    Ok(Json(serde_json::json!({"ok":true})))
 }
 
 async fn update_assignments(
@@ -228,23 +191,35 @@ async fn update_assignments(
 }
 
 fn validate_assignment_ids(body: &AssignmentBody) -> Result<(), AppError> {
-    if body.trip_ids.is_empty() || body.trip_ids.len() > MAX_BATCH_TRIPS {
-        return Err(AppError::Validation(format!(
-            "trip_ids must contain 1 to {MAX_BATCH_TRIPS} IDs"
-        )));
+    for (count, minimum, maximum, message) in [
+        (
+            body.trip_ids.len(),
+            1,
+            MAX_BATCH_TRIPS,
+            format!("trip_ids must contain 1 to {MAX_BATCH_TRIPS} IDs"),
+        ),
+        (
+            body.tag_ids.len(),
+            0,
+            MAX_BATCH_TAGS,
+            format!("tag_ids may contain at most {MAX_BATCH_TAGS} IDs"),
+        ),
+    ] {
+        if !(minimum..=maximum).contains(&count) {
+            return Err(AppError::Validation(message));
+        }
     }
-    if body.tag_ids.len() > MAX_BATCH_TAGS {
-        return Err(AppError::Validation(format!(
-            "tag_ids may contain at most {MAX_BATCH_TAGS} IDs"
-        )));
-    }
-    if matches!(body.mode, AssignmentMode::Add | AssignmentMode::Remove) && body.tag_ids.is_empty()
+    if let (AssignmentMode::Add | AssignmentMode::Remove, true) =
+        (body.mode, body.tag_ids.is_empty())
     {
         return Err(AppError::Validation(
             "tag_ids is required for add and remove".into(),
         ));
     }
-    if has_duplicates(&body.trip_ids) || has_duplicates(&body.tag_ids) {
+    if [&body.trip_ids, &body.tag_ids]
+        .into_iter()
+        .any(|ids| has_duplicates(ids))
+    {
         return Err(AppError::Validation(
             "trip_ids and tag_ids must not contain duplicates".into(),
         ));
@@ -253,9 +228,8 @@ fn validate_assignment_ids(body: &AssignmentBody) -> Result<(), AppError> {
 }
 
 fn has_duplicates(ids: &[Uuid]) -> bool {
-    let mut ids = ids.to_vec();
-    ids.sort_unstable();
-    ids.windows(2).any(|pair| pair[0] == pair[1])
+    let mut seen = std::collections::HashSet::with_capacity(ids.len());
+    ids.iter().any(|id| !seen.insert(*id))
 }
 
 async fn assert_vehicle_ids(
@@ -264,32 +238,109 @@ async fn assert_vehicle_ids(
     trip_ids: &[Uuid],
     tag_ids: &[Uuid],
 ) -> Result<(), AppError> {
-    let trip_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM panda.trips WHERE vehicle_id=$1 AND id=ANY($2)")
-            .bind(vehicle_id)
-            .bind(trip_ids)
-            .fetch_one(pool)
-            .await?;
-    if trip_count != trip_ids.len() as i64 {
-        return Err(AppError::Validation(
-            "every trip_id must belong to this vehicle".into(),
-        ));
-    }
-    if !tag_ids.is_empty() {
-        let tag_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM panda.trip_tags WHERE vehicle_id=$1 AND id=ANY($2)",
-        )
-        .bind(vehicle_id)
-        .bind(tag_ids)
-        .fetch_one(pool)
-        .await?;
-        if tag_count != tag_ids.len() as i64 {
-            return Err(AppError::Validation(
-                "every tag_id must belong to this vehicle".into(),
-            ));
+    for (table, ids, message) in [
+        (
+            "panda.trips",
+            trip_ids,
+            "every trip_id must belong to this vehicle",
+        ),
+        (
+            "panda.trip_tags",
+            tag_ids,
+            "every tag_id must belong to this vehicle",
+        ),
+    ] {
+        if table == "panda.trip_tags" && ids.is_empty() {
+            continue;
+        }
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*) FROM ");
+        query
+            .push(table)
+            .push(" WHERE vehicle_id=")
+            .push_bind(vehicle_id)
+            .push(" AND id=ANY(")
+            .push_bind(ids)
+            .push(")");
+        let count: i64 = query.build_query_scalar().fetch_one(pool).await?;
+        if count != ids.len() as i64 {
+            return Err(AppError::Validation(message.into()));
         }
     }
     Ok(())
+}
+
+struct TagChange {
+    id: Option<Uuid>,
+    name: Option<String>,
+    normalized_name: Option<String>,
+    color_token: Option<String>,
+}
+impl TagChange {
+    fn prepare(
+        id: Option<Uuid>,
+        name: Option<String>,
+        color_token: Option<String>,
+    ) -> Result<Self, AppError> {
+        if id.is_some() && name.is_none() && color_token.is_none() {
+            return Err(AppError::Validation(
+                "at least one tag field is required".into(),
+            ));
+        }
+        let named = name.as_deref().map(normalize_name).transpose()?;
+        let color_token = if id.is_none() {
+            Some(validate_color_token(color_token)?)
+        } else {
+            color_token
+                .map(|color| validate_color_token(Some(color)))
+                .transpose()?
+        };
+        let (name, normalized_name) = match named {
+            Some((name, key)) => (Some(name), Some(key)),
+            None => (None, None),
+        };
+        Ok(Self {
+            id,
+            name,
+            normalized_name,
+            color_token,
+        })
+    }
+
+    async fn persist(
+        self,
+        state: &AppState,
+        vehicle_id: Uuid,
+        actor: Uuid,
+    ) -> Result<TripTagResponse, AppError> {
+        let result = sqlx::query_as::<_, TripTagResponse>(
+            "WITH inserted AS (
+              INSERT INTO panda.trip_tags (vehicle_id,name,normalized_name,color_token,created_by)
+              SELECT $2,$3,$4,$5,$6 WHERE $1::uuid IS NULL
+              RETURNING id,vehicle_id,name,color_token,created_by,created_at,updated_at
+             ), updated AS (
+              UPDATE panda.trip_tags SET name=COALESCE($3,name),normalized_name=COALESCE($4,normalized_name),
+              color_token=COALESCE($5,color_token),updated_at=now() WHERE id=$1 AND vehicle_id=$2
+              RETURNING id,vehicle_id,name,color_token,created_by,created_at,updated_at
+             ) SELECT * FROM inserted UNION ALL SELECT * FROM updated")
+            .bind(self.id).bind(vehicle_id).bind(self.name).bind(self.normalized_name).bind(self.color_token).bind(actor)
+            .fetch_optional(&state.pool).await;
+        match result {
+            Ok(Some(tag)) => Ok(tag),
+            Ok(None) => Err(AppError::NotFound),
+            Err(error)
+                if error
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .as_deref()
+                    == Some("23505") =>
+            {
+                Err(AppError::Conflict(
+                    "a tag with that name already exists".into(),
+                ))
+            }
+            Err(error) => Err(AppError::Database(error)),
+        }
+    }
 }
 
 #[cfg(test)]

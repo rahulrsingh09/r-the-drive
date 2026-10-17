@@ -27,24 +27,25 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/trips", get(list_trips))
-        .route(
+    super::route_table([
+        ("/trips", get(list_trips)),
+        (
             "/trips/tire-pressure-timeline",
             get(get_tire_pressure_timeline),
-        )
-        .route("/trips/{id}", get(get_trip))
-        .route("/trips/{id}/detail", get(get_trip_detail))
-        .route("/trips/{id}/track", get(get_track))
-        .route("/trips/{id}/speed", get(get_speed_profile))
-        .route("/trips/{id}/elevation", get(get_elevation_profile))
-        .route("/trips/{id}/power", get(get_power_profile))
-        .route("/trips/{id}/series", get(get_trip_series))
-        .route("/trips/map", get(get_trip_map))
-        .route(
+        ),
+        ("/trips/{id}", get(get_trip)),
+        ("/trips/{id}/detail", get(get_trip_detail)),
+        ("/trips/{id}/track", get(get_track)),
+        ("/trips/{id}/speed", get(get_speed_profile)),
+        ("/trips/{id}/elevation", get(get_elevation_profile)),
+        ("/trips/{id}/power", get(get_power_profile)),
+        ("/trips/{id}/series", get(get_trip_series)),
+        ("/trips/map", get(get_trip_map)),
+        (
             "/vehicles/{vehicle_id}/drives/{id}/power",
             get(get_power_profile_path),
-        )
+        ),
+    ])
 }
 
 #[derive(Deserialize)]
@@ -70,18 +71,23 @@ fn parse_tag_filter(params: &TripListParams) -> Result<TripTagFilter, AppError> 
 }
 
 fn trip_search_predicate(param: usize) -> String {
-    format!(
-        r#" AND (${param}::text IS NULL OR
-                  COALESCE(sg.name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
-                  COALESCE(eg.name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
-                  COALESCE(sa.display_name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
-                  COALESCE(ea.display_name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
-                  COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
-                  COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
-                  EXISTS (SELECT 1 FROM panda.trip_tag_assignments tta
-                          JOIN panda.trip_tags tt ON tt.id=tta.tag_id
-                          WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || ${param} || '%' ESCAPE '\'))"#
-    )
+    let columns = [
+        "sg.name",
+        "eg.name",
+        "sa.display_name",
+        "ea.display_name",
+        "CONCAT_WS(', ', sa.road, sa.city)",
+        "CONCAT_WS(', ', ea.road, ea.city)",
+    ];
+    let mut alternatives = vec![format!("${param}::text IS NULL")];
+    alternatives.extend(
+        columns.into_iter().map(|column| {
+            format!("COALESCE({column}, '') ILIKE '%' || ${param} || '%' ESCAPE '\\'")
+        }),
+    );
+    alternatives.push(format!(
+        "EXISTS (SELECT 1 FROM panda.trip_tag_assignments tta JOIN panda.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || ${param} || '%' ESCAPE '\\')"));
+    format!(" AND ({})", alternatives.join(" OR "))
 }
 
 #[cfg(test)]
@@ -153,13 +159,7 @@ fn resolve_time_bounds(
     lifetime: bool,
     default_days: i64,
 ) -> (DateTime<Utc>, DateTime<Utc>) {
-    let resolved_to = to.unwrap_or_else(Utc::now);
-    let resolved_from = if lifetime {
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
-    } else {
-        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
-    };
-    (resolved_from, resolved_to)
+    super::time_bounds(from, to, lifetime, default_days)
 }
 
 #[derive(Deserialize)]
@@ -459,33 +459,24 @@ fn finite_value(value: Option<f64>) -> Option<f64> {
 }
 
 fn normalize_capacity_wh(value: Option<f64>) -> Option<f64> {
-    let value = finite_value(value)?;
-    if (40.0..=250.0).contains(&value) {
-        Some(value * 1_000.0)
-    } else if (40_000.0..=250_000.0).contains(&value) {
-        Some(value)
-    } else {
-        None
-    }
+    let value = value?;
+    [(40.0..=250.0, 1000.0), (40_000.0..=250_000.0, 1.0)]
+        .into_iter()
+        .find_map(|(bounds, scale)| bounds.contains(&value).then_some(value * scale))
 }
 
 fn percentile(values: &[f64], percentile: f64) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    if sorted.len() == 1 {
-        return sorted.first().copied();
-    }
-    let position = percentile.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let last = values.len().checked_sub(1)?;
+    let position = percentile.clamp(0.0, 1.0) * last as f64;
     let lower = position.floor() as usize;
     let upper = position.ceil() as usize;
+    let mut work = values.to_vec();
+    let (_, low, greater) = work.select_nth_unstable_by(lower, f64::total_cmp);
     if lower == upper {
-        return sorted.get(lower).copied();
+        return Some(*low);
     }
-    let fraction = position - lower as f64;
-    Some(sorted[lower] + (sorted[upper] - sorted[lower]) * fraction)
+    let high = greater.iter().min_by(|a, b| a.total_cmp(b))?;
+    Some(*low + (*high - *low) * (position - lower as f64))
 }
 
 fn derive_soc_power(rows: &[TripPowerTelemetryRow], trip_duration_seconds: i32) -> TripPowerData {
@@ -673,28 +664,47 @@ fn raw_outside_elapsed(samples: &TripDetailSamples) -> std::collections::HashSet
 }
 
 fn merge_weather_samples(samples: &mut TripDetailSamples, weather_rows: &[TripWeatherRow]) {
-    if samples.elapsed_s.is_empty() {
+    let mut timeline = samples
+        .elapsed_s
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, elapsed)| (elapsed, index))
+        .collect::<Vec<_>>();
+    timeline.sort_unstable();
+    timeline.dedup_by_key(|point| point.0);
+    let Some(&(first, _)) = timeline.first() else {
         return;
-    }
+    };
+    let last = timeline.last().unwrap().0;
     for weather in weather_rows {
-        let Some((index, _)) = samples
-            .elapsed_s
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, elapsed)| (**elapsed - weather.elapsed_seconds).abs())
-        else {
-            continue;
-        };
-        if samples
-            .outside_temp_c
-            .get(index)
-            .copied()
+        let elapsed = weather.elapsed_seconds;
+        let safe_distance = |point: i32| point.checked_sub(elapsed).and_then(i32::checked_abs);
+        let index = if safe_distance(first).is_some() && safe_distance(last).is_some() {
+            let split = timeline.partition_point(|point| point.0 < elapsed);
+            [
+                split.checked_sub(1),
+                (split < timeline.len()).then_some(split),
+            ]
+            .into_iter()
             .flatten()
-            .is_none()
-        {
-            if let Some(value) = samples.outside_temp_c.get_mut(index) {
-                *value = Some(weather.temperature_c);
-            }
+            .map(|position| {
+                let (point, index) = timeline[position];
+                ((point - elapsed).abs(), index)
+            })
+            .min()
+            .map(|(_, index)| index)
+        } else {
+            // Preserve the legacy overflow behavior for nonphysical elapsed values.
+            samples
+                .elapsed_s
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, point)| (**point - elapsed).abs())
+                .map(|(index, _)| index)
+        };
+        if let Some(value) = index.and_then(|index| samples.outside_temp_c.get_mut(index)) {
+            value.get_or_insert(weather.temperature_c);
         }
     }
 }
@@ -709,15 +719,17 @@ fn build_outside_temperature(
 }
 
 fn detail_bucket_seconds(duration_seconds: i32) -> i32 {
-    let target = (duration_seconds.max(1) as f64 / 1_500.0).ceil().max(1.0);
-    let exponent = target.log10().floor() as i32;
-    let base = 10_f64.powi(exponent);
-    [1.0, 2.0, 5.0, 10.0]
-        .into_iter()
-        .map(|step| step * base)
-        .find(|step| *step >= target)
-        .unwrap_or(10.0 * base)
-        .round() as i32
+    let target = ((i64::from(duration_seconds).max(1) + 1499) / 1500) as i32;
+    let mut magnitude = 1;
+    loop {
+        for factor in [1, 2, 5] {
+            let seconds = magnitude * factor;
+            if seconds >= target {
+                return seconds;
+            }
+        }
+        magnitude *= 10;
+    }
 }
 
 async fn get_track(
@@ -811,11 +823,9 @@ async fn get_power_profile(
     Path(id): Path<Uuid>,
     Query(p): Query<VehicleParam>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vid)?;
-    power_profile_response(&state, auth.user_id, vid, id).await
+    TripRead::Power(id)
+        .respond(&state, &auth, p.vehicle_id)
+        .await
 }
 
 async fn get_power_profile_path(
@@ -823,8 +833,9 @@ async fn get_power_profile_path(
     auth: AuthUser,
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    power_profile_response(&state, auth.user_id, vehicle_id, id).await
+    TripRead::Power(id)
+        .respond(&state, &auth, Some(vehicle_id))
+        .await
 }
 
 async fn get_trip_series(
@@ -833,11 +844,9 @@ async fn get_trip_series(
     Path(id): Path<Uuid>,
     Query(p): Query<VehicleParam>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    require_vehicle_access(&auth, vid)?;
-    trip_series_response(&state, auth.user_id, vid, id).await
+    TripRead::Series(id)
+        .respond(&state, &auth, p.vehicle_id)
+        .await
 }
 
 async fn power_profile_response(
@@ -1134,3 +1143,51 @@ mod query_contracts;
 #[cfg(test)]
 #[path = "__tests__/derived_trip_series.rs"]
 mod derived_series_tests;
+
+enum TripRead {
+    Power(Uuid),
+    Series(Uuid),
+}
+impl TripRead {
+    async fn respond(
+        self,
+        state: &AppState,
+        auth: &AuthUser,
+        vehicle: Option<Uuid>,
+    ) -> Result<Json<serde_json::Value>, AppError> {
+        let request = super::VehicleRequest::select(auth, vehicle)?;
+        match self {
+            Self::Power(id) => power_profile_response(state, auth.user_id, request.id, id).await,
+            Self::Series(id) => trip_series_response(state, auth.user_id, request.id, id).await,
+        }
+    }
+}
+
+#[cfg(test)]
+mod full_replacement_weather_characterization {
+    use super::*;
+
+    #[test]
+    fn nearest_weather_preserves_input_order_ties_and_existing_values() {
+        let mut samples = TripDetailSamples {
+            elapsed_s: vec![20, 0, 20, 40, 10],
+            outside_temp_c: vec![None, Some(90.0), None, None],
+            ..Default::default()
+        };
+        let rows = [(30, 7.0), (20, 8.0), (0, 9.0), (10, 10.0), (41, 11.0)].map(
+            |(elapsed_seconds, temperature_c)| TripWeatherRow {
+                sampled_at: DateTime::UNIX_EPOCH,
+                elapsed_seconds,
+                temperature_c,
+            },
+        );
+        merge_weather_samples(&mut samples, &rows);
+        assert_eq!(
+            samples.outside_temp_c,
+            vec![Some(7.0), Some(90.0), None, Some(11.0)]
+        );
+        let mut empty = TripDetailSamples::default();
+        merge_weather_samples(&mut empty, &rows);
+        assert!(empty.outside_temp_c.is_empty());
+    }
+}

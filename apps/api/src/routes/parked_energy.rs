@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/{vehicle_id}/parked-energy", get(parked_energy))
+    super::route_table([("/vehicles/{vehicle_id}/parked-energy", get(parked_energy))])
 }
 
 #[derive(Deserialize)]

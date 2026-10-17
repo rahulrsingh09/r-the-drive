@@ -15,7 +15,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -29,20 +29,21 @@ const BUILTIN_MANIFEST: &str = include_str!("../themes/builtins.generated.json")
 const PREFERENCES_IF_MATCH_HEADER: &str = "x-theme-preferences-if-match";
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/themes/catalog", get(catalog))
-        .route("/themes", post(create_theme))
-        .route("/themes/{theme_id}", get(get_theme).delete(retire_theme))
-        .route("/themes/{theme_id}/revisions", post(save_revision))
-        .route(
+    super::route_table([
+        ("/themes/catalog", get(catalog)),
+        ("/themes", post(create_theme)),
+        ("/themes/{theme_id}", get(get_theme).delete(retire_theme)),
+        ("/themes/{theme_id}/revisions", post(save_revision)),
+        (
             "/themes/{theme_id}/revisions/{revision}/publish",
             post(publish_revision),
-        )
-        .route("/themes/{theme_id}/rollback", post(rollback_theme))
-        .route(
+        ),
+        ("/themes/{theme_id}/rollback", post(rollback_theme)),
+        (
             "/auth/preferences/theme",
             get(get_theme_preferences).put(update_theme_preferences),
-        )
+        ),
+    ])
 }
 
 #[derive(Debug, Serialize)]
@@ -106,9 +107,13 @@ struct UpdateThemePreferencesBody {
 }
 
 fn builtin_manifest() -> Result<Value, AppError> {
-    serde_json::from_str(BUILTIN_MANIFEST).map_err(|error| {
-        AppError::Internal(anyhow::anyhow!("invalid generated theme manifest: {error}"))
-    })
+    static MANIFEST: std::sync::OnceLock<Result<Value, String>> = std::sync::OnceLock::new();
+    MANIFEST
+        .get_or_init(|| serde_json::from_str(BUILTIN_MANIFEST).map_err(|error| error.to_string()))
+        .clone()
+        .map_err(|error| {
+            AppError::Internal(anyhow::anyhow!("invalid generated theme manifest: {error}"))
+        })
 }
 
 fn builtin_ids(manifest: &Value) -> BTreeSet<&str> {
@@ -130,13 +135,13 @@ fn validate_builtin_id(theme_id: &str) -> Result<(), AppError> {
 }
 
 fn normalize_name(name: &str) -> Result<String, AppError> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 80 {
-        return Err(AppError::Validation(
+    let trimmed = name.trim();
+    match trimmed.chars().take(81).count() {
+        1..=80 => Ok(trimmed.to_owned()),
+        _ => Err(AppError::Validation(
             "theme name must be between 1 and 80 characters".into(),
-        ));
+        )),
     }
-    Ok(name.to_owned())
 }
 
 fn validate_mode(mode: &str) -> Result<(), AppError> {
@@ -148,48 +153,43 @@ fn validate_mode(mode: &str) -> Result<(), AppError> {
 }
 
 fn validate_color(value: &Value, context: &str) -> Result<(), AppError> {
-    let Some(color) = value.as_str() else {
-        return Err(AppError::Validation(format!("{context} must be a color")));
-    };
-    let bytes = color.as_bytes();
-    if bytes.len() != 7 || bytes[0] != b'#' || !bytes[1..].iter().all(u8::is_ascii_hexdigit) {
-        return Err(AppError::Validation(format!(
-            "{context} must be a six-digit hex color"
-        )));
-    }
-    Ok(())
+    let color = value
+        .as_str()
+        .ok_or_else(|| AppError::Validation(format!("{context} must be a color")))?;
+    let valid = color
+        .strip_prefix('#')
+        .filter(|digits| digits.len() == 6)
+        .is_some_and(|digits| digits.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    valid
+        .then_some(())
+        .ok_or_else(|| AppError::Validation(format!("{context} must be a six-digit hex color")))
 }
 
 fn validate_color_pair(value: &Value, context: &str) -> Result<(), AppError> {
-    let Some(pair) = value.as_object() else {
-        return Err(AppError::Validation(format!("{context} must be an object")));
-    };
-    if pair.is_empty() || pair.keys().any(|key| key != "light" && key != "dark") {
+    let pair = value
+        .as_object()
+        .ok_or_else(|| AppError::Validation(format!("{context} must be an object")))?;
+    let modes = pair.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if modes.is_empty() || !modes.is_subset(&BTreeSet::from(["light", "dark"])) {
         return Err(AppError::Validation(format!(
             "{context} may contain only light and dark"
         )));
     }
-    for (mode, value) in pair {
-        validate_color(value, &format!("{context}.{mode}"))?;
-    }
-    Ok(())
+    pair.iter()
+        .try_for_each(|(mode, color)| validate_color(color, &format!("{context}.{mode}")))
 }
 
 fn relative_luminance(color: &str) -> Option<f64> {
-    let channel = |range: std::ops::Range<usize>| {
-        u8::from_str_radix(color.get(range)?, 16).ok().map(|value| {
-            let value = f64::from(value) / 255.0;
-            if value <= 0.04045 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        })
-    };
-    let red = channel(1..3)?;
-    let green = channel(3..5)?;
-    let blue = channel(5..7)?;
-    Some(0.2126 * red + 0.7152 * green + 0.0722 * blue)
+    let mut linear = [0.0; 3];
+    for (index, component) in linear.iter_mut().enumerate() {
+        let start = 1 + index * 2;
+        let encoded = f64::from(u8::from_str_radix(color.get(start..start + 2)?, 16).ok()?) / 255.0;
+        *component = match encoded {
+            value if value <= 0.04045 => value / 12.92,
+            value => ((value + 0.055) / 1.055).powf(2.4),
+        };
+    }
+    Some(0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2])
 }
 
 fn contrast_ratio(first: &str, second: &str) -> Option<f64> {
@@ -204,13 +204,16 @@ fn resolved_token<'a>(
     token: &str,
     mode: &str,
 ) -> Option<&'a str> {
-    root.get("tokens")
-        .and_then(Value::as_object)
-        .and_then(|tokens| tokens.get(token))
-        .and_then(Value::as_object)
-        .and_then(|pair| pair.get(mode))
-        .and_then(Value::as_str)
-        .or_else(|| base["tokens"][mode][token].as_str())
+    let mut current = root.get("tokens");
+    for key in [token, mode] {
+        current = current
+            .and_then(Value::as_object)
+            .and_then(|object| object.get(key));
+    }
+    match current.and_then(Value::as_str) {
+        Some(color) => Some(color),
+        None => base["tokens"][mode][token].as_str(),
+    }
 }
 
 fn validate_theme_definition(base_theme_id: &str, definition: &Value) -> Result<Vec<u8>, AppError> {
@@ -221,13 +224,11 @@ fn validate_theme_definition(base_theme_id: &str, definition: &Value) -> Result<
             "theme definition exceeds 64 KiB".into(),
         ));
     }
-    let Some(root) = definition.as_object() else {
-        return Err(AppError::Validation(
-            "theme definition must be an object".into(),
-        ));
-    };
-    let allowed_root = ["theme", "tokens", "series", "brandPaints"];
-    if root.keys().any(|key| !allowed_root.contains(&key.as_str())) {
+    let root = definition
+        .as_object()
+        .ok_or_else(|| AppError::Validation("theme definition must be an object".into()))?;
+    let properties = BTreeSet::from(["theme", "tokens", "series", "brandPaints"]);
+    if root.keys().any(|key| !properties.contains(key.as_str())) {
         return Err(AppError::Validation(
             "theme definition contains an unsupported property".into(),
         ));
@@ -237,80 +238,35 @@ fn validate_theme_definition(base_theme_id: &str, definition: &Value) -> Result<
             "theme definition must inherit from its built-in base".into(),
         ));
     }
-
     let manifest = builtin_manifest()?;
     let base = manifest["builtins"]
         .as_array()
         .and_then(|themes| themes.iter().find(|theme| theme["id"] == base_theme_id))
         .ok_or_else(|| AppError::Validation("unknown built-in theme".into()))?;
-    let token_ids: BTreeSet<&str> = base["tokens"]["light"]
-        .as_object()
+    for section in [
+        OverrideSection::Tokens,
+        OverrideSection::Series,
+        OverrideSection::BrandPaints,
+    ] {
+        if let Some(value) = root.get(section.name()) {
+            section.validate(value, base)?;
+        }
+    }
+    for (mode, background) in ["light", "dark"]
         .into_iter()
-        .flat_map(Map::keys)
-        .map(String::as_str)
-        .filter(|token| {
-            !token.starts_with("glow-") && !token.starts_with("shadow-") && *token != "value-halo"
-        })
-        .collect();
-
-    if let Some(tokens) = root.get("tokens") {
-        let Some(tokens) = tokens.as_object() else {
-            return Err(AppError::Validation("tokens must be an object".into()));
-        };
-        for (token, pair) in tokens {
-            if !token_ids.contains(token.as_str()) {
-                return Err(AppError::Validation(format!(
-                    "unknown or non-customizable theme token: {token}"
-                )));
-            }
-            validate_color_pair(pair, &format!("tokens.{token}"))?;
+        .flat_map(|mode| ["bg-page", "bg-surface"].map(|background| (mode, background)))
+    {
+        let mut colors = ["", ""];
+        for (index, token) in ["text-primary", background].into_iter().enumerate() {
+            colors[index] = resolved_token(base, root, token, mode)
+                .ok_or_else(|| AppError::Validation(format!("missing {token}.{mode}")))?;
         }
-    }
-
-    if let Some(series) = root.get("series") {
-        let Some(series) = series.as_object() else {
-            return Err(AppError::Validation("series must be an object".into()));
-        };
-        for (slot, pair) in series {
-            let valid = slot
-                .strip_prefix("series-")
-                .and_then(|value| value.parse::<u8>().ok())
-                .is_some_and(|value| (1..=16).contains(&value) && slot.len() == 9);
-            if !valid {
-                return Err(AppError::Validation(format!("unknown series slot: {slot}")));
-            }
-            validate_color_pair(pair, &format!("series.{slot}"))?;
-        }
-    }
-
-    if let Some(paints) = root.get("brandPaints") {
-        let Some(paints) = paints.as_object() else {
-            return Err(AppError::Validation("brandPaints must be an object".into()));
-        };
-        for (paint, pair) in paints {
-            if !matches!(paint.as_str(), "accent" | "accentMuted" | "mark") {
+        match contrast_ratio(colors[0], colors[1]) {
+            Some(ratio) if ratio >= 4.5 => {}
+            _ => {
                 return Err(AppError::Validation(format!(
-                    "unknown brand paint: {paint}"
-                )));
-            }
-            validate_color_pair(pair, &format!("brandPaints.{paint}"))?;
-        }
-    }
-    for mode in ["light", "dark"] {
-        for (foreground, background, minimum) in [
-            ("text-primary", "bg-page", 4.5),
-            ("text-primary", "bg-surface", 4.5),
-        ] {
-            let foreground_value = resolved_token(base, root, foreground, mode)
-                .ok_or_else(|| AppError::Validation(format!("missing {foreground}.{mode}")))?;
-            let background_value = resolved_token(base, root, background, mode)
-                .ok_or_else(|| AppError::Validation(format!("missing {background}.{mode}")))?;
-            if contrast_ratio(foreground_value, background_value)
-                .is_none_or(|ratio| ratio < minimum)
-            {
-                return Err(AppError::Validation(format!(
-                    "critical contrast failure for {foreground} on {background} in {mode} mode"
-                )));
+                    "critical contrast failure for text-primary on {background} in {mode} mode"
+                )))
             }
         }
     }
@@ -348,21 +304,21 @@ async fn require_preference_etag(
     headers: &HeaderMap,
 ) -> Result<(), AppError> {
     ensure_preferences_row(tx, user_id).await?;
-    let version: i64 = sqlx::query_scalar(
-        "SELECT theme_etag_version FROM panda.user_preferences WHERE user_id = $1 FOR UPDATE",
+    let (version,): (i64,) = sqlx::query_as(
+        "SELECT theme_etag_version FROM panda.user_preferences WHERE user_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
     .await?;
-    let supplied = headers
+    let expected = preferences_etag(version);
+    match headers
         .get(PREFERENCES_IF_MATCH_HEADER)
-        .and_then(|value| value.to_str().ok());
-    if supplied == Some(preferences_etag(version).as_str()) {
-        Ok(())
-    } else {
-        Err(AppError::Conflict(
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(value) if value == expected => Ok(()),
+        _ => Err(AppError::Conflict(
             "appearance preferences changed since they were loaded; refresh and try again".into(),
-        ))
+        )),
     }
 }
 
@@ -377,14 +333,23 @@ async fn list_owned_themes(
     user_id: Uuid,
     include_retired: bool,
 ) -> Result<Vec<ThemeSummary>, AppError> {
-    let rows = sqlx::query(
+    #[derive(sqlx::FromRow)]
+    struct SummaryRow {
+        id: Uuid,
+        name: String,
+        base_theme_id: String,
+        published_revision: Option<i32>,
+        retired_at: Option<chrono::DateTime<chrono::Utc>>,
+        etag_version: i64,
+        published_definition: Option<Value>,
+    }
+    let rows = sqlx::query_as::<_, SummaryRow>(
         "SELECT t.id, t.name, t.base_theme_id, t.published_revision, t.retired_at, t.etag_version,
-                (SELECT r.definition
-                 FROM panda.user_theme_revisions r
-                 WHERE r.theme_id = t.id AND r.revision = t.published_revision) AS published_definition
-         FROM panda.user_themes t
-         WHERE t.owner_id = $1 AND ($2 OR t.retired_at IS NULL)
-         ORDER BY t.updated_at DESC, t.id",
+                r.definition AS published_definition
+         FROM panda.user_themes t LEFT JOIN panda.user_theme_revisions r
+           ON r.theme_id=t.id AND r.revision=t.published_revision
+         WHERE t.owner_id=$1 AND ($2 OR t.retired_at IS NULL)
+         ORDER BY t.updated_at DESC,t.id",
     )
     .bind(user_id)
     .bind(include_retired)
@@ -392,18 +357,14 @@ async fn list_owned_themes(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| {
-            let id = row.get("id");
-            let version = row.get("etag_version");
-            ThemeSummary {
-                theme_id: id,
-                name: row.get("name"),
-                base_theme_id: row.get("base_theme_id"),
-                published_revision: row.get("published_revision"),
-                published_definition: row.get("published_definition"),
-                retired_at: row.get("retired_at"),
-                etag: theme_etag(id, version),
-            }
+        .map(|row| ThemeSummary {
+            theme_id: row.id,
+            name: row.name,
+            base_theme_id: row.base_theme_id,
+            published_revision: row.published_revision,
+            published_definition: row.published_definition,
+            retired_at: row.retired_at,
+            etag: theme_etag(row.id, row.etag_version),
         })
         .collect())
 }
@@ -434,50 +395,38 @@ async fn get_theme(
     auth: AuthUser,
     Path(theme_id): Path<Uuid>,
 ) -> Result<Response, AppError> {
-    let row = sqlx::query(
-        "SELECT name, base_theme_id, published_revision, retired_at, etag_version
-         FROM panda.user_themes WHERE id = $1 AND owner_id = $2",
-    )
-    .bind(theme_id)
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    let revisions = sqlx::query(
-        "SELECT r.revision, r.definition, r.definition_hash, r.created_at, p.published_at
-         FROM panda.user_theme_revisions r
-         LEFT JOIN panda.user_theme_publications p
-           ON p.theme_id = r.theme_id AND p.revision = r.revision
-         WHERE r.theme_id = $1 ORDER BY r.revision DESC",
-    )
-    .bind(theme_id)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .map(|revision| {
-        json!({
-            "revision": revision.get::<i32, _>("revision"),
-            "definition": revision.get::<Value, _>("definition"),
-            "definitionHash": revision.get::<String, _>("definition_hash"),
-            "createdAt": revision.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "publishedAt": revision.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
-        })
-    })
-    .collect::<Vec<_>>();
-    let version: i64 = row.get("etag_version");
-    let etag = theme_etag(theme_id, version);
-    etag_json(
-        &etag,
-        json!({
-            "themeId": theme_id,
-            "name": row.get::<String, _>("name"),
-            "baseThemeId": row.get::<String, _>("base_theme_id"),
-            "publishedRevision": row.get::<Option<i32>, _>("published_revision"),
-            "retiredAt": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("retired_at"),
-            "etag": etag,
-            "revisions": revisions,
-        }),
-    )
+    #[derive(sqlx::FromRow)]
+    struct OwnedTheme {
+        name: String,
+        base_theme_id: String,
+        published_revision: Option<i32>,
+        retired_at: Option<chrono::DateTime<chrono::Utc>>,
+        etag_version: i64,
+    }
+    #[derive(sqlx::FromRow, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Revision {
+        revision: i32,
+        definition: Value,
+        definition_hash: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+        published_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+    let theme = sqlx::query_as::<_, OwnedTheme>(
+        "SELECT name,base_theme_id,published_revision,retired_at,etag_version FROM panda.user_themes WHERE id=$1 AND owner_id=$2")
+        .bind(theme_id).bind(auth.user_id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    let revisions = sqlx::query_as::<_, Revision>(
+        "SELECT r.revision,r.definition,r.definition_hash,r.created_at,p.published_at
+         FROM panda.user_theme_revisions r LEFT JOIN panda.user_theme_publications p
+         ON (p.theme_id,p.revision)=(r.theme_id,r.revision) WHERE r.theme_id=$1 ORDER BY r.revision DESC")
+        .bind(theme_id).fetch_all(&state.pool).await?;
+    let etag = theme_etag(theme_id, theme.etag_version);
+    let payload = json!({
+        "themeId":theme_id, "name":theme.name, "baseThemeId":theme.base_theme_id,
+        "publishedRevision":theme.published_revision, "retiredAt":theme.retired_at,
+        "etag":etag, "revisions":revisions,
+    });
+    etag_json(&etag, payload)
 }
 
 async fn lock_owned_theme(
@@ -485,21 +434,15 @@ async fn lock_owned_theme(
     user_id: Uuid,
     theme_id: Uuid,
 ) -> Result<(String, i64, Option<chrono::DateTime<chrono::Utc>>), AppError> {
-    let row = sqlx::query(
-        "SELECT base_theme_id, etag_version, retired_at
-         FROM panda.user_themes
-         WHERE id = $1 AND owner_id = $2 FOR UPDATE",
+    sqlx::query_as(
+        "SELECT base_theme_id,etag_version,retired_at FROM panda.user_themes
+         WHERE (id,owner_id)=($1,$2) FOR UPDATE",
     )
     .bind(theme_id)
     .bind(user_id)
     .fetch_optional(&mut **tx)
     .await?
-    .ok_or(AppError::NotFound)?;
-    Ok((
-        row.get("base_theme_id"),
-        row.get("etag_version"),
-        row.get("retired_at"),
-    ))
+    .ok_or(AppError::NotFound)
 }
 
 async fn save_revision(
@@ -528,33 +471,19 @@ async fn apply_custom_selection_tx(
     revision: i32,
     base_theme_id: &str,
 ) -> Result<i64, AppError> {
-    sqlx::query(
+    let version: i64 = sqlx::query_scalar(
         "INSERT INTO panda.user_preferences
-            (user_id, theme_mode, theme_palette, theme_selection_kind, theme_builtin_id,
-             theme_custom_id, theme_custom_revision, theme_etag_version, updated_at)
-         VALUES ($1, COALESCE($2, 'dark'), $3, 'custom', $3, $4, $5, 1, now())
+          (user_id,theme_mode,theme_palette,theme_selection_kind,theme_builtin_id,theme_custom_id,theme_custom_revision,theme_etag_version,updated_at)
+         VALUES ($1,COALESCE($2,'dark'),$3,'custom',$3,$4,$5,1,now())
          ON CONFLICT (user_id) DO UPDATE SET
-            theme_mode = COALESCE($2, panda.user_preferences.theme_mode),
-            theme_palette = $3,
-            theme_selection_kind = 'custom',
-            theme_builtin_id = $3,
-            theme_custom_id = $4,
-            theme_custom_revision = $5,
-            theme_etag_version = panda.user_preferences.theme_etag_version + 1,
-            updated_at = now()",
-    )
-    .bind(user_id)
-    .bind(mode)
-    .bind(base_theme_id)
-    .bind(theme_id)
-    .bind(revision)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query_scalar("SELECT theme_etag_version FROM panda.user_preferences WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(AppError::from)
+          theme_mode=COALESCE($2,panda.user_preferences.theme_mode), theme_palette=EXCLUDED.theme_palette,
+          theme_selection_kind=EXCLUDED.theme_selection_kind,theme_builtin_id=EXCLUDED.theme_builtin_id,
+          theme_custom_id=EXCLUDED.theme_custom_id,theme_custom_revision=EXCLUDED.theme_custom_revision,
+          theme_etag_version=panda.user_preferences.theme_etag_version+1,updated_at=now()
+         RETURNING theme_etag_version")
+        .bind(user_id).bind(mode).bind(base_theme_id).bind(theme_id).bind(revision)
+        .fetch_one(&mut **tx).await?;
+    Ok(version)
 }
 
 async fn publish_revision(
@@ -689,5 +618,117 @@ mod tests {
         let id = Uuid::nil();
         assert_eq!(theme_etag(id, 3), format!("\"theme-{id}-3\""));
         assert_eq!(preferences_etag(4), "\"theme-preferences-4\"");
+    }
+}
+
+#[cfg(test)]
+mod full_replacement_characterization {
+    use super::*;
+
+    #[test]
+    fn ordered_definition_failures_and_color_boundaries() {
+        let manifest = builtin_manifest().unwrap();
+        let base = manifest["builtins"][0]["id"].as_str().unwrap();
+        for (definition, expected) in [
+            (Value::Null, "theme definition must be an object"),
+            (
+                json!({"extra": 1}),
+                "theme definition contains an unsupported property",
+            ),
+            (
+                json!({}),
+                "theme definition must inherit from its built-in base",
+            ),
+            (
+                json!({"theme":base, "tokens":null}),
+                "tokens must be an object",
+            ),
+            (
+                json!({"theme":base, "tokens":{"shadow-1":{}}}),
+                "unknown or non-customizable theme token: shadow-1",
+            ),
+            (
+                json!({"theme":base, "series":{"series-01":{"other":5}}}),
+                "series.series-01 may contain only light and dark",
+            ),
+            (
+                json!({"theme":base, "series":{"series-01":{"light":5}}}),
+                "series.series-01.light must be a color",
+            ),
+            (
+                json!({"theme":base, "series":{"series-01":{"light":"#123"}}}),
+                "series.series-01.light must be a six-digit hex color",
+            ),
+            (
+                json!({"theme":base, "brandPaints":{"wrong":{}}}),
+                "unknown brand paint: wrong",
+            ),
+        ] {
+            match validate_theme_definition(base, &definition) {
+                Err(AppError::Validation(message)) => assert_eq!(message, expected),
+                result => panic!("expected {expected}: {result:?}"),
+            }
+        }
+        for value in ["#000000", "#ffffff", "#ABCdef"] {
+            assert!(validate_color(&json!(value), "color").is_ok());
+        }
+        assert_eq!(relative_luminance("#000000"), Some(0.0));
+        assert_eq!(relative_luminance("#ffffff"), Some(1.0));
+        assert_eq!(contrast_ratio("#000000", "#ffffff"), Some(21.0));
+        assert_eq!(normalize_name(&"é".repeat(80)).unwrap().chars().count(), 80);
+        assert!(normalize_name(&"é".repeat(81)).is_err());
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OverrideSection {
+    Tokens,
+    Series,
+    BrandPaints,
+}
+
+impl OverrideSection {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Tokens => "tokens",
+            Self::Series => "series",
+            Self::BrandPaints => "brandPaints",
+        }
+    }
+
+    fn validate(self, value: &Value, base: &Value) -> Result<(), AppError> {
+        let section = self.name();
+        let pairs = value
+            .as_object()
+            .ok_or_else(|| AppError::Validation(format!("{section} must be an object")))?;
+        for (key, pair) in pairs {
+            let rejection = match self {
+                Self::Tokens => {
+                    let known = base["tokens"]["light"]
+                        .as_object()
+                        .is_some_and(|tokens| tokens.contains_key(key));
+                    (!known
+                        || key.starts_with("glow-")
+                        || key.starts_with("shadow-")
+                        || key == "value-halo")
+                        .then(|| format!("unknown or non-customizable theme token: {key}"))
+                }
+                Self::Series => {
+                    let valid = key.len() == 9
+                        && key
+                            .strip_prefix("series-")
+                            .and_then(|number| number.parse::<u8>().ok())
+                            .is_some_and(|number| (1..=16).contains(&number));
+                    (!valid).then(|| format!("unknown series slot: {key}"))
+                }
+                Self::BrandPaints => (!["accent", "accentMuted", "mark"].contains(&key.as_str()))
+                    .then(|| format!("unknown brand paint: {key}")),
+            };
+            if let Some(message) = rejection {
+                return Err(AppError::Validation(message));
+            }
+            validate_color_pair(pair, &format!("{section}.{key}"))?;
+        }
+        Ok(())
     }
 }

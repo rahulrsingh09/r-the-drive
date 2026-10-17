@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/dashboard/overview/{vehicle_id}", get(overview))
+    super::route_table([("/dashboard/overview/{vehicle_id}", get(overview))])
 }
 
 #[derive(Serialize)]

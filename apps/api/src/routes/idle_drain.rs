@@ -16,9 +16,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_read_access,
     errors::AppError,
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    middleware::auth::{AppState, AuthUser},
 };
 
 mod evidence;
@@ -44,7 +43,7 @@ const SOC_WINDOW_MISMATCH_TOLERANCE_PCT: f64 = 3.0;
 const RANGE_EFFICIENCY_DRIFT_TOLERANCE: f64 = 0.35;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/{vehicle_id}/idle-drain", get(idle_drain))
+    super::route_table([("/vehicles/{vehicle_id}/idle-drain", get(idle_drain))])
 }
 
 #[derive(Deserialize)]
@@ -74,13 +73,7 @@ fn resolve_time_bounds(
     lifetime: bool,
     default_days: i64,
 ) -> (DateTime<Utc>, DateTime<Utc>) {
-    let resolved_to = to.unwrap_or_else(Utc::now);
-    let resolved_from = if lifetime {
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
-    } else {
-        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
-    };
-    (resolved_from, resolved_to)
+    super::time_bounds(from, to, lifetime, default_days)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -171,27 +164,23 @@ async fn idle_drain(
     Path(vehicle_id): Path<Uuid>,
     Query(params): Query<IdleDrainParams>,
 ) -> Result<Json<IdleDrainResponse>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-
+    let request = super::VehicleRequest::select(&auth, Some(vehicle_id))?
+        .read(&state)
+        .await?;
     let (from, to) =
         resolve_time_bounds(params.from, params.to, params.lifetime.unwrap_or(false), 30);
-    let min_duration_hours = params.min_duration_hours.max(0.0);
-    let limit = params.limit.clamp(1, MAX_LIMIT as i64) as usize;
-
     let periods = fetch_idle_drain_periods(
         &state.pool,
-        vehicle_id,
+        request.id,
         from,
         to,
-        min_duration_hours,
-        limit,
+        params.min_duration_hours.max(0.0),
+        params.limit.clamp(1, MAX_LIMIT as i64) as usize,
         params.include_excluded,
     )
     .await?;
-
     Ok(Json(IdleDrainResponse {
-        vehicle_id,
+        vehicle_id: request.id,
         periods,
     }))
 }
@@ -223,15 +212,15 @@ pub(crate) async fn fetch_validated_idle_drain_periods_for_chart(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<Vec<PhantomPeriod>, AppError> {
-    fetch_idle_drain_periods(
-        pool,
-        vehicle_id,
+    workflow::ParkedHistory {
+        vehicle: vehicle_id,
         from,
         to,
-        CHART_MIN_DURATION_HOURS,
-        MAX_LIMIT,
-        false,
-    )
+        minimum_hours: CHART_MIN_DURATION_HOURS,
+        limit: MAX_LIMIT,
+        include_excluded: false,
+    }
+    .execute(pool)
     .await
 }
 

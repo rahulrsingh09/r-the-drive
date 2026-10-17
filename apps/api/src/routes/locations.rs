@@ -11,13 +11,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_read_access,
     errors::AppError,
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    middleware::auth::{AppState, AuthUser},
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/{vehicle_id}/locations", get(locations))
+    super::route_table([("/vehicles/{vehicle_id}/locations", get(locations))])
 }
 #[derive(Deserialize)]
 struct LocationParams {
@@ -58,8 +57,9 @@ async fn locations(
     Path(vehicle_id): Path<Uuid>,
     Query(params): Query<LocationParams>,
 ) -> Result<Json<LocationsResponse>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
+    let vehicle = super::VehicleRequest::select(&auth, Some(vehicle_id))?
+        .read(&state)
+        .await?;
 
     let from = params
         .from
@@ -69,22 +69,18 @@ async fn locations(
     let limit = params.limit.min(20_000);
 
     let points = sqlx::query_as::<_, LocationPoint>(
-        r#"SELECT
-               time_bucket(make_interval(secs => $2::float8), ts) AS "bucket: DateTime<Utc>",
-               avg(latitude)  AS "latitude: f64",
-               avg(longitude) AS "longitude: f64",
-               avg(speed_mph) AS "avg_speed_mph: f64",
-               mode() WITHIN GROUP (ORDER BY power_state) AS "power_state: String"
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1
-             AND ts >= $3 AND ts <= $4
-             AND latitude IS NOT NULL
-             AND longitude IS NOT NULL
-           GROUP BY 1
-            ORDER BY 1 DESC
-            LIMIT $5"#,
+        r#"WITH bucketed AS (
+             SELECT time_bucket(make_interval(secs => $2::float8),ts) AS bucket,
+                    latitude,longitude,speed_mph,power_state
+             FROM timeseries.telemetry
+             WHERE vehicle_id=$1 AND ts >= $3 AND ts <= $4
+               AND latitude IS NOT NULL AND longitude IS NOT NULL
+           ) SELECT bucket AS "bucket: DateTime<Utc>",avg(latitude) AS "latitude: f64",
+                    avg(longitude) AS "longitude: f64",avg(speed_mph) AS "avg_speed_mph: f64",
+                    mode() WITHIN GROUP (ORDER BY power_state) AS "power_state: String"
+             FROM bucketed GROUP BY bucket ORDER BY bucket DESC LIMIT $5"#,
     )
-    .bind(vehicle_id)
+    .bind(vehicle.id)
     .bind(bucket_secs as f64)
     .bind(from)
     .bind(to)

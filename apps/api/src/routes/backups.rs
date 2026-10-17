@@ -36,32 +36,33 @@ mod read_runs;
 mod settings;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/admin/backups", get(get_backup_overview))
-        .route("/admin/backups/settings", put(update_backup_settings))
-        .route("/admin/backups/run", post(run_backup_now))
-        .route("/admin/backups/s3/test", post(test_s3_connection))
-        .route(
+    super::route_table([
+        ("/admin/backups", get(get_backup_overview)),
+        ("/admin/backups/settings", put(update_backup_settings)),
+        ("/admin/backups/run", post(run_backup_now)),
+        ("/admin/backups/s3/test", post(test_s3_connection)),
+        (
             "/admin/backups/imports/{artifact_id}",
             delete(delete_uploaded_artifact),
-        )
-        .route("/admin/backups/restores", post(start_restore))
-        .route("/admin/backups/restores/preflight", post(preflight_restore))
-        .route(
+        ),
+        ("/admin/backups/restores", post(start_restore)),
+        ("/admin/backups/restores/preflight", post(preflight_restore)),
+        (
             "/admin/backups/artifacts/{artifact_id}/download",
             get(download_backup_artifact),
-        )
-        .route(
+        ),
+        (
             "/admin/backups/restore-requests",
             post(create_restore_request),
-        )
+        ),
+    ])
 }
 
 pub fn upload_router() -> Router<AppState> {
-    Router::new().route(
+    super::route_table([(
         "/admin/backups/imports",
         post(upload_backup_artifact).layer(DefaultBodyLimit::disable()),
-    )
+    )])
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -389,42 +390,45 @@ async fn get_backup_overview(
     axum::extract::Query(query): axum::extract::Query<BackupOverviewQuery>,
 ) -> Result<Json<BackupOverviewResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
-
     backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
-
     let settings = load_settings(&state).await?;
-    let recent_runs_page = query.page.unwrap_or(1).max(1);
-    let recent_runs_per_page = query.per_page.unwrap_or(10).clamp(1, 100);
-    let recent_runs_total = count_recent_runs(&state).await?;
-    let recent_runs = load_recent_runs(&state, recent_runs_page, recent_runs_per_page).await?;
-    let s3_catalog_error = match reconcile_s3_catalog(&state).await {
-        Ok(()) => None,
-        Err(error) => Some(error.to_string()),
-    };
-    let artifacts = load_artifacts(&state).await?;
-    let restore_requests = load_restore_requests(&state).await?;
-    let latest_successful_run = load_latest_successful_run(&state).await?;
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
+    let total = count_recent_runs(&state).await?;
+    let runs = load_recent_runs(&state, page, per_page).await?;
+    let s3_catalog_error = reconcile_s3_catalog(&state)
+        .await
+        .err()
+        .map(|error| error.to_string());
+    let (artifacts, requests, latest) = tokio::join!(
+        load_artifacts(&state),
+        load_restore_requests(&state),
+        load_latest_successful_run(&state)
+    );
+    let artifacts = artifacts?;
+    let restore_requests = requests?;
+    let latest_successful_run = latest?;
     let next_run_at = compute_next_run(&settings)?;
     let readiness = backup_service::runtime_readiness(&state.config).await;
-    let restore_readiness = restore_jobs::agent_readiness(&state.config).await;
-
+    let restore = restore_jobs::agent_readiness(&state.config).await;
+    let runtime_readiness = BackupRuntimeReadinessResponse {
+        pg_dump_available: readiness.pg_dump_available,
+        run_now_allowed: readiness.run_now_allowed,
+        restore_automation_available: restore.is_ok(),
+        restore_automation_reason: restore.err(),
+        reason: readiness.reason,
+    };
     Ok(Json(BackupOverviewResponse {
         settings,
-        recent_runs,
-        recent_runs_total,
-        recent_runs_page: recent_runs_page as i64,
-        recent_runs_per_page: recent_runs_per_page as i64,
+        recent_runs: runs,
+        recent_runs_total: total,
+        recent_runs_page: i64::from(page),
+        recent_runs_per_page: i64::from(per_page),
         artifacts,
         restore_requests,
         latest_successful_run,
         next_run_at,
-        runtime_readiness: BackupRuntimeReadinessResponse {
-            pg_dump_available: readiness.pg_dump_available,
-            run_now_allowed: readiness.run_now_allowed,
-            restore_automation_available: restore_readiness.is_ok(),
-            restore_automation_reason: restore_readiness.err(),
-            reason: readiness.reason,
-        },
+        runtime_readiness,
         s3_catalog_error,
     }))
 }
@@ -434,42 +438,41 @@ async fn reconcile_s3_catalog(state: &AppState) -> Result<(), AppError> {
     else {
         return Ok(());
     };
-    let rows = tokio::time::timeout(
+    let listed = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         s3_backups::list(&settings),
     )
     .await
-    .map_err(|_| AppError::DependencyUnavailable("S3 catalog listing timed out".into()))?
-    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
-    sqlx::query(
-        r#"
-        UPDATE panda.backup_artifacts
-        SET manifest = jsonb_set(manifest, '{restore_availability}', '"unavailable"'::jsonb, true)
-        WHERE storage_type = 's3'
-        "#,
-    )
-    .execute(&state.pool)
-    .await?;
-    for row in rows {
-        let storage_path = s3_backups::locator(&settings.bucket, &row.key);
-        let checksum = row.checksum_sha256.unwrap_or_default();
-        let manifest = serde_json::json!({
-            "artifact_kind": "recovery_package",
-            "format": row.metadata.get("panda-format").cloned().unwrap_or_else(|| "panda-recovery-v1".into()),
-            "storage_type": "s3",
-            "object_key": row.key,
-            "restore_availability": "available",
-        });
-        sqlx::query(
-            r#"INSERT INTO panda.backup_artifacts
-               (run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
-               VALUES (NULL, 's3', $1, $2, $3, $4, $5, $6)
-               ON CONFLICT (storage_path) WHERE storage_type = 's3'
-               DO UPDATE SET file_name = EXCLUDED.file_name, size_bytes = EXCLUDED.size_bytes,
-                             checksum_sha256 = EXCLUDED.checksum_sha256, manifest = EXCLUDED.manifest"#,
-        )
-        .bind(row.file_name).bind(storage_path).bind(row.size_bytes).bind(checksum).bind(manifest).bind(row.created_at)
+    {
+        Err(_) => {
+            return Err(AppError::DependencyUnavailable(
+                "S3 catalog listing timed out".into(),
+            ))
+        }
+        Ok(result) => {
+            result.map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?
+        }
+    };
+    let objects = listed.into_iter().map(|row| (serde_json::json!({
+        "file_name":row.file_name, "storage_path":s3_backups::locator(&settings.bucket, &row.key),
+        "size_bytes":row.size_bytes, "checksum_sha256":row.checksum_sha256.unwrap_or_default(),
+        "manifest":{
+            "artifact_kind":"recovery_package",
+            "format":row.metadata.get("panda-format").cloned().unwrap_or_else(|| "panda-recovery-v1".into()),
+            "storage_type":"s3", "object_key":row.key, "restore_availability":"available",
+        }
+    }), row.created_at)).collect::<Vec<_>>();
+    sqlx::query("UPDATE panda.backup_artifacts SET manifest=jsonb_set(manifest,'{restore_availability}','\"unavailable\"'::jsonb,true) WHERE storage_type='s3'")
         .execute(&state.pool).await?;
+    for (object, created_at) in objects {
+        sqlx::query(
+            "INSERT INTO panda.backup_artifacts (run_id,storage_type,file_name,storage_path,size_bytes,checksum_sha256,manifest,created_at)
+             SELECT NULL,'s3',v.file_name,v.storage_path,v.size_bytes,v.checksum_sha256,v.manifest,$2
+             FROM jsonb_populate_record(NULL::panda.backup_artifacts,$1) v
+             ON CONFLICT (storage_path) WHERE storage_type='s3'
+             DO UPDATE SET file_name=EXCLUDED.file_name,size_bytes=EXCLUDED.size_bytes,
+             checksum_sha256=EXCLUDED.checksum_sha256,manifest=EXCLUDED.manifest")
+            .bind(object).bind(created_at).execute(&state.pool).await?;
     }
     Ok(())
 }
@@ -480,11 +483,18 @@ async fn upload_backup_artifact(
     headers: HeaderMap,
     body: Body,
 ) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
-    require_admin(&state, auth.user_id).await?;
-    backup_service::run_recovery_operation(state.pool.clone(), async move {
-        upload_backup_artifact_admitted(state, auth, headers, body).await
+    let user_id = auth.user_id;
+    match (RecoveryCommand::Upload {
+        auth,
+        headers,
+        body,
     })
-    .await
+    .execute(state, user_id)
+    .await?
+    {
+        RecoveryResponse::Upload(response) => Ok(*response),
+        _ => unreachable!("upload command returns an upload response"),
+    }
 }
 
 async fn upload_backup_artifact_admitted(
@@ -513,29 +523,38 @@ async fn delete_uploaded_artifact(
     axum::extract::Path(artifact_id): axum::extract::Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&state, auth.user_id).await?;
-    let artifact = load_artifact_by_id(&state, artifact_id).await?;
-    if artifact.storage_type != "uploaded" {
-        return Err(AppError::Validation(
-            "Only imported recovery packages can be deleted with this action.".into(),
-        ));
+    #[derive(sqlx::FromRow)]
+    struct Removal {
+        run_id: Option<Uuid>,
+        storage_type: String,
+        storage_path: String,
+        active: bool,
     }
-    let active: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM panda.backup_restore_requests WHERE artifact_id = $1 AND status IN ('pending', 'approved', 'running') LIMIT 1",
-    )
-    .bind(artifact_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    if active.is_some() {
-        return Err(AppError::Conflict(
-            "This package has an active restore job.".into(),
-        ));
+    let removal = sqlx::query_as::<_, Removal>(
+        "SELECT a.run_id,a.storage_type,a.storage_path,
+         EXISTS(SELECT 1 FROM panda.backup_restore_requests r WHERE r.artifact_id=a.id AND r.status=ANY($2)) AS active
+         FROM panda.backup_artifacts a WHERE a.id=$1")
+        .bind(artifact_id).bind(&["pending","approved","running"][..])
+        .fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    match (removal.storage_type.as_str(), removal.active) {
+        ("uploaded", false) => {}
+        ("uploaded", true) => {
+            return Err(AppError::Conflict(
+                "This package has an active restore job.".into(),
+            ))
+        }
+        _ => {
+            return Err(AppError::Validation(
+                "Only imported recovery packages can be deleted with this action.".into(),
+            ))
+        }
     }
     crate::services::artifact_files::remove(
         std::path::Path::new(&state.config.backup_artifact_dir),
-        std::path::Path::new(&artifact.storage_path),
+        std::path::Path::new(&removal.storage_path),
     )?;
-    sqlx::query("DELETE FROM panda.backup_runs WHERE id = $1")
-        .bind(artifact.run_id)
+    sqlx::query("DELETE FROM panda.backup_runs WHERE id=$1")
+        .bind(removal.run_id)
         .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -546,11 +565,14 @@ async fn start_restore(
     auth: AuthUser,
     Json(body): Json<StartRestoreBody>,
 ) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
-    require_admin(&state, auth.user_id).await?;
-    backup_service::run_recovery_operation(state.pool.clone(), async move {
-        start_restore_admitted(state, auth, body).await
-    })
-    .await
+    let user_id = auth.user_id;
+    match (RecoveryCommand::Restore { auth, body })
+        .execute(state, user_id)
+        .await?
+    {
+        RecoveryResponse::Restore(response) => Ok(*response),
+        _ => unreachable!("restore command returns a restore response"),
+    }
 }
 
 async fn start_restore_admitted(
@@ -570,91 +592,9 @@ async fn start_restore_admitted(
             backup_service::RESTORE_CONFIRMATION_PHRASE
         )));
     }
-    let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
-    let staged = materialize_artifact(&state, &artifact).await?;
-    let restore_path = staged.path.clone();
-    let prepared = async {
-        let validated = backup_service::validate_recovery_package_with_limits(
-            std::path::Path::new(&restore_path),
-            &state.config.recovery,
-        )
-        .await?;
-        let dump_inspection = restore_compatibility::inspect_recovery_dump(
-            std::path::Path::new(&restore_path),
-            std::path::Path::new(&state.config.backup_artifact_dir),
-            &state.config.recovery,
-        )
-        .await?;
-        let plan = restore_compatibility::plan_restore(
-            &validated.manifest,
-            &validated.checksum_sha256,
-            &state.pool,
-            Some(&dump_inspection),
-        )
-        .await?;
-        if !plan.compatible {
-            return Err(AppError::Validation(
-                plan.blocking_errors
-                    .iter()
-                    .map(|error| error.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            ));
-        }
-        if body.plan_id != plan.plan_id || body.package_checksum_sha256 != validated.checksum_sha256
-        {
-            return Err(AppError::Conflict(
-            "The recovery package or target schema changed after preflight. Run preflight again."
-                .into(),
-        ));
-        }
-        let request_id = backup_service::create_restore_request(
-            &state.pool,
-            body.artifact_id,
-            auth.user_id,
-            &body.confirmation_phrase,
-            body.notes,
-        )
-        .await?;
-        let (job, capability_token) = restore_jobs::create(
-            &state.config,
-            body.artifact_id,
-            restore_path.clone(),
-            request_id,
-            plan,
-        )
-        .await?;
-        Ok::<_, AppError>((job, capability_token, request_id))
-    }
-    .await;
-    let (job, capability_token, request_id) = prepared?;
-    let background_state = state.clone();
-    let job_id = job.id;
-    tokio::spawn(async move {
-        if let Err(error) = prepare_and_handoff_restore(background_state.clone(), job_id).await {
-            if let Ok(job) = restore_jobs::read(&background_state.config, job_id).await {
-                cleanup_remote_staging_path(&job.artifact_path).await;
-            }
-            let _ = restore_jobs::fail(&background_state.config, job_id, &error).await;
-            let _ = sqlx::query(
-                "UPDATE panda.backup_restore_requests SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
-            )
-            .bind(request_id)
-            .bind(error.to_string())
-            .execute(&background_state.pool)
-            .await;
-        }
-    });
-    // The durable job and its background worker now own the published path.
-    staged.retain();
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(StartRestoreResponse {
-            job: job.public(),
-            capability_token,
-        }),
-    ))
+    let prepared = PreparedRecovery::inspect(&state, body.artifact_id).await?;
+    prepared.confirm(&body)?;
+    prepared.submit(state, auth.user_id, body).await
 }
 
 async fn preflight_restore(
@@ -662,43 +602,23 @@ async fn preflight_restore(
     auth: AuthUser,
     Json(body): Json<PreflightRestoreBody>,
 ) -> Result<Json<RestorePreflightResponse>, AppError> {
-    require_admin(&state, auth.user_id).await?;
-    backup_service::run_recovery_operation(state.pool.clone(), async move {
-        preflight_restore_admitted(state, body).await
-    })
-    .await
+    match RecoveryCommand::Preflight(body)
+        .execute(state, auth.user_id)
+        .await?
+    {
+        RecoveryResponse::Preflight(response) => Ok(*response),
+        _ => unreachable!("preflight command returns a preflight response"),
+    }
 }
 
 async fn preflight_restore_admitted(
     state: AppState,
     body: PreflightRestoreBody,
 ) -> Result<Json<RestorePreflightResponse>, AppError> {
-    let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
-    let staged = materialize_artifact(&state, &artifact).await?;
-    let restore_path = &staged.path;
-    let result = async {
-        let validated = backup_service::validate_recovery_package_with_limits(
-            std::path::Path::new(&restore_path),
-            &state.config.recovery,
-        )
-        .await?;
-        let dump_inspection = restore_compatibility::inspect_recovery_dump(
-            std::path::Path::new(&restore_path),
-            std::path::Path::new(&state.config.backup_artifact_dir),
-            &state.config.recovery,
-        )
-        .await?;
-        let plan = restore_compatibility::plan_restore(
-            &validated.manifest,
-            &validated.checksum_sha256,
-            &state.pool,
-            Some(&dump_inspection),
-        )
-        .await?;
-        Ok::<_, AppError>(RestorePreflightResponse { plan })
-    }
-    .await;
-    result.map(Json)
+    let prepared = PreparedRecovery::inspect(&state, body.artifact_id).await?;
+    Ok(Json(RestorePreflightResponse {
+        plan: prepared.plan,
+    }))
 }
 
 async fn cleanup_remote_staging_path(path: &str) {
@@ -715,47 +635,47 @@ async fn cleanup_remote_staging_path(path: &str) {
 
 async fn prepare_and_handoff_restore(state: AppState, job_id: Uuid) -> Result<(), AppError> {
     let mut job = restore_jobs::read(&state.config, job_id).await?;
-    job.phase = restore_jobs::RestorePhase::PreparingCandidate;
-    job.progress_percent = 15;
-    job.message = "Preparing isolated restore candidate while Panda remains available".into();
-    job.updated_at = Utc::now();
-    restore_jobs::write(&state.config, &job).await?;
-
-    sqlx::query(
-        "UPDATE panda.backup_restore_requests SET status = 'running', updated_at = now() WHERE id = $1",
-    )
-    .bind(job.restore_request_id)
-    .execute(&state.pool)
-    .await?;
-
-    backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
-
-    // The database restore replaces these operational tables. Keep their current
-    // contents beside the packages so the restarted API can merge the catalog,
-    // execution history, and this restore request back into the restored database.
-    job.catalog_snapshot = Some(restore_jobs::snapshot_catalog(&state.pool).await?);
-    job.updated_at = Utc::now();
-    restore_jobs::write(&state.config, &job).await?;
-
+    enum Checkpoint {
+        Preparing,
+        Catalog,
+    }
+    for checkpoint in [Checkpoint::Preparing, Checkpoint::Catalog] {
+        if matches!(checkpoint, Checkpoint::Catalog) {
+            sqlx::query("UPDATE panda.backup_restore_requests SET status='running',updated_at=now() WHERE id=$1")
+                .bind(job.restore_request_id).execute(&state.pool).await?;
+            backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
+            job.catalog_snapshot = Some(restore_jobs::snapshot_catalog(&state.pool).await?);
+        } else {
+            job.phase = restore_jobs::RestorePhase::PreparingCandidate;
+            job.progress_percent = 15;
+            job.message =
+                "Preparing isolated restore candidate while Panda remains available".into();
+        }
+        job.updated_at = Utc::now();
+        restore_jobs::write(&state.config, &job).await?;
+    }
     let key = fs::read_to_string(restore_jobs::agent_key_path(&state.config)).await?;
-    let response = reqwest::Client::new()
-        .post(format!(
-            "{}/internal/jobs/{job_id}/execute",
-            state.config.restore_agent_url.trim_end_matches('/')
-        ))
+    let endpoint = format!(
+        "{}/internal/jobs/{job_id}/execute",
+        state.config.restore_agent_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::new();
+    let request = client
+        .post(endpoint)
         .header("x-panda-agent-key", key.trim())
-        .send()
-        .await
+        .build()
         .map_err(|error| {
             AppError::DependencyUnavailable(format!("Restore supervisor is unavailable: {error}"))
         })?;
-    if !response.status().is_success() {
-        return Err(AppError::DependencyUnavailable(format!(
-            "Restore supervisor rejected the job with status {}.",
-            response.status()
-        )));
+    let response = client.execute(request).await.map_err(|error| {
+        AppError::DependencyUnavailable(format!("Restore supervisor is unavailable: {error}"))
+    })?;
+    match response.status() {
+        status if status.is_success() => Ok(()),
+        status => Err(AppError::DependencyUnavailable(format!(
+            "Restore supervisor rejected the job with status {status}."
+        ))),
     }
-    Ok(())
 }
 
 fn sanitize_upload_name(value: &str) -> String {
@@ -779,37 +699,23 @@ async fn download_backup_artifact(
 ) -> Result<Response<Body>, AppError> {
     require_admin(&state, auth.user_id).await?;
     let artifact = load_artifact_by_id(&state, artifact_id).await?;
-    let body = if artifact.storage_type == "s3" {
-        let (settings, key) = resolve_remote_artifact(&state, &artifact).await?;
-        let stream = s3_backups::download_stream(&settings, &key)
-            .await
-            .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
-        Body::from_stream(ReaderStream::new(stream.into_async_read()))
-    } else {
-        let file = fs::File::from_std(crate::services::artifact_files::open(
-            std::path::Path::new(&state.config.backup_artifact_dir),
-            std::path::Path::new(&artifact.storage_path),
-        )?);
-        Body::from_stream(ReaderStream::new(file))
-    };
-
-    let safe_name = artifact.file_name.replace('"', "_");
-    let mut response = Response::new(body);
-    *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    let content_disposition = HeaderValue::from_str(&format!(
-        "attachment; filename=\"{safe_name}\""
+    let origin = ArtifactOrigin::resolve(&state, &artifact).await?;
+    let content = origin.body().await?;
+    let disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        artifact.file_name.replace('"', "_")
     ))
     .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid download filename: {error}")))?;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_DISPOSITION, content_disposition);
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let headers = [
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        ),
+        (header::CONTENT_DISPOSITION, disposition),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+    ];
+    let mut response = Response::new(content);
+    response.headers_mut().extend(headers);
     Ok(response)
 }
 
@@ -847,45 +753,27 @@ async fn materialize_artifact(
     state: &AppState,
     artifact: &BackupArtifactResponse,
 ) -> Result<MaterializedArtifact, AppError> {
-    // Both callers hold recovery admission through materialization, dump
-    // extraction/inspection and planning, so concurrent preflights cannot
-    // multiply the configured disk envelope.
     let root = std::path::Path::new(&state.config.backup_artifact_dir);
     let staging_id = Uuid::new_v4();
-    let path = if artifact.storage_type != "s3" {
-        let mut source = fs::File::from_std(crate::services::artifact_files::open(
-            root,
-            std::path::Path::new(&artifact.storage_path),
-        )?);
-        crate::services::artifact_files::stage_reader(
-            root,
-            staging_id,
-            &mut source,
-            &state.config.recovery,
-        )
-        .await?
-    } else {
-        let (settings, key) = resolve_remote_artifact(state, artifact).await?;
-        s3_backups::download(&settings, &key, root, staging_id, &state.config.recovery)
-            .await
-            .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?
-    };
-    let staged = MaterializedArtifact {
+    let mut staged = MaterializedArtifact {
         root: root.to_owned(),
         staging_id,
-        path: path.to_string_lossy().into_owned(),
+        path: String::new(),
         retained: false,
     };
-    let validated =
+    let origin = ArtifactOrigin::resolve(state, artifact).await?;
+    let path = origin.stage(root, staging_id, state).await?;
+    staged.path = path.to_string_lossy().into_owned();
+    let package =
         backup_service::validate_recovery_package_with_limits(&path, &state.config.recovery)
             .await?;
-    if !artifact.checksum_sha256.is_empty() && artifact.checksum_sha256 != validated.checksum_sha256
-    {
-        return Err(AppError::Validation(
+    match artifact.checksum_sha256.as_str() {
+        "" => Ok(staged),
+        checksum if checksum == package.checksum_sha256 => Ok(staged),
+        _ => Err(AppError::Validation(
             "Recovery package checksum does not match its catalog metadata".into(),
-        ));
+        )),
     }
-    Ok(staged)
 }
 
 async fn resolve_remote_artifact(
@@ -899,15 +787,21 @@ async fn resolve_remote_artifact(
                 "S3 credentials must be configured before accessing this package".into(),
             )
         })?;
-    let key = s3_backups::key_from_locator(&settings.bucket, &artifact.storage_path).ok_or_else(
-        || AppError::Validation("This backup belongs to a different S3 bucket".into()),
-    )?;
-    if !s3_backups::key_belongs_to_prefix(&settings.prefix, key) {
-        return Err(AppError::Validation(
-            "This backup is outside the configured S3 prefix".into(),
-        ));
-    }
-    Ok((settings, key.to_string()))
+    let locator = s3_backups::key_from_locator(&settings.bucket, &artifact.storage_path);
+    let key = match locator {
+        None => {
+            return Err(AppError::Validation(
+                "This backup belongs to a different S3 bucket".into(),
+            ))
+        }
+        Some(key) if !s3_backups::key_belongs_to_prefix(&settings.prefix, key) => {
+            return Err(AppError::Validation(
+                "This backup is outside the configured S3 prefix".into(),
+            ))
+        }
+        Some(key) => key.to_owned(),
+    };
+    Ok((settings, key))
 }
 
 #[derive(Debug, Serialize)]
@@ -936,85 +830,78 @@ async fn test_s3_connection(
         .await
         .ok()
         .flatten();
-    let secret_key = body
-        .secret_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
+    let mut credentials = Vec::with_capacity(2);
+    for (supplied, saved, name) in [
+        (
+            body.secret_key.as_deref(),
             existing
                 .as_ref()
-                .map(|settings| settings.secret_key.clone())
-        })
-        .ok_or_else(|| {
-            AppError::Validation("Enter or save an S3 secret key before testing".into())
-        })?;
-    let access_key = body
-        .access_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
+                .map(|settings| settings.secret_key.as_str()),
+            "secret",
+        ),
+        (
+            body.access_key.as_deref(),
             existing
                 .as_ref()
-                .map(|settings| settings.access_key.clone())
-        })
-        .ok_or_else(|| {
-            AppError::Validation("Enter or save an S3 access key before testing".into())
-        })?;
+                .map(|settings| settings.access_key.as_str()),
+            "access",
+        ),
+    ] {
+        let credential = supplied
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or(saved)
+            .ok_or_else(|| {
+                AppError::Validation(format!("Enter or save an S3 {name} key before testing"))
+            })?;
+        credentials.push(credential.to_owned());
+    }
+    let secret_key = credentials.remove(0);
+    let access_key = credentials.remove(0);
     let settings = s3_backups::S3Settings {
-        endpoint: body.endpoint.trim().to_string(),
+        endpoint: body.endpoint.trim().to_owned(),
         region: body
             .region
             .as_deref()
             .map(str::trim)
-            .filter(|value| !value.is_empty())
+            .filter(|region| !region.is_empty())
             .unwrap_or("us-east-1")
-            .to_string(),
-        bucket: body.bucket.trim().to_string(),
+            .to_owned(),
+        bucket: body.bucket.trim().to_owned(),
         prefix: normalize_prefix(&body.prefix)?,
         access_key,
         secret_key,
         policy: crate::services::s3_transport::S3Policy::from_config(&state.config)?,
     };
-    tokio::time::timeout(
+    match tokio::time::timeout(
         std::time::Duration::from_secs(30),
         s3_backups::test_connection(&settings),
     )
     .await
-    .map_err(|_| AppError::DependencyUnavailable("S3 connection test timed out".into()))?
-    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
-    Ok(Json(TestS3Response {
-        ok: true,
-        message: "S3 list/write/read/delete checks passed".into(),
-    }))
+    {
+        Err(_) => Err(AppError::DependencyUnavailable(
+            "S3 connection test timed out".into(),
+        )),
+        Ok(Err(error)) => Err(AppError::DependencyUnavailable(format!("{error:#}"))),
+        Ok(Ok(())) => Ok(Json(TestS3Response {
+            ok: true,
+            message: "S3 list/write/read/delete checks passed".into(),
+        })),
+    }
 }
 
 async fn run_backup_now(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<(StatusCode, Json<BackupRunExecutionResponse>), AppError> {
-    require_admin(&state, auth.user_id).await?;
-
-    let run_id = backup_service::start_backup_now(
-        &state.pool,
-        &state.config,
-        Some(auth.user_id),
-        backup_service::BackupRunTrigger::Manual,
-    )
-    .await?;
-
-    let run = load_run_by_id(&state, run_id).await?;
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(BackupRunExecutionResponse {
-            run,
-            artifacts: Vec::new(),
-        }),
-    ))
+    let id = BackupSubmission::Manual
+        .submit(&state, auth.user_id)
+        .await?;
+    let response = BackupRunExecutionResponse {
+        run: load_run_by_id(&state, id).await?,
+        artifacts: Vec::new(),
+    };
+    Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
 async fn create_restore_request(
@@ -1022,19 +909,12 @@ async fn create_restore_request(
     auth: AuthUser,
     Json(body): Json<CreateRestoreRequestBody>,
 ) -> Result<(StatusCode, Json<BackupRestoreRequestResponse>), AppError> {
-    require_admin(&state, auth.user_id).await?;
-
-    let request_id = backup_service::create_restore_request(
-        &state.pool,
-        body.artifact_id,
-        auth.user_id,
-        &body.confirmation_phrase,
-        body.notes,
-    )
-    .await?;
-
-    let request = load_restore_request_by_id(&state, request_id).await?;
-    Ok((StatusCode::CREATED, Json(request)))
+    let id = BackupSubmission::Request(body)
+        .submit(&state, auth.user_id)
+        .await?;
+    load_restore_request_by_id(&state, id)
+        .await
+        .map(|request| (StatusCode::CREATED, Json(request)))
 }
 
 async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppError> {
@@ -1095,77 +975,47 @@ async fn load_run_by_id(state: &AppState, run_id: Uuid) -> Result<BackupRunRespo
 }
 
 async fn load_artifacts(state: &AppState) -> Result<Vec<BackupArtifactResponse>, AppError> {
-    let rows = sqlx::query_as::<_, BackupArtifactRow>(
-        r#"
-        SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
-        FROM panda.backup_artifacts
-        ORDER BY created_at DESC
-        LIMIT 200
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(rows.into_iter().map(map_artifact_row).collect())
+    Ok(CatalogSelection::Artifacts(None)
+        .load::<BackupArtifactRow>(state)
+        .await?
+        .into_iter()
+        .map(map_artifact_row)
+        .collect())
 }
 
 async fn load_artifact_by_id(
     state: &AppState,
     artifact_id: Uuid,
 ) -> Result<BackupArtifactResponse, AppError> {
-    let row = sqlx::query_as::<_, BackupArtifactRow>(
-        r#"
-        SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
-        FROM panda.backup_artifacts
-        WHERE id = $1
-        "#,
-    )
-    .bind(artifact_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    match row {
-        Some(row) => Ok(map_artifact_row(row)),
-        None => Err(AppError::NotFound),
-    }
+    CatalogSelection::Artifacts(Some(artifact_id))
+        .load::<BackupArtifactRow>(state)
+        .await?
+        .pop()
+        .map(map_artifact_row)
+        .ok_or(AppError::NotFound)
 }
 
 async fn load_restore_requests(
     state: &AppState,
 ) -> Result<Vec<BackupRestoreRequestResponse>, AppError> {
-    let rows = sqlx::query_as::<_, BackupRestoreRequestRow>(
-        r#"
-        SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
-        FROM panda.backup_restore_requests
-        ORDER BY requested_at DESC
-        LIMIT 10
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(rows.into_iter().map(map_restore_request_row).collect())
+    Ok(CatalogSelection::Requests(None)
+        .load::<BackupRestoreRequestRow>(state)
+        .await?
+        .into_iter()
+        .map(map_restore_request_row)
+        .collect())
 }
 
 async fn load_restore_request_by_id(
     state: &AppState,
     request_id: Uuid,
 ) -> Result<BackupRestoreRequestResponse, AppError> {
-    let row = sqlx::query_as::<_, BackupRestoreRequestRow>(
-        r#"
-        SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
-        FROM panda.backup_restore_requests
-        WHERE id = $1
-        "#,
-    )
-    .bind(request_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    match row {
-        Some(row) => Ok(map_restore_request_row(row)),
-        None => Err(AppError::NotFound),
-    }
+    CatalogSelection::Requests(Some(request_id))
+        .load::<BackupRestoreRequestRow>(state)
+        .await?
+        .pop()
+        .map(map_restore_request_row)
+        .ok_or(AppError::NotFound)
 }
 
 async fn load_latest_successful_run(
@@ -1282,21 +1132,22 @@ fn validate_schedule(
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
 ) -> Result<(), AppError> {
-    match frequency {
-        BackupFrequency::Daily => Ok(()),
-        BackupFrequency::Weekly => match day_of_week {
-            Some(value) if (0..=6).contains(&value) => Ok(()),
-            _ => Err(AppError::Validation(
-                "weekly backups require day_of_week between 0 and 6".into(),
-            )),
-        },
-        BackupFrequency::Monthly => match day_of_month {
-            Some(value) if (1..=31).contains(&value) => Ok(()),
-            _ => Err(AppError::Validation(
-                "monthly backups require day_of_month between 1 and 31".into(),
-            )),
-        },
-    }
+    let (day, interval, message) = match frequency {
+        BackupFrequency::Daily => return Ok(()),
+        BackupFrequency::Weekly => (
+            day_of_week,
+            0..=6,
+            "weekly backups require day_of_week between 0 and 6",
+        ),
+        BackupFrequency::Monthly => (
+            day_of_month,
+            1..=31,
+            "monthly backups require day_of_month between 1 and 31",
+        ),
+    };
+    day.filter(|day| interval.contains(day))
+        .map(|_| ())
+        .ok_or_else(|| AppError::Validation(message.into()))
 }
 
 fn validate_target(
@@ -1306,30 +1157,39 @@ fn validate_target(
     endpoint: &str,
     bucket: &str,
 ) -> Result<(), AppError> {
-    if target_type != BackupTargetType::S3 {
-        return Err(AppError::Validation("target_type must be s3".into()));
+    let invalid = [
+        (
+            target_type != BackupTargetType::S3,
+            "target_type must be s3",
+        ),
+        (
+            !local_enabled && !s3_enabled,
+            "Enable at least one backup destination",
+        ),
+        (
+            s3_enabled && bucket.trim().is_empty(),
+            "bucket is required when S3 backups are enabled",
+        ),
+    ]
+    .into_iter()
+    .find(|(invalid, _)| *invalid);
+    if let Some((_, message)) = invalid {
+        return Err(AppError::Validation(message.into()));
     }
-    if !local_enabled && !s3_enabled {
-        return Err(AppError::Validation(
-            "Enable at least one backup destination".into(),
-        ));
-    }
-    if s3_enabled && bucket.trim().is_empty() {
-        return Err(AppError::Validation(
-            "bucket is required when S3 backups are enabled".into(),
-        ));
-    }
-    if s3_enabled && !endpoint.trim().is_empty() {
-        let parsed = url::Url::parse(endpoint.trim()).map_err(|_| {
-            AppError::Validation("S3 endpoint must be a valid HTTP or HTTPS URL".into())
-        })?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err(AppError::Validation(
-                "S3 endpoint must use HTTP or HTTPS".into(),
-            ));
+    match (s3_enabled, endpoint.trim()) {
+        (true, endpoint) if !endpoint.is_empty() => {
+            let parsed = url::Url::parse(endpoint).map_err(|_| {
+                AppError::Validation("S3 endpoint must be a valid HTTP or HTTPS URL".into())
+            })?;
+            if !["http", "https"].contains(&parsed.scheme()) {
+                return Err(AppError::Validation(
+                    "S3 endpoint must use HTTP or HTTPS".into(),
+                ));
+            }
+            Ok(())
         }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 fn normalize_prefix(value: &str) -> Result<String, AppError> {
@@ -1357,27 +1217,24 @@ fn compute_next_run(settings: &BackupSettingsResponse) -> Result<Option<DateTime
     if !settings.enabled {
         return Ok(None);
     }
-
     let timezone = parse_timezone(&settings.timezone)?;
-    let run_at = parse_run_time(&settings.run_at)?;
-    let now_local = Utc::now().with_timezone(&timezone);
-
-    let next_local = match settings.frequency {
-        BackupFrequency::Daily => next_daily_run(now_local, run_at),
-        BackupFrequency::Weekly => {
-            next_weekly_run(now_local, run_at, settings.day_of_week.unwrap_or(0))
-        }
-        BackupFrequency::Monthly => {
-            next_monthly_run(now_local, run_at, settings.day_of_month.unwrap_or(1))
-        }
+    let at = parse_run_time(&settings.run_at)?;
+    let cadence = match settings.frequency {
+        BackupFrequency::Daily => calendar::Cadence::Daily,
+        BackupFrequency::Weekly => calendar::Cadence::Weekly(settings.day_of_week.unwrap_or(0)),
+        BackupFrequency::Monthly => calendar::Cadence::Monthly(settings.day_of_month.unwrap_or(1)),
     };
-
-    Ok(Some(next_local.with_timezone(&Utc)))
+    Ok(Some(
+        calendar::occurrence(Utc::now().with_timezone(&timezone), at, cadence, true)
+            .with_timezone(&Utc),
+    ))
 }
 
+#[cfg(test)]
 fn next_daily_run(now_local: chrono::DateTime<Tz>, run_at: NaiveTime) -> chrono::DateTime<Tz> {
     calendar::occurrence(now_local, run_at, calendar::Cadence::Daily, true)
 }
+#[cfg(test)]
 fn next_weekly_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
@@ -1390,6 +1247,7 @@ fn next_weekly_run(
         true,
     )
 }
+#[cfg(test)]
 fn next_monthly_run(
     now_local: chrono::DateTime<Tz>,
     run_at: NaiveTime,
@@ -1404,14 +1262,10 @@ fn next_monthly_run(
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role = sqlx::query_scalar!("SELECT role FROM panda.users WHERE id = $1", user_id)
-        .fetch_optional(&state.pool)
-        .await?;
-
-    match role.as_deref() {
-        Some("admin") | Some("super_user") => Ok(()),
-        _ => Err(AppError::Forbidden),
-    }
+    super::installation_admin(&state.pool, user_id)
+        .await?
+        .then_some(())
+        .ok_or(AppError::Forbidden)
 }
 #[derive(Debug, Deserialize)]
 struct BackupOverviewQuery {
@@ -1465,3 +1319,281 @@ mod cancellation_tests {
 #[cfg(test)]
 #[path = "__tests__/backup_workflows.rs"]
 mod workflow_contracts;
+
+enum ArtifactOrigin<'a> {
+    Local {
+        root: &'a std::path::Path,
+        path: &'a std::path::Path,
+    },
+    Remote {
+        settings: Box<s3_backups::S3Settings>,
+        key: String,
+    },
+}
+
+impl<'a> ArtifactOrigin<'a> {
+    async fn resolve(
+        state: &'a AppState,
+        artifact: &'a BackupArtifactResponse,
+    ) -> Result<Self, AppError> {
+        match artifact.storage_type.as_str() {
+            "s3" => {
+                let (settings, key) = resolve_remote_artifact(state, artifact).await?;
+                Ok(Self::Remote {
+                    settings: Box::new(settings),
+                    key,
+                })
+            }
+            _ => Ok(Self::Local {
+                root: std::path::Path::new(&state.config.backup_artifact_dir),
+                path: std::path::Path::new(&artifact.storage_path),
+            }),
+        }
+    }
+
+    async fn body(self) -> Result<Body, AppError> {
+        let reader: std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>> = match self {
+            Self::Local { root, path } => Box::pin(fs::File::from_std(
+                crate::services::artifact_files::open(root, path)?,
+            )),
+            Self::Remote { settings, key } => Box::pin(
+                s3_backups::download_stream(&settings, &key)
+                    .await
+                    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?
+                    .into_async_read(),
+            ),
+        };
+        Ok(Body::from_stream(ReaderStream::new(reader)))
+    }
+
+    async fn stage(
+        self,
+        root: &std::path::Path,
+        id: Uuid,
+        state: &AppState,
+    ) -> Result<std::path::PathBuf, AppError> {
+        match self {
+            Self::Local {
+                root: source_root,
+                path,
+            } => {
+                let mut source =
+                    fs::File::from_std(crate::services::artifact_files::open(source_root, path)?);
+                crate::services::artifact_files::stage_reader(
+                    root,
+                    id,
+                    &mut source,
+                    &state.config.recovery,
+                )
+                .await
+            }
+            Self::Remote { settings, key } => {
+                s3_backups::download(&settings, &key, root, id, &state.config.recovery)
+                    .await
+                    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))
+            }
+        }
+    }
+}
+
+enum RecoveryCommand {
+    Upload {
+        auth: AuthUser,
+        headers: HeaderMap,
+        body: Body,
+    },
+    Preflight(PreflightRestoreBody),
+    Restore {
+        auth: AuthUser,
+        body: StartRestoreBody,
+    },
+}
+enum RecoveryResponse {
+    Upload(Box<(StatusCode, Json<UploadBackupResponse>)>),
+    Preflight(Box<Json<RestorePreflightResponse>>),
+    Restore(Box<(StatusCode, Json<StartRestoreResponse>)>),
+}
+impl RecoveryCommand {
+    async fn execute(self, state: AppState, user_id: Uuid) -> Result<RecoveryResponse, AppError> {
+        require_admin(&state, user_id).await?;
+        backup_service::run_recovery_operation(state.pool.clone(), async move {
+            match self {
+                Self::Upload {
+                    auth,
+                    headers,
+                    body,
+                } => upload_backup_artifact_admitted(state, auth, headers, body)
+                    .await
+                    .map(Box::new)
+                    .map(RecoveryResponse::Upload),
+                Self::Preflight(body) => preflight_restore_admitted(state, body)
+                    .await
+                    .map(Box::new)
+                    .map(RecoveryResponse::Preflight),
+                Self::Restore { auth, body } => start_restore_admitted(state, auth, body)
+                    .await
+                    .map(Box::new)
+                    .map(RecoveryResponse::Restore),
+            }
+        })
+        .await
+    }
+}
+
+async fn finish_restore_handoff(state: AppState, job_id: Uuid, request_id: Uuid) {
+    let error = match prepare_and_handoff_restore(state.clone(), job_id).await {
+        Ok(()) => return,
+        Err(error) => error,
+    };
+    if let Ok(job) = restore_jobs::read(&state.config, job_id).await {
+        cleanup_remote_staging_path(&job.artifact_path).await;
+    }
+    let _ = restore_jobs::fail(&state.config, job_id, &error).await;
+    let _ = sqlx::query(
+        "UPDATE panda.backup_restore_requests SET status='failed',error_message=$2,updated_at=now() WHERE id=$1")
+        .bind(request_id).bind(error.to_string()).execute(&state.pool).await;
+}
+
+enum CatalogSelection {
+    Artifacts(Option<Uuid>),
+    Requests(Option<Uuid>),
+}
+impl CatalogSelection {
+    async fn load<T>(self, state: &AppState) -> Result<Vec<T>, AppError>
+    where
+        T: for<'row> sqlx::FromRow<'row, sqlx::postgres::PgRow> + Send + Unpin,
+    {
+        let (columns, table, order, limit, id) = match self {
+            Self::Artifacts(id) => ("id,run_id,storage_type,file_name,storage_path,size_bytes,checksum_sha256,manifest,created_at",
+                "panda.backup_artifacts", "created_at DESC", 200_i64, id),
+            Self::Requests(id) => ("id,artifact_id,requested_by,status,confirmation_phrase,notes,error_message,requested_at,updated_at",
+                "panda.backup_restore_requests", "requested_at DESC", 10_i64, id),
+        };
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT ");
+        query.push(columns).push(" FROM ").push(table);
+        match id {
+            Some(id) => {
+                query.push(" WHERE id=").push_bind(id);
+            }
+            None => {
+                query
+                    .push(" ORDER BY ")
+                    .push(order)
+                    .push(" LIMIT ")
+                    .push_bind(limit);
+            }
+        }
+        query
+            .build_query_as::<T>()
+            .fetch_all(&state.pool)
+            .await
+            .map_err(AppError::from)
+    }
+}
+
+enum BackupSubmission {
+    Manual,
+    Request(CreateRestoreRequestBody),
+}
+impl BackupSubmission {
+    async fn submit(self, state: &AppState, user: Uuid) -> Result<Uuid, AppError> {
+        require_admin(state, user).await?;
+        match self {
+            Self::Manual => {
+                backup_service::start_backup_now(
+                    &state.pool,
+                    &state.config,
+                    Some(user),
+                    backup_service::BackupRunTrigger::Manual,
+                )
+                .await
+            }
+            Self::Request(body) => {
+                backup_service::create_restore_request(
+                    &state.pool,
+                    body.artifact_id,
+                    user,
+                    &body.confirmation_phrase,
+                    body.notes,
+                )
+                .await
+            }
+        }
+    }
+}
+
+struct PreparedRecovery {
+    staged: MaterializedArtifact,
+    plan: restore_compatibility::RestorePlan,
+}
+impl PreparedRecovery {
+    async fn inspect(state: &AppState, artifact_id: Uuid) -> Result<Self, AppError> {
+        let artifact = load_artifact_by_id(state, artifact_id).await?;
+        let staged = materialize_artifact(state, &artifact).await?;
+        let path = std::path::Path::new(&staged.path);
+        let package =
+            backup_service::validate_recovery_package_with_limits(path, &state.config.recovery)
+                .await?;
+        let inspection = restore_compatibility::inspect_recovery_dump(
+            path,
+            std::path::Path::new(&state.config.backup_artifact_dir),
+            &state.config.recovery,
+        )
+        .await?;
+        let plan = restore_compatibility::plan_restore(
+            &package.manifest,
+            &package.checksum_sha256,
+            &state.pool,
+            Some(&inspection),
+        )
+        .await?;
+        Ok(Self { staged, plan })
+    }
+
+    fn confirm(&self, request: &StartRestoreBody) -> Result<(), AppError> {
+        let plan = &self.plan;
+        match (plan.compatible,
+               request.plan_id == plan.plan_id && request.package_checksum_sha256 == plan.package_checksum_sha256) {
+            (true, true) => Ok(()),
+            (true, false) => Err(AppError::Conflict(
+                "The recovery package or target schema changed after preflight. Run preflight again.".into(),
+            )),
+            (false, _) => Err(AppError::Validation(plan.blocking_errors.iter()
+                .map(|error| error.message.as_str()).collect::<Vec<_>>().join(" "))),
+        }
+    }
+
+    async fn submit(
+        self,
+        state: AppState,
+        user_id: Uuid,
+        request: StartRestoreBody,
+    ) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
+        let request_id = backup_service::create_restore_request(
+            &state.pool,
+            request.artifact_id,
+            user_id,
+            &request.confirmation_phrase,
+            request.notes,
+        )
+        .await?;
+        let (job, capability_token) = restore_jobs::create(
+            &state.config,
+            request.artifact_id,
+            self.staged.path.clone(),
+            request_id,
+            self.plan,
+        )
+        .await?;
+        let job_id = job.id;
+        tokio::spawn(finish_restore_handoff(state, job_id, request_id));
+        self.staged.retain();
+        Ok((
+            StatusCode::ACCEPTED,
+            Json(StartRestoreResponse {
+                job: job.public(),
+                capability_token,
+            }),
+        ))
+    }
+}

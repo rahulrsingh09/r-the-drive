@@ -70,26 +70,32 @@ struct PlacementPatch {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/charts", get(list).post(create))
-        .route("/chart-sources", get(source_manifest))
-        .route("/charts/effective", get(effective))
-        .route(
+    super::route_table([
+        ("/charts", get(list).post(create)),
+        ("/chart-sources", get(source_manifest)),
+        ("/charts/effective", get(effective)),
+        (
             "/charts/{id}",
             get(fetch).put(update).patch(update).delete(remove),
-        )
-        .route("/charts/{id}/clone", post(clone_chart))
-        .route("/charts/{id}/reset", post(reset))
-        .route("/charts/{id}/placements", patch(set_placements))
-        .route("/admin/charts/{id}", put(admin_update).patch(admin_update))
-        .route("/admin/charts/{id}/lock", put(admin_lock).patch(admin_lock))
-        .route("/admin/charts/{id}/restore", post(admin_restore))
+        ),
+        ("/charts/{id}/clone", post(clone_chart)),
+        ("/charts/{id}/reset", post(reset)),
+        ("/charts/{id}/placements", patch(set_placements)),
+        ("/admin/charts/{id}", put(admin_update).patch(admin_update)),
+        ("/admin/charts/{id}/lock", put(admin_lock).patch(admin_lock)),
+        ("/admin/charts/{id}/restore", post(admin_restore)),
+    ])
 }
 
 async fn source_manifest(_auth: AuthUser) -> Json<Value> {
+    static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
     Json(
-        serde_json::from_str(include_str!("../../charts/sources.json"))
-            .expect("bundled chart source manifest must be valid JSON"),
+        MANIFEST
+            .get_or_init(|| {
+                serde_json::from_str(include_str!("../../charts/sources.json"))
+                    .expect("bundled chart source manifest must be valid JSON")
+            })
+            .clone(),
     )
 }
 
@@ -127,9 +133,13 @@ async fn fetch(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ChartRecord>, AppError> {
-    let row = get_chart(&state, id).await?;
-    check_read(&row, auth.user_id)?;
-    Ok(Json(row))
+    let record = ChartSelection::Id(id)
+        .load(&state)
+        .await?
+        .pop()
+        .ok_or(AppError::NotFound)?;
+    check_read(&record, auth.user_id)?;
+    Ok(Json(record))
 }
 
 async fn create(
@@ -161,12 +171,16 @@ async fn remove(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    let row = get_chart(&state, id).await?;
-    check_write(&row, auth.user_id, false)?;
-    sqlx::query("DELETE FROM panda.charts WHERE id=$1")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    let record = ChartSelection::Id(id)
+        .load(&state)
+        .await?
+        .pop()
+        .ok_or(AppError::NotFound)?;
+    check_write(&record, auth.user_id, false)?;
+    let mut delete =
+        sqlx::QueryBuilder::<sqlx::Postgres>::new("DELETE FROM panda.charts WHERE id=");
+    delete.push_bind(id);
+    delete.build().execute(&state.pool).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -258,48 +272,51 @@ async fn admin_restore(
 }
 
 fn bundled_default(slug: &str) -> Option<Value> {
-    serde_json::from_str::<Vec<Value>>(include_str!("../../charts/defaults.json"))
-        .ok()?
-        .into_iter()
+    static DEFAULTS: std::sync::OnceLock<Option<Vec<Value>>> = std::sync::OnceLock::new();
+    DEFAULTS
+        .get_or_init(|| serde_json::from_str(include_str!("../../charts/defaults.json")).ok())
+        .as_ref()?
+        .iter()
         .find(|chart| chart["slug"].as_str() == Some(slug))
+        .cloned()
 }
 
 async fn visible_rows(state: &AppState, user_id: Uuid) -> Result<Vec<ChartRecord>, AppError> {
-    Ok(sqlx::query_as::<_,ChartRecord>("SELECT id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at FROM panda.charts WHERE owner_id IS NULL OR owner_id=$1 ORDER BY slug,owner_id NULLS FIRST").bind(user_id).fetch_all(&state.pool).await?)
+    ChartSelection::Visible(user_id).load(state).await
 }
 async fn get_chart(state: &AppState, id: Uuid) -> Result<ChartRecord, AppError> {
-    sqlx::query_as::<_,ChartRecord>("SELECT id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at FROM panda.charts WHERE id=$1").bind(id).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)
+    ChartSelection::Id(id)
+        .load(state)
+        .await?
+        .pop()
+        .ok_or(AppError::NotFound)
 }
 fn check_read(row: &ChartRecord, user_id: Uuid) -> Result<(), AppError> {
-    if row.owner_id.is_none() || row.owner_id == Some(user_id) {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
-}
-fn check_write(row: &ChartRecord, user_id: Uuid, admin: bool) -> Result<(), AppError> {
-    if admin || row.owner_id == Some(user_id) && !row.is_locked {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
-}
-async fn is_admin(state: &AppState, user_id: Uuid) -> Result<bool, AppError> {
-    Ok(
-        sqlx::query_scalar::<_, Option<String>>("SELECT role FROM panda.users WHERE id=$1")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten()
-            .is_some_and(|r| r == "admin" || r == "super_user"),
+    super::authorize_record(
+        row.owner_id,
+        row.is_locked,
+        user_id,
+        super::RecordOperation::Read,
     )
 }
+fn check_write(row: &ChartRecord, user_id: Uuid, admin: bool) -> Result<(), AppError> {
+    super::authorize_record(
+        row.owner_id,
+        row.is_locked,
+        user_id,
+        super::RecordOperation::Write {
+            administrator: admin,
+        },
+    )
+}
+async fn is_admin(state: &AppState, user_id: Uuid) -> Result<bool, AppError> {
+    super::installation_admin(&state.pool, user_id).await
+}
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    if is_admin(state, user_id).await? {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
+    super::installation_admin(&state.pool, user_id)
+        .await?
+        .then_some(())
+        .ok_or(AppError::Forbidden)
 }
 fn validate_slug(slug: &str) -> Result<(), AppError> {
     if !validate_slug_value(slug) {
@@ -312,11 +329,13 @@ fn validate_slug(slug: &str) -> Result<(), AppError> {
 }
 
 fn validate_slug_value(slug: &str) -> bool {
-    !slug.is_empty()
-        && slug.len() <= 80
-        && slug.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-        })
+    match slug.as_bytes() {
+        [] => false,
+        bytes if bytes.len() > 80 => false,
+        bytes => bytes
+            .iter()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-')),
+    }
 }
 fn validate_name(name: &str) -> Result<(), AppError> {
     if name.trim().is_empty() || name.len() > 160 {
@@ -359,5 +378,40 @@ mod tests {
         assert!(validate_slug("soc-history").is_ok());
         assert!(validate_slug("SOC").is_err());
         assert!(validate_slug("https://bad").is_err());
+    }
+}
+
+#[cfg(test)]
+mod full_replacement_characterization {
+    use super::*;
+    #[test]
+    fn slug_and_name_byte_boundaries() {
+        for valid in ["a", "0", "a.b_c-d", &"a".repeat(80)] {
+            assert!(validate_slug(valid).is_ok());
+        }
+        for invalid in ["", "A", "a b", "é", &"a".repeat(81)] {
+            assert!(validate_slug(invalid).is_err());
+        }
+        assert!(validate_name(&"é".repeat(80)).is_ok());
+        assert!(validate_name(&"é".repeat(81)).is_err());
+        assert!(validate_name(" \t\n").is_err());
+    }
+}
+
+enum ChartSelection {
+    Visible(Uuid),
+    Id(Uuid),
+}
+impl ChartSelection {
+    async fn load(self, state: &AppState) -> Result<Vec<ChartRecord>, AppError> {
+        let (id, owner) = match self {
+            Self::Visible(owner) => (None, Some(owner)),
+            Self::Id(id) => (Some(id), None),
+        };
+        sqlx::query_as::<_, ChartRecord>(
+            "SELECT id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at
+             FROM panda.charts WHERE CASE WHEN $1::uuid IS NULL THEN owner_id IS NULL OR owner_id=$2 ELSE id=$1 END
+             ORDER BY slug,owner_id NULLS FIRST")
+            .bind(id).bind(owner).fetch_all(&state.pool).await.map_err(AppError::from)
     }
 }

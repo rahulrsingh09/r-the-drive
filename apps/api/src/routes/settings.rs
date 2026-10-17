@@ -17,31 +17,32 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/settings/timezone", get(get_timezone).put(update_timezone))
-        .route(
+    super::route_table([
+        ("/settings/timezone", get(get_timezone).put(update_timezone)),
+        (
             "/settings/update-check",
             get(get_update_check_settings).put(update_update_check_settings),
-        )
-        .route(
+        ),
+        (
             "/settings/authentication",
             get(get_authentication).put(update_authentication),
-        )
-        .route(
+        ),
+        (
             "/settings/authentication/test",
             axum::routing::post(test_authentication),
-        )
-        .route("/admin/security/status", get(get_security_status))
+        ),
+        ("/admin/security/status", get(get_security_status)),
+    ])
 }
 
 async fn get_authentication(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<AuthenticationSettingsResponse>, AppError> {
-    require_super_user(&state.pool, auth.user_id).await?;
-    Ok(Json(
-        authentication_settings::load(&state.pool, &state.age_key).await?,
-    ))
+    AuthenticationRead::Settings
+        .authorize(&state, &auth)
+        .await
+        .map(Json)
 }
 
 async fn update_authentication(
@@ -59,18 +60,11 @@ async fn test_authentication(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_super_user(&state.pool, auth.user_id).await?;
-    let visible = authentication_settings::load(&state.pool, &state.age_key).await?;
-    authentication_settings::validate_effective(&visible)?;
-    let effective = authentication_settings::load_effective(&state.pool, &state.age_key).await?;
-    let mut provider_settings = effective.clone();
-    // Test-before-enable is intentional so the administrator can validate the
-    // provider and recovery path without exposing SSO on the login page.
-    provider_settings.oidc_enabled = true;
-    crate::services::oidc::test_provider(&provider_settings).await?;
-    authentication_settings::record_validation(&state.pool, &effective, &state.age_key).await?;
+    AuthenticationRead::Validate
+        .authorize(&state, &auth)
+        .await?;
     Ok(Json(
-        serde_json::json!({ "valid": true, "discovery": "validated", "message": "OIDC provider discovery and JWKS retrieval succeeded." }),
+        serde_json::json!({"valid":true,"discovery":"validated","message":"OIDC provider discovery and JWKS retrieval succeeded."}),
     ))
 }
 
@@ -150,14 +144,20 @@ async fn get_update_check_settings(
     State(state): State<AppState>,
     _auth: AuthUser,
 ) -> Result<Json<UpdateCheckSettingsResponse>, AppError> {
-    let (enabled, frequency): (bool, String) = sqlx::query_as(
-        "SELECT enabled, frequency FROM panda.update_check_settings WHERE id = TRUE",
+    #[derive(sqlx::FromRow)]
+    struct Stored {
+        enabled: bool,
+        frequency: String,
+    }
+    let record = sqlx::query_as::<_, Stored>(
+        "SELECT enabled,frequency FROM panda.update_check_settings WHERE id=TRUE",
     )
     .fetch_one(&state.pool)
     .await?;
+    let frequency = UpdateCheckFrequency::parse(&record.frequency)?;
     Ok(Json(UpdateCheckSettingsResponse {
-        enabled,
-        frequency: UpdateCheckFrequency::parse(&frequency)?,
+        enabled: record.enabled,
+        frequency,
     }))
 }
 
@@ -212,19 +212,41 @@ async fn get_security_status(
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role = sqlx::query_scalar!("SELECT role FROM panda.users WHERE id = $1", user_id)
-        .fetch_optional(&state.pool)
-        .await?;
-
-    if role_can_manage_installation(role.as_deref()) {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
+    super::installation_admin(&state.pool, user_id)
+        .await?
+        .then_some(())
+        .ok_or(AppError::Forbidden)
 }
 
+#[cfg(test)]
 fn role_can_manage_installation(role: Option<&str>) -> bool {
     matches!(role, Some("admin" | "super_user"))
+}
+
+enum AuthenticationRead {
+    Settings,
+    Validate,
+}
+impl AuthenticationRead {
+    async fn authorize(
+        self,
+        state: &AppState,
+        auth: &AuthUser,
+    ) -> Result<AuthenticationSettingsResponse, AppError> {
+        require_super_user(&state.pool, auth.user_id).await?;
+        let visible = authentication_settings::load(&state.pool, &state.age_key).await?;
+        if let Self::Validate = self {
+            authentication_settings::validate_effective(&visible)?;
+            let effective =
+                authentication_settings::load_effective(&state.pool, &state.age_key).await?;
+            let mut candidate = effective.clone();
+            candidate.oidc_enabled = true;
+            crate::services::oidc::test_provider(&candidate).await?;
+            authentication_settings::record_validation(&state.pool, &effective, &state.age_key)
+                .await?;
+        }
+        Ok(visible)
+    }
 }
 
 #[cfg(test)]

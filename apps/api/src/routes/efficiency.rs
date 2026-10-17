@@ -21,13 +21,14 @@ use crate::{
 mod workflow;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/efficiency/summary", get(get_summary))
-        .route("/efficiency/by-mode", get(get_by_mode))
-        .route("/efficiency/by-tag", get(get_by_tag))
-        .route("/efficiency/range-vs-temp", get(get_range_vs_temp))
-        .route("/efficiency/vs-temp", get(get_vs_temp_binned))
-        .route("/efficiency/trend", get(get_trend))
+    super::route_table([
+        ("/efficiency/summary", get(get_summary)),
+        ("/efficiency/by-mode", get(get_by_mode)),
+        ("/efficiency/by-tag", get(get_by_tag)),
+        ("/efficiency/range-vs-temp", get(get_range_vs_temp)),
+        ("/efficiency/vs-temp", get(get_vs_temp_binned)),
+        ("/efficiency/trend", get(get_trend)),
+    ])
 }
 
 #[derive(Deserialize)]
@@ -96,13 +97,7 @@ fn resolve_time_bounds(
     lifetime: bool,
     default_days: i64,
 ) -> (DateTime<Utc>, DateTime<Utc>) {
-    let resolved_to = to.unwrap_or_else(Utc::now);
-    let resolved_from = if lifetime {
-        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
-    } else {
-        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
-    };
-    (resolved_from, resolved_to)
+    super::time_bounds(from, to, lifetime, default_days)
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

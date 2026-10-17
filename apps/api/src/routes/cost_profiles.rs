@@ -15,12 +15,13 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/cost-profiles", get(list_profiles).post(create_profile))
-        .route(
+    super::route_table([
+        ("/cost-profiles", get(list_profiles).post(create_profile)),
+        (
             "/cost-profiles/{id}",
             get(get_profile).put(update_profile).delete(delete_profile),
-        )
+        ),
+    ])
 }
 
 // ─── Request bodies ───────────────────────────────────────────────────────────
@@ -150,36 +151,20 @@ fn validate_profile_details(
             "rate must be a non-negative number".into(),
         ));
     }
-    // Sanity check: rates are dollars per kWh.  Reject obviously-mis-unitted
-    // values (e.g. someone typed "32.2499" meaning cents per kWh) before they
-    // silently inflate every cost calculation by 100×.  Flat-fee profiles
-    // ("flat" billing_type) use `rate` as a per-session dollar amount, where
-    // larger values are legitimate — so this guard only applies to per_kwh.
-    if billing_type == "per_kwh" && rate > 5.0 {
-        return Err(AppError::Validation(format!(
-            "Rate {rate:.4} $/kWh is too high. Enter the rate in dollars per kWh \
-             (e.g. 0.13 for 13¢/kWh), not cents."
-        )));
-    }
-
-    if billing_type == "tou" {
-        if timezone
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            return Err(AppError::Validation(
-                "timezone is required for TOU profiles".into(),
-            ));
+    match billing_type {
+        "per_kwh" if rate > 5.0 => Err(AppError::Validation(format!(
+            "Rate {rate:.4} $/kWh is too high. Enter the rate in dollars per kWh (e.g. 0.13 for 13¢/kWh), not cents."))),
+        "tou" => {
+            let configured = timezone.unwrap_or_default().trim();
+            if configured.is_empty() {
+                return Err(AppError::Validation("timezone is required for TOU profiles".into()));
+            }
+            let periods: Vec<TouPeriod> = serde_json::from_value(tou_periods.clone())
+                .map_err(|_| AppError::Validation("tou_periods must be a JSON array of schedule periods".into()))?;
+            validate_tou_periods(&periods).map_err(AppError::Validation)
         }
-        let periods: Vec<TouPeriod> =
-            serde_json::from_value(tou_periods.clone()).map_err(|_| {
-                AppError::Validation("tou_periods must be a JSON array of schedule periods".into())
-            })?;
-        validate_tou_periods(&periods).map_err(AppError::Validation)?;
+        _ => Ok(()),
     }
-
-    Ok(())
 }
 
 #[path = "cost_profiles/workflow.rs"]

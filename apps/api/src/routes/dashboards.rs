@@ -76,20 +76,21 @@ pub struct UpdateDashboard {
 // ─── Router ──────────────────────────────────────────────────────────────────
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/dashboards", get(list).post(create))
-        .route("/dashboards/{id}", get(fetch).put(update).delete(remove))
-        .route("/dashboards/{id}/clone", post(clone_dashboard))
-        .route("/admin/dashboards/{id}", put(admin_update))
-        .route("/admin/dashboards/{id}/lock", post(admin_set_lock))
-        .route(
+    super::route_table([
+        ("/dashboards", get(list).post(create)),
+        ("/dashboards/{id}", get(fetch).put(update).delete(remove)),
+        ("/dashboards/{id}/clone", post(clone_dashboard)),
+        ("/admin/dashboards/{id}", put(admin_update)),
+        ("/admin/dashboards/{id}/lock", post(admin_set_lock)),
+        (
             "/admin/dashboards/{id}/restore-default",
             post(admin_restore_default),
-        )
+        ),
+    ])
 }
 
 pub fn metadata_router() -> Router<AppState> {
-    Router::new().route("/dashboards/by-slug/{slug}", get(by_slug))
+    super::route_table([("/dashboards/by-slug/{slug}", get(by_slug))])
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -243,51 +244,40 @@ async fn get_dashboard(state: &AppState, id: Uuid) -> Result<Dashboard, AppError
 }
 
 fn check_read_access(d: &Dashboard, user_id: Uuid) -> Result<(), AppError> {
-    // System defaults are readable by all authenticated users
-    if d.owner_id.is_none() {
-        return Ok(());
-    }
-    if d.owner_id == Some(user_id) {
-        return Ok(());
-    }
-    Err(AppError::Forbidden)
+    super::authorize_record(
+        d.owner_id,
+        d.is_locked,
+        user_id,
+        super::RecordOperation::Read,
+    )
 }
 
 fn check_write_access(d: &Dashboard, user_id: Uuid, is_admin: bool) -> Result<(), AppError> {
-    if d.is_locked && !is_admin {
-        return Err(AppError::Forbidden);
-    }
-    if d.owner_id.is_none() && !is_admin {
-        return Err(AppError::Forbidden);
-    }
-    if d.owner_id != Some(user_id) && !is_admin {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
+    super::authorize_record(
+        d.owner_id,
+        d.is_locked,
+        user_id,
+        super::RecordOperation::Write {
+            administrator: is_admin,
+        },
+    )
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role = sqlx::query_scalar!("SELECT role FROM panda.users WHERE id = $1", user_id)
-        .fetch_optional(&state.pool)
-        .await?;
-
-    match role.as_deref() {
-        Some("admin") | Some("super_user") => Ok(()),
-        _ => Err(AppError::Forbidden),
-    }
+    super::installation_admin(&state.pool, user_id)
+        .await?
+        .then_some(())
+        .ok_or(AppError::Forbidden)
 }
 
 fn validate_slug(slug: &str) -> Result<(), AppError> {
-    if slug.is_empty()
-        || !slug
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
-    {
-        return Err(AppError::Validation(
-            "Slug must be lowercase letters, digits, and hyphens only".into(),
-        ));
-    }
-    Ok(())
+    let valid = !slug.is_empty()
+        && slug
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'));
+    valid.then_some(()).ok_or_else(|| {
+        AppError::Validation("Slug must be lowercase letters, digits, and hyphens only".into())
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -301,42 +291,53 @@ fn dashboard_config_with_metadata(
     is_default: bool,
     is_locked: bool,
 ) -> Value {
-    if let Value::Object(ref mut object) = config {
-        object.insert("id".into(), Value::String(id.to_string()));
-        object.insert("slug".into(), Value::String(slug.to_string()));
-        object.insert("name".into(), Value::String(name.to_string()));
-        match description {
-            Some(description) => {
-                object.insert("description".into(), Value::String(description.to_string()));
+    let Some(object) = config.as_object_mut() else {
+        return config;
+    };
+    let metadata = [
+        ("id", Some(Value::String(id.to_string()))),
+        ("slug", Some(Value::String(slug.to_owned()))),
+        ("name", Some(Value::String(name.to_owned()))),
+        (
+            "description",
+            description.map(|text| Value::String(text.to_owned())),
+        ),
+        ("isDefault", Some(Value::Bool(is_default))),
+        ("isLocked", Some(Value::Bool(is_locked))),
+        (
+            "ownerId",
+            Some(
+                owner_id
+                    .map(|id| Value::String(id.to_string()))
+                    .unwrap_or(Value::Null),
+            ),
+        ),
+    ];
+    for (key, value) in metadata {
+        match value {
+            Some(value) => {
+                object.insert(key.into(), value);
             }
             None => {
-                object.remove("description");
+                object.remove(key);
             }
         }
-        object.insert("isDefault".into(), Value::Bool(is_default));
-        object.insert("isLocked".into(), Value::Bool(is_locked));
-        object.insert(
-            "ownerId".into(),
-            owner_id
-                .map(|id| Value::String(id.to_string()))
-                .unwrap_or(Value::Null),
-        );
     }
     config
 }
 
 fn bundled_default_config(id: Uuid) -> Option<Value> {
-    let id_str = id.to_string();
-    let json_str = match id_str.as_str() {
-        "00000000-0000-0000-0000-000000000001" => include_str!("../../dashboards/dashboard.json"),
-        "00000000-0000-0000-0000-000000000002" => include_str!("../../dashboards/battery.json"),
-        "00000000-0000-0000-0000-000000000003" => include_str!("../../dashboards/efficiency.json"),
-        "00000000-0000-0000-0000-000000000004" => include_str!("../../dashboards/charging.json"),
-        "00000000-0000-0000-0000-000000000005" => include_str!("../../dashboards/trips.json"),
-        _ => return None,
-    };
-
-    serde_json::from_str(json_str).ok()
+    const SOURCES: [&str; 5] = [
+        include_str!("../../dashboards/dashboard.json"),
+        include_str!("../../dashboards/battery.json"),
+        include_str!("../../dashboards/efficiency.json"),
+        include_str!("../../dashboards/charging.json"),
+        include_str!("../../dashboards/trips.json"),
+    ];
+    let index = usize::try_from(id.as_u128().checked_sub(1)?).ok()?;
+    SOURCES
+        .get(index)
+        .and_then(|source| serde_json::from_str(source).ok())
 }
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -389,23 +390,25 @@ fn merge_managed_widgets(
 }
 
 fn compact_canonical_trips_layout(widgets: &mut [Value]) -> bool {
-    let mut changed = false;
+    let migrations = [
+        ("d5000005-0000-0000-0000-000000000005", [0, 9, 12, 10], 2),
+        ("d5000005-0000-0000-0000-000000000006", [0, 19, 12, 14], 12),
+    ];
+    let mut changes = 0;
     for widget in widgets {
-        let (expected_y, expected_height, next_y) = match widget["id"].as_str() {
-            Some("d5000005-0000-0000-0000-000000000005") => (9, 10, 2),
-            Some("d5000005-0000-0000-0000-000000000006") => (19, 14, 12),
-            _ => continue,
+        let Some((_, expected, y)) = migrations
+            .iter()
+            .find(|(id, _, _)| widget["id"].as_str() == Some(*id))
+        else {
+            continue;
         };
-        let layout_is_canonical = widget["layout"]["x"].as_i64() == Some(0)
-            && widget["layout"]["y"].as_i64() == Some(expected_y)
-            && widget["layout"]["w"].as_i64() == Some(12)
-            && widget["layout"]["h"].as_i64() == Some(expected_height);
-        if layout_is_canonical {
-            widget["layout"]["y"] = Value::from(next_y);
-            changed = true;
+        let actual = ["x", "y", "w", "h"].map(|key| widget["layout"][key].as_i64());
+        if actual == expected.map(Some) {
+            widget["layout"]["y"] = Value::from(*y);
+            changes += 1;
         }
     }
-    changed
+    changes > 0
 }
 
 #[cfg(test)]
