@@ -93,6 +93,11 @@ const sidebars: SidebarsConfig = {
     },
   ],
   developmentSidebar: [
+    'architecture/full-replacement-vehicle_routes',
+        'architecture/full-replacement-query_routes',
+        'architecture/full-replacement-domain_services',
+        'architecture/full-replacement-maintenance_db',
+        'architecture/full-replacement-recovery_storage',
     'architecture/full-replacement-auth-routes',
     'architecture/full-replacement-identity-policy',
     'architecture/full-replacement-edge-sessions',

@@ -47,11 +47,35 @@ export function routeSecurityInventory(root) {
     }));
   const tests = new Set();
   const mounted = new Map();
-  for (const match of assembly.matchAll(
-    /\.merge\((\w+)::(router|protected_router|metadata_router)\(\)\)/g
-  )) {
-    if (!mounted.has(match[1])) mounted.set(match[1], new Set());
-    mounted.get(match[1]).add(match[2]);
+  const registration = assembly.match(/^fn registrations\(\)[^{]*\{[\s\S]*?^\}/m)?.[0];
+  const scopeFailures = [];
+  const register = (module, factory) => {
+    if (!mounted.has(module)) mounted.set(module, new Set());
+    mounted.get(module).add(factory);
+  };
+  if (registration) {
+    const specialized = new Map([
+      ['auth::router', 'Public'],
+      ['auth::metadata_router', 'Metadata'],
+      ['dashboards::metadata_router', 'Metadata'],
+      ['live::router', 'Heavy'],
+      ['backups::upload_router', 'Upload'],
+      ['themes::router', 'Themes'],
+    ]);
+    for (const [, scope, module, factory] of registration.matchAll(
+      /\(\s*(\w+)\s*,\s*(\w+)::(\w+)\s*\)/g
+    )) {
+      const name = `${module}::${factory}`;
+      const expected = specialized.get(name) ?? 'Common';
+      if (scope !== expected)
+        scopeFailures.push(`API route registration ${name} uses ${scope}; expected ${expected}`);
+      register(module, factory);
+    }
+  } else {
+    for (const [, module, factory] of assembly.matchAll(
+      /\.merge\((\w+)::(router|protected_router|metadata_router)\(\)\)/g
+    ))
+      register(module, factory);
   }
   for (const module of modules) {
     for (const match of module.source.matchAll(
@@ -60,7 +84,10 @@ export function routeSecurityInventory(root) {
       tests.add(match[1]);
   }
   const active = modules.filter(
-    (module) => !tests.has(module.name) && module.source.includes('.route(')
+    (module) =>
+      !tests.has(module.name) &&
+      (module.source.includes('.route(') ||
+        /\bfn\s+(?:router|protected_router|metadata_router|upload_router)\s*\(/.test(module.source))
   );
   const rules = [
     [
@@ -85,7 +112,7 @@ export function routeSecurityInventory(root) {
     const offenders = active.filter(violates).map((module) => module.name);
     return offenders.length ? [`${message}: ${offenders.join(', ')}`] : [];
   });
-  return { failures, count: modules.length };
+  return { failures: [...failures, ...scopeFailures], count: modules.length };
 }
 
 if (isMain(import.meta.url)) {

@@ -89,15 +89,23 @@ test('route guard refuses unmounted modules, missing matrix entries, and depreca
     'pub fn router() { Router::new().route("/synthetic", get(handler)); }'
   );
   assert.match(command(root, 'scripts/check-api-route-security.mjs').stderr, /not mounted/);
-  const router = join(root, 'apps/api/src/routes/mod.rs');
-  const original = readFileSync(router, 'utf8');
-  writeFileSync(router, original + '\n.merge(synthetic::router())\n');
+  edit(
+    root,
+    'apps/api/src/routes/mod.rs',
+    '(Common, battery::router),',
+    '(Common, battery::router),\n(Common, synthetic::router),'
+  );
   assert.match(
     command(root, 'scripts/check-api-route-security.mjs').stderr,
     /authorization-matrix/
   );
   rmSync(join(root, 'apps/api/src/routes/synthetic.rs'));
-  edit(root, 'apps/api/src/routes/battery.rs', '.route(', 'require_vehicle_owned();\n.route(');
+  edit(
+    root,
+    'apps/api/src/routes/battery.rs',
+    'pub fn router() -> Router<AppState> {',
+    'pub fn router() -> Router<AppState> {\nrequire_vehicle_owned();'
+  );
   assert.match(command(root, 'scripts/check-api-route-security.mjs').stderr, /Deprecated/);
 });
 

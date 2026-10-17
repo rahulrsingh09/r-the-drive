@@ -1,5 +1,29 @@
 {
   "hotspots": {
+    "apps/api/src/services/backups_recovery_operations_tests.rs": {
+      "maxLines": 580,
+      "maxBytes": 21174
+    },
+    "apps/api/src/services/restore_compatibility_recovery_operations_tests.rs": {
+      "maxLines": 543,
+      "maxBytes": 18895
+    },
+    "apps/api/src/routes/auth_full_replacement_tests.rs": {
+      "maxLines": 566,
+      "maxBytes": 20736
+    },
+    "apps/api/src/routes/health.rs": {
+      "maxLines": 629,
+      "maxBytes": 26705
+    },
+    "apps/api/src/routes/mod.rs": {
+      "maxLines": 649,
+      "maxBytes": 21813
+    },
+    "apps/api/src/routes/vehicles/status.rs": {
+      "maxLines": 784,
+      "maxBytes": 31385
+    },
     "apps/web/src/features/settings/SettingsPage.tsx": {
       "maxLines": 1933,
       "maxBytes": 101666
@@ -66,6 +90,12 @@
     ],
     "extensions": [".ts", ".tsx", ".rs"],
     "existingExceptions": {
+      "apps/api/src/services/backups_recovery_operations_tests.rs": "Explicit cfg(test) archive and backup characterization module; exact size ratchet, no production code.",
+      "apps/api/src/services/restore_compatibility_recovery_operations_tests.rs": "Explicit cfg(test) disposable restore database fixtures and failure characterization; exact size ratchet, no production code.",
+      "apps/api/src/routes/auth_full_replacement_tests.rs": "Explicit cfg(test) auth characterization module; exact size ratchet, no production code.",
+      "apps/api/src/routes/health.rs": "Health response contracts and assembly with 131 lines of embedded characterization; history and observations are separate modules. Exact size ratchet.",
+      "apps/api/src/routes/mod.rs": "Shared limiter identities, six route scopes, registration table and middleware ordering reviewed together; embedded characterization retained. Exact size ratchet.",
+      "apps/api/src/routes/vehicles/status.rs": "One five-read status snapshot and deterministic 117-field projection with explicit availability tables. Exact size ratchet; no new route workflows here.",
       "apps/api/src/routes/vehicles.rs": "Existing route hotspot; split in A3.",
       "apps/api/src/services/backups.rs": "Existing lifecycle hotspot; split in A6.",
       "packages/hooks/src/api/transport.ts": "Existing transport facade; split in D1.",

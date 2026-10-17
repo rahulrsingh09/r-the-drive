@@ -14,7 +14,14 @@ thresholds, and exception lists remain defined by the existing policy.
 
 Route checks inventory mounted Rust route modules, the authorization matrix,
 and the deprecated ownership helper ban. They are a source inventory, not a
-substitute for handler authorization tests. Dependency checks retain catalog
+substitute for handler authorization tests. The registration table assigns each
+factory to its public, common, metadata, heavy-read, upload, or theme scope.
+Checks reject missing factories and incorrect scope assignments; test-only
+legacy merge expressions cannot satisfy a missing production registration.
+Named size exceptions for route assembly, status projection, health contracts,
+and auth characterization have exact line and byte limits.
+
+Dependency checks retain catalog
 requirements, toolchain pins, immutable action references, the install-script
 allowlist, and bounded advisory exceptions. Audit evaluation keeps raw findings,
 validates exception dates and exact package versions, and requires every pnpm
