@@ -415,13 +415,11 @@ mod location_bits {
 
 /// Classify charger type from peak observed power.
 fn classify_charger(peak_kw: f64) -> String {
-    if peak_kw < AC_L1_MAX_KW {
-        "ac".to_string()
-    } else if peak_kw < AC_L2_MAX_KW {
-        "ac_l2".to_string()
-    } else {
-        "dc".to_string()
-    }
+    [(AC_L1_MAX_KW, "ac"), (AC_L2_MAX_KW, "ac_l2")]
+        .into_iter()
+        .find_map(|(ceiling, label)| (peak_kw < ceiling).then_some(label))
+        .unwrap_or("dc")
+        .to_owned()
 }
 
 #[cfg(test)]

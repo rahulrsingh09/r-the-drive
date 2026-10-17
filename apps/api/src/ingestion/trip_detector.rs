@@ -453,17 +453,16 @@ impl TripDetectorState {
 }
 
 fn mode_of(v: &[String]) -> Option<String> {
-    if v.is_empty() {
-        return None;
-    }
-    let mut counts = std::collections::HashMap::<&str, usize>::new();
-    for s in v {
-        *counts.entry(s.as_str()).or_insert(0) += 1;
-    }
+    let mut ordered: Vec<&str> = v.iter().map(String::as_str).collect();
+    ordered.sort_unstable();
+    let counts: std::collections::HashMap<&str, usize> = ordered
+        .chunk_by(|left, right| left == right)
+        .map(|group| (group[0], group.len()))
+        .collect();
     counts
         .into_iter()
-        .max_by_key(|&(_, c)| c)
-        .map(|(s, _)| s.to_string())
+        .max_by_key(|(_, count)| *count)
+        .map(|(value, _)| value.to_owned())
 }
 
 /// Compute distance from odometer delta if both endpoints are available.

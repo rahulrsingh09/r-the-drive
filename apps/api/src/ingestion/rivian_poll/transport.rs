@@ -62,54 +62,53 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
     variables: serde_json::Value,
 ) -> Result<T> {
     outbound_policy::require_telemetry_query(query)?;
-    let body = serde_json::json!({
-        "operationName": operation,
-        "query": query,
-        "variables": variables,
-    });
-
-    let mut request = outbound_policy::rivian_post(url)?
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+    let body = serde_json::json!({"operationName":operation,"query":query,"variables":variables});
+    let mut request = outbound_policy::rivian_post(url)?;
+    for (name, value) in [
+        ("User-Agent", USER_AGENT),
+        ("Accept", "application/json"),
+        ("Content-Type", "application/json"),
+        ("Apollographql-Client-Name", APOLLO_CLIENT_NAME),
+        ("A-Sess", tokens.app_session_token.as_str()),
+        ("U-Sess", tokens.user_session_token.as_str()),
+    ] {
+        request = request.header(name, value);
+    }
+    request = request
         .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
-        .header("A-Sess", &tokens.app_session_token)
-        .header("U-Sess", &tokens.user_session_token)
         .json(&body);
-
-    if !tokens.csrf_token.is_empty() {
-        request = request.header("Csrf-Token", &tokens.csrf_token);
+    if let Some(value) = Some(tokens.csrf_token.as_str()).filter(|value| !value.is_empty()) {
+        request = request.header("Csrf-Token", value);
     }
     if !tokens.access_token.is_empty() {
         request = request.bearer_auth(&tokens.access_token);
     }
-
     let response = request.send().await.context("HTTP request failed")?;
-    let status = response.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(anyhow!(AuthError));
-    }
-    if !status.is_success() {
-        return Err(anyhow!("Rivian API: HTTP {status}"));
-    }
-
-    let envelope = outbound_policy::read_json::<GqlEnvelope<T>>(response)
-        .await
-        .context("failed to parse Rivian API response")?;
-
-    if let Some(errors) = &envelope.errors {
-        if !errors.is_empty() {
-            if errors_indicate_auth(errors) {
-                return Err(anyhow!(AuthError));
+    match response.status() {
+        reqwest::StatusCode::UNAUTHORIZED => Err(anyhow!(AuthError)),
+        status if !status.is_success() => Err(anyhow!("Rivian API: HTTP {status}")),
+        _ => {
+            let envelope: GqlEnvelope<T> = outbound_policy::read_json(response)
+                .await
+                .context("failed to parse Rivian API response")?;
+            match envelope {
+                GqlEnvelope {
+                    errors: Some(errors),
+                    ..
+                } if !errors.is_empty() => {
+                    if errors_indicate_auth(&errors) {
+                        Err(anyhow!(AuthError))
+                    } else {
+                        Err(anyhow!("Rivian GQL errors: {}", fmt_errors(&errors)))
+                    }
+                }
+                GqlEnvelope {
+                    data: Some(data), ..
+                } => Ok(data),
+                _ => Err(anyhow!("Rivian API: empty data for {operation}")),
             }
-            return Err(anyhow!("Rivian GQL errors: {}", fmt_errors(errors)));
         }
     }
-
-    envelope
-        .data
-        .ok_or_else(|| anyhow!("Rivian API: empty data for {operation}"))
 }
 
 #[cfg(test)]

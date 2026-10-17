@@ -66,11 +66,6 @@ impl WorkerSlot {
     }
 }
 
-enum SupervisorState {
-    Serving,
-    Draining,
-}
-
 struct RestartState {
     failures: u32,
     started_at: tokio::time::Instant,
@@ -87,24 +82,28 @@ impl RestartState {
     }
 
     fn failed(&mut self) {
-        if self.started_at.elapsed() >= Duration::from_secs(300) {
-            self.failures = 0;
-        }
-        let delay = Duration::from_secs((5_u64 * (1_u64 << self.failures.min(6))).min(300));
-        self.failures = self.failures.saturating_add(1);
-        self.restart_at = tokio::time::Instant::now() + delay;
+        let failures = if self.started_at.elapsed() >= Duration::from_secs(300) {
+            0
+        } else {
+            self.failures
+        };
+        let delays = [5, 10, 20, 40, 80, 160, 300];
+        let delay = delays[failures.min(6) as usize];
+        self.restart_at = tokio::time::Instant::now() + Duration::from_secs(delay);
+        self.failures = failures.saturating_add(1);
     }
 }
 
 async fn stop_task(vehicle_id: Uuid, (mut handle, shutdown): WorkerEntry) {
     let _ = shutdown.send(());
-    if tokio::time::timeout(Duration::from_secs(5), &mut handle)
-        .await
-        .is_err()
-    {
-        handle.abort();
-        let _ = handle.await;
-        tracing::warn!(%vehicle_id, "worker stop timed out; aborted");
+    tokio::select! {
+        biased;
+        result = &mut handle => { let _ = result; }
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            handle.abort();
+            let _ = handle.await;
+            tracing::warn!(%vehicle_id, "worker stop timed out; aborted");
+        }
     }
 }
 
@@ -455,20 +454,20 @@ impl WorkerSupervisor {
         age_key: String,
         config: Config,
     ) -> SupervisorHandle {
-        let (cmd_tx, cmd_rx) = mpsc::channel(64);
-
-        let mut sup = WorkerSupervisor {
-            pool,
-            redis,
-            age_key,
-            config,
-            workers: HashMap::new(),
-            cmd_rx,
-        };
-
-        tokio::spawn(async move { sup.run().await });
-
-        SupervisorHandle { tx: cmd_tx }
+        let (tx, cmd_rx) = mpsc::channel(64);
+        tokio::spawn(async move {
+            WorkerSupervisor {
+                pool,
+                redis,
+                age_key,
+                config,
+                workers: HashMap::new(),
+                cmd_rx,
+            }
+            .run()
+            .await;
+        });
+        SupervisorHandle { tx }
     }
 
     async fn run(&mut self) {
@@ -506,44 +505,34 @@ impl WorkerSupervisor {
     {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut state = SupervisorState::Serving;
         loop {
-            match state {
-                SupervisorState::Serving => {
-                    let command = tokio::select! {
-                        biased;
-                        command = self.cmd_rx.recv() => command,
-                        _ = interval.tick() => {
-                            self.reconcile(&spawn).await;
-                            continue;
-                        }
-                    };
-                    match command {
-                        Some(SupervisorCommand::StartWorker { vehicle_id }) => {
-                            self.workers
-                                .entry(vehicle_id)
-                                .or_insert_with(WorkerSlot::waiting);
-                            self.reconcile(&spawn).await;
-                        }
-                        Some(SupervisorCommand::StopWorker { vehicle_id }) => {
-                            if let Some(slot) = self.workers.remove(&vehicle_id) {
-                                slot.stop(vehicle_id).await;
-                            }
-                        }
-                        Some(SupervisorCommand::Shutdown) | None => {
-                            state = SupervisorState::Draining
-                        }
+            let command = tokio::select! {
+                biased;
+                command = self.cmd_rx.recv() => command,
+                _ = interval.tick() => {
+                    self.reconcile(&spawn).await;
+                    continue;
+                }
+            };
+            match command {
+                Some(SupervisorCommand::StartWorker { vehicle_id }) => {
+                    self.workers
+                        .entry(vehicle_id)
+                        .or_insert_with(WorkerSlot::waiting);
+                    self.reconcile(&spawn).await;
+                }
+                Some(SupervisorCommand::StopWorker { vehicle_id }) => {
+                    if let Some(slot) = self.workers.remove(&vehicle_id) {
+                        slot.stop(vehicle_id).await;
                     }
                 }
-                SupervisorState::Draining => {
-                    let mut stopping = tokio::task::JoinSet::new();
-                    for (vehicle_id, slot) in self.workers.drain() {
-                        stopping.spawn(slot.stop(vehicle_id));
-                    }
-                    while stopping.join_next().await.is_some() {}
-                    return;
-                }
+                Some(SupervisorCommand::Shutdown) | None => break,
             }
         }
+        let mut stopping = tokio::task::JoinSet::new();
+        self.workers.drain().for_each(|(vehicle_id, slot)| {
+            stopping.spawn(slot.stop(vehicle_id));
+        });
+        while stopping.join_next().await.is_some() {}
     }
 }

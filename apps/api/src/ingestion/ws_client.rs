@@ -427,56 +427,33 @@ impl VehicleStateSubscriptionHealth {
     }
 
     fn record_rejection(&mut self, vehicle_id: &Uuid, invalid_fields: &[String]) -> bool {
-        let mut disabled_any = false;
-
+        let previous = self.disabled_fields.len();
         for field_name in invalid_fields {
-            let count = self.failure_counts.entry(field_name.clone()).or_default();
-            *count += 1;
-
-            let descriptor = vehicle_state_field(field_name);
-            if descriptor.is_none() {
-                tracing::warn!(
-                    vehicle_id = %vehicle_id,
-                    field = %field_name,
-                    failures = *count,
-                    "Rivian WS schema rejected unknown VehicleState field"
-                );
+            let failures = self.failure_counts.entry(field_name.clone()).or_default();
+            *failures += 1;
+            let Some(field) = vehicle_state_field(field_name) else {
+                tracing::warn!(%vehicle_id, field=%field_name, failures=*failures,
+                "Rivian WS schema rejected unknown VehicleState field");
+                continue;
+            };
+            if *failures < VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD
+                || self.disabled_fields.contains(field_name)
+            {
+                tracing::warn!(%vehicle_id, field=%field_name, failures=*failures,
+                disable_threshold=VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD,
+                "Rivian WS VehicleState field rejected by schema");
                 continue;
             }
-
-            if *count >= VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD
-                && self.disabled_fields.insert(field_name.clone())
-            {
-                disabled_any = true;
-                let field = descriptor.expect("checked above");
-                if let Some(reason) = field.critical_reason {
-                    tracing::error!(
-                        vehicle_id = %vehicle_id,
-                        field = %field_name,
-                        failures = *count,
-                        critical_reason = reason,
-                        "Rivian WS VehicleState field disabled after repeated schema rejection"
-                    );
-                } else {
-                    tracing::warn!(
-                        vehicle_id = %vehicle_id,
-                        field = %field_name,
-                        failures = *count,
-                        "Rivian WS VehicleState field disabled after repeated schema rejection"
-                    );
-                }
-            } else {
-                tracing::warn!(
-                    vehicle_id = %vehicle_id,
-                    field = %field_name,
-                    failures = *count,
-                    disable_threshold = VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD,
-                    "Rivian WS VehicleState field rejected by schema"
-                );
+            self.disabled_fields.insert(field_name.clone());
+            match field.critical_reason {
+                Some(reason) => tracing::error!(%vehicle_id, field=%field_name,
+                failures=*failures, critical_reason=reason,
+                "Rivian WS VehicleState field disabled after repeated schema rejection"),
+                None => tracing::warn!(%vehicle_id, field=%field_name, failures=*failures,
+                "Rivian WS VehicleState field disabled after repeated schema rejection"),
             }
         }
-
-        disabled_any
+        self.disabled_fields.len() != previous
     }
 }
 
@@ -487,19 +464,12 @@ fn vehicle_state_field(field_name: &str) -> Option<&'static VehicleStateField> {
 }
 
 fn build_vehicle_state_subscription(disabled_fields: &HashSet<String>) -> String {
-    let mut query = String::from(
-        "subscription vehicleState($vehicleID: String!) {\n  vehicleState(id: $vehicleID) {\n",
-    );
-    for field in VEHICLE_STATE_FIELDS {
-        if disabled_fields.contains(field.name) {
-            continue;
-        }
-        query.push_str("    ");
-        query.push_str(field.selection);
-        query.push('\n');
-    }
-    query.push_str("  }\n}\n");
-    query
+    let selections = VEHICLE_STATE_FIELDS
+        .iter()
+        .filter(|field| !disabled_fields.contains(field.name))
+        .map(|field| format!("    {}\n", field.selection))
+        .collect::<String>();
+    format!("subscription vehicleState($vehicleID: String!) {{\n  vehicleState(id: $vehicleID) {{\n{selections}  }}\n}}\n")
 }
 
 // Forward-declared for the departure-schedule WS subscription (wired in a follow-up).
@@ -934,31 +904,31 @@ fn build_rivian_ws_request(
 ) -> anyhow::Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
     crate::services::outbound_policy::validate_ws_destination(WS_URL)?;
     let mut request = WS_URL.into_client_request()?;
-    request
-        .headers_mut()
-        .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
-    request.headers_mut().insert(
-        "A-Sess",
-        tokens
-            .app_session_token
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid Rivian app session header"))?,
-    );
-    request.headers_mut().insert(
-        "U-Sess",
-        tokens
-            .user_session_token
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid Rivian user session header"))?,
-    );
-    if !tokens.csrf_token.is_empty() {
-        request.headers_mut().insert(
+    let headers = request.headers_mut();
+    headers.insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
+    for (name, value, required, error) in [
+        (
+            "A-Sess",
+            tokens.app_session_token.as_str(),
+            true,
+            "invalid Rivian app session header",
+        ),
+        (
+            "U-Sess",
+            tokens.user_session_token.as_str(),
+            true,
+            "invalid Rivian user session header",
+        ),
+        (
             "Csrf-Token",
-            tokens
-                .csrf_token
-                .parse()
-                .map_err(|_| anyhow::anyhow!("invalid Rivian CSRF header"))?,
-        );
+            tokens.csrf_token.as_str(),
+            false,
+            "invalid Rivian CSRF header",
+        ),
+    ] {
+        if required || !value.is_empty() {
+            headers.insert(name, value.parse().map_err(|_| anyhow::anyhow!(error))?);
+        }
     }
     Ok(request)
 }
@@ -968,34 +938,33 @@ fn classify_text_message(
     vehicle_id: Uuid,
 ) -> Result<WsInboundEvent, parser::ParseError> {
     let value: Value = serde_json::from_str(raw)?;
-    let charging_root = value.pointer("/payload/data/chargingSession").is_some();
-    if charging_root {
-        return Ok(WsInboundEvent {
-            kind: WsInboundKind::ChargingSession,
-            received_at: Utc::now(),
-            raw: raw.to_string(),
-            message_type: None,
-            telemetry: None,
-            charging_session: parser::parse_charging_session_message(raw)?,
-            battery_cell_type: None,
-        });
-    }
-    let telemetry = parser::parse_ws_message(raw, vehicle_id)?;
-    let kind = match telemetry.as_ref() {
-        Some(event) if event_has_meaningful_payload(event) => WsInboundKind::Telemetry,
-        Some(_) => WsInboundKind::Heartbeat,
-        None => WsInboundKind::Control,
-    };
-
-    Ok(WsInboundEvent {
-        kind,
+    let mut inbound = WsInboundEvent {
+        kind: WsInboundKind::Control,
         received_at: Utc::now(),
-        raw: raw.to_string(),
+        raw: raw.to_owned(),
         message_type: None,
-        telemetry,
+        telemetry: None,
         charging_session: None,
-        battery_cell_type: parser::parse_battery_cell_type(raw)?,
-    })
+        battery_cell_type: None,
+    };
+    match value.pointer("/payload/data/chargingSession") {
+        Some(_) => {
+            inbound.kind = WsInboundKind::ChargingSession;
+            inbound.charging_session = parser::parse_charging_session_message(raw)?;
+        }
+        None => {
+            inbound.telemetry = parser::parse_ws_message(raw, vehicle_id)?;
+            inbound.battery_cell_type = parser::parse_battery_cell_type(raw)?;
+            if let Some(event) = &inbound.telemetry {
+                inbound.kind = if event_has_meaningful_payload(event) {
+                    WsInboundKind::Telemetry
+                } else {
+                    WsInboundKind::Heartbeat
+                };
+            }
+        }
+    }
+    Ok(inbound)
 }
 
 fn message_type(value: &Value) -> Option<String> {
@@ -1006,90 +975,7 @@ fn message_type(value: &Value) -> Option<String> {
 }
 
 fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
-    event.latitude.is_some()
-        || event.longitude.is_some()
-        || event.altitude_m.is_some()
-        || event.speed_mph.is_some()
-        || event.battery_level.is_some()
-        || event.battery_capacity_wh.is_some()
-        || event.distance_to_empty_mi.is_some()
-        || event.battery_limit.is_some()
-        || event.power_state.is_some()
-        || event.charger_state.is_some()
-        || event.charger_status.is_some()
-        || event.time_to_end_of_charge_min.is_some()
-        || event.drive_mode.is_some()
-        || event.gear_status.is_some()
-        || event.cabin_temp_c.is_some()
-        || event.driver_temp_c.is_some()
-        || event.outside_temp_c.is_some()
-        || event.hvac_active.is_some()
-        || event.power_kw.is_some()
-        || event.regen_power_kw.is_some()
-        || event.heading_deg.is_some()
-        || event.odometer_miles.is_some()
-        || event.tire_fl_psi.is_some()
-        || event.tire_fr_psi.is_some()
-        || event.tire_rl_psi.is_some()
-        || event.tire_rr_psi.is_some()
-        || event.tire_fl_status.is_some()
-        || event.tire_fr_status.is_some()
-        || event.tire_rl_status.is_some()
-        || event.tire_rr_status.is_some()
-        || event.tire_fl_valid.is_some()
-        || event.tire_fr_valid.is_some()
-        || event.tire_rl_valid.is_some()
-        || event.tire_rr_valid.is_some()
-        || event.door_front_left_locked.is_some()
-        || event.door_front_right_locked.is_some()
-        || event.door_rear_left_locked.is_some()
-        || event.door_rear_right_locked.is_some()
-        || event.door_front_left_closed.is_some()
-        || event.door_front_right_closed.is_some()
-        || event.door_rear_left_closed.is_some()
-        || event.door_rear_right_closed.is_some()
-        || event.closure_frunk_locked.is_some()
-        || event.closure_frunk_closed.is_some()
-        || event.closure_liftgate_locked.is_some()
-        || event.closure_liftgate_closed.is_some()
-        || event.closure_tailgate_locked.is_some()
-        || event.closure_tailgate_closed.is_some()
-        || event.ota_current_version.is_some()
-        || event.ota_available_version.is_some()
-        || event.ota_status.is_some()
-        || event.ota_current_status.is_some()
-        || event.hv_thermal_event.is_some()
-        || event.twelve_volt_health.is_some()
-        || event.charge_port_open.is_some()
-        || event.charger_derate_active.is_some()
-        || event.cabin_precon_status.is_some()
-        || event.cabin_precon_type.is_some()
-        || event.pet_mode_active.is_some()
-        || event.pet_mode_temp_ok.is_some()
-        || event.defrost_active.is_some()
-        || event.steering_wheel_heat.is_some()
-        || event.seat_fl_heat.is_some()
-        || event.seat_fr_heat.is_some()
-        || event.seat_rl_heat.is_some()
-        || event.seat_rr_heat.is_some()
-        || event.seat_fl_vent.is_some()
-        || event.seat_fr_vent.is_some()
-        || event.tonneau_locked.is_some()
-        || event.tonneau_closed.is_some()
-        || event.side_bin_left_locked.is_some()
-        || event.side_bin_right_locked.is_some()
-        || event.side_bin_left_closed.is_some()
-        || event.side_bin_right_closed.is_some()
-        || event.window_fl_closed.is_some()
-        || event.window_fr_closed.is_some()
-        || event.window_rl_closed.is_some()
-        || event.window_rr_closed.is_some()
-        || event.gear_guard_locked.is_some()
-        || event.gear_guard_video_status.is_some()
-        || event.wiper_fluid_low.is_some()
-        || event.brake_fluid_low.is_some()
-        || event.alarm_active.is_some()
-        || event.service_mode.is_some()
+    super::worker::socket_payload_present(event)
 }
 
 pub(crate) fn next_backoff_secs(current: u64, max: u64) -> u64 {
@@ -1117,33 +1003,22 @@ fn truncate_ws_message(value: &str) -> String {
 }
 
 fn rejected_vehicle_state_fields(value: &Value) -> Vec<String> {
-    let Some(payload) = value.get("payload").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-
-    let mut fields = Vec::new();
     let mut seen = HashSet::new();
-    for error in payload {
-        let Some(message) = error.get("message").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(field) = rejected_vehicle_state_field(message) else {
-            continue;
-        };
-        if seen.insert(field.clone()) {
-            fields.push(field);
-        }
-    }
-    fields
+    value
+        .get("payload")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|error| error.get("message").and_then(Value::as_str))
+        .filter_map(rejected_vehicle_state_field)
+        .filter(|field| seen.insert(field.clone()))
+        .collect()
 }
 
 fn rejected_vehicle_state_field(message: &str) -> Option<String> {
-    let prefix = "Cannot query field \"";
-    let suffix = "\" on type \"VehicleState\"";
-    let start = message.find(prefix)? + prefix.len();
-    let rest = &message[start..];
-    let end = rest.find(suffix)?;
-    Some(rest[..end].to_string())
+    let (_, quoted) = message.split_once("Cannot query field \"")?;
+    let (field, _) = quoted.split_once("\" on type \"VehicleState\"")?;
+    Some(field.to_owned())
 }
 
 #[cfg(test)]
@@ -1359,3 +1234,35 @@ mod tests {
 #[cfg(test)]
 #[path = "ws_client/contract_tests.rs"]
 mod contract_tests;
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+    #[test]
+    fn socket_payload_classification_covers_every_frozen_field() {
+        let fields: serde_json::Map<String, Value> = serde_json::from_str(include_str!(
+            "worker/telemetry_contract_fixtures/all-fields.json"
+        ))
+        .unwrap();
+        let empty = TelemetryEvent::empty(Uuid::nil(), Utc::now());
+        for (name, value) in fields {
+            if matches!(name.as_str(), "vehicle_id" | "ts") {
+                continue;
+            }
+            let mut patch = serde_json::to_value(&empty).unwrap();
+            patch[&name] = value;
+            let event: TelemetryEvent = serde_json::from_value(patch).unwrap();
+            assert_eq!(
+                event_has_meaningful_payload(&event),
+                !matches!(name.as_str(), "is_online" | "closure_transitions")
+                    && !name.ends_with("_ts"),
+                "{name}"
+            );
+        }
+        let mut event = empty;
+        event.is_online = Some(true);
+        assert!(!event_has_meaningful_payload(&event));
+        event.power_kw = Some(f64::NAN);
+        assert!(event_has_meaningful_payload(&event));
+    }
+}

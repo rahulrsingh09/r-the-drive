@@ -73,6 +73,15 @@ macro_rules! project {
     };
 }
 
+macro_rules! socket_present {
+    ($event:ident, is_online, $role:ident) => {
+        false
+    };
+    ($event:ident, $field:ident, $role:ident) => {
+        present!($event, $field, $role)
+    };
+}
+
 macro_rules! define_values {
     ($($field:ident: $kind:ident, $role:ident, $change:ident, $latest:tt, $wire:tt;)*) => {
         pub(super) fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
@@ -90,6 +99,10 @@ macro_rules! define_values {
 
         pub(super) fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
             false $(|| present!(event, $field, $role))*
+        }
+
+        pub(crate) fn socket_payload_present(event: &TelemetryEvent) -> bool {
+            false $(|| socket_present!(event, $field, $role))*
         }
 
         pub(super) fn immediate_change(event: &TelemetryEvent, previous: &TelemetryEvent) -> bool {

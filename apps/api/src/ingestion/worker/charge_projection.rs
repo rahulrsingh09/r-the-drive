@@ -189,31 +189,42 @@ pub(super) async fn apply_charging_session_update(
     received_at: DateTime<Utc>,
     active_session_id: Option<Uuid>,
 ) {
-    let live_key = rivian_poll::live_session_redis_key(vehicle_id);
-    match LiveProjection::plan(event, received_at, active_session_id) {
+    let key = rivian_poll::live_session_redis_key(vehicle_id);
+    let (live, cache) = match LiveProjection::plan(event, received_at, active_session_id) {
         LiveProjection::Refresh(live) => {
-            if let Ok(json) = serde_json::to_string(&live) {
-                if let Err(error) = redis_conn
-                    .set_ex::<_, _, ()>(&live_key, json, rivian_poll::LIVE_SESSION_TTL_SECONDS)
-                    .await
-                {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis write failed");
-                }
-            }
-            if let Err(error) =
-                rivian_poll::persist_live_session_data(pool, active_session_id, &live).await
-            {
-                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session database update failed");
-            }
+            let command = serde_json::to_string(&live).ok().map(|json| {
+                let mut command = redis::cmd("SETEX");
+                command
+                    .arg(&key)
+                    .arg(rivian_poll::LIVE_SESSION_TTL_SECONDS)
+                    .arg(json);
+                command
+            });
+            (Some(live), command)
         }
         LiveProjection::Clear => {
-            if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session Redis cleanup failed");
+            let mut command = redis::cmd("DEL");
+            command.arg(&key);
+            (None, Some(command))
+        }
+        LiveProjection::Retain => (None, None),
+    };
+    if let Some(command) = cache {
+        if let Err(error) = command.query_async::<()>(redis_conn).await {
+            if live.is_some() {
+                tracing::warn!(%vehicle_id, err=%error, "live session Redis write failed");
+            } else {
+                tracing::debug!(%vehicle_id, err=%error, "live session Redis cleanup failed");
             }
         }
-        LiveProjection::Retain => {}
     }
-
+    if let Some(live) = live {
+        if let Err(error) =
+            rivian_poll::persist_live_session_data(pool, active_session_id, &live).await
+        {
+            tracing::warn!(%vehicle_id, err=%error, "live session database update failed");
+        }
+    }
     if let Err(error) = rivian_poll::persist_charging_session_chart(
         pool,
         vehicle_id,
@@ -222,7 +233,7 @@ pub(super) async fn apply_charging_session_update(
     )
     .await
     {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live charge curve update failed");
+        tracing::warn!(%vehicle_id, err=%error, "live charge curve update failed");
     }
 }
 
@@ -234,38 +245,45 @@ pub(super) async fn charge_session_coordinates(
     pool: &PgPool,
     session: &crate::ingestion::charge_detector::CompletedChargeSession,
 ) -> (Option<f64>, Option<f64>) {
-    if let (Some(lat), Some(lng)) = (session.location_lat, session.location_lng) {
-        return (Some(lat), Some(lng));
-    }
-
-    let stored = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
-        "SELECT location_lat, location_lng FROM panda.charge_sessions WHERE id = $1",
-    )
-    .bind(session.session_id)
-    .fetch_optional(pool)
-    .await;
-    match stored {
-        Ok(Some((Some(lat), Some(lng)))) => return (Some(lat), Some(lng)),
-        Ok(_) => {}
-        Err(error) => {
-            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_stored_location_failed");
+    let supplied = session.location_lat.zip(session.location_lng);
+    let selected = match supplied {
+        Some(pair) => Some(pair),
+        None => {
+            let stored = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
+                "SELECT location_lat, location_lng FROM panda.charge_sessions WHERE id = $1",
+            )
+            .bind(session.session_id)
+            .fetch_optional(pool)
+            .await;
+            let stored_pair = match stored {
+                Ok(Some((lat, lon))) => lat.zip(lon),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(session_id=%session.session_id, %error, "worker.charge_session_stored_location_failed");
+                    None
+                }
+            };
+            match stored_pair {
+                Some(pair) => Some(pair),
+                None => match crate::services::trip_enrichment::nearest_telemetry_fix(
+                    pool,
+                    session.vehicle_id,
+                    session.started_at,
+                )
+                .await
+                {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        tracing::warn!(session_id=%session.session_id, %error, "worker.charge_session_telemetry_fix_failed");
+                        None
+                    }
+                },
+            }
         }
-    }
-
-    match crate::services::trip_enrichment::nearest_telemetry_fix(
-        pool,
-        session.vehicle_id,
-        session.started_at,
-    )
-    .await
-    {
-        Ok(Some((lat, lng))) => (Some(lat), Some(lng)),
-        Ok(None) => (None, None),
-        Err(error) => {
-            tracing::warn!(session_id=%session.session_id, error=%error, "worker.charge_session_telemetry_fix_failed");
-            (None, None)
-        }
-    }
+    };
+    selected
+        .map(|(lat, lon)| (Some(lat), Some(lon)))
+        .unwrap_or_default()
 }
 
 pub(super) async fn persist_charge_session(

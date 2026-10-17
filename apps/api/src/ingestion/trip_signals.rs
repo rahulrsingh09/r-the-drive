@@ -13,7 +13,7 @@ const MAX_FIX_INTERVAL: Duration = Duration::minutes(5);
 const MAX_PLAUSIBLE_MPH: f64 = 130.0;
 const MOVING_MPH: f64 = 2.0;
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct FusionDiagnostics {
     pub power_origin: &'static str,
     pub power_policy: &'static str,

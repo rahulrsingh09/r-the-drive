@@ -93,91 +93,123 @@ pub fn spawn_in_process(
     mut shutdown: broadcast::Receiver<()>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let owner_id = Uuid::new_v4();
-        loop {
-            match acquire_in_process_lease(&pool, vehicle_id, owner_id).await {
-                Ok(true) => break,
-                Ok(false) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, "fresh standalone Parallax owner detected; waiting for upgrade overlap to clear");
-                }
-                Err(error) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "Parallax lease acquisition failed")
-                }
-            }
-            if !transport::wait_to_retry(&mut shutdown, Duration::from_secs(30)).await {
-                return;
-            }
+        enum Step {
+            Lease,
+            Credentials,
+            Connected(CollectorSession),
+            Wait(Duration, bool),
         }
-        let mut backoff = RetrySchedule::default();
+        let owner = Uuid::new_v4();
+        let mut owned = false;
+        let mut retry = RetrySchedule::default();
+        let mut step = Step::Lease;
         loop {
-            let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
-                vehicle_id, &pool, &age_key,
-            )
-            .await
-            {
-                Ok((_, tokens)) => tokens,
-                Err(error) => {
-                    let _ =
-                        set_collector_state(&pool, vehicle_id, "error", Some(&error.to_string()))
+            step = match step {
+                Step::Lease => match acquire_in_process_lease(&pool, vehicle_id, owner).await {
+                    Ok(true) => {
+                        owned = true;
+                        Step::Credentials
+                    }
+                    result => {
+                        match result {
+                            Ok(false) => {
+                                tracing::warn!(%vehicle_id, "fresh standalone Parallax owner detected; waiting for upgrade overlap to clear")
+                            }
+                            Err(error) => {
+                                tracing::warn!(%vehicle_id, err=%error, "Parallax lease acquisition failed")
+                            }
+                            _ => unreachable!(),
+                        }
+                        Step::Wait(Duration::from_secs(30), false)
+                    }
+                },
+                Step::Credentials => match crate::ingestion::rivian_poll::load_vehicle_tokens(
+                    vehicle_id, &pool, &age_key,
+                )
+                .await
+                {
+                    Ok((_, tokens)) => Step::Connected(CollectorSession {
+                        vehicle_id,
+                        rivian_vehicle_id: rivian_vehicle_id.clone(),
+                        tokens,
+                    }),
+                    Err(error) => {
+                        let _ = set_collector_state(
+                            &pool,
+                            vehicle_id,
+                            "error",
+                            Some(&error.to_string()),
+                        )
+                        .await;
+                        Step::Wait(retry.delay(), true)
+                    }
+                },
+                Step::Connected(session) => {
+                    let result = tokio::select! {
+                        _ = shutdown.recv() => {
+                            let _ = set_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
+                            break;
+                        }
+                        result = collect_connection_with_context(&pool, &session, &mut active_sessions, Some(&telemetry_tx)) => result,
+                    };
+                    match result {
+                        Ok(()) => {
+                            retry.reset();
+                            Step::Credentials
+                        }
+                        Err(_) if shutdown.try_recv().is_ok() => break,
+                        Err(error) => {
+                            let _ = AcquisitionWrite::new("panda.parallax_collector_state")
+                                .field(
+                                    "reconnect_count",
+                                    Stored::Sql("reconnect_count + 1"),
+                                    MergeWrite::Replace,
+                                )
+                                .update(&pool, &[("vehicle_id", vehicle_id)], "")
+                                .await;
+                            let _ = set_collector_state(
+                                &pool,
+                                vehicle_id,
+                                "error",
+                                Some(&error.to_string()),
+                            )
                             .await;
-                    if !transport::wait_to_retry(&mut shutdown, backoff.delay()).await {
+                            Step::Wait(retry.delay(), true)
+                        }
+                    }
+                }
+                Step::Wait(delay, advance) => {
+                    if !transport::wait_to_retry(&mut shutdown, delay).await {
                         break;
                     }
-                    backoff.advance();
-                    continue;
+                    if advance {
+                        retry.advance();
+                    }
+                    if owned {
+                        Step::Credentials
+                    } else {
+                        Step::Lease
+                    }
                 }
             };
-            let session = CollectorSession {
-                vehicle_id,
-                rivian_vehicle_id: rivian_vehicle_id.clone(),
-                tokens,
-            };
-            let result = tokio::select! {
-                _ = shutdown.recv() => {
-                    let _ = set_collector_state(&pool, vehicle_id, "disconnected", Some("shutdown")).await;
-                    break;
-                }
-                result = collect_connection_with_context(&pool, &session, &mut active_sessions, Some(&telemetry_tx)) => result
-            };
-            if result.is_ok() {
-                backoff.reset();
-            } else if shutdown.try_recv().is_ok() {
-                break;
-            } else {
-                let _ = sqlx::query("UPDATE panda.parallax_collector_state SET reconnect_count=reconnect_count+1 WHERE vehicle_id=$1")
-                    .bind(vehicle_id).execute(&pool).await;
-                let message = result.err().map(|e| e.to_string());
-                let _ = set_collector_state(&pool, vehicle_id, "error", message.as_deref()).await;
-                if !transport::wait_to_retry(&mut shutdown, backoff.delay()).await {
-                    break;
-                }
-                backoff.advance();
-            }
         }
-        let _ = release_in_process_lease(&pool, vehicle_id, owner_id).await;
+        if owned {
+            let _ = release_in_process_lease(&pool, vehicle_id, owner).await;
+        }
     })
 }
 
 async fn acquire_in_process_lease(pool: &PgPool, vehicle_id: Uuid, owner_id: Uuid) -> Result<bool> {
-    let acquired = sqlx::query_scalar::<_, bool>(
-        r#"INSERT INTO panda.parallax_collector_state
-               (vehicle_id,status,schema_version,owner_kind,owner_instance_id,last_error)
-           VALUES ($1,'starting',$2,'in_process',$3,NULL)
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-               status='starting', owner_kind='in_process', owner_instance_id=$3,
-               last_error=NULL, updated_at=now()
-           WHERE panda.parallax_collector_state.owner_instance_id=$3
-              OR panda.parallax_collector_state.updated_at < now()-interval '2 minutes'
-              OR panda.parallax_collector_state.status='disconnected'
-           RETURNING true"#,
-    )
-    .bind(vehicle_id)
-    .bind(SCHEMA_VERSION)
-    .bind(owner_id)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or(false);
-    Ok(acquired)
+    let changed = AcquisitionWrite::new("panda.parallax_collector_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("status", Stored::Text(Some("starting")), MergeWrite::Replace)
+        .field("schema_version", Stored::Int(Some(SCHEMA_VERSION)), MergeWrite::Keep)
+        .field("owner_kind", Stored::Text(Some("in_process")), MergeWrite::Replace)
+        .field("owner_instance_id", Stored::Id(owner_id), MergeWrite::Replace)
+        .field("last_error", Stored::Text(None), MergeWrite::Replace)
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .upsert(pool, "(vehicle_id)", "panda.parallax_collector_state.owner_instance_id = EXCLUDED.owner_instance_id OR panda.parallax_collector_state.updated_at < now() - interval '2 minutes' OR panda.parallax_collector_state.status = 'disconnected'").await?;
+    Ok(changed != 0)
 }
 
 pub(crate) async fn release_in_process_lease(
@@ -185,15 +217,29 @@ pub(crate) async fn release_in_process_lease(
     vehicle_id: Uuid,
     owner_id: Uuid,
 ) -> Result<()> {
-    sqlx::query(
-        r#"UPDATE panda.parallax_collector_state
-           SET status='disconnected',owner_instance_id=NULL,last_error='shutdown',updated_at=now()
-           WHERE vehicle_id=$1 AND owner_kind='in_process' AND owner_instance_id=$2"#,
-    )
-    .bind(vehicle_id)
-    .bind(owner_id)
-    .execute(pool)
-    .await?;
+    AcquisitionWrite::new("panda.parallax_collector_state")
+        .field(
+            "status",
+            Stored::Text(Some("disconnected")),
+            MergeWrite::Replace,
+        )
+        .field(
+            "owner_instance_id",
+            Stored::Sql("NULL"),
+            MergeWrite::Replace,
+        )
+        .field(
+            "last_error",
+            Stored::Text(Some("shutdown")),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(
+            pool,
+            &[("vehicle_id", vehicle_id), ("owner_instance_id", owner_id)],
+            "owner_kind = 'in_process'",
+        )
+        .await?;
     Ok(())
 }
 
@@ -484,85 +530,39 @@ fn valid_temperature(value: f64) -> Result<f64> {
 /// Canonical field for a closure position, or `None` when the position has no
 /// canonical field (including 16, the R2 rear drop glass).
 fn closure_field(event: &mut TelemetryEvent, position: i32) -> Option<&mut Option<bool>> {
-    Some(match position {
-        1 => &mut event.door_front_left_closed,
-        2 => &mut event.door_front_right_closed,
-        3 => &mut event.door_rear_left_closed,
-        4 => &mut event.door_rear_right_closed,
-        5 => &mut event.closure_frunk_closed,
-        // 6 is the tailgate in the Rivian app enum (via apohor/rivolt). On
-        // the R1S, 6, 8, 9, and 11 are all "not fitted", and 8 and 9 share one
-        // closure detail type, so they are the R1T side bins; left before
-        // right follows the door ordering. Confirm with an R1T capture.
-        6 => &mut event.closure_tailgate_closed,
-        7 => &mut event.closure_liftgate_closed,
-        8 => &mut event.side_bin_left_closed,
-        9 => &mut event.side_bin_right_closed,
-        11 => &mut event.tonneau_closed,
-        // Windows, confirmed window by window on both the R1S and the R2.
-        12 => &mut event.window_fl_closed,
-        13 => &mut event.window_fr_closed,
-        14 => &mut event.window_rl_closed,
-        15 => &mut event.window_rr_closed,
-        _ => return None,
-    })
+    CLOSURE_FIELDS
+        .iter()
+        .find(|field| field.position == position)
+        .map(|field| (field.access)(event))
 }
 
 /// Name of the canonical field a closure position maps to, for captures.
 /// Must agree with `closure_field`.
 fn closure_field_name(position: i32) -> Option<&'static str> {
-    Some(match position {
-        1 => "door_front_left_closed",
-        2 => "door_front_right_closed",
-        3 => "door_rear_left_closed",
-        4 => "door_rear_right_closed",
-        5 => "closure_frunk_closed",
-        6 => "closure_tailgate_closed",
-        7 => "closure_liftgate_closed",
-        8 => "side_bin_left_closed",
-        9 => "side_bin_right_closed",
-        CLOSURE_CHARGE_PORT_POSITION => "charge_port_open",
-        11 => "tonneau_closed",
-        12 => "window_fl_closed",
-        13 => "window_fr_closed",
-        14 => "window_rl_closed",
-        15 => "window_rr_closed",
-        _ => return None,
-    })
+    if position == CLOSURE_CHARGE_PORT_POSITION {
+        return Some("charge_port_open");
+    }
+    CLOSURE_FIELDS
+        .iter()
+        .find(|field| field.position == position)
+        .map(|field| field.name)
 }
 
 /// Name of the canonical field a lock position maps to, for captures.
 /// Must agree with `set_lock`.
 fn lock_field_name(position: i32) -> Option<&'static str> {
-    Some(match position {
-        1 => "door_front_left_locked",
-        2 => "door_front_right_locked",
-        3 => "door_rear_left_locked",
-        4 => "door_rear_right_locked",
-        5 => "closure_frunk_locked",
-        6 => "closure_tailgate_locked",
-        7 => "closure_liftgate_locked",
-        8 => "side_bin_left_locked",
-        9 => "side_bin_right_locked",
-        _ => return None,
-    })
+    LOCK_FIELDS
+        .iter()
+        .find(|field| field.position == position)
+        .map(|field| field.name)
 }
 
 fn set_lock(event: &mut TelemetryEvent, position: i32, locked: bool) -> Result<bool> {
-    match position {
-        1 => event.door_front_left_locked = Some(locked),
-        2 => event.door_front_right_locked = Some(locked),
-        3 => event.door_rear_left_locked = Some(locked),
-        4 => event.door_rear_right_locked = Some(locked),
-        5 => event.closure_frunk_locked = Some(locked),
-        // Same positions as the closures; on the R1S they lock and unlock
-        // with legacy's tailgate and side-bin lock fields.
-        6 => event.closure_tailgate_locked = Some(locked),
-        7 => event.closure_liftgate_locked = Some(locked),
-        8 => event.side_bin_left_locked = Some(locked),
-        9 => event.side_bin_right_locked = Some(locked),
-        other => anyhow::bail!("unknown lock position {other}"),
-    }
+    let field = LOCK_FIELDS
+        .iter()
+        .find(|field| field.position == position)
+        .with_context(|| format!("unknown lock position {position}"))?;
+    *(field.access)(event) = Some(locked);
     Ok(true)
 }
 
@@ -572,31 +572,32 @@ fn set_tire(
     pressure_bar: f64,
     ok: bool,
 ) -> Result<bool> {
-    let pressure_psi = pressure_bar * 14.503_773_8;
-    let status = if ok { "OK" } else { "Warning" }.to_string();
-    match position {
-        1 => {
-            event.tire_fl_psi = Some(pressure_psi);
-            event.tire_fl_status = Some(status);
-            event.tire_fl_valid = Some(true);
-        }
-        2 => {
-            event.tire_fr_psi = Some(pressure_psi);
-            event.tire_fr_status = Some(status);
-            event.tire_fr_valid = Some(true);
-        }
-        3 => {
-            event.tire_rl_psi = Some(pressure_psi);
-            event.tire_rl_status = Some(status);
-            event.tire_rl_valid = Some(true);
-        }
-        4 => {
-            event.tire_rr_psi = Some(pressure_psi);
-            event.tire_rr_status = Some(status);
-            event.tire_rr_valid = Some(true);
-        }
+    let (pressure, status, valid) = match position {
+        1 => (
+            &mut event.tire_fl_psi,
+            &mut event.tire_fl_status,
+            &mut event.tire_fl_valid,
+        ),
+        2 => (
+            &mut event.tire_fr_psi,
+            &mut event.tire_fr_status,
+            &mut event.tire_fr_valid,
+        ),
+        3 => (
+            &mut event.tire_rl_psi,
+            &mut event.tire_rl_status,
+            &mut event.tire_rl_valid,
+        ),
+        4 => (
+            &mut event.tire_rr_psi,
+            &mut event.tire_rr_status,
+            &mut event.tire_rr_valid,
+        ),
         other => anyhow::bail!("unknown tire position {other}"),
-    }
+    };
+    *pressure = Some(pressure_bar * 14.503_773_8);
+    *status = Some(if ok { "OK" } else { "Warning" }.to_owned());
+    *valid = Some(true);
     Ok(true)
 }
 
@@ -655,80 +656,92 @@ pub async fn run(database_url: &str) -> Result<()> {
     crate::db::migrations::run_current_migrations(&pool)
         .await
         .context("apply Parallax telemetry migrations")?;
-
     let sessions = load_sessions(&pool).await?;
-    if sessions.is_empty() {
-        anyhow::bail!("no enrolled vehicle credentials were found");
-    }
-
+    anyhow::ensure!(
+        !sessions.is_empty(),
+        "no enrolled vehicle credentials were found"
+    );
     let mut tasks = tokio::task::JoinSet::new();
-    for session in sessions {
-        let pool = pool.clone();
-        tasks.spawn(async move { run_vehicle(pool, session).await });
-    }
-
-    tokio::select! {
+    sessions.into_iter().for_each(|session| {
+        tasks.spawn(run_vehicle(pool.clone(), session));
+    });
+    let completed = tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Parallax collector shutdown requested");
-            tasks.abort_all();
+            None
         }
-        result = tasks.join_next() => {
-            match result {
-                Some(Ok(Err(error))) => return Err(error),
-                Some(Err(error)) => return Err(error.into()),
-                _ => {}
-            }
-        }
-    }
-    Ok(())
+        result = tasks.join_next() => result,
+    };
+    tasks.abort_all();
+    completed.transpose()?.unwrap_or(Ok(()))
 }
 
 async fn load_sessions(pool: &PgPool) -> Result<Vec<CollectorSession>> {
     let rows = sqlx::query_as::<_, (Uuid, String, Vec<u8>, String)>(
-        r#"SELECT v.id, v.rivian_vehicle_id, c.encrypted_tokens,
-                  (SELECT value FROM panda.system_config WHERE key = 'age_key')
-           FROM panda.vehicles v
-           JOIN panda.vehicle_credentials c ON c.vehicle_id = v.id
-           WHERE v.rivian_vehicle_id IS NOT NULL
-           ORDER BY v.display_priority, v.created_at"#,
+        "SELECT v.id, v.rivian_vehicle_id, c.encrypted_tokens, \
+         (SELECT value FROM panda.system_config WHERE key = 'age_key') \
+         FROM panda.vehicles v JOIN panda.vehicle_credentials c ON c.vehicle_id = v.id \
+         WHERE v.rivian_vehicle_id IS NOT NULL ORDER BY v.display_priority, v.created_at",
     )
     .fetch_all(pool)
     .await?;
-
-    rows.into_iter()
-        .map(|(vehicle_id, rivian_vehicle_id, encrypted, age_key)| {
-            let identity = age_key
-                .parse::<Identity>()
-                .map_err(|_| anyhow::anyhow!("database Age identity is invalid"))?;
-            let tokens = decrypt_tokens(&encrypted, &identity)?;
-            tokens.validate()?;
-            Ok(CollectorSession {
-                vehicle_id,
-                rivian_vehicle_id,
-                tokens,
-            })
-        })
-        .collect()
+    let mut sessions = Vec::with_capacity(rows.len());
+    let mut identities = std::collections::HashMap::new();
+    for (vehicle_id, rivian_vehicle_id, encrypted, key) in rows {
+        let identity = match identities.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let identity = entry
+                    .key()
+                    .parse::<Identity>()
+                    .map_err(|_| anyhow::anyhow!("database Age identity is invalid"))?;
+                entry.insert(identity)
+            }
+        };
+        let tokens = decrypt_tokens(&encrypted, identity)?;
+        tokens.validate()?;
+        sessions.push(CollectorSession {
+            vehicle_id,
+            rivian_vehicle_id,
+            tokens,
+        });
+    }
+    Ok(sessions)
 }
 
 async fn run_vehicle(pool: PgPool, session: CollectorSession) -> Result<()> {
-    let mut backoff = RetrySchedule::default();
+    enum Step {
+        Connect,
+        Delay(Duration),
+    }
+    let mut retry = RetrySchedule::default();
+    let mut step = Step::Connect;
     loop {
-        match collect_connection(&pool, &session).await {
-            Ok(()) => backoff.reset(),
-            Err(error) => {
-                set_collector_state(&pool, session.vehicle_id, "error", Some(&error.to_string()))
-                    .await?;
-                tracing::warn!(
-                    vehicle_id = %session.vehicle_id,
-                    error = %error,
-                    retry_seconds = backoff.delay().as_secs(),
-                    "Parallax collector disconnected"
-                );
-                tokio::time::sleep(backoff.delay()).await;
-                backoff.advance();
+        step = match step {
+            Step::Delay(duration) => {
+                tokio::time::sleep(duration).await;
+                retry.advance();
+                Step::Connect
             }
-        }
+            Step::Connect => match collect_connection(&pool, &session).await {
+                Ok(()) => {
+                    retry.reset();
+                    Step::Connect
+                }
+                Err(error) => {
+                    set_collector_state(
+                        &pool,
+                        session.vehicle_id,
+                        "error",
+                        Some(&error.to_string()),
+                    )
+                    .await?;
+                    let delay = retry.delay();
+                    tracing::warn!(vehicle_id=%session.vehicle_id, %error, retry_seconds=delay.as_secs(), "Parallax collector disconnected");
+                    Step::Delay(delay)
+                }
+            },
+        };
     }
 }
 
@@ -843,17 +856,14 @@ where
 }
 
 async fn touch_collector_heartbeat(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
-    let result = sqlx::query(
-        r#"UPDATE panda.parallax_collector_state
-           SET updated_at = now()
-           WHERE vehicle_id = $1 AND status = 'connected'"#,
-    )
-    .bind(vehicle_id)
-    .execute(pool)
-    .await?;
-    if result.rows_affected() != 1 {
-        anyhow::bail!("Parallax collector heartbeat state is missing or disconnected");
-    }
+    let count = AcquisitionWrite::new("panda.parallax_collector_state")
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(pool, &[("vehicle_id", vehicle_id)], "status = 'connected'")
+        .await?;
+    anyhow::ensure!(
+        count == 1,
+        "Parallax collector heartbeat state is missing or disconnected"
+    );
     Ok(())
 }
 
@@ -864,24 +874,22 @@ where
         + Unpin,
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let message = tokio::time::timeout_at(deadline, websocket.next())
+    let mut acknowledged = false;
+    while !acknowledged {
+        let frame = tokio::time::timeout_at(deadline, websocket.next())
             .await
             .context("timed out waiting for Parallax acknowledgement")?
             .context("socket ended before Parallax acknowledgement")??;
-        match message {
-            Message::Text(text)
-                if serde_json::from_str::<Value>(&text)?
-                    .get("type")
-                    .and_then(Value::as_str)
-                    == Some("connection_ack") =>
-            {
-                return Ok(());
+        match frame {
+            Message::Text(text) => {
+                let value: Value = serde_json::from_str(&text)?;
+                acknowledged = value.get("type").and_then(Value::as_str) == Some("connection_ack");
             }
             Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn subscription_message(vehicle_id: &str) -> Value {
@@ -972,35 +980,27 @@ fn capture_payload_allowed(topic: &str) -> bool {
 /// Every entry of a body frame with the canonical field it maps to (or
 /// `null`), so a capture shows positions the decoder does not know.
 fn body_entries(topic: &str, payload: &[u8]) -> Option<Value> {
-    let entries: Vec<(Option<i32>, Option<i32>, Option<&'static str>)> = match topic {
+    let encode = |position: Option<i32>,
+                  state: Option<i32>,
+                  name: fn(i32) -> Option<&'static str>| {
+        json!({"position":position,"state":state,"field":position.and_then(name)})
+    };
+    let entries = match topic {
         "body.closures.states" => ClosureStates::decode(payload)
             .ok()?
             .states
             .into_iter()
-            .map(|entry| {
-                let field = entry.position.and_then(closure_field_name);
-                (entry.position, entry.state, field)
-            })
+            .map(|entry| encode(entry.position, entry.state, closure_field_name))
             .collect(),
         "body.locks.states" => LockStates::decode(payload)
             .ok()?
             .states
             .into_iter()
-            .map(|entry| {
-                let field = entry.position.and_then(lock_field_name);
-                (entry.position, entry.state, field)
-            })
+            .map(|entry| encode(entry.position, entry.state, lock_field_name))
             .collect(),
         _ => return None,
     };
-    Some(Value::Array(
-        entries
-            .into_iter()
-            .map(|(position, state, field)| {
-                json!({ "position": position, "state": state, "field": field })
-            })
-            .collect(),
-    ))
+    Some(Value::Array(entries))
 }
 
 fn capture_envelope(
@@ -1012,33 +1012,46 @@ fn capture_envelope(
     outcome: &str,
     report: &EnvelopeReport,
 ) {
-    let mut fields = json!({
-        "topic": topic,
-        "source_at": source_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "source_age_ms": (received_at - source_at).num_milliseconds(),
-        "payload_bytes": payload.map(<[u8]>::len),
-        "outcome": outcome,
-        "forward_outcome": report.forward_outcome.as_str(),
-    });
-    if let Some(payload) = payload {
-        if capture_payload_allowed(topic) {
-            let kept = &payload[..payload.len().min(CAPTURE_PAYLOAD_MAX_BYTES)];
-            fields["payload_hex"] = Value::from(hex::encode(kept));
-            if kept.len() < payload.len() {
-                fields["payload_truncated"] = Value::from(true);
-            }
-        }
-        if let Some(entries) = body_entries(topic, payload) {
-            fields["entries"] = entries;
-        }
+    #[derive(serde::Serialize)]
+    struct Captured<'a> {
+        topic: &'a str,
+        source_at: String,
+        source_age_ms: i64,
+        payload_bytes: Option<usize>,
+        outcome: &'a str,
+        forward_outcome: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload_hex: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload_truncated: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        entries: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        decoded: Option<&'a Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        notes: Option<&'a Vec<String>>,
     }
-    if let Some(decoded) = &report.decoded {
-        fields["decoded"] = decoded.clone();
-    }
-    if !report.notes.is_empty() {
-        fields["notes"] = json!(report.notes);
-    }
-    ingestion_capture::record(vehicle_id, CaptureKind::ParallaxEnvelope, fields);
+    let kept = payload
+        .filter(|_| capture_payload_allowed(topic))
+        .map(|bytes| &bytes[..bytes.len().min(CAPTURE_PAYLOAD_MAX_BYTES)]);
+    let truncated = kept
+        .zip(payload)
+        .filter(|(kept, original)| kept.len() < original.len())
+        .map(|_| true);
+    let captured = Captured {
+        topic,
+        source_at: source_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        source_age_ms: (received_at - source_at).num_milliseconds(),
+        payload_bytes: payload.map(<[u8]>::len),
+        outcome,
+        forward_outcome: report.forward_outcome.as_str(),
+        payload_hex: kept.map(hex::encode),
+        payload_truncated: truncated,
+        entries: payload.and_then(|bytes| body_entries(topic, bytes)),
+        decoded: report.decoded.as_ref(),
+        notes: (!report.notes.is_empty()).then_some(&report.notes),
+    };
+    ingestion_capture::record(vehicle_id, CaptureKind::ParallaxEnvelope, json!(captured));
 }
 
 fn is_canonical_telemetry_topic(topic: &str) -> bool {
@@ -1071,75 +1084,50 @@ async fn persist_envelope(
     let capturing = ingestion_capture::is_capturing(vehicle_id);
     let received_at = Utc::now();
     let source_at = parse_source_at(envelope.get("timestamp")).unwrap_or(received_at);
-    // The server can send unsolicited data. Only the exact subscription
-    // allowlist may reach a decoder or persistence branch.
-    if !is_allowlisted_topic(topic) {
-        if capturing {
-            capture_envelope(
-                vehicle_id,
-                topic,
-                None,
-                received_at,
-                source_at,
-                "not_allowlisted",
-                &EnvelopeReport::new(),
-            );
-        }
-        return Ok(());
-    }
     let mut report = EnvelopeReport::new();
-    let payload = match envelope
-        .get("payload")
-        .and_then(Value::as_str)
-        .context("missing Parallax payload")
-        .and_then(|encoded| BASE64.decode(encoded).map_err(Into::into))
-    {
-        Ok(payload) => payload,
-        Err(error) => {
-            if capturing {
-                report.forward_outcome = ForwardOutcome::NotEvaluated;
-                report.notes.push(error.to_string());
-                capture_envelope(
-                    vehicle_id,
-                    topic,
-                    None,
-                    received_at,
-                    source_at,
-                    EnvelopeOutcome::Rejected.as_str(),
-                    &report,
-                );
-            }
-            return Err(error);
+    let mut payload = None;
+    let result: Result<&'static str> = async {
+        if !is_allowlisted_topic(topic) {
+            return Ok("not_allowlisted");
         }
-    };
-    let result = persist_allowlisted_envelope(
-        pool,
-        vehicle_id,
-        topic,
-        &payload,
-        received_at,
-        source_at,
-        active_session,
-        telemetry_tx,
-        &mut report,
-        capturing,
-    )
+        let encoded = envelope
+            .get("payload")
+            .and_then(Value::as_str)
+            .context("missing Parallax payload")?;
+        payload = Some(BASE64.decode(encoded)?);
+        persist_allowlisted_envelope(
+            pool,
+            vehicle_id,
+            topic,
+            payload.as_deref().expect("decoded payload"),
+            received_at,
+            source_at,
+            active_session,
+            telemetry_tx,
+            &mut report,
+            capturing,
+        )
+        .await
+        .map(EnvelopeOutcome::as_str)
+    }
     .await;
     if capturing {
         if let Err(error) = &result {
-            report.notes.push(error.to_string());
+            if payload.is_none() {
+                report.forward_outcome = ForwardOutcome::NotEvaluated;
+            }
+            report.notes.push(format!("{error}"));
         }
         capture_envelope(
             vehicle_id,
             topic,
-            Some(&payload),
+            payload.as_deref(),
             received_at,
             source_at,
             result
                 .as_ref()
                 .copied()
-                .unwrap_or(EnvelopeOutcome::Rejected)
-                .as_str(),
+                .unwrap_or(EnvelopeOutcome::Rejected.as_str()),
             &report,
         );
     }
@@ -1376,14 +1364,34 @@ async fn persist_allowlisted_envelope(
 }
 
 async fn record_decode_error(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
-    sqlx::query("UPDATE panda.parallax_collector_state SET decode_error_count=decode_error_count+1, last_error='unsupported or malformed charging schema', updated_at=now() WHERE vehicle_id=$1")
-        .bind(vehicle_id).execute(pool).await?;
+    AcquisitionWrite::new("panda.parallax_collector_state")
+        .field(
+            "decode_error_count",
+            Stored::Sql("decode_error_count + 1"),
+            MergeWrite::Replace,
+        )
+        .field(
+            "last_error",
+            Stored::Sql("'unsupported or malformed charging schema'"),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(pool, &[("vehicle_id", vehicle_id)], "")
+        .await?;
     Ok(())
 }
 
 async fn record_empty_frame(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
-    sqlx::query("UPDATE panda.parallax_collector_state SET empty_frame_count=empty_frame_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
-        .bind(vehicle_id).execute(pool).await?;
+    AcquisitionWrite::new("panda.parallax_collector_state")
+        .field(
+            "empty_frame_count",
+            Stored::Sql("empty_frame_count + 1"),
+            MergeWrite::Replace,
+        )
+        .field("last_frame_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(pool, &[("vehicle_id", vehicle_id)], "")
+        .await?;
     Ok(())
 }
 
@@ -1413,39 +1421,55 @@ async fn persist_parked_window(
     window: &str,
     value: ParkedEnergyWindow,
 ) -> Result<()> {
-    let parked_started_at = value
+    let start = value
         .duration_minutes
         .map(|minutes| source_at - chrono::Duration::minutes(i64::from(minutes)));
-    sqlx::query(
-        r#"INSERT INTO timeseries.parallax_parked_energy_samples
-           (vehicle_id, source_at, received_at, payload_hash, period_window, parked_started_at,
-            duration_minutes, total_kwh, vehicle_systems_kwh, outlets_kwh, climate_kwh,
-            gear_guard_kwh, total_range_impact_km, vehicle_systems_range_impact_km,
-            outlets_range_impact_km, climate_range_impact_km, gear_guard_range_impact_km,
-            schema_version)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-           ON CONFLICT DO NOTHING"#,
-    )
-    .bind(vehicle_id)
-    .bind(source_at)
-    .bind(received_at)
-    .bind(hash)
-    .bind(window)
-    .bind(parked_started_at)
-    .bind(value.duration_minutes)
-    .bind(f64_opt(value.total_kwh))
-    .bind(f64_opt(value.vehicle_systems_kwh))
-    .bind(f64_opt(value.outlets_kwh))
-    .bind(f64_opt(value.climate_kwh))
-    .bind(f64_opt(value.gear_guard_kwh))
-    .bind(f64_opt(value.total_range_impact_km))
-    .bind(f64_opt(value.vehicle_systems_range_impact_km))
-    .bind(f64_opt(value.outlets_range_impact_km))
-    .bind(f64_opt(value.climate_range_impact_km))
-    .bind(f64_opt(value.gear_guard_range_impact_km))
-    .bind(SCHEMA_VERSION)
-    .execute(pool)
-    .await?;
+    let mut row = AcquisitionWrite::new("timeseries.parallax_parked_energy_samples")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("source_at", Stored::Time(Some(source_at)), MergeWrite::Keep)
+        .field(
+            "received_at",
+            Stored::Time(Some(received_at)),
+            MergeWrite::Keep,
+        )
+        .field("payload_hash", Stored::Bytes(hash), MergeWrite::Keep)
+        .field(
+            "period_window",
+            Stored::Text(Some(window)),
+            MergeWrite::Keep,
+        )
+        .field("parked_started_at", Stored::Time(start), MergeWrite::Keep)
+        .field(
+            "duration_minutes",
+            Stored::Int(value.duration_minutes),
+            MergeWrite::Keep,
+        )
+        .field(
+            "schema_version",
+            Stored::Int(Some(SCHEMA_VERSION)),
+            MergeWrite::Keep,
+        );
+    for (column, reading) in [
+        ("total_kwh", value.total_kwh),
+        ("vehicle_systems_kwh", value.vehicle_systems_kwh),
+        ("outlets_kwh", value.outlets_kwh),
+        ("climate_kwh", value.climate_kwh),
+        ("gear_guard_kwh", value.gear_guard_kwh),
+        ("total_range_impact_km", value.total_range_impact_km),
+        (
+            "vehicle_systems_range_impact_km",
+            value.vehicle_systems_range_impact_km,
+        ),
+        ("outlets_range_impact_km", value.outlets_range_impact_km),
+        ("climate_range_impact_km", value.climate_range_impact_km),
+        (
+            "gear_guard_range_impact_km",
+            value.gear_guard_range_impact_km,
+        ),
+    ] {
+        row = row.field(column, Stored::Float(f64_opt(reading)), MergeWrite::Keep);
+    }
+    row.upsert(pool, "", "").await?;
     Ok(())
 }
 
@@ -1455,41 +1479,51 @@ async fn set_collector_state(
     status: &str,
     error: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
-        r#"INSERT INTO panda.parallax_collector_state
-           (vehicle_id, status, connected_at, last_error, schema_version)
-           VALUES ($1,$2,CASE WHEN $2 = 'connected' THEN now() END,$3,$4)
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = EXCLUDED.status,
-             connected_at = CASE WHEN EXCLUDED.status = 'connected'
-                THEN COALESCE(panda.parallax_collector_state.connected_at, now())
-                ELSE panda.parallax_collector_state.connected_at END,
-             last_error = EXCLUDED.last_error,
-             schema_version = EXCLUDED.schema_version,
-             updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(status)
-    .bind(error.map(|value| value.chars().take(500).collect::<String>()))
-    .bind(SCHEMA_VERSION)
-    .execute(pool)
-    .await?;
+    let error = error.map(|text| text.chars().take(500).collect::<String>());
+    AcquisitionWrite::new("panda.parallax_collector_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("status", Stored::Text(Some(status)), MergeWrite::Replace)
+        .field(
+            "connected_at",
+            Stored::Sql(if status == "connected" {
+                "now()"
+            } else {
+                "NULL"
+            }),
+            MergeWrite::Expression(
+                "COALESCE(panda.parallax_collector_state.connected_at, EXCLUDED.connected_at)",
+            ),
+        )
+        .field(
+            "last_error",
+            Stored::Text(error.as_deref()),
+            MergeWrite::Replace,
+        )
+        .field(
+            "schema_version",
+            Stored::Int(Some(SCHEMA_VERSION)),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .upsert(pool, "(vehicle_id)", "")
+        .await?;
     Ok(())
 }
 
 fn parse_source_at(value: Option<&Value>) -> Option<DateTime<Utc>> {
-    let value = value?;
-    if let Some(text) = value.as_str() {
-        if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
-            return Some(parsed.with_timezone(&Utc));
-        }
-        if let Ok(millis) = text.parse::<i64>() {
-            return Utc.timestamp_millis_opt(millis).single();
-        }
+    match value? {
+        Value::String(text) => DateTime::parse_from_rfc3339(text)
+            .map(|at| at.with_timezone(&Utc))
+            .ok()
+            .or_else(|| {
+                text.parse::<i64>()
+                    .ok()
+                    .and_then(|millis| Utc.timestamp_millis_opt(millis).single())
+            }),
+        value => value
+            .as_i64()
+            .and_then(|millis| Utc.timestamp_millis_opt(millis).single()),
     }
-    value
-        .as_i64()
-        .and_then(|millis| Utc.timestamp_millis_opt(millis).single())
 }
 
 fn without_signal_sentinel(value: Option<i32>) -> Option<i32> {
@@ -2364,3 +2398,133 @@ mod contract_tests;
 #[cfg(test)]
 #[path = "parallax/__tests__/persistence_tests.rs"]
 mod persistence_tests;
+
+use crate::ingestion::{
+    AcquisitionMerge as MergeWrite, AcquisitionValue as Stored, AcquisitionWrite,
+};
+
+type BodyAccessor = fn(&mut TelemetryEvent) -> &mut Option<bool>;
+struct BodyField {
+    position: i32,
+    name: &'static str,
+    access: BodyAccessor,
+}
+const CLOSURE_FIELDS: &[BodyField] = &[
+    BodyField {
+        position: 1,
+        name: "door_front_left_closed",
+        access: |event| &mut event.door_front_left_closed,
+    },
+    BodyField {
+        position: 2,
+        name: "door_front_right_closed",
+        access: |event| &mut event.door_front_right_closed,
+    },
+    BodyField {
+        position: 3,
+        name: "door_rear_left_closed",
+        access: |event| &mut event.door_rear_left_closed,
+    },
+    BodyField {
+        position: 4,
+        name: "door_rear_right_closed",
+        access: |event| &mut event.door_rear_right_closed,
+    },
+    BodyField {
+        position: 5,
+        name: "closure_frunk_closed",
+        access: |event| &mut event.closure_frunk_closed,
+    },
+    BodyField {
+        position: 6,
+        name: "closure_tailgate_closed",
+        access: |event| &mut event.closure_tailgate_closed,
+    },
+    BodyField {
+        position: 7,
+        name: "closure_liftgate_closed",
+        access: |event| &mut event.closure_liftgate_closed,
+    },
+    BodyField {
+        position: 8,
+        name: "side_bin_left_closed",
+        access: |event| &mut event.side_bin_left_closed,
+    },
+    BodyField {
+        position: 9,
+        name: "side_bin_right_closed",
+        access: |event| &mut event.side_bin_right_closed,
+    },
+    BodyField {
+        position: 11,
+        name: "tonneau_closed",
+        access: |event| &mut event.tonneau_closed,
+    },
+    BodyField {
+        position: 12,
+        name: "window_fl_closed",
+        access: |event| &mut event.window_fl_closed,
+    },
+    BodyField {
+        position: 13,
+        name: "window_fr_closed",
+        access: |event| &mut event.window_fr_closed,
+    },
+    BodyField {
+        position: 14,
+        name: "window_rl_closed",
+        access: |event| &mut event.window_rl_closed,
+    },
+    BodyField {
+        position: 15,
+        name: "window_rr_closed",
+        access: |event| &mut event.window_rr_closed,
+    },
+];
+const LOCK_FIELDS: &[BodyField] = &[
+    BodyField {
+        position: 1,
+        name: "door_front_left_locked",
+        access: |event| &mut event.door_front_left_locked,
+    },
+    BodyField {
+        position: 2,
+        name: "door_front_right_locked",
+        access: |event| &mut event.door_front_right_locked,
+    },
+    BodyField {
+        position: 3,
+        name: "door_rear_left_locked",
+        access: |event| &mut event.door_rear_left_locked,
+    },
+    BodyField {
+        position: 4,
+        name: "door_rear_right_locked",
+        access: |event| &mut event.door_rear_right_locked,
+    },
+    BodyField {
+        position: 5,
+        name: "closure_frunk_locked",
+        access: |event| &mut event.closure_frunk_locked,
+    },
+    BodyField {
+        position: 6,
+        name: "closure_tailgate_locked",
+        access: |event| &mut event.closure_tailgate_locked,
+    },
+    BodyField {
+        position: 7,
+        name: "closure_liftgate_locked",
+        access: |event| &mut event.closure_liftgate_locked,
+    },
+    BodyField {
+        position: 8,
+        name: "side_bin_left_locked",
+        access: |event| &mut event.side_bin_left_locked,
+    },
+    BodyField {
+        position: 9,
+        name: "side_bin_right_locked",
+        access: |event| &mut event.side_bin_right_locked,
+    },
+];

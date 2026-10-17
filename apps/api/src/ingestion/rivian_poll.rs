@@ -33,15 +33,31 @@ fn capture_poll<T>(
     result: &Result<T>,
     detail: serde_json::Value,
 ) {
-    let fields = match result {
-        Ok(_) => serde_json::json!({ "operation": operation, "outcome": "ok", "detail": detail }),
-        Err(error) => serde_json::json!({
-            "operation": operation,
-            "outcome": if is_auth_error(error) { "auth_required" } else { "error" },
-            "error": error.to_string(),
-        }),
+    #[derive(Serialize)]
+    #[serde(tag = "outcome")]
+    enum Captured<'a> {
+        #[serde(rename = "ok")]
+        Complete {
+            operation: &'a str,
+            detail: serde_json::Value,
+        },
+        #[serde(rename = "auth_required")]
+        Authentication { operation: &'a str, error: String },
+        #[serde(rename = "error")]
+        Failed { operation: &'a str, error: String },
+    }
+    let record = match result {
+        Ok(_) => Captured::Complete { operation, detail },
+        Err(error) if is_auth_error(error) => Captured::Authentication {
+            operation,
+            error: error.to_string(),
+        },
+        Err(error) => Captured::Failed {
+            operation,
+            error: error.to_string(),
+        },
     };
-    ingestion_capture::record(vehicle_id, CaptureKind::Poll, fields);
+    ingestion_capture::record(vehicle_id, CaptureKind::Poll, serde_json::json!(record));
 }
 use crate::services::charge_sessions::{
     self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
@@ -107,52 +123,37 @@ async fn try_refresh_csrf(
     pool: &PgPool,
     age_key: &str,
 ) -> Result<RivianTokenBundle> {
-    tracing::info!(vehicle_id=%vehicle_id, "refreshing Rivian CSRF session");
+    tracing::info!(%vehicle_id, "refreshing Rivian CSRF session");
     let identity = age_key
         .parse::<age::x25519::Identity>()
-        .map_err(|e| anyhow!("bad age key: {e}"))?;
-
-    // The credential row is the per-vehicle refresh coordinator. Holding its
-    // row lock across refresh prevents concurrent REST callers from persisting
-    // an older token bundle over a newer one.
+        .map_err(|error| anyhow!("bad age key: {error}"))?;
     let mut tx = pool.begin().await?;
-    let encrypted_current = sqlx::query_scalar::<_, Vec<u8>>(
+    let ciphertext: Vec<u8> = sqlx::query_scalar(
         "SELECT encrypted_tokens FROM panda.vehicle_credentials WHERE vehicle_id=$1 FOR UPDATE",
     )
     .bind(vehicle_id)
     .fetch_one(&mut *tx)
     .await?;
-    let current_tokens = decrypt_tokens(&encrypted_current, &identity)?;
-    if session_token_snapshot_changed(rejected_tokens, &current_tokens) {
-        // Another request refreshed while this caller waited for the row lock.
-        // Reuse that newer bundle instead of rotating a second time.
-        tx.commit().await?;
-        tracing::debug!(vehicle_id=%vehicle_id, "reusing concurrently refreshed Rivian session");
-        return Ok(current_tokens);
-    }
-    let new_tokens = rivian_refresh_csrf(client, &current_tokens)
-        .await
-        .map_err(|e| anyhow!("CSRF refresh failed: {e}"))?;
-
-    let encrypted = encrypt_tokens(&new_tokens, &identity)?;
-
-    sqlx::query(
-        "INSERT INTO panda.vehicle_credentials
-            (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
-         VALUES ($1, $2, $3, now())
-         ON CONFLICT (vehicle_id) DO UPDATE
-         SET encrypted_tokens = EXCLUDED.encrypted_tokens,
-             last_refreshed_at = now()",
-    )
-    .bind(vehicle_id)
-    .bind(&encrypted)
-    .bind(new_tokens.created_at)
-    .execute(&mut *tx)
-    .await?;
+    let current = decrypt_tokens(&ciphertext, &identity)?;
+    let reused = session_token_snapshot_changed(rejected_tokens, &current);
+    let selected = if reused {
+        current
+    } else {
+        let refreshed = rivian_refresh_csrf(client, &current)
+            .await
+            .map_err(|error| anyhow!("CSRF refresh failed: {error}"))?;
+        let encrypted = encrypt_tokens(&refreshed, &identity)?;
+        sqlx::query("UPDATE panda.vehicle_credentials SET encrypted_tokens=$2, last_refreshed_at=now() WHERE vehicle_id=$1")
+            .bind(vehicle_id).bind(encrypted).execute(&mut *tx).await?;
+        refreshed
+    };
     tx.commit().await?;
-
-    tracing::info!(vehicle_id=%vehicle_id, "Rivian CSRF session refreshed");
-    Ok(new_tokens)
+    if reused {
+        tracing::debug!(%vehicle_id, "reusing concurrently refreshed Rivian session");
+    } else {
+        tracing::info!(%vehicle_id, "Rivian CSRF session refreshed");
+    }
+    Ok(selected)
 }
 
 fn session_token_snapshot_changed(left: &RivianTokenBundle, right: &RivianTokenBundle) -> bool {
@@ -166,27 +167,20 @@ pub(crate) async fn load_vehicle_tokens(
 ) -> Result<(String, RivianTokenBundle)> {
     let identity = age_key
         .parse::<age::x25519::Identity>()
-        .map_err(|e| anyhow!("bad age key: {e}"))?;
-
-    let row = sqlx::query_as::<_, (String, Vec<u8>)>(
-        "SELECT v.rivian_vehicle_id, c.encrypted_tokens
-         FROM panda.vehicles v
-         JOIN panda.vehicle_credentials c ON c.vehicle_id = v.id
-         WHERE v.id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| anyhow!("vehicle {vehicle_id} has no Rivian credentials"))?;
-
-    let (rivian_vehicle_id, encrypted_tokens) = row;
-    let tokens = decrypt_tokens(&encrypted_tokens, &identity)
-        .map_err(|e| anyhow!("failed to decrypt Rivian credentials: {e}"))?;
-    tokens
-        .validate()
-        .map_err(|e| anyhow!("Rivian credential bundle is invalid: {e}"))?;
-
-    Ok((rivian_vehicle_id, tokens))
+        .map_err(|error| anyhow!("bad age key: {error}"))?;
+    let stored = sqlx::query_as::<_, (String, Vec<u8>)>(
+        "SELECT v.rivian_vehicle_id, c.encrypted_tokens FROM panda.vehicles v JOIN panda.vehicle_credentials c ON c.vehicle_id = v.id WHERE v.id = $1")
+        .bind(vehicle_id).fetch_optional(pool).await?;
+    stored
+        .map(|(provider_id, encrypted)| {
+            let tokens = decrypt_tokens(&encrypted, &identity)
+                .map_err(|error| anyhow!("failed to decrypt Rivian credentials: {error}"))?;
+            tokens
+                .validate()
+                .map_err(|error| anyhow!("Rivian credential bundle is invalid: {error}"))?;
+            Ok((provider_id, tokens))
+        })
+        .unwrap_or_else(|| Err(anyhow!("vehicle {vehicle_id} has no Rivian credentials")))
 }
 
 async fn with_vehicle_auth_retry<T, F>(
@@ -259,85 +253,80 @@ const NEEDS_REAUTH_FAILURE_THRESHOLD: i32 = 3;
 /// Increment the consecutive-failure counter.  Flip `auth_state` to
 /// `needs_reauth` only after the counter crosses the threshold.
 async fn record_auth_failure(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
-    let updated: Option<i32> = sqlx::query_scalar(
-        r#"INSERT INTO panda.vehicle_runtime_state
-               (vehicle_id, consecutive_auth_failures, last_auth_failure_at, updated_at)
-           VALUES ($1, 1, now(), now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-               SET consecutive_auth_failures = vehicle_runtime_state.consecutive_auth_failures + 1,
-                   last_auth_failure_at = now(),
-                   updated_at = now()
-           RETURNING consecutive_auth_failures"#,
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let count = updated.unwrap_or(1);
-    tracing::debug!(
-        vehicle_id=%vehicle_id,
-        consecutive_auth_failures=count,
-        "rivian auth failure counted"
-    );
-
+    let result: Result<i32, sqlx::Error> = sqlx::query_scalar(
+        "INSERT INTO panda.vehicle_runtime_state (vehicle_id, consecutive_auth_failures, last_auth_failure_at, updated_at) \
+         VALUES ($1, 1, now(), now()) ON CONFLICT (vehicle_id) DO UPDATE SET \
+         consecutive_auth_failures = vehicle_runtime_state.consecutive_auth_failures + 1, last_auth_failure_at = now(), updated_at = now() \
+         RETURNING consecutive_auth_failures")
+        .bind(vehicle_id).fetch_one(pool).await;
+    let count = result.unwrap_or(1);
+    tracing::debug!(%vehicle_id, consecutive_auth_failures=count, "rivian auth failure counted");
     if count >= NEEDS_REAUTH_FAILURE_THRESHOLD {
         mark_needs_reauth(pool, vehicle_id, reason).await;
     }
 }
 
 async fn reset_auth_failure_counter(pool: &PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
-        "UPDATE panda.vehicle_runtime_state
-            SET consecutive_auth_failures = 0,
-                last_auth_failure_at = NULL,
-                updated_at = now()
-          WHERE vehicle_id = $1
-            AND consecutive_auth_failures <> 0",
-    )
-    .bind(vehicle_id)
-    .execute(pool)
-    .await;
+    let _ = AcquisitionWrite::new("panda.vehicle_runtime_state")
+        .field(
+            "consecutive_auth_failures",
+            Stored::Int(Some(0)),
+            MergeWrite::Replace,
+        )
+        .field(
+            "last_auth_failure_at",
+            Stored::Time(None),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(
+            pool,
+            &[("vehicle_id", vehicle_id)],
+            "consecutive_auth_failures <> 0",
+        )
+        .await;
 }
 
 /// Write an auth-required state into `vehicle_runtime_state` while keeping
 /// collector health separate from credential status.
 async fn mark_needs_reauth(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_runtime_state
-           (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
-           VALUES ($1, false, 'error', $2, 'needs_reauth', 'rivian_auth_expired', now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-           SET is_online = false,
-               worker_health = 'error',
-               worker_health_msg = $2,
-               auth_state = 'needs_reauth',
-               auth_reason_code = 'rivian_auth_expired',
-               updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(reason)
-    .execute(pool)
-    .await;
+    let _ = AcquisitionWrite::new("panda.vehicle_runtime_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("is_online", Stored::Flag(Some(false)), MergeWrite::Replace)
+        .field(
+            "worker_health",
+            Stored::Text(Some("error")),
+            MergeWrite::Replace,
+        )
+        .field(
+            "worker_health_msg",
+            Stored::Text(Some(reason)),
+            MergeWrite::Replace,
+        )
+        .field(
+            "auth_state",
+            Stored::Text(Some("needs_reauth")),
+            MergeWrite::Replace,
+        )
+        .field(
+            "auth_reason_code",
+            Stored::Text(Some("rivian_auth_expired")),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .upsert(pool, "(vehicle_id)", "")
+        .await;
 }
 
 // ── Stewardship counter ──────────────────────────────────────────────────────
 
 pub async fn increment_poll_counter(pool: &PgPool, vehicle_id: Uuid) {
-    let today = Utc::now().date_naive();
-    let _ = sqlx::query(
-        "INSERT INTO panda.rivian_stewardship_counters
-             (vehicle_id, day, outbound_graphql_requests)
-         VALUES ($1, $2, 1)
-         ON CONFLICT (vehicle_id, day)
-         DO UPDATE SET outbound_graphql_requests =
-             rivian_stewardship_counters.outbound_graphql_requests + 1",
-    )
-    .bind(vehicle_id)
-    .bind(today)
-    .execute(pool)
-    .await;
+    let _ = AcquisitionWrite::new("panda.rivian_stewardship_counters")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("day", Stored::Date(Utc::now().date_naive()), MergeWrite::Keep)
+        .field("outbound_graphql_requests", Stored::Count(1), MergeWrite::Expression(
+            "panda.rivian_stewardship_counters.outbound_graphql_requests + EXCLUDED.outbound_graphql_requests"))
+        .upsert(pool, "(vehicle_id, day)", "").await;
 }
 
 // ── Vehicle enrichment (getUserInfo static fields) ───────────────────────────
@@ -412,61 +401,55 @@ pub async fn fetch_vehicle_enrichment(
     let data: UserInfoEnrichmentData = ReadOperation::Enrichment
         .execute(client, tokens, rivian_vehicle_id)
         .await?;
-
-    let item = data
+    let selected = data
         .current_user
-        .and_then(|u| u.vehicles)
-        .unwrap_or_default()
         .into_iter()
-        .find(|v| v.id == rivian_vehicle_id);
-
-    let Some(item) = item else {
-        return Err(anyhow!(
-            "vehicle {rivian_vehicle_id} not found in getUserInfo"
-        ));
+        .flat_map(|user| user.vehicles.into_iter().flatten())
+        .find(|vehicle| vehicle.id == rivian_vehicle_id)
+        .ok_or_else(|| anyhow!("vehicle {rivian_vehicle_id} not found in getUserInfo"))?;
+    let (mobile, features) = match selected.vehicle {
+        Some(details) => (
+            details.mobile_configuration,
+            details
+                .vehicle_state
+                .and_then(|state| state.supported_features),
+        ),
+        None => (None, None),
     };
-
-    let details = item.vehicle;
-    let mobile_config = details
-        .as_ref()
-        .and_then(|d| d.mobile_configuration.as_ref());
-    let interior_color = mobile_config
-        .and_then(|m| m.interior_color_option.as_ref())
-        .and_then(|o| o.option_name.clone());
-    let trim = mobile_config
-        .and_then(|m| m.trim_option.as_ref())
-        .and_then(|o| o.option_name.clone());
-
-    let features_json: Option<serde_json::Value> = details
-        .and_then(|d| d.vehicle_state)
-        .and_then(|state| state.supported_features)
-        .map(|feats| {
-            serde_json::Value::Array(
-                feats
-                    .into_iter()
-                    .filter_map(|f| f.name)
-                    .map(serde_json::Value::String)
-                    .collect(),
-            )
-        });
-
-    sqlx::query(
-        "UPDATE panda.vehicles
-         SET interior_color     = COALESCE($2, interior_color),
-             trim               = COALESCE($3, trim),
-             supported_features = COALESCE($4, supported_features),
-             updated_at         = now()
-         WHERE id = $1",
-    )
-    .bind(vehicle_id)
-    .bind(interior_color)
-    .bind(trim)
-    .bind(features_json)
-    .execute(pool)
-    .await?;
-
+    let (interior, trim) = match mobile {
+        Some(config) => (
+            config
+                .interior_color_option
+                .and_then(|value| value.option_name),
+            config.trim_option.and_then(|value| value.option_name),
+        ),
+        None => (None, None),
+    };
+    let features = features.map(|values| {
+        serde_json::Value::Array(
+            values
+                .into_iter()
+                .filter_map(|feature| feature.name.map(serde_json::Value::String))
+                .collect(),
+        )
+    });
+    AcquisitionWrite::new("panda.vehicles")
+        .field(
+            "interior_color",
+            Stored::Text(interior.as_deref()),
+            MergeWrite::Present,
+        )
+        .field("trim", Stored::Text(trim.as_deref()), MergeWrite::Present)
+        .field(
+            "supported_features",
+            Stored::Json(features.as_ref()),
+            MergeWrite::Present,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(pool, &[("id", vehicle_id)], "")
+        .await?;
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "vehicle enrichment upserted");
+    tracing::debug!(%vehicle_id, "vehicle enrichment upserted");
     Ok(())
 }
 
@@ -502,44 +485,61 @@ pub async fn fetch_wallboxes(
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
     let data: WallboxesData = ReadOperation::Wallboxes.execute(client, tokens, "").await?;
-
     let boxes = data.get_registered_wallboxes.unwrap_or_default();
-    for wb in &boxes {
-        let Some(wb_id) = &wb.wallbox_id else {
-            continue;
-        };
-        sqlx::query(
-            "INSERT INTO panda.wallboxes
-                 (user_id, rivian_wallbox_id, name, latitude, longitude,
-                  max_power_kw, model, serial_number, firmware_version, linked)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-             ON CONFLICT (user_id, rivian_wallbox_id) DO UPDATE SET
-                 name             = EXCLUDED.name,
-                 latitude         = EXCLUDED.latitude,
-                 longitude        = EXCLUDED.longitude,
-                 max_power_kw     = EXCLUDED.max_power_kw,
-                 model            = EXCLUDED.model,
-                 serial_number    = EXCLUDED.serial_number,
-                 firmware_version = EXCLUDED.firmware_version,
-                 linked           = EXCLUDED.linked,
-                 updated_at       = now()",
-        )
-        .bind(user_id)
-        .bind(wb_id)
-        .bind(&wb.name)
-        .bind(wb.latitude)
-        .bind(wb.longitude)
-        .bind(json_number_as_f64(wb.max_power.as_ref()))
-        .bind(&wb.model)
-        .bind(&wb.serial_number)
-        .bind(&wb.firmware_version)
-        .bind(wb.linked)
-        .execute(pool)
-        .await?;
+    let count = boxes.len();
+    for (id, wallbox) in boxes
+        .iter()
+        .filter_map(|wallbox| wallbox.wallbox_id.as_deref().map(|id| (id, wallbox)))
+    {
+        AcquisitionWrite::new("panda.wallboxes")
+            .field("user_id", Stored::Id(user_id), MergeWrite::Keep)
+            .field(
+                "rivian_wallbox_id",
+                Stored::Text(Some(id)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "name",
+                Stored::Text(wallbox.name.as_deref()),
+                MergeWrite::Replace,
+            )
+            .field(
+                "latitude",
+                Stored::Float(wallbox.latitude),
+                MergeWrite::Replace,
+            )
+            .field(
+                "longitude",
+                Stored::Float(wallbox.longitude),
+                MergeWrite::Replace,
+            )
+            .field(
+                "max_power_kw",
+                Stored::Float(json_number_as_f64(wallbox.max_power.as_ref())),
+                MergeWrite::Replace,
+            )
+            .field(
+                "model",
+                Stored::Text(wallbox.model.as_deref()),
+                MergeWrite::Replace,
+            )
+            .field(
+                "serial_number",
+                Stored::Text(wallbox.serial_number.as_deref()),
+                MergeWrite::Replace,
+            )
+            .field(
+                "firmware_version",
+                Stored::Text(wallbox.firmware_version.as_deref()),
+                MergeWrite::Replace,
+            )
+            .field("linked", Stored::Flag(wallbox.linked), MergeWrite::Replace)
+            .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+            .upsert(pool, "(user_id, rivian_wallbox_id)", "")
+            .await?;
     }
-
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, count=%boxes.len(), "wallboxes upserted");
+    tracing::debug!(%vehicle_id, %count, "wallboxes upserted");
     Ok(())
 }
 
@@ -549,19 +549,10 @@ pub async fn fetch_vehicle_enrichment_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_vehicle_enrichment",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_vehicle_enrichment(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
-            })
-        },
-    )
-    .await
+    VehicleRead::Enrichment
+        .acquire(vehicle_id, pool, client, age_key)
+        .await
+        .map(|_| ())
 }
 
 pub async fn fetch_wallboxes_for_vehicle(
@@ -571,19 +562,10 @@ pub async fn fetch_wallboxes_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_wallboxes",
-        move |_rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(
-                async move { fetch_wallboxes(user_id, vehicle_id, pool, client, tokens).await },
-            )
-        },
-    )
-    .await
+    VehicleRead::Wallboxes(user_id)
+        .acquire(vehicle_id, pool, client, age_key)
+        .await
+        .map(|_| ())
 }
 
 // ── Charge session history ────────────────────────────────────────────────────
@@ -646,32 +628,31 @@ const RECENT_INCREMENTAL_INSERT_LOOKBACK_DAYS: i64 = 30;
 const LIVE_CURVE_OVERLAP_MINUTES: i64 = 5;
 
 async fn record_charge_history_sync_started(pool: &PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_runtime_state
-           (vehicle_id, last_charge_history_sync_at, updated_at)
-           VALUES ($1, now(), now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-           SET last_charge_history_sync_at = now(),
-               updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .execute(pool)
-    .await;
+    let mut row = AcquisitionWrite::new("panda.vehicle_runtime_state").field(
+        "vehicle_id",
+        Stored::Id(vehicle_id),
+        MergeWrite::Keep,
+    );
+    for column in ["last_charge_history_sync_at", "updated_at"] {
+        row = row.field(column, Stored::Sql("now()"), MergeWrite::Replace);
+    }
+    let _ = row.upsert(pool, "(vehicle_id)", "").await;
 }
 
 async fn record_charge_history_sync_succeeded(pool: &PgPool, vehicle_id: Uuid) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_runtime_state
-           (vehicle_id, last_charge_history_sync_at, last_charge_history_success_at, updated_at)
-           VALUES ($1, now(), now(), now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-           SET last_charge_history_sync_at = now(),
-               last_charge_history_success_at = now(),
-               updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .execute(pool)
-    .await;
+    let mut row = AcquisitionWrite::new("panda.vehicle_runtime_state").field(
+        "vehicle_id",
+        Stored::Id(vehicle_id),
+        MergeWrite::Keep,
+    );
+    for column in [
+        "last_charge_history_sync_at",
+        "last_charge_history_success_at",
+        "updated_at",
+    ] {
+        row = row.field(column, Stored::Sql("now()"), MergeWrite::Replace);
+    }
+    let _ = row.upsert(pool, "(vehicle_id)", "").await;
 }
 
 /// Fetch completed charge sessions from Rivian's charging endpoint.
@@ -700,26 +681,9 @@ pub async fn fetch_charge_history_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<usize> {
-    record_charge_history_sync_started(pool, vehicle_id).await;
-    let result = with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_charge_history",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_charge_history(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
-            })
-        },
-    )
-    .await;
-
-    if result.is_ok() {
-        record_charge_history_sync_succeeded(pool, vehicle_id).await;
-    }
-
-    result
+    VehicleRead::History
+        .acquire(vehicle_id, pool, client, age_key)
+        .await
 }
 
 /// Same as [`fetch_charge_history`] but inserts new sessions from the API that
@@ -742,26 +706,21 @@ async fn fetch_charge_history_inner_v2(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    // Hold a distributed per-vehicle transaction lock across the upstream fetch
-    // and reconciliation writes. SQLx rolls back a dropped transaction before
-    // reusing its pooled connection, so cancellation cannot leak the lock.
-    let mut lock_transaction = pool.begin().await?;
+    let mut lease = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("rivian-charge-history:{vehicle_id}"))
-        .execute(&mut *lock_transaction)
+        .execute(&mut *lease)
         .await?;
-
-    let result = fetch_charge_history_locked(vehicle_id, full_backfill, pool, client, tokens).await;
-    if let Err(error) = lock_transaction.rollback().await {
-        tracing::error!(vehicle_id=%vehicle_id, error=%error, "charge history lock release failed");
-        if result.is_ok() {
-            return Err(anyhow!(
-                "failed to release charge-history transaction lock: {error}"
-            ));
-        }
+    let acquired =
+        fetch_charge_history_locked(vehicle_id, full_backfill, pool, client, tokens).await;
+    let released = lease.rollback().await.map_err(|error| {
+        tracing::error!(%vehicle_id, %error, "charge history lock release failed");
+        anyhow!("failed to release charge-history transaction lock: {error}")
+    });
+    match acquired {
+        Err(error) => Err(error),
+        Ok(count) => released.map(|()| count),
     }
-
-    result
 }
 
 async fn fetch_charge_history_locked(
@@ -774,10 +733,8 @@ async fn fetch_charge_history_locked(
     let data: CompletedSessionsData = ReadOperation::CompletedHistory
         .execute(client, tokens, "")
         .await?;
-
     increment_poll_counter(pool, vehicle_id).await;
-
-    let insert_policy = if full_backfill {
+    let policy = if full_backfill {
         UnmatchedInsertPolicy::Always
     } else {
         UnmatchedInsertPolicy::RecentOnly {
@@ -785,119 +742,74 @@ async fn fetch_charge_history_locked(
             lookback_days: RECENT_INCREMENTAL_INSERT_LOOKBACK_DAYS,
         }
     };
-
-    let mut total_processed = 0usize;
+    let summaries = data.get_completed_session_summaries.unwrap_or_default();
+    let total_processed = summaries.len();
+    let mut audit = [0usize; 5];
+    let mut error_sample = None;
     let mut total_linked = 0usize;
-    let mut payloads_reused = 0usize;
-    let mut payloads_inserted = 0usize;
-    let mut payloads_repaired = 0usize;
-    let mut payloads_evidence_expired = 0usize;
-    let mut payload_audit_failures = 0usize;
-    let mut payload_audit_error_sample: Option<String> = None;
-    for summary in &data.get_completed_session_summaries.unwrap_or_default() {
-        let payload = serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({}));
-        let payload_ref = match record_charge_payload_with_ref(
+    for summary in summaries {
+        let evidence = record_charge_payload_with_ref(
             pool,
             vehicle_id,
             "getCompletedSessionSummaries",
             summary.transaction_id.as_deref(),
             summary.vehicle_id.as_deref(),
-            payload,
+            serde_json::to_value(&summary).unwrap_or_else(|_| serde_json::json!({})),
         )
-        .await
-        {
+        .await;
+        let payload = match evidence {
             Ok(ChargePayloadRecordOutcome::Recorded {
                 payload_ref,
                 repaired,
             }) => {
-                if repaired {
-                    payloads_repaired += 1;
-                }
-                if payload_ref.unchanged {
-                    payloads_reused += 1;
-                } else {
-                    payloads_inserted += 1;
-                }
+                audit[usize::from(payload_ref.unchanged)] += 1;
+                audit[2] += usize::from(repaired);
                 Some(payload_ref)
             }
             Ok(ChargePayloadRecordOutcome::EvidenceExpired) => {
-                payloads_evidence_expired += 1;
+                audit[3] += 1;
                 None
             }
-            Err(_error) => {
-                payload_audit_failures += 1;
-                if payload_audit_error_sample.is_none() {
-                    payload_audit_error_sample = Some(safe_charge_audit_error(&_error));
-                }
+            Err(error) => {
+                audit[4] += 1;
+                error_sample.get_or_insert_with(|| safe_charge_audit_error(&error));
                 None
             }
         };
-
-        let already_linked_session = unchanged_linked_session(payload_ref);
-        let matched_session_id = if let Some(session_id) = already_linked_session {
-            Some(session_id)
-        } else {
-            charge_sessions::reconcile_completed_session_summary(
-                pool,
-                vehicle_id,
-                summary,
-                insert_policy,
-                payload_ref,
-            )
-            .await?
+        if unchanged_linked_session(payload).is_some() {
+            continue;
+        }
+        let Some(session_id) = charge_sessions::reconcile_completed_session_summary(
+            pool, vehicle_id, &summary, policy, payload,
+        )
+        .await?
+        else {
+            continue;
         };
-
-        if let (Some(payload_ref), Some(session_id)) = (
-            payload_ref.filter(|_| already_linked_session.is_none()),
-            matched_session_id,
-        ) {
-            sqlx::query(
-                "UPDATE panda.rivian_charge_payloads
-                 SET charge_session_id = $2
-                 WHERE id = $1
-                   AND charge_session_id IS DISTINCT FROM $2",
-            )
-            .bind(payload_ref.payload_id)
-            .bind(session_id)
-            .execute(pool)
-            .await?;
+        if let Some(payload) = payload {
+            let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+                "UPDATE panda.rivian_charge_payloads SET charge_session_id = ",
+            );
+            query
+                .push_bind(session_id)
+                .push(" WHERE id = ")
+                .push_bind(payload.payload_id)
+                .push(" AND charge_session_id IS DISTINCT FROM ")
+                .push_bind(session_id);
+            query.build().execute(pool).await?;
         }
-
-        if let Some(session_id) = matched_session_id.filter(|_| already_linked_session.is_none()) {
-            total_linked += 1;
-            let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
-        }
-
-        total_processed += 1;
+        total_linked += 1;
+        crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
     }
-
-    if payloads_repaired > 0 || payload_audit_failures > 0 {
-        tracing::warn!(
-            vehicle_id=%vehicle_id,
-            payloads_repaired,
-            payload_audit_failures,
-            error_sample = payload_audit_error_sample.as_deref().unwrap_or("none"),
-            "charge history payload audit required repair"
-        );
+    let [payloads_inserted, payloads_reused, payloads_repaired, payloads_evidence_expired, payload_audit_failures] =
+        audit;
+    if payloads_repaired != 0 || payload_audit_failures != 0 {
+        tracing::warn!(%vehicle_id, payloads_repaired, payload_audit_failures, error_sample=error_sample.as_deref().unwrap_or("none"), "charge history payload audit required repair");
     }
-    if payloads_evidence_expired > 0 {
-        tracing::info!(
-            vehicle_id=%vehicle_id,
-            payloads_evidence_expired,
-            "charge history retained payload evidence expired"
-        );
+    if payloads_evidence_expired != 0 {
+        tracing::info!(%vehicle_id, payloads_evidence_expired, "charge history retained payload evidence expired");
     }
-
-    tracing::debug!(
-        vehicle_id=%vehicle_id,
-        total_processed,
-        total_linked,
-        payloads_inserted,
-        payloads_reused,
-        full_backfill,
-        "charge history synced"
-    );
-
+    tracing::debug!(%vehicle_id, total_processed, total_linked, payloads_inserted, payloads_reused, full_backfill, "charge history synced");
     Ok(total_processed)
 }
 
@@ -913,8 +825,7 @@ fn unchanged_linked_session(payload_ref: Option<ChargeSessionPayloadRef>) -> Opt
 
 fn safe_charge_audit_error(error: &anyhow::Error) -> String {
     let text = error.to_string();
-    let lower = text.to_ascii_lowercase();
-    if [
+    let sensitive = [
         "payload",
         "fingerprint",
         "identity",
@@ -922,11 +833,15 @@ fn safe_charge_audit_error(error: &anyhow::Error) -> String {
         "vehicle",
     ]
     .iter()
-    .any(|term| lower.contains(term))
-    {
-        return "sensitive_audit_error".to_owned();
+    .any(|term| {
+        text.as_bytes()
+            .windows(term.len())
+            .any(|window| window.eq_ignore_ascii_case(term.as_bytes()))
+    });
+    match sensitive {
+        true => "sensitive_audit_error".to_owned(),
+        false => text.chars().take(256).collect(),
     }
-    text.chars().take(256).collect()
 }
 
 async fn record_charge_payload_with_ref(
@@ -968,10 +883,9 @@ async fn find_exact_payload_survivor(
     rivian_vehicle_id: Option<&str>,
     fingerprint: &[u8],
 ) -> Result<Option<(Uuid, DateTime<Utc>, Option<Uuid>)>> {
-    Ok(sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
-        r#"SELECT payload.id, payload.captured_at,
-                  CASE WHEN cs.vehicle_id = payload.vehicle_id
-                       THEN payload.charge_session_id ELSE NULL END
+    type SurvivorRow = (Uuid, DateTime<Utc>, Option<Uuid>, Option<Uuid>);
+    let candidate: Option<SurvivorRow> = sqlx::query_as(
+        r#"SELECT payload.id, payload.captured_at, payload.charge_session_id, cs.vehicle_id
            FROM panda.rivian_charge_payloads payload
            LEFT JOIN panda.charge_sessions cs ON cs.id = payload.charge_session_id
            WHERE payload.vehicle_id = $1 AND payload.operation = $2
@@ -988,7 +902,14 @@ async fn find_exact_payload_survivor(
     .bind(rivian_vehicle_id)
     .bind(fingerprint)
     .fetch_optional(&mut **tx)
-    .await?)
+    .await?;
+    Ok(candidate.map(|(id, captured_at, session, owner)| {
+        (
+            id,
+            captured_at,
+            session.filter(|_| owner == Some(vehicle_id)),
+        )
+    }))
 }
 
 async fn repair_payload_aliases(
@@ -997,17 +918,19 @@ async fn repair_payload_aliases(
     replacement_payload_id: Uuid,
     replacement_captured_at: DateTime<Utc>,
 ) -> Result<()> {
-    sqlx::query(
-        "UPDATE panda.charge_session_external_aliases
-         SET latest_payload_id = $2,
-             latest_payload_captured_at = $3
-         WHERE latest_payload_id = $1",
-    )
-    .bind(previous_payload_id)
-    .bind(replacement_payload_id)
-    .bind(replacement_captured_at)
-    .execute(&mut **tx)
-    .await?;
+    AcquisitionWrite::new("panda.charge_session_external_aliases")
+        .field(
+            "latest_payload_id",
+            Stored::Id(replacement_payload_id),
+            MergeWrite::Replace,
+        )
+        .field(
+            "latest_payload_captured_at",
+            Stored::Time(Some(replacement_captured_at)),
+            MergeWrite::Replace,
+        )
+        .update(&mut **tx, &[("latest_payload_id", previous_payload_id)], "")
+        .await?;
     Ok(())
 }
 
@@ -1015,16 +938,20 @@ async fn clear_expired_payload_aliases(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     previous_payload_id: Option<Uuid>,
 ) -> Result<()> {
-    if let Some(previous_payload_id) = previous_payload_id {
-        sqlx::query(
-            "UPDATE panda.charge_session_external_aliases
-             SET latest_payload_id = NULL,
-                 latest_payload_captured_at = NULL
-             WHERE latest_payload_id = $1",
-        )
-        .bind(previous_payload_id)
-        .execute(&mut **tx)
-        .await?;
+    if let Some(previous) = previous_payload_id {
+        AcquisitionWrite::new("panda.charge_session_external_aliases")
+            .field(
+                "latest_payload_id",
+                Stored::Sql("NULL"),
+                MergeWrite::Replace,
+            )
+            .field(
+                "latest_payload_captured_at",
+                Stored::Time(None),
+                MergeWrite::Replace,
+            )
+            .update(&mut **tx, &[("latest_payload_id", previous)], "")
+            .await?;
     }
     Ok(())
 }
@@ -1044,50 +971,38 @@ pub async fn fetch_live_session_history(
         .execute(client, tokens, rivian_vehicle_id)
         .await?;
     increment_poll_counter(pool, vehicle_id).await;
-
     let points = data
         .get_live_session_history
         .and_then(|history| history.chart_data)
         .unwrap_or_default();
-    let latest_stored: Option<DateTime<Utc>> = sqlx::query_scalar(
+    let latest: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT MAX(ts) FROM panda.rivian_charge_curve_points WHERE vehicle_id = $1",
     )
     .bind(vehicle_id)
     .fetch_one(pool)
     .await?;
-    let cutoff =
-        latest_stored.map(|latest| latest - chrono::Duration::minutes(LIVE_CURVE_OVERLAP_MINUTES));
+    let cutoff = latest.map(|at| at - chrono::Duration::minutes(LIVE_CURVE_OVERLAP_MINUTES));
     let records_received = points.len();
-    let mut selected = points
-        .into_iter()
-        .filter_map(|point| point.time.map(|ts| (ts, point.kw)))
-        .filter(|(ts, _)| cutoff.is_none_or(|cutoff| *ts >= cutoff))
-        .collect::<Vec<_>>();
-    selected.sort_by_key(|(ts, _)| *ts);
-    if selected.is_empty() {
-        tracing::debug!(
-            vehicle_id=%vehicle_id,
-            records_received,
-            records_selected=0,
-            curve_points_changed=0,
-            "live charge curve unchanged"
-        );
-        return Ok(0);
+    let mut ordered = std::collections::BTreeMap::<DateTime<Utc>, Vec<Option<f64>>>::new();
+    for point in points {
+        if let Some(at) = point
+            .time
+            .filter(|at| cutoff.is_none_or(|cutoff| *at >= cutoff))
+        {
+            ordered.entry(at).or_default().push(point.kw);
+        }
     }
-
-    let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
-    let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
-    let changed =
-        persist_curve_batch(pool, vehicle_id, active_session_id, &timestamps, &power).await?;
-
-    tracing::debug!(
-        vehicle_id=%vehicle_id,
-        records_received,
-        records_selected=selected.len(),
-        curve_points_changed=changed,
-        "live charge curve synchronized"
-    );
-
+    let (timestamps, power): (Vec<_>, Vec<_>) = ordered
+        .into_iter()
+        .flat_map(|(at, readings)| readings.into_iter().map(move |power| (at, power)))
+        .unzip();
+    let changed = if timestamps.is_empty() {
+        0
+    } else {
+        persist_curve_batch(pool, vehicle_id, active_session_id, &timestamps, &power).await?
+    };
+    tracing::debug!(%vehicle_id, records_received, records_selected=timestamps.len(), curve_points_changed=changed,
+        "live charge curve synchronized");
     Ok(changed)
 }
 
@@ -1098,27 +1013,9 @@ pub async fn fetch_live_session_history_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<usize> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_live_session_history",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_live_session_history(
-                    rivian_vehicle_id,
-                    vehicle_id,
-                    active_session_id,
-                    pool,
-                    client,
-                    tokens,
-                )
-                .await
-            })
-        },
-    )
-    .await
+    VehicleRead::LiveHistory(active_session_id)
+        .acquire(vehicle_id, pool, client, age_key)
+        .await
 }
 
 // ── Live session data (WebSocket chargingSession subscription) ──────────────
@@ -1164,30 +1061,12 @@ pub fn normalize_charging_session(
     received_at: DateTime<Utc>,
 ) -> Option<LiveSessionData> {
     let live = event.live_data.as_ref()?;
-    let has_live_value = live.power_kw.is_some()
-        || live.kilometers_charged_per_hour.is_some()
-        || live.range_added_this_session.is_some()
-        || live.total_charged_energy.is_some()
-        || live.time_elapsed_seconds.is_some()
-        || live.time_remaining_seconds.is_some()
-        || live.price.is_some()
-        || live.currency.is_some()
-        || live.is_free_session.is_some()
-        || live.vehicle_charger_state.is_some()
-        || live.start_time.is_some();
-    let has_chart_value = event.chart_data.iter().any(|point| {
-        point.soc.is_some()
-            || point.power_kw.is_some()
-            || point.start_time.is_some()
-            || point.end_time.is_some()
-            || point.time_estimation_validity_status.is_some()
-            || point.vehicle_charger_state.is_some()
-    });
-    if !has_live_value && !has_chart_value {
-        return None;
-    }
-    Some(LiveSessionData {
-        soc_pct: event.chart_data.iter().rev().find_map(|point| point.soc),
+    let normalized = LiveSessionData {
+        soc_pct: event
+            .chart_data
+            .iter()
+            .filter_map(|point| point.soc)
+            .next_back(),
         power_kw: live.power_kw,
         energy_kwh: live.total_charged_energy,
         range_added_km: live.range_added_this_session,
@@ -1201,7 +1080,31 @@ pub fn normalize_charging_session(
         is_free_session: live.is_free_session,
         vehicle_charger_state: live.vehicle_charger_state.clone(),
         started_at: live.start_time,
-    })
+    };
+    let has_metric = [
+        normalized.power_kw,
+        normalized.energy_kwh,
+        normalized.range_added_km,
+        normalized.time_remaining_min,
+        normalized.charge_rate_kph,
+        normalized.time_elapsed_seconds,
+        normalized.price,
+    ]
+    .iter()
+    .any(Option::is_some);
+    let has_metadata = normalized.currency.is_some()
+        || normalized.is_free_session.is_some()
+        || normalized.vehicle_charger_state.is_some()
+        || normalized.started_at.is_some();
+    let has_chart = event.chart_data.iter().any(|point| {
+        point.soc.is_some()
+            || point.power_kw.is_some()
+            || point.start_time.is_some()
+            || point.end_time.is_some()
+            || point.time_estimation_validity_status.is_some()
+            || point.vehicle_charger_state.is_some()
+    });
+    (has_metric || has_metadata || has_chart).then_some(normalized)
 }
 
 /// Persist the fields that belong to the active canonical charge session.
@@ -1212,63 +1115,37 @@ pub async fn persist_live_session_data(
     active_session_id: Option<Uuid>,
     live: &LiveSessionData,
 ) -> Result<()> {
-    let Some(session_id) = active_session_id else {
-        return Ok(());
-    };
-
-    sqlx::query(
-        "UPDATE panda.charge_sessions SET
-             live_current_price       = COALESCE($2, live_current_price),
-             live_current_currency    = COALESCE($3, live_current_currency),
-             live_total_charged_kwh   = COALESCE($4, live_total_charged_kwh),
-             live_range_added_km      = COALESCE($5, live_range_added_km),
-             live_power_kw            = COALESCE($6, live_power_kw),
-             live_charge_rate_kph     = COALESCE($7, live_charge_rate_kph),
-             live_time_elapsed_seconds = COALESCE($8, live_time_elapsed_seconds),
-             live_session_started_at  = COALESCE($9, live_session_started_at),
-             live_time_remaining_minutes = COALESCE($11, live_time_remaining_minutes),
-             is_free_session          = COALESCE($10, is_free_session),
-             kwh_added                = COALESCE($4, kwh_added),
-             range_added_km           = COALESCE($5, range_added_km),
-             max_charge_rate_kw      = CASE WHEN $6 IS NOT NULL
-                                            THEN GREATEST(COALESCE(max_charge_rate_kw, 0), $6)
-                                            ELSE max_charge_rate_kw END,
-             duration_minutes        = COALESCE($12, duration_minutes),
-             source = CASE WHEN source = 'rivian_api'
-                           THEN 'telemetry+rivian_api'
-                           ELSE COALESCE(source, 'telemetry') END,
-             data_confidence = CASE WHEN source = 'rivian_api'
-                                    THEN 'telemetry_enriched'
-                                    ELSE COALESCE(data_confidence, 'telemetry') END
-         WHERE id = $1 AND ended_at IS NULL",
-    )
-    .bind(session_id)
-    .bind(live.price)
-    .bind(&live.currency)
-    .bind(live.energy_kwh)
-    .bind(live.range_added_km)
-    .bind(live.power_kw)
-    .bind(live.charge_rate_kph)
-    .bind(
-        live.time_elapsed_seconds
-            .map(|seconds| seconds.round() as i32),
-    )
-    .bind(live.started_at)
-    .bind(live.is_free_session)
-    .bind(
-        live.time_remaining_min
-            .map(|minutes| minutes.round() as i32),
-    )
-    .bind(
-        live.time_elapsed_seconds
-            .map(|seconds| (seconds / 60.0).round() as i32),
-    )
-    .execute(pool)
-    .await?;
-
-    // Do not compute a final billing amount while the session is open.  The
-    // live price is retained above for an estimate; final cost is recomputed
-    // by the canonical session-finalization path once ended_at is known.
+    if let Some(session_id) = active_session_id {
+        let mut row = AcquisitionWrite::new("panda.charge_sessions")
+            .field("live_current_currency", Stored::Text(live.currency.as_deref()), MergeWrite::Present)
+            .field("live_time_elapsed_seconds", Stored::Int(live.time_elapsed_seconds.map(|seconds| seconds.round() as i32)), MergeWrite::Present)
+            .field("live_session_started_at", Stored::Time(live.started_at), MergeWrite::Present)
+            .field("live_time_remaining_minutes", Stored::Int(live.time_remaining_min.map(|minutes| minutes.round() as i32)), MergeWrite::Present)
+            .field("is_free_session", Stored::Flag(live.is_free_session), MergeWrite::Present)
+            .field("duration_minutes", Stored::Int(live.time_elapsed_seconds.map(|seconds| (seconds / 60.0).round() as i32)), MergeWrite::Present)
+            .field("source", Stored::Sql("CASE WHEN source = 'rivian_api' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'telemetry') END"), MergeWrite::Replace)
+            .field("data_confidence", Stored::Sql("CASE WHEN source = 'rivian_api' THEN 'telemetry_enriched' ELSE COALESCE(data_confidence, 'telemetry') END"), MergeWrite::Replace);
+        for (column, value) in [
+            ("live_current_price", live.price),
+            ("live_total_charged_kwh", live.energy_kwh),
+            ("live_range_added_km", live.range_added_km),
+            ("live_power_kw", live.power_kw),
+            ("live_charge_rate_kph", live.charge_rate_kph),
+            ("kwh_added", live.energy_kwh),
+            ("range_added_km", live.range_added_km),
+        ] {
+            row = row.field(column, Stored::Float(value), MergeWrite::Present);
+        }
+        if live.power_kw.is_some() {
+            row = row.field(
+                "max_charge_rate_kw",
+                Stored::Float(live.power_kw),
+                MergeWrite::Greatest,
+            );
+        }
+        row.update(pool, &[("id", session_id)], "ended_at IS NULL")
+            .await?;
+    }
     Ok(())
 }
 
@@ -1281,17 +1158,16 @@ pub async fn persist_charging_session_chart(
     active_session_id: Option<Uuid>,
     points: &[crate::ingestion::parser::ChargingSessionChartPoint],
 ) -> Result<usize> {
-    let selected = points
+    let (timestamps, power): (Vec<_>, Vec<_>) = points
         .iter()
-        .filter_map(|point| point.start_time.map(|ts| (ts, point.power_kw)))
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        return Ok(0);
+        .filter_map(|point| point.start_time.map(|at| (at, point.power_kw)))
+        .unzip();
+    match timestamps.is_empty() {
+        true => Ok(0),
+        false => {
+            persist_curve_batch(pool, vehicle_id, active_session_id, &timestamps, &power).await
+        }
     }
-
-    let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
-    let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
-    persist_curve_batch(pool, vehicle_id, active_session_id, &timestamps, &power).await
 }
 
 async fn persist_curve_batch(
@@ -1384,45 +1260,57 @@ pub async fn fetch_charging_schedule(
     let data: ChargingScheduleData = ReadOperation::ChargingSchedule
         .execute(client, tokens, rivian_vehicle_id)
         .await?;
-
-    let policy = data
+    let selected = data
         .get_vehicle
-        .and_then(|s| s.charging_schedules)
-        .and_then(|mut schedules| schedules.pop());
-
-    if let Some(p) = policy {
-        let week_days: Option<Vec<String>> = p.week_days;
-        sqlx::query(
-            "INSERT INTO panda.charging_schedules
-                 (vehicle_id, enabled, start_time_minutes, duration_minutes,
-                  amperage, location_lat, location_lng, week_days, rivian_updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             ON CONFLICT (vehicle_id) DO UPDATE SET
-                 enabled            = EXCLUDED.enabled,
-                 start_time_minutes = EXCLUDED.start_time_minutes,
-                 duration_minutes   = EXCLUDED.duration_minutes,
-                 amperage           = EXCLUDED.amperage,
-                 location_lat       = EXCLUDED.location_lat,
-                 location_lng       = EXCLUDED.location_lng,
-                 week_days          = EXCLUDED.week_days,
-                 rivian_updated_at  = EXCLUDED.rivian_updated_at,
-                 updated_at         = now()",
-        )
-        .bind(vehicle_id)
-        .bind(p.enabled.unwrap_or(false))
-        .bind(p.start_time)
-        .bind(p.duration)
-        .bind(p.amperage)
-        .bind(p.location.as_ref().and_then(|l| l.latitude))
-        .bind(p.location.as_ref().and_then(|l| l.longitude))
-        .bind(week_days.as_deref())
-        .bind(Option::<DateTime<Utc>>::None)
-        .execute(pool)
-        .await?;
+        .into_iter()
+        .flat_map(|vehicle| vehicle.charging_schedules.into_iter().flatten())
+        .last();
+    if let Some(schedule) = selected {
+        let (latitude, longitude) = schedule
+            .location
+            .as_ref()
+            .map(|value| (value.latitude, value.longitude))
+            .unwrap_or_default();
+        AcquisitionWrite::new("panda.charging_schedules")
+            .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+            .field(
+                "enabled",
+                Stored::Flag(Some(schedule.enabled.unwrap_or(false))),
+                MergeWrite::Replace,
+            )
+            .field(
+                "start_time_minutes",
+                Stored::Int(schedule.start_time),
+                MergeWrite::Replace,
+            )
+            .field(
+                "duration_minutes",
+                Stored::Int(schedule.duration),
+                MergeWrite::Replace,
+            )
+            .field(
+                "amperage",
+                Stored::Float(schedule.amperage),
+                MergeWrite::Replace,
+            )
+            .field("location_lat", Stored::Float(latitude), MergeWrite::Replace)
+            .field(
+                "location_lng",
+                Stored::Float(longitude),
+                MergeWrite::Replace,
+            )
+            .field(
+                "week_days",
+                Stored::Texts(schedule.week_days.as_deref()),
+                MergeWrite::Replace,
+            )
+            .field("rivian_updated_at", Stored::Time(None), MergeWrite::Replace)
+            .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+            .upsert(pool, "(vehicle_id)", "")
+            .await?;
     }
-
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "charging schedule upserted");
+    tracing::debug!(%vehicle_id, "charging schedule upserted");
     Ok(())
 }
 
@@ -1432,19 +1320,10 @@ pub async fn fetch_charging_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_charging_schedule",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_charging_schedule(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
-            })
-        },
-    )
-    .await
+    VehicleRead::Schedule
+        .acquire(vehicle_id, pool, client, age_key)
+        .await
+        .map(|_| ())
 }
 
 // ── Departure schedules ───────────────────────────────────────────────────────
@@ -1476,33 +1355,44 @@ pub async fn fetch_departure_schedules(
     let data: DepartureSchedulesData = ReadOperation::DepartureSchedules
         .execute(client, tokens, rivian_vehicle_id)
         .await?;
-
-    for sched in data.get_departure_schedules.unwrap_or_default() {
-        let Some(rivian_id) = &sched.id else { continue };
-        sqlx::query(
-            "INSERT INTO panda.departure_schedules
-                 (vehicle_id, rivian_schedule_id, name, enabled,
-                  occurrence, comfort_settings)
-             VALUES ($1,$2,$3,$4,$5,$6)
-             ON CONFLICT (vehicle_id, rivian_schedule_id) DO UPDATE SET
-                 name             = EXCLUDED.name,
-                 enabled          = EXCLUDED.enabled,
-                 occurrence       = EXCLUDED.occurrence,
-                 comfort_settings = EXCLUDED.comfort_settings,
-                 updated_at       = now()",
-        )
-        .bind(vehicle_id)
-        .bind(rivian_id)
-        .bind(&sched.name)
-        .bind(sched.enabled.unwrap_or(false))
-        .bind(&sched.occurrence)
-        .bind(&sched.preconditioning_settings)
-        .execute(pool)
-        .await?;
+    let schedules = data.get_departure_schedules.unwrap_or_default();
+    for (id, schedule) in schedules
+        .iter()
+        .filter_map(|schedule| schedule.id.as_deref().map(|id| (id, schedule)))
+    {
+        AcquisitionWrite::new("panda.departure_schedules")
+            .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+            .field(
+                "rivian_schedule_id",
+                Stored::Text(Some(id)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "name",
+                Stored::Text(schedule.name.as_deref()),
+                MergeWrite::Replace,
+            )
+            .field(
+                "enabled",
+                Stored::Flag(Some(schedule.enabled.unwrap_or(false))),
+                MergeWrite::Replace,
+            )
+            .field(
+                "occurrence",
+                Stored::Json(schedule.occurrence.as_ref()),
+                MergeWrite::Replace,
+            )
+            .field(
+                "comfort_settings",
+                Stored::Json(schedule.preconditioning_settings.as_ref()),
+                MergeWrite::Replace,
+            )
+            .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+            .upsert(pool, "(vehicle_id, rivian_schedule_id)", "")
+            .await?;
     }
-
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "departure schedules upserted");
+    tracing::debug!(%vehicle_id, "departure schedules upserted");
     Ok(())
 }
 
@@ -1532,23 +1422,22 @@ pub async fn fetch_ota_details(
     let data: OtaDetailsData = ReadOperation::OtaDetails
         .execute(client, tokens, rivian_vehicle_id)
         .await?;
-
     let url = data
         .get_ota_update_details
-        .and_then(|d| d.release_notes_url);
-
-    if let Some(ref url) = url {
-        sqlx::query(
-            "UPDATE panda.vehicles SET ota_release_notes_url = $2, updated_at = now() WHERE id = $1",
-        )
-        .bind(vehicle_id)
-        .bind(url)
-        .execute(pool)
-        .await?;
+        .and_then(|details| details.release_notes_url);
+    if let Some(value) = url.as_deref() {
+        AcquisitionWrite::new("panda.vehicles")
+            .field(
+                "ota_release_notes_url",
+                Stored::Text(Some(value)),
+                MergeWrite::Replace,
+            )
+            .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+            .update(pool, &[("id", vehicle_id)], "")
+            .await?;
     }
-
     increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, url=?url, "OTA details upserted");
+    tracing::debug!(%vehicle_id, ?url, "OTA details upserted");
     Ok(())
 }
 
@@ -1586,29 +1475,8 @@ pub async fn mutate_charging_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
-    let input = input.clone();
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "mutate_charging_schedule",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            let input = input.clone();
-            Box::pin(async move {
-                mutate_charging_schedule(
-                    rivian_vehicle_id,
-                    vehicle_id,
-                    &input,
-                    pool,
-                    client,
-                    tokens,
-                )
-                .await
-            })
-        },
-    )
-    .await
+    let (provider_id, tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
+    mutate_charging_schedule(&provider_id, vehicle_id, input, pool, client, &tokens).await
 }
 
 // ── Departure schedule mutations ──────────────────────────────────────────────
@@ -1642,29 +1510,8 @@ pub async fn create_departure_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<String> {
-    let input = input.clone();
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "create_departure_schedule",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            let input = input.clone();
-            Box::pin(async move {
-                create_departure_schedule(
-                    rivian_vehicle_id,
-                    vehicle_id,
-                    &input,
-                    pool,
-                    client,
-                    tokens,
-                )
-                .await
-            })
-        },
-    )
-    .await
+    let (provider_id, tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
+    create_departure_schedule(&provider_id, vehicle_id, input, pool, client, &tokens).await
 }
 
 /// Stable adapter: updating departure schedules is denied by provider policy.
@@ -1697,30 +1544,15 @@ pub async fn update_departure_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
-    let rivian_schedule_id = rivian_schedule_id.to_string();
-    let input = input.clone();
-    with_vehicle_auth_retry(
+    let (provider_id, tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
+    update_departure_schedule(
+        &provider_id,
         vehicle_id,
+        rivian_schedule_id,
+        input,
         pool,
         client,
-        age_key,
-        "update_departure_schedule",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            let rivian_schedule_id = rivian_schedule_id.clone();
-            let input = input.clone();
-            Box::pin(async move {
-                update_departure_schedule(
-                    rivian_vehicle_id,
-                    vehicle_id,
-                    &rivian_schedule_id,
-                    &input,
-                    pool,
-                    client,
-                    tokens,
-                )
-                .await
-            })
-        },
+        &tokens,
     )
     .await
 }
@@ -1752,27 +1584,14 @@ pub async fn delete_departure_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
-    let rivian_schedule_id = rivian_schedule_id.to_string();
-    with_vehicle_auth_retry(
+    let (provider_id, tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
+    delete_departure_schedule(
+        &provider_id,
         vehicle_id,
+        rivian_schedule_id,
         pool,
         client,
-        age_key,
-        "delete_departure_schedule",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            let rivian_schedule_id = rivian_schedule_id.clone();
-            Box::pin(async move {
-                delete_departure_schedule(
-                    rivian_vehicle_id,
-                    vehicle_id,
-                    &rivian_schedule_id,
-                    pool,
-                    client,
-                    tokens,
-                )
-                .await
-            })
-        },
+        &tokens,
     )
     .await
 }
@@ -2526,3 +2345,170 @@ mod contract_tests;
 #[cfg(test)]
 #[path = "__tests__/payload_reconciliation_contract.rs"]
 mod payload_reconciliation_contract;
+
+use crate::ingestion::{
+    AcquisitionMerge as MergeWrite, AcquisitionValue as Stored, AcquisitionWrite,
+};
+
+#[derive(Clone, Copy)]
+enum VehicleRead {
+    Enrichment,
+    Wallboxes(Uuid),
+    History,
+    LiveHistory(Option<Uuid>),
+    Schedule,
+}
+
+impl VehicleRead {
+    async fn acquire(
+        self,
+        vehicle_id: Uuid,
+        pool: &PgPool,
+        client: &reqwest::Client,
+        age_key: &str,
+    ) -> Result<usize> {
+        let operation = match self {
+            Self::Enrichment => "fetch_vehicle_enrichment",
+            Self::Wallboxes(_) => "fetch_wallboxes",
+            Self::History => "fetch_charge_history",
+            Self::LiveHistory(_) => "fetch_live_session_history",
+            Self::Schedule => "fetch_charging_schedule",
+        };
+        if matches!(self, Self::History) {
+            record_charge_history_sync_started(pool, vehicle_id).await;
+        }
+        let result = with_vehicle_auth_retry(
+            vehicle_id,
+            pool,
+            client,
+            age_key,
+            operation,
+            move |provider_id, tokens, pool, client| {
+                Box::pin(async move {
+                    match self {
+                        Self::Enrichment => {
+                            fetch_vehicle_enrichment(provider_id, vehicle_id, pool, client, tokens)
+                                .await
+                                .map(|()| 0)
+                        }
+                        Self::Wallboxes(owner) => {
+                            fetch_wallboxes(owner, vehicle_id, pool, client, tokens)
+                                .await
+                                .map(|()| 0)
+                        }
+                        Self::History => {
+                            fetch_charge_history(provider_id, vehicle_id, pool, client, tokens)
+                                .await
+                        }
+                        Self::LiveHistory(active) => {
+                            fetch_live_session_history(
+                                provider_id,
+                                vehicle_id,
+                                active,
+                                pool,
+                                client,
+                                tokens,
+                            )
+                            .await
+                        }
+                        Self::Schedule => {
+                            fetch_charging_schedule(provider_id, vehicle_id, pool, client, tokens)
+                                .await
+                                .map(|()| 0)
+                        }
+                    }
+                })
+            },
+        )
+        .await;
+        if matches!(self, Self::History) && result.is_ok() {
+            record_charge_history_sync_succeeded(pool, vehicle_id).await;
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "requires unique restricted synthetic PAYLOAD_DATABASE_URL"]
+    async fn live_projection_preserves_peak_floor_nulls_rounding_and_closed_guard() {
+        let db = tests::DisposableDatabase::new().await;
+        let vehicle = tests::seed_vehicle(&db.pool).await;
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,source,live_current_currency) VALUES($1,$2,now(),'rivian_api','USD')")
+            .bind(id).bind(vehicle).execute(&db.pool).await.unwrap();
+        let mut live = LiveSessionData {
+            soc_pct: None,
+            power_kw: Some(-2.0),
+            energy_kwh: Some(1.25),
+            range_added_km: None,
+            time_remaining_min: Some(1.5),
+            charger_type: None,
+            ts: Utc::now(),
+            charge_rate_kph: None,
+            time_elapsed_seconds: Some(90.5),
+            price: None,
+            currency: None,
+            is_free_session: None,
+            vehicle_charger_state: None,
+            started_at: None,
+        };
+        persist_live_session_data(&db.pool, Some(id), &live)
+            .await
+            .unwrap();
+        type LiveState = (
+            Option<f64>,
+            Option<String>,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+        );
+        let result: LiveState = sqlx::query_as(
+            "SELECT max_charge_rate_kw,live_current_currency,live_time_elapsed_seconds,duration_minutes,live_time_remaining_minutes,source,data_confidence FROM panda.charge_sessions WHERE id=$1")
+            .bind(id).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(
+            result,
+            (
+                Some(0.0),
+                Some("USD".into()),
+                Some(91),
+                Some(2),
+                Some(2),
+                Some("telemetry+rivian_api".into()),
+                Some("telemetry_enriched".into())
+            )
+        );
+        live.power_kw = Some(f64::NAN);
+        persist_live_session_data(&db.pool, Some(id), &live)
+            .await
+            .unwrap();
+        let peak: f64 =
+            sqlx::query_scalar("SELECT max_charge_rate_kw FROM panda.charge_sessions WHERE id=$1")
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(peak.is_nan());
+        sqlx::query("UPDATE panda.charge_sessions SET ended_at=now() WHERE id=$1")
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        live.energy_kwh = Some(999.0);
+        persist_live_session_data(&db.pool, Some(id), &live)
+            .await
+            .unwrap();
+        let energy: f64 =
+            sqlx::query_scalar("SELECT kwh_added FROM panda.charge_sessions WHERE id=$1")
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(energy, 1.25);
+        db.cleanup().await;
+    }
+}

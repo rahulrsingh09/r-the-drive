@@ -251,22 +251,17 @@ impl LegacyChargingSessionClass {
 pub fn classify_legacy_charging_session(
     value: Option<&serde_json::Value>,
 ) -> LegacyChargingSessionClass {
-    let Some(value) = value else {
-        return LegacyChargingSessionClass::Missing;
-    };
-    if value.is_null() {
-        return LegacyChargingSessionClass::Null;
-    }
-    let Some(object) = value.as_object() else {
-        return LegacyChargingSessionClass::Malformed;
-    };
-    if object.is_empty() {
-        return LegacyChargingSessionClass::AllNull;
-    }
-    if object.values().all(serde_json::Value::is_null) {
-        LegacyChargingSessionClass::AllNull
-    } else {
-        LegacyChargingSessionClass::Meaningful
+    match value {
+        None => LegacyChargingSessionClass::Missing,
+        Some(serde_json::Value::Null) => LegacyChargingSessionClass::Null,
+        Some(serde_json::Value::Object(fields)) => {
+            if fields.values().any(|field| !field.is_null()) {
+                LegacyChargingSessionClass::Meaningful
+            } else {
+                LegacyChargingSessionClass::AllNull
+            }
+        }
+        Some(_) => LegacyChargingSessionClass::Malformed,
     }
 }
 
@@ -757,16 +752,15 @@ async fn upsert_battery_cell_type(
     vehicle_id: Uuid,
     battery_cell_type: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE panda.vehicles
-         SET battery_cell_type = COALESCE($2, battery_cell_type),
-             updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(vehicle_id)
-    .bind(battery_cell_type)
-    .execute(pool)
-    .await?;
+    AcquisitionWrite::new("panda.vehicles")
+        .field(
+            "battery_cell_type",
+            Stored::Text(Some(battery_cell_type)),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .update(pool, &[("id", vehicle_id)], "")
+        .await?;
     Ok(())
 }
 
@@ -836,12 +830,9 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 }
 
 fn collector_lock_key(vehicle_id: Uuid) -> i64 {
-    let bytes = vehicle_id.as_bytes();
-    let mut first = [0u8; 8];
-    let mut second = [0u8; 8];
-    first.copy_from_slice(&bytes[0..8]);
-    second.copy_from_slice(&bytes[8..16]);
-    i64::from_be_bytes(first) ^ i64::from_be_bytes(second) ^ ADVISORY_LOCK_NAMESPACE
+    let folded = vehicle_id.as_u128();
+    let halves = (folded >> 64) as u64 ^ folded as u64;
+    halves as i64 ^ ADVISORY_LOCK_NAMESPACE
 }
 
 #[cfg(test)]
@@ -984,24 +975,18 @@ async fn match_point(
     lat: f64,
     lon: f64,
 ) -> anyhow::Result<MatchedLocation> {
-    let matched = match_geofence(pool, user_id, lat, lon).await?;
-
-    Ok(match matched {
-        Some(geofence) => MatchedLocation {
+    match match_geofence(pool, user_id, lat, lon).await? {
+        None => Ok(MatchedLocation {
+            geofence_id: None,
+            address_id: reverse_geocode_and_store(pool, lat, lon).await,
+            is_home: None,
+        }),
+        Some(geofence) => Ok(MatchedLocation {
             geofence_id: Some(geofence.id),
             address_id: geofence.address_id,
             is_home: Some(geofence.is_home),
-        },
-        None => {
-            // No named geofence — reverse-geocode so trips get road/city labels.
-            let address_id = reverse_geocode_and_store(pool, lat, lon).await;
-            MatchedLocation {
-                geofence_id: None,
-                address_id,
-                is_home: None,
-            }
-        }
-    })
+        }),
+    }
 }
 
 /// Call Nominatim reverse geocoding, store the result in `panda.addresses`,
@@ -1009,165 +994,9 @@ async fn match_point(
 /// callers can degrade gracefully.
 #[allow(dead_code)]
 async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<Uuid> {
+    let _ = (pool, lat, lon);
     crate::services::outbound_policy::require_optional_traffic().ok()?;
-    let slot = crate::services::nominatim::acquire_slot(
-        crate::services::nominatim::NominatimLane::BackgroundReverseGeocode,
-    )
-    .await;
-
-    // ── HTTP request ──────────────────────────────────────────────────────
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error=%e, "worker.reverse_geocode_client_build_failed");
-            return None;
-        }
-    };
-
-    let lat_s = lat.to_string();
-    let lon_s = lon.to_string();
-    let resp = match client
-        .get("https://nominatim.openstreetmap.org/reverse")
-        .header(
-            reqwest::header::USER_AGENT,
-            "panda-api/0.1 (contact: support@docs.panda.invalid)",
-        )
-        .query(&[
-            ("format", "jsonv2"),
-            ("addressdetails", "1"),
-            ("lat", lat_s.as_str()),
-            ("lon", lon_s.as_str()),
-        ])
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            crate::services::nominatim::report_outcome(None, None).await;
-            tracing::warn!(error=%e, lat=%lat, lon=%lon, "worker.reverse_geocode_request_failed");
-            return None;
-        }
-    };
-
-    let status = resp.status();
-    let retry_after = crate::services::nominatim::retry_after_from_headers(resp.headers());
-    crate::services::nominatim::report_outcome(Some(status.as_u16()), retry_after).await;
-
-    if !status.is_success() {
-        tracing::warn!(
-            status=%status,
-            lat=%lat,
-            lon=%lon,
-            lane=?slot.lane,
-            queued_ms=slot.queued_ms,
-            gate_wait_ms=slot.gate_wait_ms,
-            scheduled_interval_ms=slot.effective_interval_ms,
-            retry_after_s = retry_after.map(|duration| duration.as_secs()),
-            "worker.reverse_geocode_http_error"
-        );
-        return None;
-    }
-
-    let raw: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error=%e, "worker.reverse_geocode_decode_failed");
-            return None;
-        }
-    };
-
-    // ── parse ─────────────────────────────────────────────────────────────
-    let display_name = raw.get("display_name")?.as_str()?.to_string();
-    let osm_id = raw.get("osm_id").and_then(|v| v.as_i64());
-    let addr = raw.get("address").and_then(|v| v.as_object());
-
-    let road: Option<String> = addr
-        .and_then(|a| {
-            a.get("road")
-                .or_else(|| a.get("pedestrian"))
-                .or_else(|| a.get("footway"))
-        })
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let city: Option<String> = addr
-        .and_then(|a| {
-            a.get("city")
-                .or_else(|| a.get("town"))
-                .or_else(|| a.get("village"))
-        })
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let state: Option<String> = addr
-        .and_then(|a| a.get("state"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let postcode: Option<String> = addr
-        .and_then(|a| a.get("postcode"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let country: Option<String> = addr
-        .and_then(|a| a.get("country"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-
-    // ── persist ───────────────────────────────────────────────────────────
-    let result: Result<Uuid, sqlx::Error> = if let Some(oid) = osm_id {
-        sqlx::query_scalar(
-            r#"INSERT INTO panda.addresses
-               (display_name, osm_id, latitude, longitude, road, city, state, postcode, country, raw)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               ON CONFLICT (osm_id) DO UPDATE SET
-                 display_name = EXCLUDED.display_name,
-                 road = EXCLUDED.road,
-                 city = EXCLUDED.city,
-                 state = EXCLUDED.state,
-                 postcode = EXCLUDED.postcode,
-                 country = EXCLUDED.country,
-                 raw = EXCLUDED.raw
-               RETURNING id"#,
-        )
-        .bind(display_name)
-        .bind(oid)
-        .bind(lat)
-        .bind(lon)
-        .bind(road)
-        .bind(city)
-        .bind(state)
-        .bind(postcode)
-        .bind(country)
-        .bind(raw)
-        .fetch_one(pool)
-        .await
-    } else {
-        sqlx::query_scalar(
-            r#"INSERT INTO panda.addresses
-               (display_name, latitude, longitude, road, city, state, postcode, country, raw)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-               RETURNING id"#,
-        )
-        .bind(display_name)
-        .bind(lat)
-        .bind(lon)
-        .bind(road)
-        .bind(city)
-        .bind(state)
-        .bind(postcode)
-        .bind(country)
-        .bind(raw)
-        .fetch_one(pool)
-        .await
-    };
-
-    match result {
-        Ok(id) => Some(id),
-        Err(e) => {
-            tracing::warn!(error=%e, "worker.reverse_geocode_db_insert_failed");
-            None
-        }
-    }
+    None
 }
 
 /// Which lifecycle signals an inbound frame may drive.
@@ -1187,37 +1016,17 @@ async fn upsert_health(
     auth_state: Option<&str>,
     auth_reason_code: Option<&str>,
 ) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_runtime_state
-           (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-           SET is_online=$2,
-               worker_health=$3,
-               worker_health_msg=$4,
-               auth_state=CASE
-                   WHEN panda.vehicle_runtime_state.auth_state = 'needs_reauth'
-                        AND $5 = 'authorized'
-                     THEN panda.vehicle_runtime_state.auth_state
-                   ELSE COALESCE($5, panda.vehicle_runtime_state.auth_state)
-               END,
-               auth_reason_code=CASE
-                   WHEN panda.vehicle_runtime_state.auth_state = 'needs_reauth'
-                        AND $5 = 'authorized'
-                     THEN panda.vehicle_runtime_state.auth_reason_code
-                   WHEN $5 IS NULL AND $6 IS NULL THEN panda.vehicle_runtime_state.auth_reason_code
-                   ELSE $6
-               END,
-               updated_at=now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(online)
-    .bind(health)
-    .bind(msg)
-    .bind(auth_state)
-    .bind(auth_reason_code)
-    .execute(pool)
-    .await;
+    let _ = AcquisitionWrite::new("panda.vehicle_runtime_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("is_online", Stored::Flag(Some(online)), MergeWrite::Replace)
+        .field("worker_health", Stored::Text(Some(health)), MergeWrite::Replace)
+        .field("worker_health_msg", Stored::Text(Some(msg)), MergeWrite::Replace)
+        .field("auth_state", Stored::Text(auth_state), MergeWrite::Expression(
+            "CASE WHEN panda.vehicle_runtime_state.auth_state = 'needs_reauth' AND EXCLUDED.auth_state = 'authorized' THEN panda.vehicle_runtime_state.auth_state ELSE COALESCE(EXCLUDED.auth_state, panda.vehicle_runtime_state.auth_state) END"))
+        .field("auth_reason_code", Stored::Text(auth_reason_code), MergeWrite::Expression(
+            "CASE WHEN panda.vehicle_runtime_state.auth_state = 'needs_reauth' AND EXCLUDED.auth_state = 'authorized' THEN panda.vehicle_runtime_state.auth_reason_code WHEN EXCLUDED.auth_state IS NULL AND EXCLUDED.auth_reason_code IS NULL THEN panda.vehicle_runtime_state.auth_reason_code ELSE EXCLUDED.auth_reason_code END"))
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .upsert(pool, "(vehicle_id)", "").await;
 }
 
 async fn upsert_seen(
@@ -1228,50 +1037,42 @@ async fn upsert_seen(
     received_at: DateTime<Utc>,
     kind: SeenKind,
 ) {
-    let (payload_at, heartbeat_at, payload_received_at, heartbeat_received_at) = match kind {
-        SeenKind::Payload => (Some(ts), None, Some(received_at), None),
-        SeenKind::Heartbeat => (None, Some(ts), None, Some(received_at)),
+    let (source_column, receipt_column) = match kind {
+        SeenKind::Payload => ("last_payload_at", "last_ws_payload_received_at"),
+        SeenKind::Heartbeat => ("last_heartbeat_at", "last_ws_heartbeat_received_at"),
     };
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_runtime_state
-           (vehicle_id, is_online, last_event_at, last_seen_at, last_payload_at, last_heartbeat_at,
-            last_ws_received_at, last_ws_payload_received_at, last_ws_heartbeat_received_at, updated_at)
-           VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-           SET is_online=$2,
-               last_event_at=$3,
-               last_seen_at=$3,
-               last_payload_at=COALESCE($4, panda.vehicle_runtime_state.last_payload_at),
-               last_heartbeat_at=COALESCE($5, panda.vehicle_runtime_state.last_heartbeat_at),
-               last_ws_received_at=$6,
-               last_ws_payload_received_at=COALESCE($7, panda.vehicle_runtime_state.last_ws_payload_received_at),
-               last_ws_heartbeat_received_at=COALESCE($8, panda.vehicle_runtime_state.last_ws_heartbeat_received_at),
-               updated_at=now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(online)
-    .bind(ts)
-    .bind(payload_at)
-    .bind(heartbeat_at)
-    .bind(received_at)
-    .bind(payload_received_at)
-    .bind(heartbeat_received_at)
-    .execute(pool)
-    .await;
+    let _ = AcquisitionWrite::new("panda.vehicle_runtime_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("is_online", Stored::Flag(Some(online)), MergeWrite::Replace)
+        .field("last_event_at", Stored::Time(Some(ts)), MergeWrite::Replace)
+        .field("last_seen_at", Stored::Time(Some(ts)), MergeWrite::Replace)
+        .field(source_column, Stored::Time(Some(ts)), MergeWrite::Replace)
+        .field(
+            "last_ws_received_at",
+            Stored::Time(Some(received_at)),
+            MergeWrite::Replace,
+        )
+        .field(
+            receipt_column,
+            Stored::Time(Some(received_at)),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .upsert(pool, "(vehicle_id)", "")
+        .await;
 }
 
 async fn mark_persisted(pool: &PgPool, vehicle_id: Uuid, ts: DateTime<Utc>) {
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_runtime_state
-           (vehicle_id, last_persisted_at, updated_at)
-           VALUES ($1,$2,now())
-           ON CONFLICT (vehicle_id) DO UPDATE
-           SET last_persisted_at=$2, updated_at=now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(ts)
-    .execute(pool)
-    .await;
+    let _ = AcquisitionWrite::new("panda.vehicle_runtime_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field(
+            "last_persisted_at",
+            Stored::Time(Some(ts)),
+            MergeWrite::Replace,
+        )
+        .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+        .upsert(pool, "(vehicle_id)", "")
+        .await;
 }
 
 #[cfg(test)]
@@ -1533,62 +1334,68 @@ fn field_age(
 /// their source timestamps, charging-session fields, or connection events.
 /// Location values are reduced to a presence marker.
 fn legacy_capture_fields(inbound: &WsInboundEvent) -> Option<(CaptureKind, serde_json::Value)> {
-    let raw = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
-    match inbound.kind {
-        WsInboundKind::Heartbeat => None,
-        WsInboundKind::Control => Some((
-            CaptureKind::LegacyConnection,
-            serde_json::json!({
-                "message_type": inbound.message_type,
-                "detail": raw.filter(serde_json::Value::is_object),
-            }),
-        )),
-        WsInboundKind::Telemetry | WsInboundKind::ChargingSession => {
-            let data = raw.as_ref()?.pointer("/payload/data")?;
-            let mut fields = serde_json::Map::new();
-            if let Some(state) = data
-                .get("vehicleState")
-                .and_then(serde_json::Value::as_object)
-            {
-                for (key, value) in state {
-                    let Some(value) = value.as_object() else {
-                        continue;
-                    };
-                    let time_stamp = value.get("timeStamp").cloned();
-                    if key == "gnssLocation" {
-                        fields.insert(
-                            "gnssLocationPresent".into(),
-                            serde_json::json!({ "timeStamp": time_stamp }),
-                        );
-                    } else {
-                        fields.insert(
-                            key.clone(),
-                            serde_json::json!({ "value": value.get("value"), "timeStamp": time_stamp }),
-                        );
-                    }
-                }
-            }
-            let charging_session = data
-                .get("chargingSession")
-                .and_then(serde_json::Value::as_object)
-                .map(|session| {
-                    session
-                        .iter()
-                        .filter(|(_, value)| !value.is_null())
-                        .map(|(key, value)| (key.clone(), value.clone()))
-                        .collect::<serde_json::Map<_, _>>()
-                });
-            Some((
-                CaptureKind::LegacyFrame,
-                serde_json::json!({
-                    "frame": inbound.kind.as_str(),
-                    "message_type": inbound.message_type,
-                    "fields": fields,
-                    "charging_session": charging_session,
-                }),
-            ))
-        }
+    use serde_json::{json, Value};
+    #[derive(serde::Serialize)]
+    #[serde(untagged)]
+    enum Field<'a> {
+        Location {
+            #[serde(rename = "timeStamp")]
+            time: Option<&'a Value>,
+        },
+        Reading {
+            value: Option<&'a Value>,
+            #[serde(rename = "timeStamp")]
+            time: Option<&'a Value>,
+        },
     }
+    let raw = serde_json::from_str::<Value>(&inbound.raw).ok();
+    if inbound.kind == WsInboundKind::Heartbeat {
+        return None;
+    }
+    if inbound.kind == WsInboundKind::Control {
+        return Some((
+            CaptureKind::LegacyConnection,
+            json!({
+                "message_type":inbound.message_type, "detail":raw.as_ref().filter(|value| value.is_object()),
+            }),
+        ));
+    }
+    let data = raw.as_ref()?.pointer("/payload/data")?;
+    let fields: std::collections::BTreeMap<_, _> = data
+        .get("vehicleState")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|state| state.iter())
+        .filter_map(|(name, value)| {
+            let reading = value.as_object()?;
+            let time = reading.get("timeStamp");
+            Some(if name == "gnssLocation" {
+                ("gnssLocationPresent", Field::Location { time })
+            } else {
+                (
+                    name.as_str(),
+                    Field::Reading {
+                        time,
+                        value: reading.get("value"),
+                    },
+                )
+            })
+        })
+        .collect();
+    let session = data
+        .get("chargingSession")
+        .and_then(Value::as_object)
+        .map(|session| {
+            session
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .collect::<std::collections::BTreeMap<_, _>>()
+        });
+    Some((
+        CaptureKind::LegacyFrame,
+        json!({"frame":inbound.kind.as_str(), "message_type":inbound.message_type,
+        "fields":fields, "charging_session":session}),
+    ))
 }
 
 fn persistence_label(decision: &PersistenceDecision) -> &'static str {
@@ -1610,34 +1417,55 @@ fn ingestion_capture_fields(
     lifecycle: LifecycleUpdates,
     charge_active: bool,
 ) -> serde_json::Value {
-    let state_period = if lifecycle.state_period {
-        serde_json::to_value(infer_vehicle_state(event)).unwrap_or_default()
-    } else if is_parallax && charge_active && event.charger_state.is_none() {
-        "skipped_parallax_charge_guard".into()
-    } else {
-        "no_lifecycle_fields".into()
+    #[derive(serde::Serialize)]
+    struct Capture<'a> {
+        source: &'a str,
+        event_ts: String,
+        sample_age_ms: i64,
+        values: serde_json::Value,
+        persistence: &'static str,
+        state_period: serde_json::Value,
+        power_tx_sent: bool,
+        charging_tx_sent: bool,
+        charge_active: bool,
+        charge_lifecycle_eligible: bool,
+        charge_transition: &'static str,
+        actively_charging: bool,
+    }
+    let state_period = match (
+        lifecycle.state_period,
+        is_parallax && charge_active && event.charger_state.is_none(),
+    ) {
+        (true, _) => serde_json::to_value(infer_vehicle_state(event)).unwrap_or_default(),
+        (false, true) => "skipped_parallax_charge_guard".into(),
+        (false, false) => "no_lifecycle_fields".into(),
     };
-    serde_json::json!({
-        "source": match (is_parallax, message_type) {
-            (true, kind) => kind.unwrap_or("parallax"),
-            (false, Some("baseline")) => "baseline",
-            (false, _) => "legacy",
-        },
-        "event_ts": event.ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "sample_age_ms": (Utc::now() - event.ts).num_milliseconds(),
-        "values": ingestion_capture::present_fields(event),
-        "persistence": persistence_label(persistence),
-        "state_period": state_period,
-        "power_tx_sent": lifecycle.power_state,
-        "charging_tx_sent": lifecycle.charging,
-        "charge_active": charge_active,
-        "charge_lifecycle_eligible": !is_parallax,
-        "charge_transition": match charge_event {
+    let source = if is_parallax {
+        message_type.unwrap_or("parallax")
+    } else if message_type == Some("baseline") {
+        "baseline"
+    } else {
+        "legacy"
+    };
+    serde_json::json!(Capture {
+        source,
+        event_ts: event
+            .ts
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        sample_age_ms: (Utc::now() - event.ts).num_milliseconds(),
+        values: ingestion_capture::present_fields(event),
+        persistence: persistence_label(persistence),
+        state_period,
+        power_tx_sent: lifecycle.power_state,
+        charging_tx_sent: lifecycle.charging,
+        charge_active,
+        charge_lifecycle_eligible: !is_parallax,
+        charge_transition: match charge_event {
             ChargeEvent::SessionStarted => "started",
             ChargeEvent::SessionEnded(_) => "ended",
             ChargeEvent::NoChange => "no_change",
         },
-        "actively_charging": event.is_actively_charging(),
+        actively_charging: event.is_actively_charging(),
     })
 }
 
@@ -1651,29 +1479,39 @@ fn trip_diagnostics_fields(
     start_decision: &str,
     trip_event: &TripEvent,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "trip_active": trip_active,
-        "fused_power": trip_sample.power_state.is_some() && event.power_state.is_none(),
-        "derived_speed": trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
-        "effective_power": trip_sample.power_state,
-        "power_origin": fusion.power_origin,
-        "power_policy": fusion.power_policy,
-        "power_outcome": fusion.power_outcome,
-        "reported_power_outcome": fusion.reported_power_outcome,
-        "power_age_seconds": field_age(trip_sample, trip_sample.power_state.is_some(), trip_sample.power_state_ts),
-        "speed_mph": trip_sample.speed_mph,
-        "speed_origin": fusion.speed_origin,
-        "reported_speed_outcome": fusion.reported_speed_outcome,
-        "speed_age_seconds": field_age(trip_sample, trip_sample.speed_mph.is_some(), trip_sample.speed_mph_ts),
-        "gnss_outcome": fusion.gnss_outcome,
-        "gnss_interval_seconds": fusion.gnss_interval_seconds,
-        "gnss_distance_miles": fusion.gnss_distance_miles,
-        "moving_segments": fusion.moving_segments,
-        "odometer_outcome": fusion.odometer_outcome,
-        "odometer_interval_seconds": fusion.odometer_interval_seconds,
-        "odometer_delta_miles": fusion.odometer_delta_miles,
-        "start_decision": start_decision,
-        "trip_transition": trip_event.transition_name(),
+    #[derive(serde::Serialize)]
+    struct Capture<'a> {
+        trip_active: bool,
+        fused_power: bool,
+        derived_speed: bool,
+        effective_power: &'a Option<PowerState>,
+        power_age_seconds: Option<i64>,
+        speed_mph: Option<f64>,
+        speed_age_seconds: Option<i64>,
+        start_decision: &'a str,
+        trip_transition: &'static str,
+        #[serde(flatten)]
+        fusion: &'a FusionDiagnostics,
+    }
+    serde_json::json!(Capture {
+        trip_active,
+        fused_power: trip_sample.power_state.is_some() && event.power_state.is_none(),
+        derived_speed: trip_sample.speed_mph.is_some() && event.speed_mph.is_none(),
+        effective_power: &trip_sample.power_state,
+        power_age_seconds: field_age(
+            trip_sample,
+            trip_sample.power_state.is_some(),
+            trip_sample.power_state_ts
+        ),
+        speed_mph: trip_sample.speed_mph,
+        speed_age_seconds: field_age(
+            trip_sample,
+            trip_sample.speed_mph.is_some(),
+            trip_sample.speed_mph_ts
+        ),
+        start_decision,
+        trip_transition: trip_event.transition_name(),
+        fusion,
     })
 }
 
@@ -1801,5 +1639,42 @@ mod diagnostic_capture_tests {
         assert_eq!(fields["persistence"], "persisted");
         assert_eq!(fields["values"]["power_state"], "ready");
         assert!(fields["values"].get("latitude").is_none());
+    }
+}
+
+pub(super) use telemetry_values::socket_payload_present;
+
+use crate::ingestion::{
+    AcquisitionMerge as MergeWrite, AcquisitionValue as Stored, AcquisitionWrite,
+};
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+    #[test]
+    fn lock_identity_preserves_both_unsigned_uuid_halves() {
+        for (value, folded) in [
+            (0, 0),
+            (1, 1),
+            (1u128 << 64, 1),
+            (u128::MAX, 0),
+            (1u128 << 127, i64::MIN),
+        ] {
+            assert_eq!(
+                collector_lock_key(Uuid::from_u128(value)),
+                folded ^ ADVISORY_LOCK_NAMESPACE
+            );
+        }
+    }
+    #[tokio::test]
+    async fn optional_geocoding_cannot_acquire_database_or_network_resources() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://invalid/invalid")
+            .unwrap();
+        assert!(!crate::services::outbound_policy::optional_traffic_allowed());
+        assert_eq!(
+            reverse_geocode_and_store(&pool, f64::NAN, f64::INFINITY).await,
+            None
+        );
     }
 }

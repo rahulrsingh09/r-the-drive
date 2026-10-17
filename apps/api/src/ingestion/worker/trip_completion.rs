@@ -26,98 +26,115 @@ pub(super) async fn persist_trip(
     distance: f64,
 ) -> anyhow::Result<()> {
     let soc = TripSoc::resolve(pool, trip).await;
-    let TripProjection {
-        duration,
-        max_speed,
-        avg_speed,
-        energy_wh,
-        energy_strategy,
-        efficiency_wh_per_mi,
-        route_preview,
-    } = TripProjection::derive(trip, distance, soc)?;
-    let TripSoc {
-        start: soc_start,
-        end: soc_end,
-    } = soc;
+    let projection = TripProjection::derive(trip, distance, soc)?;
     let start = trip.points.first();
     let end = trip.points.last();
-    let start_match = MatchedLocation::none();
-    let end_match = MatchedLocation::none();
-
     let mut tx = pool.begin().await?;
     if distance >= MIN_TRIP_DISTANCE_MILES {
-        sqlx::query(
-        r#"INSERT INTO panda.trips
-           (id, vehicle_id, started_at, ended_at,
-            start_lat, start_lng, end_lat, end_lng,
-            distance_miles, duration_seconds,
-            soc_start, soc_end,
-            efficiency_wh_per_mile, max_speed_mph, avg_speed_mph, drive_mode,
-            start_odometer_mi, end_odometer_mi,
-            start_position_ts, end_position_ts,
-            start_geofence_id, end_geofence_id,
-            start_address_id, end_address_id,
-            range_start_mi, range_end_mi,
-            power_max_kw, power_min_kw,
-            elevation_gain_m, elevation_loss_m,
-            inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy,
-            route_preview, route_preview_version)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,1) ON CONFLICT(id) DO NOTHING"#,
-    )
-        .bind(trip.trip_id)
-        .bind(trip.vehicle_id)
-        .bind(trip.started_at)
-        .bind(trip.ended_at)
-        .bind(start.map(|p| p.lat))
-        .bind(start.map(|p| p.lng))
-        .bind(end.map(|p| p.lat))
-        .bind(end.map(|p| p.lng))
-        .bind(distance)
-        .bind(duration)
-        .bind(soc_start)
-        .bind(soc_end)
-        .bind(efficiency_wh_per_mi)
-        .bind(max_speed)
-        .bind(avg_speed)
-        .bind(trip.dominant_drive_mode.as_deref())
-        .bind(trip.start_odometer_mi)
-        .bind(trip.end_odometer_mi)
-        .bind(start.map(|p| p.ts))
-        .bind(end.map(|p| p.ts))
-        .bind(start_match.geofence_id)
-        .bind(end_match.geofence_id)
-        .bind(start_match.address_id)
-        .bind(end_match.address_id)
-        .bind(trip.range_start_mi)
-        .bind(trip.range_end_mi)
-        .bind(trip.power_max_kw)
-        .bind(trip.power_min_kw)
-        .bind(trip.elevation_gain_m)
-        .bind(trip.elevation_loss_m)
-        .bind(trip.inside_temp_avg_c)
-        .bind(Option::<f64>::None)
-        .bind(trip.regen_wh)
-        .bind(energy_wh)
-        .bind(energy_strategy.as_deref())
-        .bind(route_preview)
-        .execute(&mut *tx)
-        .await?;
-
+        let mut row = AcquisitionWrite::new("panda.trips")
+            .field("id", Stored::Id(trip.trip_id), MergeWrite::Keep)
+            .field("vehicle_id", Stored::Id(trip.vehicle_id), MergeWrite::Keep)
+            .field(
+                "started_at",
+                Stored::Time(Some(trip.started_at)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "ended_at",
+                Stored::Time(Some(trip.ended_at)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "duration_seconds",
+                Stored::Int(Some(projection.duration)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "drive_mode",
+                Stored::Text(trip.dominant_drive_mode.as_deref()),
+                MergeWrite::Keep,
+            )
+            .field(
+                "energy_strategy",
+                Stored::Text(projection.energy_strategy.as_deref()),
+                MergeWrite::Keep,
+            )
+            .field(
+                "start_position_ts",
+                Stored::Time(start.map(|point| point.ts)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "end_position_ts",
+                Stored::Time(end.map(|point| point.ts)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "route_preview",
+                Stored::Json(Some(&projection.route_preview)),
+                MergeWrite::Keep,
+            )
+            .field(
+                "route_preview_version",
+                Stored::Int(Some(1)),
+                MergeWrite::Keep,
+            );
+        for (column, value) in [
+            ("start_lat", start.map(|point| point.lat)),
+            ("start_lng", start.map(|point| point.lng)),
+            ("end_lat", end.map(|point| point.lat)),
+            ("end_lng", end.map(|point| point.lng)),
+            ("distance_miles", Some(distance)),
+            ("soc_start", soc.start),
+            ("soc_end", soc.end),
+            ("efficiency_wh_per_mile", projection.efficiency_wh_per_mi),
+            ("max_speed_mph", Some(projection.max_speed)),
+            ("avg_speed_mph", projection.avg_speed),
+            ("start_odometer_mi", trip.start_odometer_mi),
+            ("end_odometer_mi", trip.end_odometer_mi),
+            ("range_start_mi", trip.range_start_mi),
+            ("range_end_mi", trip.range_end_mi),
+            ("power_max_kw", trip.power_max_kw),
+            ("power_min_kw", trip.power_min_kw),
+            ("elevation_gain_m", trip.elevation_gain_m),
+            ("elevation_loss_m", trip.elevation_loss_m),
+            ("inside_temp_avg_c", trip.inside_temp_avg_c),
+            ("outside_temp_c", None),
+            ("regen_wh", trip.regen_wh),
+            ("energy_wh", projection.energy_wh),
+        ] {
+            row = row.field(column, Stored::Float(value), MergeWrite::Keep);
+        }
+        for column in [
+            "start_geofence_id",
+            "end_geofence_id",
+            "start_address_id",
+            "end_address_id",
+        ] {
+            row = row.field(column, Stored::Sql("NULL"), MergeWrite::Keep);
+        }
+        row.upsert(&mut *tx, "(id)", "").await?;
         let identity: (Uuid, DateTime<Utc>, Option<DateTime<Utc>>) =
             sqlx::query_as("SELECT vehicle_id,started_at,ended_at FROM panda.trips WHERE id=$1")
                 .bind(trip.trip_id)
                 .fetch_one(&mut *tx)
                 .await?;
         anyhow::ensure!(
-            identity.0 == trip.vehicle_id
-                && identity.1.timestamp_micros() == trip.started_at.timestamp_micros()
-                && identity.2.map(|at| at.timestamp_micros())
-                    == Some(trip.ended_at.timestamp_micros()),
+            (
+                identity.0,
+                identity.1.timestamp_micros(),
+                identity.2.map(|at| at.timestamp_micros())
+            ) == (
+                trip.vehicle_id,
+                trip.started_at.timestamp_micros(),
+                Some(trip.ended_at.timestamp_micros())
+            ),
             "trip identity collision; retaining completion for investigation"
         );
-        sqlx::query(
-            "INSERT INTO panda.weather_enrichment_jobs(trip_id) VALUES($1) ON CONFLICT(trip_id) DO NOTHING",
-        ).bind(trip.trip_id).execute(&mut *tx).await?;
+        AcquisitionWrite::new("panda.weather_enrichment_jobs")
+            .field("trip_id", Stored::Id(trip.trip_id), MergeWrite::Keep)
+            .upsert(&mut *tx, "(trip_id)", "")
+            .await?;
     }
     sqlx::query("DELETE FROM panda.pending_trip_completions WHERE trip_id=$1 AND vehicle_id=$2")
         .bind(trip.trip_id)
@@ -125,7 +142,6 @@ pub(super) async fn persist_trip(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-
     Ok(())
 }
 

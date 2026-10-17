@@ -1,5 +1,8 @@
 //! Durable detector snapshots and a transactional completion outbox.
 
+use crate::ingestion::{
+    AcquisitionMerge as MergeWrite, AcquisitionValue as Stored, AcquisitionWrite,
+};
 use anyhow::{ensure, Context};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -32,21 +35,24 @@ pub(super) struct TripCapture {
 
 impl TripCapture {
     pub(super) async fn load(pool: &PgPool, vehicle_id: Uuid) -> anyhow::Result<Self> {
-        let snapshot: Option<serde_json::Value> = sqlx::query_scalar(
+        let persisted: Option<serde_json::Value> = sqlx::query_scalar(
             "SELECT snapshot FROM panda.active_trip_checkpoints WHERE vehicle_id=$1",
         )
         .bind(vehicle_id)
         .fetch_optional(pool)
         .await?;
-        let mut checkpoint = match snapshot.clone() {
-            Some(value) => serde_json::from_value::<Checkpoint>(value)
-                .context("invalid trip checkpoint; refusing to overwrite recovery state")?,
-            None => Checkpoint {
+        let mut checkpoint = persisted
+            .as_ref()
+            .map(|value| {
+                Checkpoint::deserialize(value)
+                    .context("invalid trip checkpoint; refusing to overwrite recovery state")
+            })
+            .transpose()?
+            .unwrap_or_else(|| Checkpoint {
                 version: 1,
                 detector: TripDetectorState::new(vehicle_id),
                 last_event_at: None,
-            },
-        };
+            });
         ensure!(
             checkpoint.version == 1,
             "unsupported trip checkpoint version"
@@ -55,13 +61,14 @@ impl TripCapture {
             checkpoint.detector.vehicle_id() == vehicle_id,
             "trip checkpoint vehicle mismatch"
         );
+        let replay_cutoff = checkpoint.last_event_at;
         checkpoint.detector.resume_after_restart();
         Ok(Self {
-            replay_cutoff: checkpoint.last_event_at,
             checkpoint,
+            replay_cutoff,
             recovering: true,
             pending: Vec::new(),
-            persisted: snapshot,
+            persisted,
         })
     }
 
@@ -75,36 +82,42 @@ impl TripCapture {
 
     /// The caller must retry save before processing another event.
     pub(super) fn process(&mut self, event: &TelemetryEvent) -> TripEvent {
-        if self.is_replay(event.ts) {
-            return TripEvent::NoChange;
+        match self.replay_cutoff {
+            Some(cutoff) if event.ts <= cutoff => TripEvent::NoChange,
+            _ => {
+                self.recover_stale(event.ts);
+                self.recovering = false;
+                self.checkpoint.last_event_at = Some(
+                    self.checkpoint
+                        .last_event_at
+                        .into_iter()
+                        .chain(std::iter::once(event.ts))
+                        .max()
+                        .expect("incoming observation"),
+                );
+                let transition = self.checkpoint.detector.process(event);
+                self.pending.extend(match &transition {
+                    TripEvent::TripEnded { trip } => Some(trip.clone()),
+                    _ => None,
+                });
+                transition
+            }
         }
-        self.recover_stale(event.ts);
-        self.recovering = false;
-        let transition = self.checkpoint.detector.process(event);
-        if let TripEvent::TripEnded { trip } = &transition {
-            self.pending.push(trip.clone());
-        }
-        self.checkpoint.last_event_at = Some(
-            self.checkpoint
-                .last_event_at
-                .map_or(event.ts, |at| at.max(event.ts)),
-        );
-        transition
     }
 
     /// A stale fragment ends at its last observation, never at restart time.
     pub(super) fn recover_stale(&mut self, now: DateTime<Utc>) {
-        if self.recovering {
-            if let Some(last) = self.checkpoint.last_event_at {
-                if now - last > Duration::seconds(RECOVERY_GAP_SECONDS) {
-                    if let TripEvent::TripEnded { trip } =
-                        self.checkpoint.detector.close_interrupted_trip(last)
-                    {
-                        self.pending.push(trip);
-                    }
-                    self.recovering = false;
-                }
-            }
+        let expired_at = self.checkpoint.last_event_at.filter(|last| {
+            self.recovering && now - *last > Duration::seconds(RECOVERY_GAP_SECONDS)
+        });
+        if let Some(last) = expired_at {
+            self.recovering = false;
+            self.pending.extend(
+                match self.checkpoint.detector.close_interrupted_trip(last) {
+                    TripEvent::TripEnded { trip } => Some(trip),
+                    _ => None,
+                },
+            );
         }
     }
 
@@ -169,52 +182,60 @@ impl TripCapture {
         .bind(self.checkpoint.detector.vehicle_id())
         .fetch_optional(conn)
         .await?;
-        // The candidate also covers a COMMIT whose acknowledgement was lost.
-        ensure!(
-            stored == self.persisted || stored == Some(serde_json::to_value(&self.checkpoint)?),
-            "checkpoint advanced under another collector; refusing stale write"
-        );
-        Ok(())
+        if stored == self.persisted {
+            return Ok(());
+        }
+        match stored {
+            Some(value) if value == serde_json::to_value(&self.checkpoint)? => Ok(()),
+            _ => anyhow::bail!("checkpoint advanced under another collector; refusing stale write"),
+        }
     }
 }
 
 pub(super) async fn drain_one(pool: &PgPool, vehicle_id: Uuid) -> anyhow::Result<bool> {
     let pending: Option<(Uuid, serde_json::Value)> = sqlx::query_as(
-        "SELECT trip_id,trip FROM panda.pending_trip_completions \
-         WHERE vehicle_id=$1 ORDER BY created_at,trip_id LIMIT 1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await?;
-    let Some((trip_id, value)) = pending else {
-        return Ok(false);
-    };
-    let trip: CompletedTripData = serde_json::from_value(value)?;
-    ensure!(
-        trip.vehicle_id == vehicle_id && trip.trip_id == trip_id,
-        "completion identity mismatch"
-    );
-    let distance = compute_distance_odometer_or_gps(
-        trip.start_odometer_mi,
-        trip.end_odometer_mi,
-        &trip.points,
-    );
-    super::persist_trip(pool, &trip, distance).await?;
-    Ok(true)
+        "SELECT trip_id,trip FROM panda.pending_trip_completions WHERE vehicle_id=$1 ORDER BY created_at,trip_id LIMIT 1")
+        .bind(vehicle_id).fetch_optional(pool).await?;
+    let completion = pending
+        .map(|(id, value)| -> anyhow::Result<CompletedTripData> {
+            let trip: CompletedTripData = serde_json::from_value(value)?;
+            ensure!(
+                trip.vehicle_id == vehicle_id && trip.trip_id == id,
+                "completion identity mismatch"
+            );
+            Ok(trip)
+        })
+        .transpose()?;
+    match completion {
+        None => Ok(false),
+        Some(trip) => {
+            let distance = compute_distance_odometer_or_gps(
+                trip.start_odometer_mi,
+                trip.end_odometer_mi,
+                &trip.points,
+            );
+            super::persist_trip(pool, &trip, distance).await?;
+            Ok(true)
+        }
+    }
 }
 
 pub(super) async fn record_health(pool: &PgPool, vehicle_id: Uuid, error: Option<&str>) {
-    if let Err(error) = sqlx::query(
-        "INSERT INTO panda.vehicle_runtime_state \
-         (vehicle_id,collector_heartbeat_at,trip_persistence_error) VALUES($1,now(),$2) \
-         ON CONFLICT(vehicle_id) DO UPDATE \
-         SET collector_heartbeat_at=now(),trip_persistence_error=$2",
-    )
-    .bind(vehicle_id)
-    .bind(error)
-    .execute(pool)
-    .await
-    {
+    let result = AcquisitionWrite::new("panda.vehicle_runtime_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field(
+            "collector_heartbeat_at",
+            Stored::Sql("now()"),
+            MergeWrite::Replace,
+        )
+        .field(
+            "trip_persistence_error",
+            Stored::Text(error),
+            MergeWrite::Replace,
+        )
+        .upsert(pool, "(vehicle_id)", "")
+        .await;
+    if let Err(error) = result {
         tracing::warn!(%vehicle_id, %error, "trip capture health update failed");
     }
 }

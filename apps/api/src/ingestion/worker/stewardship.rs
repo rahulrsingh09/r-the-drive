@@ -8,33 +8,45 @@ pub(super) async fn flush_legacy_charging_diagnostics(
     last_frame_at: Option<DateTime<Utc>>,
     last_meaningful_at: Option<DateTime<Utc>>,
 ) {
-    if counts.iter().all(|count| *count == 0) {
+    if *counts == [0; 5] {
         return;
     }
-    let result = sqlx::query(
-        r#"INSERT INTO panda.parallax_collector_state (
-               vehicle_id,status,schema_version,legacy_last_frame_at,
-               legacy_last_meaningful_frame_at,legacy_last_classification,
-               legacy_null_count,legacy_missing_count,legacy_malformed_count,
-               legacy_all_null_count,legacy_meaningful_count)
-           VALUES ($1,'starting',1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT(vehicle_id) DO UPDATE SET
-               legacy_last_frame_at=GREATEST(panda.parallax_collector_state.legacy_last_frame_at,EXCLUDED.legacy_last_frame_at),
-               legacy_last_meaningful_frame_at=GREATEST(panda.parallax_collector_state.legacy_last_meaningful_frame_at,EXCLUDED.legacy_last_meaningful_frame_at),
-               legacy_last_classification=EXCLUDED.legacy_last_classification,
-               legacy_null_count=panda.parallax_collector_state.legacy_null_count+EXCLUDED.legacy_null_count,
-               legacy_missing_count=panda.parallax_collector_state.legacy_missing_count+EXCLUDED.legacy_missing_count,
-               legacy_malformed_count=panda.parallax_collector_state.legacy_malformed_count+EXCLUDED.legacy_malformed_count,
-               legacy_all_null_count=panda.parallax_collector_state.legacy_all_null_count+EXCLUDED.legacy_all_null_count,
-               legacy_meaningful_count=panda.parallax_collector_state.legacy_meaningful_count+EXCLUDED.legacy_meaningful_count"#,
-    ).bind(vehicle_id).bind(last_frame_at).bind(last_meaningful_at)
-     .bind(last_class.map(LegacyChargingSessionClass::as_str))
-     .bind(counts[0]).bind(counts[1]).bind(counts[2]).bind(counts[3]).bind(counts[4])
-     .execute(pool).await;
-    if let Err(error) = result {
-        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "legacy charging diagnostics flush failed");
-    } else {
-        *counts = [0; 5];
+    let mut row = AcquisitionWrite::new("panda.parallax_collector_state")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field("status", Stored::Text(Some("starting")), MergeWrite::Keep)
+        .field("schema_version", Stored::Int(Some(1)), MergeWrite::Keep)
+        .field(
+            "legacy_last_frame_at",
+            Stored::Time(last_frame_at),
+            MergeWrite::Greatest,
+        )
+        .field(
+            "legacy_last_meaningful_frame_at",
+            Stored::Time(last_meaningful_at),
+            MergeWrite::Greatest,
+        )
+        .field(
+            "legacy_last_classification",
+            Stored::Text(last_class.map(LegacyChargingSessionClass::as_str)),
+            MergeWrite::Replace,
+        );
+    for (column, count) in [
+        "legacy_null_count",
+        "legacy_missing_count",
+        "legacy_malformed_count",
+        "legacy_all_null_count",
+        "legacy_meaningful_count",
+    ]
+    .into_iter()
+    .zip(*counts)
+    {
+        row = row.field(column, Stored::Count(count), MergeWrite::Sum);
+    }
+    match row.upsert(pool, "(vehicle_id)", "").await {
+        Ok(_) => counts.fill(0),
+        Err(error) => {
+            tracing::debug!(%vehicle_id, err=%error, "legacy charging diagnostics flush failed")
+        }
     }
 }
 
@@ -165,24 +177,35 @@ pub(super) async fn persist_raw_event(
     vehicle_id: Uuid,
     inbound: &WsInboundEvent,
 ) {
-    let payload_json = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
-    let result = sqlx::query(
-        r#"
-        INSERT INTO panda.rivian_ws_raw_events
-          (vehicle_id, received_at, event_type, message_type, payload_json, payload_text)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(inbound.received_at)
-    .bind(inbound.kind.as_str())
-    .bind(inbound.message_type.as_deref())
-    .bind(payload_json)
-    .bind(&inbound.raw)
-    .execute(pool)
-    .await;
-
-    if result.is_ok() {
+    let parsed = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
+    let write = AcquisitionWrite::new("panda.rivian_ws_raw_events")
+        .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+        .field(
+            "received_at",
+            Stored::Time(Some(inbound.received_at)),
+            MergeWrite::Keep,
+        )
+        .field(
+            "event_type",
+            Stored::Text(Some(inbound.kind.as_str())),
+            MergeWrite::Keep,
+        )
+        .field(
+            "message_type",
+            Stored::Text(inbound.message_type.as_deref()),
+            MergeWrite::Keep,
+        )
+        .field(
+            "payload_json",
+            Stored::Json(parsed.as_ref()),
+            MergeWrite::Keep,
+        )
+        .field(
+            "payload_text",
+            Stored::Text(Some(&inbound.raw)),
+            MergeWrite::Keep,
+        );
+    if write.insert(pool).await.is_ok() {
         batch.increment("raw_events_persisted");
     }
 }
@@ -223,40 +246,36 @@ async fn purge_raw_window(pool: &PgPool, days: i32) -> Result<(), sqlx::Error> {
 }
 
 pub(super) async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {
-    let Some(column) = stewardship_counter_column(column) else {
-        return;
-    };
-    let sql = format!(
-        "INSERT INTO panda.rivian_stewardship_counters (vehicle_id, day, {column}) \
-         VALUES ($1, CURRENT_DATE, 1) \
-         ON CONFLICT (vehicle_id, day) DO UPDATE \
-         SET {column} = panda.rivian_stewardship_counters.{column} + 1, updated_at = now()"
-    );
-    let _ = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vehicle_id)
-        .execute(pool)
-        .await;
+    if let Some(column) = stewardship_counter_column(column) {
+        let _ = AcquisitionWrite::new("panda.rivian_stewardship_counters")
+            .field("vehicle_id", Stored::Id(vehicle_id), MergeWrite::Keep)
+            .field("day", Stored::Sql("CURRENT_DATE"), MergeWrite::Keep)
+            .field(column, Stored::Count(1), MergeWrite::Sum)
+            .field("updated_at", Stored::Sql("now()"), MergeWrite::Replace)
+            .upsert(pool, "(vehicle_id, day)", "")
+            .await;
+    }
 }
 
 pub(super) fn stewardship_counter_column(column: &str) -> Option<&'static str> {
-    match column {
-        "ws_messages_received" => Some("ws_messages_received"),
-        "ws_heartbeats_received" => Some("ws_heartbeats_received"),
-        "ws_payload_messages_received" => Some("ws_payload_messages_received"),
-        "ws_control_messages_received" => Some("ws_control_messages_received"),
-        "ws_connections_opened" => Some("ws_connections_opened"),
-        "ws_reconnects" => Some("ws_reconnects"),
-        "outbound_messages_sent" => Some("outbound_messages_sent"),
-        "outbound_graphql_requests" => Some("outbound_graphql_requests"),
-        "telemetry_writes_persisted" => Some("telemetry_writes_persisted"),
-        "telemetry_writes_suppressed" => Some("telemetry_writes_suppressed"),
-        "telemetry_suppressed_duplicate" => Some("telemetry_suppressed_duplicate"),
-        "telemetry_suppressed_empty" => Some("telemetry_suppressed_empty"),
-        "telemetry_suppressed_threshold" => Some("telemetry_suppressed_threshold"),
-        "collector_lock_skips" => Some("collector_lock_skips"),
-        "raw_events_persisted" => Some("raw_events_persisted"),
-        _ => None,
-    }
+    const COLUMNS: &[&str] = &[
+        "ws_messages_received",
+        "ws_heartbeats_received",
+        "ws_payload_messages_received",
+        "ws_control_messages_received",
+        "ws_connections_opened",
+        "ws_reconnects",
+        "outbound_messages_sent",
+        "outbound_graphql_requests",
+        "telemetry_writes_persisted",
+        "telemetry_writes_suppressed",
+        "telemetry_suppressed_duplicate",
+        "telemetry_suppressed_empty",
+        "telemetry_suppressed_threshold",
+        "collector_lock_skips",
+        "raw_events_persisted",
+    ];
+    COLUMNS.iter().copied().find(|allowed| *allowed == column)
 }
 
 struct AccountingPlan {

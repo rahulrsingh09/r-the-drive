@@ -75,74 +75,69 @@ pub(super) struct RuntimeHealthUpdate {
 pub(super) fn runtime_health_update_for_ws_control(
     inbound: &WsInboundEvent,
 ) -> Option<RuntimeHealthUpdate> {
-    match inbound.message_type.as_deref() {
-        Some("connection_open") => Some(RuntimeHealthUpdate {
-            online: true,
-            worker_health: "starting",
-            worker_health_msg: "Rivian telemetry socket opened; waiting for authentication".into(),
-            auth_state: "authorized",
-            auth_reason_code: None,
-        }),
-        Some("connection_ack") => Some(RuntimeHealthUpdate {
-            online: true,
-            worker_health: "connected",
-            worker_health_msg: String::new(),
-            auth_state: "authorized",
-            auth_reason_code: None,
-        }),
-        Some("reconnect") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: "Rivian telemetry connection interrupted; reconnecting".into(),
-            auth_state: "authorized",
-            auth_reason_code: None,
-        }),
-        Some("ws_handshake_rejected") => {
-            let auth_rejected = ws_handshake_auth_rejected(&inbound.raw);
-            Some(RuntimeHealthUpdate {
-                online: false,
-                worker_health: "error",
-                worker_health_msg: read_ws_detail_message(&inbound.raw)
-                    .unwrap_or_else(|| "Rivian WS handshake rejected".into()),
-                auth_state: if auth_rejected {
-                    "needs_reauth"
-                } else {
-                    "authorized"
-                },
-                auth_reason_code: Some(if auth_rejected {
-                    "rivian_ws_auth_rejected"
-                } else {
-                    "rivian_ws_handshake_rejected"
-                }),
-            })
-        }
-        Some("ws_schema_rejected") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: read_ws_detail_message(&inbound.raw)
-                .unwrap_or_else(|| "Rivian WS VehicleState schema rejected".into()),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_schema_rejected"),
-        }),
-        Some("ws_schema_degraded") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: "Rivian WS subscription degraded to recover from schema drift"
-                .into(),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_schema_rejected"),
-        }),
-        Some("ws_no_active_subscriptions") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: read_ws_detail_message(&inbound.raw).unwrap_or_else(|| {
-                "Rivian WS reported no active subscriptions; reconnecting".into()
-            }),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_no_active_subscriptions"),
-        }),
-        _ => None,
-    }
+    let kind = inbound.message_type.as_deref()?;
+    let (online, health, fallback, reason, use_detail) = match kind {
+        "connection_open" => (
+            true,
+            "starting",
+            "Rivian telemetry socket opened; waiting for authentication",
+            None,
+            false,
+        ),
+        "connection_ack" => (true, "connected", "", None, false),
+        "reconnect" => (
+            false,
+            "degraded",
+            "Rivian telemetry connection interrupted; reconnecting",
+            None,
+            false,
+        ),
+        "ws_handshake_rejected" => (
+            false,
+            "error",
+            "Rivian WS handshake rejected",
+            Some("rivian_ws_handshake_rejected"),
+            true,
+        ),
+        "ws_schema_rejected" => (
+            false,
+            "degraded",
+            "Rivian WS VehicleState schema rejected",
+            Some("rivian_ws_schema_rejected"),
+            true,
+        ),
+        "ws_schema_degraded" => (
+            false,
+            "degraded",
+            "Rivian WS subscription degraded to recover from schema drift",
+            Some("rivian_ws_schema_rejected"),
+            false,
+        ),
+        "ws_no_active_subscriptions" => (
+            false,
+            "degraded",
+            "Rivian WS reported no active subscriptions; reconnecting",
+            Some("rivian_ws_no_active_subscriptions"),
+            true,
+        ),
+        _ => return None,
+    };
+    let denied = kind == "ws_handshake_rejected" && ws_handshake_auth_rejected(&inbound.raw);
+    let message = use_detail
+        .then(|| read_ws_detail_message(&inbound.raw))
+        .flatten()
+        .unwrap_or_else(|| fallback.to_owned());
+    Some(RuntimeHealthUpdate {
+        online,
+        worker_health: health,
+        worker_health_msg: message,
+        auth_state: if denied { "needs_reauth" } else { "authorized" },
+        auth_reason_code: if denied {
+            Some("rivian_ws_auth_rejected")
+        } else {
+            reason
+        },
+    })
 }
 
 fn read_ws_detail_message(raw: &str) -> Option<String> {
