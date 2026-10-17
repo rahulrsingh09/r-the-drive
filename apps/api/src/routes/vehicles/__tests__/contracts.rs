@@ -522,3 +522,77 @@ async fn workflow_contract_schedules() {
     f.cleanup().await;
     e.finish("schedules", include_str!("schedules.json"));
 }
+
+#[tokio::test]
+#[ignore = "requires unique disposable restricted-role DB and Redis"]
+async fn full_status_response_characterization() {
+    let f = Fixture::new().await;
+    f.seed().await;
+    let mut responses = Vec::new();
+    let path = format!("/v1/vehicles/{}/status", id(101));
+    let empty = f.request(Some(1), "GET", &path, Value::Null).await;
+    assert_eq!(empty["status"], 200);
+    assert_eq!(empty["body"]["battery_level"], Value::Null);
+    assert_eq!(empty["body"]["open_closures"], Value::Null);
+    assert_eq!(empty["body"]["is_online"], false);
+    assert_eq!(empty["body"]["telemetry_stale"], false);
+    let expected_keys = &["alarm_active", "altitude_m", "auth_reason_code", "auth_state", "battery_capacity_kwh", "battery_level", "battery_level_ts", "battery_limit", "battery_limit_ts", "brake_fluid_low", "cabin_precon_status", "cabin_precon_type", "cabin_temp_c", "charge_port_open", "charger_derate_active", "charger_state", "charger_state_ts", "charger_status", "charger_status_ts", "closure_frunk_closed", "closure_frunk_locked", "closure_liftgate_closed", "closure_liftgate_locked", "closure_tailgate_closed", "closure_tailgate_locked", "credential_issued_at", "defrost_active", "door_front_left_closed", "door_front_left_locked", "door_front_right_closed", "door_front_right_locked", "door_rear_left_closed", "door_rear_left_locked", "door_rear_right_closed", "door_rear_right_locked", "doors_locked", "drive_mode", "driver_temp_c", "expected_renewal_at", "field_availability", "gear_guard_locked", "gear_guard_video_status", "gear_status", "heading_deg", "hv_thermal_event", "is_online", "last_charge_history_success_at", "last_charge_history_sync_at", "last_event_at", "last_heartbeat_at", "last_payload_at", "last_updated", "last_ws_heartbeat_received_at", "last_ws_payload_received_at", "last_ws_received_at", "latitude", "location_ts", "longitude", "odometer_miles", "odometer_miles_ts", "open_closures", "ota_available_version", "ota_current_status", "ota_current_version", "ota_status", "outside_temp_c", "pet_mode_active", "pet_mode_temp_ok", "power_state", "power_state_ts", "range_miles", "range_miles_ts", "renewal_state", "seat_fl_heat", "seat_fl_vent", "seat_fr_heat", "seat_fr_vent", "seat_rl_heat", "seat_rr_heat", "service_mode", "side_bin_left_closed", "side_bin_left_locked", "side_bin_right_closed", "side_bin_right_locked", "software_update_status", "speed_mph", "speed_mph_ts", "steering_wheel_heat", "telemetry_stale", "telemetry_stale_reason", "time_to_end_of_charge_min", "time_to_end_of_charge_min_ts", "tire_fl_psi", "tire_fl_status", "tire_fl_valid", "tire_fr_psi", "tire_fr_status", "tire_fr_valid", "tire_min_psi", "tire_pressure_status", "tire_rl_psi", "tire_rl_status", "tire_rl_valid", "tire_rr_psi", "tire_rr_status", "tire_rr_valid", "tonneau_closed", "tonneau_locked", "twelve_volt_health", "vehicle_id", "window_fl_closed", "window_fr_closed", "window_rl_closed", "window_rr_closed", "wiper_fluid_low", "worker_health", "worker_health_msg"];
+    let actual_keys: Vec<_> = empty["body"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(actual_keys, expected_keys);
+    responses.push(empty);
+    let mut telemetry: Value = serde_json::from_str(r#"{"ts": "2026-01-03T04:05:06Z", "latitude": 1.25, "longitude": 2.25, "altitude_m": 3.25, "speed_mph": 4.25, "location_ts": "2026-01-03T04:05:06Z", "speed_mph_ts": "2026-01-03T04:05:06Z", "battery_level": 75.0, "battery_capacity_wh": 135000.0, "distance_to_empty_mi": 200.0, "battery_limit": 10.25, "battery_level_ts": "2026-01-03T04:05:06Z", "distance_to_empty_mi_ts": "2026-01-03T04:05:06Z", "battery_limit_ts": "2026-01-03T04:05:06Z", "power_state": "fixture-power_state", "power_state_ts": "2026-01-03T04:05:06Z", "charger_state": "fixture-charger_state", "charger_state_ts": "2026-01-03T04:05:06Z", "charger_status": "fixture-charger_status", "charger_status_ts": "2026-01-03T04:05:06Z", "time_to_end_of_charge_min": 20, "time_to_end_of_charge_min_ts": "2026-01-03T04:05:06Z", "drive_mode": "fixture-drive_mode", "gear_status": "fixture-gear_status", "cabin_temp_c": 24.25, "driver_temp_c": 25.25, "outside_temp_c": 26.25, "heading_deg": 27.25, "odometer_miles": 28.25, "odometer_miles_ts": "2026-01-03T04:05:06Z", "tire_fl_psi": 30.25, "tire_fr_psi": 31.25, "tire_rl_psi": 32.25, "tire_rr_psi": 33.25, "tire_fl_status": "ok", "tire_fr_status": "low", "tire_rl_status": "unknown", "tire_rr_status": "ok", "tire_fl_valid": true, "tire_fr_valid": true, "tire_rl_valid": true, "tire_rr_valid": true, "door_front_left_locked": true, "door_front_right_locked": true, "door_rear_left_locked": true, "door_rear_right_locked": true, "door_front_left_closed": true, "door_front_right_closed": false, "door_rear_left_closed": true, "door_rear_right_closed": false, "closure_frunk_locked": true, "closure_frunk_closed": false, "closure_liftgate_locked": true, "closure_liftgate_closed": false, "closure_tailgate_locked": true, "closure_tailgate_closed": false, "ota_current_version": "fixture-ota_current_version", "ota_available_version": "fixture-ota_available_version", "ota_status": "fixture-ota_status", "ota_current_status": "fixture-ota_current_status", "hv_thermal_event": "fixture-hv_thermal_event", "twelve_volt_health": "fixture-twelve_volt_health", "charge_port_open": true, "charger_derate_active": false, "cabin_precon_status": "fixture-cabin_precon_status", "cabin_precon_type": "fixture-cabin_precon_type", "pet_mode_active": true, "pet_mode_temp_ok": false, "defrost_active": true, "steering_wheel_heat": 69, "seat_fl_heat": 70, "seat_fr_heat": 71, "seat_rl_heat": 72, "seat_rr_heat": 73, "seat_fl_vent": 74, "seat_fr_vent": 75, "tonneau_locked": true, "tonneau_closed": false, "side_bin_left_locked": true, "side_bin_right_locked": false, "side_bin_left_closed": true, "side_bin_right_closed": false, "window_fl_closed": true, "window_fr_closed": false, "window_rl_closed": true, "window_rr_closed": false, "gear_guard_locked": true, "gear_guard_video_status": "fixture-gear_guard_video_status", "wiper_fluid_low": true, "brake_fluid_low": false, "alarm_active": true, "service_mode": false}"#).unwrap();
+    telemetry["vehicle_id"] = json!(id(101));
+    telemetry["updated_at"] = json!("2026-01-03T04:05:06Z");
+    sqlx::query("INSERT INTO panda.vehicle_latest_status SELECT (jsonb_populate_record(NULL::panda.vehicle_latest_status,$1)).*")
+        .bind(&telemetry).execute(&f.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO timeseries.telemetry(vehicle_id,ts,tire_fl_psi,tire_fr_status,tire_rl_valid,door_front_left_closed,hv_thermal_event) VALUES($1,'2026-01-02Z',42,'low',true,false,'none')")
+        .bind(id(101)).execute(&f.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO panda.vehicle_runtime_state(vehicle_id,is_online,last_event_at,last_payload_at,last_heartbeat_at,last_ws_received_at,last_ws_payload_received_at,last_ws_heartbeat_received_at,last_charge_history_sync_at,last_charge_history_success_at,worker_health,worker_health_msg,auth_state,auth_reason_code) VALUES($1,true,'2026-01-04Z','2026-01-05Z','2026-01-06Z','2026-01-07Z','2026-01-08Z','2026-01-09Z','2026-01-10Z','2026-01-11Z','connected','fixture health','authorized','fixture reason')")
+        .bind(id(101)).execute(&f.state.pool).await.unwrap();
+    let dense = f.request(Some(1), "GET", &path, Value::Null).await;
+    assert_eq!(dense["status"], 200);
+    assert_eq!(dense["body"]["battery_capacity_kwh"], 135.0);
+    assert_eq!(dense["body"]["doors_locked"], true);
+    assert_eq!(dense["body"]["tire_pressure_status"], "low");
+    assert_eq!(dense["body"]["last_updated"], "2026-01-03T04:05:06Z");
+    assert_eq!(dense["body"]["last_event_at"], "2026-01-04T00:00:00Z");
+    assert_eq!(dense["body"]["telemetry_stale_reason"], "ws_silent");
+    assert_eq!(dense["body"]["field_availability"]["tire_fl_psi"]["availability"], "historical");
+    assert_eq!(dense["body"]["field_availability"]["tire_fr_psi"]["availability"], "never_seen");
+    responses.push(dense);
+    sqlx::query("UPDATE panda.vehicle_latest_status SET tire_fl_valid=false,door_front_left_locked=NULL,battery_capacity_wh=1000,battery_level_ts=NULL,distance_to_empty_mi_ts=NULL,power_state_ts=NULL WHERE vehicle_id=$1")
+        .bind(id(101)).execute(&f.state.pool).await.unwrap();
+    sqlx::query("UPDATE panda.vehicle_runtime_state SET last_ws_received_at=NULL WHERE vehicle_id=$1")
+        .bind(id(101)).execute(&f.state.pool).await.unwrap();
+    let sparse = f.request(Some(1), "GET", &path, Value::Null).await;
+    assert_eq!(sparse["body"]["battery_capacity_kwh"], 1000.0);
+    assert_eq!(sparse["body"]["doors_locked"], Value::Null);
+    assert_eq!(sparse["body"]["battery_level_ts"], "2026-01-03T04:05:06Z");
+    assert_eq!(sparse["body"]["tire_pressure_status"], "invalid_sensor");
+    assert_eq!(sparse["body"]["telemetry_stale_reason"], "battery_stale");
+    assert_eq!(sparse["body"]["field_availability"]["tire_fl_psi"]["reason_code"], "invalid_sensor");
+    responses.push(sparse);
+    for user in [None, Some(2), Some(3), Some(4), Some(5)] {
+        let response = f.request(user, "GET", &path, Value::Null).await;
+        assert_eq!(response["status"], if user.is_none() {401} else if matches!(user,Some(2)|Some(3)) {200} else {403});
+        responses.push(response);
+    }
+    // Query failures must fail the response instead of silently dropping status fields.
+    sqlx::query("ALTER TABLE panda.vehicle_latest_status RENAME TO vehicle_latest_status_fault")
+        .execute(&f.state.pool).await.unwrap();
+    let failed = f.request(Some(1), "GET", &path, Value::Null).await;
+    assert_eq!(failed["status"], 500);
+    responses.push(failed);
+    sqlx::query("ALTER TABLE panda.vehicle_latest_status_fault RENAME TO vehicle_latest_status")
+        .execute(&f.state.pool).await.unwrap();
+    assert_eq!(f.request(Some(1), "GET", &path, Value::Null).await["status"], 200);
+    let evidence = json!(responses);
+    if let Ok(path) = std::env::var("STATUS_CHARACTERIZATION_CAPTURE") {
+        std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    }
+    if let Ok(path) = std::env::var("STATUS_CHARACTERIZATION_COMPARE") {
+        let original: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(evidence, original, "all status response fields, headers, and failure bodies");
+    }
+    f.cleanup().await;
+}
