@@ -38,10 +38,9 @@ actions. The admin dashboard list opens a saved dashboard by its ID and exposes
 no edit or lock action. `/d/dashboard` still redirects to Overview unless an exact
 dashboard ID is supplied, including when legacy edit search input is present.
 
-The old edit session, draft hook, and save dispatcher have been removed.
-`useDashboardEditButtonPreference` is an inert compatibility export for a separately
-owned settings caller during integration: it always returns false and performs no
-storage reads, writes, or subscriptions.
+The old edit session, draft hook, save dispatcher, and dashboard edit-preference
+hook have been removed. Stored legacy edit preferences do not enable controls
+or trigger storage writes.
 
 The phantom-drain table has a reducer for search, page size, page navigation, and
 source changes. Its summary accumulator maintains independent duration weights for

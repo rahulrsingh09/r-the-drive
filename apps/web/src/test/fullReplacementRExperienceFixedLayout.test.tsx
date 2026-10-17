@@ -69,27 +69,29 @@ it('offers export without clone, import, file input or layout-library navigation
   expect(fixture.download).toHaveBeenCalledTimes(1);
 });
 
-it('excludes restructuring from the settings directory, search and section picker', () => {
+it('keeps read-only saved layouts reachable through the settings directory and picker', () => {
   const select = vi.fn();
   const view = render(<RSettingsNavigation sections={sections} active="directory" onSelect={select} />);
-  expect(screen.queryByRole('button', { name: /dashboards/ })).toBeNull();
+  expect(screen.getByRole('button', { name: /dashboards/ })).toHaveTextContent('Open and export your saved layouts');
   fireEvent.click(screen.getByRole('button', { name: /charts/ }));
   expect(select).toHaveBeenLastCalledWith('charts');
   fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'dashboards' } });
-  expect(screen.getByRole('status')).toHaveTextContent('No settings match');
+  fireEvent.click(screen.getByRole('button', { name: /dashboards/ }));
+  expect(select).toHaveBeenLastCalledWith('dashboards');
+  expect(screen.queryByRole('button', { name: /charts/ })).toBeNull();
   view.rerender(<RSettingsNavigation sections={sections} active="charts" onSelect={select} />);
-  expect(screen.queryByRole('option', { name: 'dashboards' })).toBeNull();
+  expect(screen.getByRole('option', { name: 'dashboards' })).toBeInTheDocument();
   expect(screen.getByRole('option', { name: 'jobs' })).toBeInTheDocument();
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'units' } });
   expect(select).toHaveBeenLastCalledWith('units');
-  expect(settingsDirectory(sections, '').matches).toBe(4);
+  expect(settingsDirectory(sections, '').matches).toBe(5);
 });
 
-it('renders the settings directory for a stale dashboards selection without selecting it', () => {
+it('renders the section picker for read-only saved dashboards without navigating automatically', () => {
   const select = vi.fn();
   render(<RSettingsNavigation sections={sections} active="dashboards" onSelect={select} />);
-  expect(screen.getByRole('searchbox')).toBeInTheDocument();
-  expect(screen.queryByRole('combobox')).toBeNull();
+  expect(screen.queryByRole('searchbox')).toBeNull();
+  expect(screen.getByRole('combobox')).toHaveValue('dashboards');
   expect(select).not.toHaveBeenCalled();
 });
 

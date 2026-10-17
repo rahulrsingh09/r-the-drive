@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowLeft, ArrowRight, Search } from 'lucide-react';
 import { SelectPicker } from '@panda/ui/primitives';
-import { availableSettings, descriptions, settingsDirectory, settingsLabel } from './settingsModel';
+import { descriptions, settingsDirectory, settingsLabel } from './settingsModel';
 import './r-settings.css';
 
 
@@ -11,7 +11,7 @@ export function RSettingsNavigation<T extends string>({ sections, active, onSele
   onSelect: (section: T | 'directory') => void;
 }) {
   const [search, setSearch] = React.useState('');
-  const available = availableSettings(sections);
+  const available = sections;
   const selectSection = (id: string) => {
     if (id === 'directory') onSelect('directory');
     else {
@@ -19,7 +19,7 @@ export function RSettingsNavigation<T extends string>({ sections, active, onSele
       if (selected) onSelect(selected.id);
     }
   };
-  if (active !== 'directory' && active !== 'dashboards') return (
+  if (active !== 'directory') return (
     <nav className="r-settings-navigation" aria-label="Settings sections">
       <button type="button" onClick={() => selectSection('directory')}><ArrowLeft />All settings</button>
       <SelectPicker value={active} onChange={selectSection} aria-label="Settings section"

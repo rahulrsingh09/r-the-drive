@@ -1,5 +1,6 @@
 export const descriptions: Record<string, string> = {
   vehicles: 'Connection, sharing and vehicle configuration',
+  dashboards: 'Open and export your saved layouts',
   charts: 'Your charts, sources and definitions',
   units: 'Measurements, efficiency display, time zone and maps',
   places: 'Named places and location boundaries',
@@ -14,16 +15,13 @@ export const descriptions: Record<string, string> = {
 };
 const groups = [
   { title: 'Your vehicle', ids: ['vehicles', 'places', 'charging'] },
-  { title: 'Your workspace', ids: ['charts', 'units'] },
+  { title: 'Your workspace', ids: ['dashboards', 'charts', 'units'] },
   { title: 'Your account', ids: ['account'] },
   { title: 'Data & administration', ids: ['external', 'api', 'jobs', 'raw', 'backup', 'authentication'] },
 ];
 
 
 type Section = { id: string; label: string };
-export function availableSettings<T extends Section>(sections: T[]): T[] {
-  return sections.filter(section => section.id !== 'dashboards');
-}
 
 export function settingsDirectory<T extends Section>(sections: T[], search: string) {
   const term = search.trim().toLowerCase();
@@ -31,7 +29,7 @@ export function settingsDirectory<T extends Section>(sections: T[], search: stri
   const extraIds: string[] = [];
   const knownIds = new Set(groups.flatMap(group => group.ids));
   let matches = 0;
-  for (const section of availableSettings(sections)) {
+  for (const section of sections) {
     if (!knownIds.has(section.id)) extraIds.push(section.id);
     const searchable = `${section.label} ${descriptions[section.id] ?? ''}`.toLowerCase();
     if (!searchable.includes(term)) continue;
