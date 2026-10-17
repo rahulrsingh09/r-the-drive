@@ -7,7 +7,8 @@ mod full_replacement_key_custody_tests;
 use age::x25519;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+#[cfg(test)]
+use std::io::Read;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RivianTokenBundle {
@@ -36,34 +37,24 @@ impl RivianTokenBundle {
     /// corrupted blobs early, without rejecting valid bundles that happen to
     /// have an empty `user_session_token`.
     pub fn validate(&self) -> anyhow::Result<()> {
-        match (self.access_token.is_empty(), self.refresh_token.is_empty()) {
-            (true, _) => anyhow::bail!("RivianTokenBundle: access_token is empty"),
-            (false, true) => anyhow::bail!("RivianTokenBundle: refresh_token is empty"),
-            (false, false) => Ok(()),
+        for (name, value) in [
+            ("access_token", &self.access_token),
+            ("refresh_token", &self.refresh_token),
+        ] {
+            anyhow::ensure!(!value.is_empty(), "RivianTokenBundle: {name} is empty");
         }
+        Ok(())
     }
 
     pub(super) fn has_same_session_snapshot(&self, other: &Self) -> bool {
-        SessionSnapshot::from(self) == SessionSnapshot::from(other)
-    }
-}
-
-#[derive(PartialEq, Eq)]
-struct SessionSnapshot<'a> {
-    app: &'a str,
-    user: &'a str,
-    csrf: &'a str,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl<'a> From<&'a RivianTokenBundle> for SessionSnapshot<'a> {
-    fn from(bundle: &'a RivianTokenBundle) -> Self {
-        Self {
-            app: &bundle.app_session_token,
-            user: &bundle.user_session_token,
-            csrf: &bundle.csrf_token,
-            created_at: bundle.created_at,
-        }
+        self.created_at == other.created_at
+            && [
+                (&self.app_session_token, &other.app_session_token),
+                (&self.user_session_token, &other.user_session_token),
+                (&self.csrf_token, &other.csrf_token),
+            ]
+            .into_iter()
+            .all(|(left, right)| left == right)
     }
 }
 
@@ -71,16 +62,15 @@ pub fn encrypt_json<T: Serialize>(
     value: &T,
     identity: &x25519::Identity,
 ) -> anyhow::Result<Vec<u8>> {
-    let recipient = identity.to_public();
-    let plaintext = serde_json::to_vec(value)?;
-
-    let encryptor =
-        age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))?;
-
-    let mut ciphertext = vec![];
-    let mut writer = encryptor.wrap_output(&mut ciphertext)?;
-    writer.write_all(&plaintext)?;
-    writer.finish()?;
+    let public_key = identity.to_public();
+    let mut ciphertext = Vec::new();
+    {
+        let recipients = std::iter::once(&public_key as &dyn age::Recipient);
+        let mut output =
+            age::Encryptor::with_recipients(recipients)?.wrap_output(&mut ciphertext)?;
+        serde_json::to_writer(&mut output, value)?;
+        output.finish()?;
+    }
     Ok(ciphertext)
 }
 
@@ -88,12 +78,10 @@ pub fn decrypt_json<T: DeserializeOwned>(
     ciphertext: &[u8],
     identity: &x25519::Identity,
 ) -> anyhow::Result<T> {
-    let decryptor = age::Decryptor::new(ciphertext)?;
-
-    let mut plaintext = vec![];
-    let mut reader = decryptor.decrypt(std::iter::once(identity as &dyn age::Identity))?;
-    reader.read_to_end(&mut plaintext)?;
-    Ok(serde_json::from_slice(&plaintext)?)
+    let identities = std::iter::once(identity as &dyn age::Identity);
+    let input = age::Decryptor::new(ciphertext)?.decrypt(identities)?;
+    // from_reader checks EOF, including the final authenticated AGE chunk.
+    Ok(serde_json::from_reader(input)?)
 }
 
 pub fn encrypt_tokens(

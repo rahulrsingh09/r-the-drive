@@ -6,6 +6,56 @@ use std::sync::{
     Arc,
 };
 
+#[test]
+fn full_replacement_key_custody_backup_mirror_preserves_local_archive_on_failure() {
+    if std::env::var_os("CUSTODY_MIRROR_TEST_CHILD").is_none() {
+        for enabled in [false, true] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .arg("--exact")
+                .arg(format!("{}::full_replacement_key_custody_backup_mirror_preserves_local_archive_on_failure", module_path!().split_once("::").unwrap().1))
+                .env("CUSTODY_MIRROR_TEST_CHILD", "yes")
+                .env_remove("HISTORY_BACKUP_TOKEN");
+            if enabled {
+                child.env("HISTORY_BACKUP_TOKEN", "synthetic-invalid-token");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        }
+        return;
+    }
+    use age::secrecy::ExposeSecret;
+    let directory = tempfile::tempdir().unwrap();
+    let archive = directory.path().join("synthetic-recovery.tar.gz");
+    let original = b"synthetic recovery package";
+    std::fs::write(&archive, original).unwrap();
+    let config: Config = serde_json::from_value(json!({
+        "database_url": "postgresql://unused",
+        "redis_url": "redis://unused",
+        "panda_env": "production",
+        "age_encryption_key": Identity::generate().to_string().expose_secret(),
+    }))
+    .unwrap();
+    let result = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(mirror(&config, &archive));
+    if configured() {
+        assert!(matches!(&result, Err(AppError::DependencyUnavailable(_))));
+        assert!(!result
+            .unwrap_err()
+            .to_string()
+            .contains("synthetic-invalid-token"));
+    } else {
+        result.unwrap();
+    }
+    assert_eq!(std::fs::read(&archive).unwrap(), original);
+}
+
 #[tokio::test]
 async fn full_replacement_key_custody_backup_receipts_and_token_denials() {
     let requests = Arc::new(AtomicUsize::new(0));

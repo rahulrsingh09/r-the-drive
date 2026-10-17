@@ -58,6 +58,33 @@ async fn full_replacement_key_custody_cancelled_bootstrap_releases_transaction()
     .unwrap();
     let reread = export_database_keys(&pool).await.unwrap();
     assert_eq!(keys.age_key, reread.age_key);
+    let mut config: crate::config::Config = serde_json::from_value(serde_json::json!({
+        "database_url": url.as_str(),
+        "redis_url": "redis://unused",
+        "panda_env": "development",
+    }))
+    .unwrap();
+    assert_eq!(
+        bootstrap_keys_for_config(&pool, &config)
+            .await
+            .unwrap()
+            .age_key,
+        keys.age_key
+    );
+    config.panda_env = Some("production".into());
+    assert!(bootstrap_keys_for_config(&pool, &config).await.is_err());
+    config.jwt_secret = Some(keys.jwt_private_pem.clone());
+    config.jwt_public_key = Some(keys.jwt_public_pem.clone());
+    config.age_encryption_key = Some(keys.age_key.clone());
+    assert!(bootstrap_keys_for_config(&pool, &config).await.is_err());
+    migrate_database_keys(&pool, &keys).await.unwrap();
+    assert_eq!(
+        bootstrap_keys_for_config(&pool, &config)
+            .await
+            .unwrap()
+            .age_key,
+        keys.age_key
+    );
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
         .execute(&admin)

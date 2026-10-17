@@ -1,4 +1,4 @@
-use std::{io::Write, path::Path};
+use std::path::Path;
 
 use age::x25519::Identity;
 use anyhow::{anyhow, bail, Context};
@@ -19,23 +19,28 @@ pub fn configured() -> bool {
 }
 
 pub fn encrypt(plaintext: &[u8], key: &str) -> anyhow::Result<Vec<u8>> {
-    if plaintext.is_empty() || plaintext.len() > MAX_BYTES - 64 * 1024 {
-        bail!("recovery package exceeds the free backup size limit");
-    }
-    let identity: Identity = key
-        .parse()
+    anyhow::ensure!(
+        (1..=MAX_BYTES - 64 * 1024).contains(&plaintext.len()),
+        "recovery package exceeds the free backup size limit"
+    );
+    let identity = key
+        .parse::<Identity>()
         .map_err(|_| anyhow!("invalid backup encryption key"))?;
     let recipient = identity.to_public();
-    let encryptor =
-        age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+    let mut ciphertext = Vec::with_capacity(plaintext.len());
+    {
+        let recipients = std::iter::once(&recipient as &dyn age::Recipient);
+        let encryptor = age::Encryptor::with_recipients(recipients)
             .map_err(|_| anyhow!("backup encryption initialization failed"))?;
-    let mut ciphertext = Vec::new();
-    let mut writer = encryptor.wrap_output(&mut ciphertext)?;
-    writer.write_all(plaintext)?;
-    writer.finish()?;
-    if ciphertext.len() > MAX_BYTES {
-        bail!("encrypted recovery package exceeds the free backup size limit");
+        let mut archive = encryptor.wrap_output(&mut ciphertext)?;
+        let mut input = plaintext;
+        std::io::copy(&mut input, &mut archive)?;
+        archive.finish()?;
     }
+    anyhow::ensure!(
+        ciphertext.len() <= MAX_BYTES,
+        "encrypted recovery package exceeds the free backup size limit"
+    );
     Ok(ciphertext)
 }
 
@@ -48,54 +53,50 @@ struct Receipt {
 
 async fn publish(ciphertext: Vec<u8>, token: &str, receiver: &str) -> anyhow::Result<()> {
     if token.len() != 64
-        || !token
+        || token
             .bytes()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            .any(|byte| !matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
         bail!("backup receiver token is invalid");
     }
-    let checksum = hex::encode(Sha256::digest(&ciphertext));
-    let size = ciphertext.len();
-    let client = reqwest::Client::builder()
-        .user_agent("Panda-History-Backup/1.0")
+    let expected = (hex::encode(Sha256::digest(&ciphertext)), ciphertext.len());
+    let response = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .timeout(std::time::Duration::from_secs(120))
+        .user_agent("Panda-History-Backup/1.0")
         .build()
-        .map_err(|_| anyhow!("backup upload client initialization failed"))?;
-    let mut response = client
+        .map_err(|_| anyhow!("backup upload client initialization failed"))?
         .post(receiver)
         .bearer_auth(token)
         .header("Content-Type", "application/octet-stream")
-        .header("X-Backup-Sha256", &checksum)
+        .header("X-Backup-Sha256", &expected.0)
         .body(ciphertext)
         .send()
         .await
         .map_err(|_| anyhow!("backup upload request failed"))?;
-    if response.status() != reqwest::StatusCode::CREATED {
-        bail!("backup receiver did not accept the archive");
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+    anyhow::ensure!(
+        response.status() == reqwest::StatusCode::CREATED,
+        "backup receiver did not accept the archive"
+    );
+    let body = super::outbound::read_limited(response, 1024)
         .await
-        .map_err(|_| anyhow!("backup receipt read failed"))?
-    {
-        if body.len() + chunk.len() > 1024 {
-            bail!("backup receipt exceeds limit");
-        }
-        body.extend_from_slice(&chunk);
-    }
-    let receipt: Receipt = serde_json::from_slice(&body).context("invalid backup receipt")?;
-    if receipt.sha256 != checksum
-        || receipt.bytes != size
-        || !receipt
-            .key
-            .strip_prefix("daily/")
-            .is_some_and(|slot| slot.len() == 2 && slot.parse::<u8>().is_ok_and(|n| n < 31))
-    {
-        bail!("backup receipt does not match the uploaded archive");
-    }
+        .map_err(|error| match error {
+            super::outbound::PolicyError::ResponseTooLarge => {
+                anyhow!("backup receipt exceeds limit")
+            }
+            _ => anyhow!("backup receipt read failed"),
+        })?;
+    let Receipt { key, sha256, bytes } =
+        serde_json::from_slice(&body).context("invalid backup receipt")?;
+    let slot = key
+        .strip_prefix("daily/")
+        .filter(|value| value.len() == 2)
+        .and_then(|value| value.parse::<u8>().ok());
+    anyhow::ensure!(
+        (sha256, bytes) == expected && slot.is_some_and(|day| day < 31),
+        "backup receipt does not match the uploaded archive"
+    );
     Ok(())
 }
 
@@ -104,22 +105,19 @@ pub async fn mirror(config: &Config, path: &Path) -> Result<(), AppError> {
         return Ok(());
     }
     let result = async {
+        use tokio::io::AsyncReadExt;
         let token = std::env::var("HISTORY_BACKUP_TOKEN").context("backup token is unavailable")?;
         let key = config
             .age_encryption_key
-            .as_ref()
-            .context("backup encryption key is unavailable")?
-            .clone();
-        let path = path.to_owned();
-        let ciphertext = tokio::task::spawn_blocking(move || {
-            use std::io::Read;
-            let file = std::fs::File::open(path)?;
-            let mut plaintext = Vec::new();
-            file.take(MAX_BYTES as u64 + 1)
-                .read_to_end(&mut plaintext)?;
-            encrypt(&plaintext, &key)
-        })
-        .await??;
+            .clone()
+            .context("backup encryption key is unavailable")?;
+        let mut plaintext = Vec::new();
+        tokio::fs::File::open(path)
+            .await?
+            .take(MAX_BYTES as u64 + 1)
+            .read_to_end(&mut plaintext)
+            .await?;
+        let ciphertext = tokio::task::spawn_blocking(move || encrypt(&plaintext, &key)).await??;
         publish(ciphertext, &token, RECEIVER).await
     }
     .await;

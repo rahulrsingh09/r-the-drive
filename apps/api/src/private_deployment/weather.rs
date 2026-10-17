@@ -36,15 +36,22 @@ pub struct WeatherFetchError {
 }
 
 pub fn settings_allowed(settings: &connections::ConnectionSettingsRow) -> bool {
+    let credentials =
+        settings.api_key_encrypted.is_some() || settings.bearer_token_encrypted.is_some();
     settings.mode == "remote"
-        && settings.weather_precision.as_deref() == Some("approximate")
-        && settings.forecast_url.as_deref() == Some(FORECAST_URL)
-        && settings.archive_url.as_deref() == Some(ARCHIVE_URL)
-        && !settings.allow_private_network
+        && settings.weather_precision.is_some()
+        && settings.forecast_url.is_some()
+        && settings.archive_url.is_some()
         && settings.private_network_allowlist.is_empty()
         && settings.private_network_policy_state == "restricted"
-        && settings.api_key_encrypted.is_none()
-        && settings.bearer_token_encrypted.is_none()
+        && update_allowed(
+            &settings.mode,
+            settings.weather_precision.as_deref(),
+            settings.forecast_url.as_deref(),
+            settings.archive_url.as_deref(),
+            credentials,
+            settings.allow_private_network,
+        )
 }
 
 pub fn update_allowed(
@@ -55,12 +62,16 @@ pub fn update_allowed(
     has_credentials: bool,
     private_network: bool,
 ) -> bool {
-    matches!(mode, "remote" | "hosted" | "disabled")
-        && precision.is_none_or(|value| value == "approximate")
-        && forecast.is_none_or(|value| value == FORECAST_URL)
-        && archive.is_none_or(|value| value == ARCHIVE_URL)
-        && !has_credentials
-        && !private_network
+    if has_credentials || private_network || !["remote", "hosted", "disabled"].contains(&mode) {
+        return false;
+    }
+    [
+        (precision, "approximate"),
+        (forecast, FORECAST_URL),
+        (archive, ARCHIVE_URL),
+    ]
+    .into_iter()
+    .all(|(configured, required)| configured.is_none_or(|value| value == required))
 }
 
 fn request_url(
@@ -69,33 +80,33 @@ fn request_url(
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
 ) -> Result<url::Url> {
-    if !lat.is_finite()
-        || !lng.is_finite()
-        || !(-90.0..=90.0).contains(&lat)
-        || !(-180.0..=180.0).contains(&lng)
-        || ended_at < started_at
-        || ended_at - started_at > chrono::Duration::days(1)
-        || ended_at > Utc::now()
+    let now = Utc::now();
+    let duration = ended_at.signed_duration_since(started_at);
+    let coordinates_valid = [(lat, 90.0), (lng, 180.0)]
+        .into_iter()
+        .all(|(value, bound)| value.is_finite() && (-bound..=bound).contains(&value));
+    if !coordinates_valid
+        || duration < chrono::Duration::zero()
+        || duration > chrono::Duration::days(1)
+        || ended_at > now
     {
         bail!("Invalid weather sample bounds");
     }
-    let endpoint = if Utc::now() - ended_at < chrono::Duration::days(5) {
-        FORECAST_URL
-    } else {
-        ARCHIVE_URL
+    let endpoint = match now.signed_duration_since(ended_at) < chrono::Duration::days(5) {
+        true => FORECAST_URL,
+        false => ARCHIVE_URL,
     };
     let mut url = url::Url::parse(endpoint)?;
-    url.query_pairs_mut()
-        .append_pair("latitude", &format!("{:.2}", (lat * 100.0).round() / 100.0))
-        .append_pair(
-            "longitude",
-            &format!("{:.2}", (lng * 100.0).round() / 100.0),
-        )
-        .append_pair("hourly", "temperature_2m")
-        .append_pair("timezone", "UTC")
-        .append_pair("temperature_unit", "celsius")
-        .append_pair("start_date", &started_at.date_naive().to_string())
-        .append_pair("end_date", &ended_at.date_naive().to_string());
+    let pairs = [
+        ("latitude", format!("{:.2}", (lat * 100.0).round() / 100.0)),
+        ("longitude", format!("{:.2}", (lng * 100.0).round() / 100.0)),
+        ("hourly", "temperature_2m".to_owned()),
+        ("timezone", "UTC".to_owned()),
+        ("temperature_unit", "celsius".to_owned()),
+        ("start_date", started_at.date_naive().to_string()),
+        ("end_date", ended_at.date_naive().to_string()),
+    ];
+    url.query_pairs_mut().extend_pairs(pairs);
     Ok(url)
 }
 
@@ -107,40 +118,35 @@ enum Admission {
 }
 
 async fn reserve(pool: &PgPool) -> Result<Admission> {
-    let admitted = sqlx::query_scalar::<_, bool>(
-        r#"INSERT INTO panda.external_connection_activity
-             (connection_id, last_attempt_at, usage_date, request_count)
-           VALUES ('open_meteo', clock_timestamp(), (clock_timestamp() AT TIME ZONE 'UTC')::date, 1)
-           ON CONFLICT (connection_id) DO UPDATE SET
-             last_attempt_at = clock_timestamp(),
-             usage_date = (clock_timestamp() AT TIME ZONE 'UTC')::date,
-             request_count = CASE
-               WHEN external_connection_activity.usage_date = (clock_timestamp() AT TIME ZONE 'UTC')::date
-               THEN external_connection_activity.request_count + 1 ELSE 1 END
-           WHERE (external_connection_activity.usage_date <> (clock_timestamp() AT TIME ZONE 'UTC')::date
-                  OR external_connection_activity.request_count < $1)
-             AND (external_connection_activity.last_attempt_at IS NULL
-                  OR external_connection_activity.last_attempt_at <= clock_timestamp() - interval '5 seconds')
-           RETURNING TRUE"#,
-    )
-    .bind(DAILY_REQUEST_BUDGET)
-    .fetch_optional(pool)
-    .await?;
-    if admitted == Some(true) {
-        return Ok(Admission::Ready);
+    let count = sqlx::query_scalar::<_, i32>(
+        "WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS ts)
+         INSERT INTO panda.external_connection_activity
+           (connection_id, last_attempt_at, usage_date, request_count)
+         SELECT 'open_meteo', ts, (ts AT TIME ZONE 'UTC')::date, 1 FROM instant
+         ON CONFLICT (connection_id) DO UPDATE SET
+           last_attempt_at = EXCLUDED.last_attempt_at,
+           usage_date = EXCLUDED.usage_date,
+           request_count = CASE WHEN external_connection_activity.usage_date = EXCLUDED.usage_date
+             THEN external_connection_activity.request_count + 1 ELSE 1 END
+         WHERE (external_connection_activity.usage_date <> EXCLUDED.usage_date
+                OR external_connection_activity.request_count < $1)
+           AND (external_connection_activity.last_attempt_at IS NULL
+                OR external_connection_activity.last_attempt_at <= EXCLUDED.last_attempt_at - interval '5 seconds')
+         RETURNING request_count"
+    ).bind(DAILY_REQUEST_BUDGET).fetch_optional(pool).await?;
+    match count {
+        Some(_) => Ok(Admission::Ready),
+        None => {
+            let exhausted: bool = sqlx::query_scalar(
+                "SELECT usage_date = (clock_timestamp() AT TIME ZONE 'UTC')::date AND request_count >= $1
+                 FROM panda.external_connection_activity WHERE connection_id = 'open_meteo'"
+            ).bind(DAILY_REQUEST_BUDGET).fetch_one(pool).await?;
+            Ok(match exhausted {
+                true => Admission::Budget,
+                false => Admission::Wait,
+            })
+        }
     }
-    let exhausted: bool = sqlx::query_scalar(
-        "SELECT usage_date = (clock_timestamp() AT TIME ZONE 'UTC')::date AND request_count >= $1
-         FROM panda.external_connection_activity WHERE connection_id = 'open_meteo'",
-    )
-    .bind(DAILY_REQUEST_BUDGET)
-    .fetch_one(pool)
-    .await?;
-    Ok(if exhausted {
-        Admission::Budget
-    } else {
-        Admission::Wait
-    })
 }
 
 pub async fn fetch(
@@ -151,8 +157,7 @@ pub async fn fetch(
     ended_at: DateTime<Utc>,
 ) -> Result<Value> {
     let url = request_url(lat, lng, started_at, ended_at)?;
-    let mut waits = 0;
-    let client = loop {
+    for attempt in 0..6 {
         connections::require_enabled(pool, connections::OPEN_METEO)
             .await
             .map_err(|error| match error {
@@ -161,83 +166,95 @@ pub async fn fetch(
                 }
                 other => other.into(),
             })?;
-        // Resolve before admission so slow DNS cannot bunch admitted requests.
+        // Resolve before admission so DNS latency cannot bunch admitted requests.
         let client = outbound::outbound_client_for_url(&url, &[]).await?;
         match reserve(pool).await? {
-            Admission::Ready => break client,
             Admission::Budget => return Err(WeatherBudgetError.into()),
             Admission::Wait => {
-                waits += 1;
-                if waits >= 6 {
-                    return Err(WeatherBusyError.into());
+                if attempt == 5 {
+                    break;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            }
+            Admission::Ready => {}
+        }
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("Weather connection failed"))?;
+        match response.status().is_success() {
+            false => {
+                let retry_after_seconds = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<i64>().ok());
+                return Err(WeatherFetchError {
+                    status: response.status(),
+                    retry_after_seconds,
+                }
+                .into());
+            }
+            true => {
+                let body =
+                    outbound::read_json(response, RESPONSE_LIMIT, "Weather provider").await?;
+                validate_payload(&body, started_at, ended_at)?;
+                return Ok(body);
             }
         }
-    };
-    // A fresh pinned client carries neither Rivian headers nor operator proxy settings.
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| anyhow::anyhow!("Weather connection failed"))?;
-    if !response.status().is_success() {
-        return Err(WeatherFetchError {
-            status: response.status(),
-            retry_after_seconds: response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<i64>().ok()),
-        }
-        .into());
     }
-    let body = outbound::read_json(response, RESPONSE_LIMIT, "Weather provider").await?;
-    validate_payload(&body, started_at, ended_at)?;
-    Ok(body)
+    Err(WeatherBusyError.into())
 }
 
 pub async fn recover_interrupted_jobs(pool: &PgPool) -> Result<()> {
     sqlx::query(
-        "UPDATE panda.weather_enrichment_jobs SET status='pending',
-         attempts=GREATEST(attempts-1,0), next_attempt_at=now(), last_error=NULL, updated_at=now()
-         WHERE status='running' AND updated_at < now()-interval '15 minutes'",
-    )
-    .execute(pool)
-    .await?;
+        "WITH abandoned AS MATERIALIZED (
+           SELECT trip_id FROM panda.weather_enrichment_jobs
+           WHERE status='running' AND updated_at < now()-interval '15 minutes' FOR UPDATE
+         )
+         UPDATE panda.weather_enrichment_jobs job SET status='pending',
+           attempts=GREATEST(job.attempts-1,0), next_attempt_at=now(), last_error=NULL, updated_at=now()
+         FROM abandoned WHERE job.trip_id=abandoned.trip_id"
+    ).execute(pool).await?;
     Ok(())
 }
 
 fn validate_payload(body: &Value, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<()> {
-    let times = body.pointer("/hourly/time").and_then(Value::as_array);
-    let temperatures = body
-        .pointer("/hourly/temperature_2m")
-        .and_then(Value::as_array);
-    let (Some(times), Some(temperatures)) = (times, temperatures) else {
+    let arrays = ["/hourly/time", "/hourly/temperature_2m"]
+        .map(|pointer| body.pointer(pointer).and_then(Value::as_array));
+    let [Some(times), Some(temperatures)] = arrays else {
         bail!("Invalid weather response");
     };
-    if times.is_empty() || times.len() > 48 || times.len() != temperatures.len() {
+    if !(1..=48).contains(&times.len()) || times.len() != temperatures.len() {
         bail!("Invalid weather response size");
     }
-    let mut previous = None;
-    for (time, temperature) in times.iter().zip(temperatures) {
-        let timestamp = time
-            .as_str()
-            .and_then(|value| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").ok())
-            .ok_or_else(|| anyhow::anyhow!("Invalid weather timestamp"))?;
-        if timestamp.date() < start.date_naive()
-            || timestamp.date() > end.date_naive()
-            || previous.is_some_and(|previous| timestamp <= previous)
-            || (!temperature.is_null()
-                && !temperature
+    times
+        .iter()
+        .zip(temperatures)
+        .try_fold(None, |previous, (time, temperature)| {
+            let timestamp = time
+                .as_str()
+                .and_then(|value| {
+                    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").ok()
+                })
+                .ok_or_else(|| anyhow::anyhow!("Invalid weather timestamp"))?;
+            let valid_temperature = temperature.is_null()
+                || temperature
                     .as_f64()
-                    .is_some_and(|value| value.is_finite() && (-100.0..=70.0).contains(&value)))
-        {
-            bail!("Invalid weather sample");
-        }
-        previous = Some(timestamp);
-    }
-    Ok(())
+                    .is_some_and(|value| value.is_finite() && (-100.0..=70.0).contains(&value));
+            let date_in_window =
+                (start.date_naive()..=end.date_naive()).contains(&timestamp.date());
+            if !date_in_window
+                || !valid_temperature
+                || previous.is_some_and(|previous| timestamp <= previous)
+            {
+                bail!("Invalid weather sample");
+            }
+            Ok(Some(timestamp))
+        })
+        .map(|_| ())
 }
 
 #[cfg(test)]

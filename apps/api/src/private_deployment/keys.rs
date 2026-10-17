@@ -7,6 +7,9 @@ use sqlx::{PgPool, Postgres, Transaction};
 #[path = "full_replacement_key_custody_keys_tests.rs"]
 mod full_replacement_key_custody_tests;
 
+const DATABASE_KEY_NAMES: [&str; 3] = ["jwt_private_key", "jwt_public_key", "age_key"];
+const BUNDLE_FILENAMES: [&str; 3] = ["jwt_private.pem", "jwt_public.pem", "age_key.txt"];
+
 #[derive(Clone)]
 pub struct BootstrappedKeys {
     pub jwt_private_pem: String,
@@ -15,6 +18,22 @@ pub struct BootstrappedKeys {
 }
 
 impl BootstrappedKeys {
+    fn from_values(
+        [jwt_private_pem, jwt_public_pem, age_key]: [String; 3],
+    ) -> anyhow::Result<Self> {
+        let keys = Self {
+            jwt_private_pem,
+            jwt_public_pem,
+            age_key,
+        };
+        keys.validate()?;
+        Ok(keys)
+    }
+
+    fn values(&self) -> [&str; 3] {
+        [&self.jwt_private_pem, &self.jwt_public_pem, &self.age_key]
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         validate_rsa_pair(&self.jwt_private_pem, &self.jwt_public_pem)?;
         self.identity()?;
@@ -49,19 +68,21 @@ pub fn external_keys(
     public: Option<&str>,
     age: Option<&str>,
 ) -> anyhow::Result<Option<BootstrappedKeys>> {
-    match (private, public, age) {
-        (None, None, None) => Ok(None),
-        (Some(private), Some(public), Some(age)) => {
-            let keys = BootstrappedKeys {
-                jwt_private_pem: private.to_owned(),
-                jwt_public_pem: public.to_owned(),
-                age_key: age.trim().to_owned(),
-            };
-            keys.validate()?;
-            Ok(Some(keys))
-        }
-        _ => bail!("JWT_SECRET, JWT_PUBLIC_KEY, and AGE_ENCRYPTION_KEY must be supplied together (direct values or their _FILE alternatives)"),
+    let supplied = [private, public, age];
+    let count = supplied.iter().flatten().count();
+    if count == 0 {
+        return Ok(None);
     }
+    if count != supplied.len() {
+        bail!("JWT_SECRET, JWT_PUBLIC_KEY, and AGE_ENCRYPTION_KEY must be supplied together (direct values or their _FILE alternatives)");
+    }
+    let [private, public, age] = supplied.map(|value| value.expect("complete bundle"));
+    let keys = BootstrappedKeys::from_values([
+        private.to_owned(),
+        public.to_owned(),
+        age.trim().to_owned(),
+    ])?;
+    Ok(Some(keys))
 }
 
 /// Production entry point: never generates or stores private key material.
@@ -73,16 +94,12 @@ pub async fn bootstrap_keys(
 ) -> anyhow::Result<BootstrappedKeys> {
     let keys = external_keys(env_jwt_secret.as_deref(), env_jwt_public.as_deref(), env_age_key.as_deref())?
         .context("production requires external JWT_SECRET, JWT_PUBLIC_KEY, and AGE_ENCRYPTION_KEY (or _FILE alternatives)")?;
-    let mut tx = locked_transaction(pool).await?;
-    if read_database_keys(&mut tx)
-        .await?
-        .iter()
-        .any(Option::is_some)
-    {
-        bail!("database-backed application keys remain; stop all app instances and complete the explicit key-custody migration before external startup");
+    let mut transaction = locked_transaction(pool).await?;
+    match read_database_keys(&mut transaction).await? {
+        [None, None, None] => bind_age_identity(&mut transaction, &keys, false).await?,
+        _ => bail!("database-backed application keys remain; stop all app instances and complete the explicit key-custody migration before external startup"),
     }
-    bind_age_identity(&mut tx, &keys, false).await?;
-    tx.commit().await?;
+    transaction.commit().await?;
     Ok(keys)
 }
 
@@ -90,83 +107,77 @@ pub async fn bootstrap_keys_for_config(
     pool: &PgPool,
     config: &crate::config::Config,
 ) -> anyhow::Result<BootstrappedKeys> {
-    if config.is_development()
-        && config.jwt_secret.is_none()
-        && config.jwt_public_key.is_none()
-        && config.age_encryption_key.is_none()
-    {
-        bootstrap_development_keys(pool).await
-    } else {
-        bootstrap_keys(
-            pool,
-            config.jwt_secret.clone(),
-            config.jwt_public_key.clone(),
-            config.age_encryption_key.clone(),
-        )
-        .await
+    let supplied = [
+        &config.jwt_secret,
+        &config.jwt_public_key,
+        &config.age_encryption_key,
+    ];
+    match (
+        config.is_development(),
+        supplied.iter().any(|value| value.is_some()),
+    ) {
+        (true, false) => bootstrap_development_keys(pool).await,
+        _ => {
+            let [private, public, age] = supplied.map(Clone::clone);
+            bootstrap_keys(pool, private, public, age).await
+        }
     }
 }
 
 /// Explicit local-development/test path; existing state is never repaired by generation.
 pub async fn bootstrap_development_keys(pool: &PgPool) -> anyhow::Result<BootstrappedKeys> {
-    let mut tx = locked_transaction(pool).await?;
-    let stored = read_database_keys(&mut tx).await?;
-    let keys = if stored.iter().all(Option::is_none) {
-        if age_recipient(&mut tx).await?.is_some() || has_ciphertexts(&mut tx).await? {
-            bail!("application keys are missing but encrypted state or an AGE binding exists; restore the original keys, never regenerate");
+    let mut transaction = locked_transaction(pool).await?;
+    let keys = match read_database_keys(&mut transaction).await? {
+        [None, None, None] => {
+            if age_recipient(&mut transaction).await?.is_some()
+                || has_ciphertexts(&mut transaction).await?
+            {
+                bail!("application keys are missing but encrypted state or an AGE binding exists; restore the original keys, never regenerate");
+            }
+            let generated = generate_keys()?;
+            sqlx::query("INSERT INTO panda.system_config(key, value) SELECT * FROM unnest($1::text[], $2::text[])")
+                .bind(DATABASE_KEY_NAMES.as_slice()).bind(generated.values().as_slice())
+                .execute(&mut *transaction).await?;
+            generated
         }
-        let keys = generate_keys()?;
-        for (name, value) in [
-            ("jwt_private_key", &keys.jwt_private_pem),
-            ("jwt_public_key", &keys.jwt_public_pem),
-            ("age_key", &keys.age_key),
-        ] {
-            sqlx::query("INSERT INTO panda.system_config (key, value) VALUES ($1, $2)")
-                .bind(name)
-                .bind(value)
-                .execute(&mut *tx)
-                .await?;
-        }
-        keys
-    } else {
-        complete_database_keys(stored)?
+        stored => complete_database_keys(stored)?,
     };
-    bind_age_identity(&mut tx, &keys, false).await?;
-    tx.commit().await?;
+    bind_age_identity(&mut transaction, &keys, false).await?;
+    transaction.commit().await?;
     Ok(keys)
 }
 
 async fn locked_transaction(pool: &PgPool) -> anyhow::Result<Transaction<'_, Postgres>> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(1234567890)")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("LOCK TABLE panda.system_config IN SHARE ROW EXCLUSIVE MODE")
-        .execute(&mut *tx)
-        .await?;
-    Ok(tx)
+    let mut transaction = pool.begin().await?;
+    sqlx::raw_sql(
+        "SELECT pg_advisory_xact_lock(1234567890);
+        LOCK TABLE panda.system_config IN SHARE ROW EXCLUSIVE MODE;",
+    )
+    .execute(&mut *transaction)
+    .await?;
+    Ok(transaction)
 }
 
 async fn read_database_keys(
     tx: &mut Transaction<'_, Postgres>,
 ) -> anyhow::Result<[Option<String>; 3]> {
-    let (private, public, age): (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT
-            (SELECT value FROM panda.system_config WHERE key = 'jwt_private_key'),
-            (SELECT value FROM panda.system_config WHERE key = 'jwt_public_key'),
-            (SELECT value FROM panda.system_config WHERE key = 'age_key')",
+    let slots: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT stored.value FROM unnest($1::text[]) WITH ORDINALITY AS slot(name, position)
+         LEFT JOIN panda.system_config stored ON stored.key = slot.name ORDER BY slot.position",
     )
-    .fetch_one(&mut **tx)
+    .bind(DATABASE_KEY_NAMES.as_slice())
+    .fetch_all(&mut **tx)
     .await
     .context("reading application key custody")?;
-    Ok([private, public, age])
+    slots
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("application key inventory is incomplete"))
 }
 
 fn complete_database_keys(stored: [Option<String>; 3]) -> anyhow::Result<BootstrappedKeys> {
-    let [Some(private), Some(public), Some(age)] = stored else {
-        bail!("database application key bundle is missing or partial; restore the originals from a protected backup, never clear rows or regenerate");
-    };
-    external_keys(Some(&private), Some(&public), Some(&age))?
+    let [private, public, age] = stored.map(|value| value.context(
+        "database application key bundle is missing or partial; restore the originals from a protected backup, never clear rows or regenerate"));
+    external_keys(Some(&private?), Some(&public?), Some(&age?))?
         .context("database application key bundle is missing")
 }
 
@@ -194,10 +205,10 @@ async fn lock_ciphertexts(tx: &mut Transaction<'_, Postgres>) -> anyhow::Result<
 
 async fn has_ciphertexts(tx: &mut Transaction<'_, Postgres>) -> anyhow::Result<bool> {
     lock_ciphertexts(tx).await?;
-    Ok(sqlx::query(CIPHERTEXT_QUERY)
-        .fetch_optional(&mut **tx)
-        .await?
-        .is_some())
+    let statement = format!("SELECT EXISTS({CIPHERTEXT_QUERY})");
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(statement))
+        .fetch_one(&mut **tx)
+        .await?)
 }
 
 async fn bind_age_identity(
@@ -207,38 +218,35 @@ async fn bind_age_identity(
 ) -> anyhow::Result<()> {
     let identity = keys.identity()?;
     let recipient = identity.to_public().to_string();
-    let saved = age_recipient(tx).await?;
-    if saved.as_ref().is_some_and(|saved| saved != &recipient) {
-        bail!("AGE_ENCRYPTION_KEY differs from the database AGE binding; restore the original key (key rotation requires a separate ciphertext migration)");
+    match age_recipient(tx).await? {
+        Some(saved) if saved != recipient => bail!("AGE_ENCRYPTION_KEY differs from the database AGE binding; restore the original key (key rotation requires a separate ciphertext migration)"),
+        Some(_) if !verify_all => return Ok(()),
+        _ => {},
     }
-    if saved.is_none() || verify_all {
-        lock_ciphertexts(tx).await?;
-        let mut rows = sqlx::query_scalar::<_, Vec<u8>>(CIPHERTEXT_QUERY).fetch(&mut **tx);
-        while let Some(ciphertext) = rows.try_next().await? {
-            let result = (|| -> anyhow::Result<()> {
-                let decryptor = age::Decryptor::new(ciphertext.as_slice())?;
-                let mut reader =
-                    decryptor.decrypt(std::iter::once(&identity as &dyn age::Identity))?;
-                std::io::copy(&mut reader, &mut std::io::sink())?;
+    lock_ciphertexts(tx).await?;
+    sqlx::query_scalar::<_, Vec<u8>>(CIPHERTEXT_QUERY).fetch(&mut **tx)
+        .map_err(anyhow::Error::from)
+        .try_for_each(|ciphertext| {
+            let authenticated = (|| -> anyhow::Result<()> {
+                let identities = std::iter::once(&identity as &dyn age::Identity);
+                let mut plaintext = age::Decryptor::new(ciphertext.as_slice())?.decrypt(identities)?;
+                std::io::copy(&mut plaintext, &mut std::io::sink())?;
                 Ok(())
             })();
-            if result.is_err() {
-                bail!("existing encrypted data cannot be authenticated with AGE_ENCRYPTION_KEY; preserve the database and restore the original key/ciphertexts");
-            }
-        }
-        drop(rows);
-        sqlx::query("INSERT INTO panda.system_config (key, value) VALUES ('age_recipient', $1) ON CONFLICT (key) DO NOTHING")
-            .bind(recipient).execute(&mut **tx).await?;
-    }
+            futures::future::ready(authenticated.map_err(|_| anyhow::anyhow!(
+                "existing encrypted data cannot be authenticated with AGE_ENCRYPTION_KEY; preserve the database and restore the original key/ciphertexts")))
+        }).await?;
+    sqlx::query("INSERT INTO panda.system_config (key, value) VALUES ('age_recipient', $1) ON CONFLICT (key) DO NOTHING")
+        .bind(recipient).execute(&mut **tx).await?;
     Ok(())
 }
 
 /// Read-only export source. The caller must save the originals outside database/backup storage.
 pub async fn export_database_keys(pool: &PgPool) -> anyhow::Result<BootstrappedKeys> {
-    let mut tx = locked_transaction(pool).await?;
-    let keys = complete_database_keys(read_database_keys(&mut tx).await?)?;
-    tx.rollback().await?;
-    Ok(keys)
+    let mut transaction = locked_transaction(pool).await?;
+    let stored = read_database_keys(&mut transaction).await?;
+    transaction.rollback().await?;
+    complete_database_keys(stored)
 }
 
 /// Explicit operator migration, after exporting and independently backing up the original bundle.
@@ -248,20 +256,23 @@ pub async fn migrate_database_keys(
     external: &BootstrappedKeys,
 ) -> anyhow::Result<()> {
     external.validate()?;
-    let mut tx = locked_transaction(pool).await?;
-    let stored = read_database_keys(&mut tx).await?;
-    if stored.iter().any(Option::is_some) {
-        let original = complete_database_keys(stored)?;
-        validate_rsa_pair(&external.jwt_private_pem, &original.jwt_public_pem)
-            .context("external JWT pair does not match the original database pair")?;
-        if original.identity()?.to_public() != external.identity()?.to_public() {
-            bail!("external AGE key does not match the original database key; no keys or ciphertexts were changed");
+    let mut transaction = locked_transaction(pool).await?;
+    match read_database_keys(&mut transaction).await? {
+        [None, None, None] => {}
+        stored => {
+            let original = complete_database_keys(stored)?;
+            validate_rsa_pair(&external.jwt_private_pem, &original.jwt_public_pem)
+                .context("external JWT pair does not match the original database pair")?;
+            anyhow::ensure!(original.identity()?.to_public() == external.identity()?.to_public(),
+                "external AGE key does not match the original database key; no keys or ciphertexts were changed");
         }
     }
-    bind_age_identity(&mut tx, external, true).await?;
-    sqlx::query("DELETE FROM panda.system_config WHERE key IN ('jwt_private_key', 'jwt_public_key', 'age_key')")
-        .execute(&mut *tx).await?;
-    tx.commit().await?;
+    bind_age_identity(&mut transaction, external, true).await?;
+    sqlx::query("DELETE FROM panda.system_config WHERE key = ANY($1)")
+        .bind(DATABASE_KEY_NAMES.as_slice())
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
     Ok(())
 }
 
@@ -278,28 +289,30 @@ pub fn write_key_bundle(
         .mode(0o700)
         .create(directory)
         .context("create a NEW key directory outside application data and backups")?;
-    for (name, value) in [
-        ("jwt_private.pem", &keys.jwt_private_pem),
-        ("jwt_public.pem", &keys.jwt_public_pem),
-        ("age_key.txt", &keys.age_key),
-    ] {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(directory.join(name))
-            .context("create key file without overwriting")?;
+    let mut files = BUNDLE_FILENAMES
+        .into_iter()
+        .map(|name| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(directory.join(name))
+                .context("create key file without overwriting")
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    for (file, value) in files.iter_mut().zip(keys.values()) {
         file.write_all(value.as_bytes())?;
+    }
+    for file in files {
         file.sync_all()?;
     }
-    std::fs::File::open(directory)?.sync_all()?;
-    std::fs::File::open(
-        directory
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or(std::path::Path::new(".")),
-    )?
-    .sync_all()?;
+    let parent = directory
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    for path in [directory, parent] {
+        std::fs::File::open(path)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -312,13 +325,14 @@ pub fn write_key_bundle(
 }
 
 pub fn read_key_bundle(directory: &std::path::Path) -> anyhow::Result<BootstrappedKeys> {
-    let keys = BootstrappedKeys {
-        jwt_private_pem: std::fs::read_to_string(directory.join("jwt_private.pem"))?,
-        jwt_public_pem: std::fs::read_to_string(directory.join("jwt_public.pem"))?,
-        age_key: std::fs::read_to_string(directory.join("age_key.txt"))?,
-    };
-    keys.validate()?;
-    Ok(keys)
+    let values = BUNDLE_FILENAMES
+        .into_iter()
+        .map(|name| std::fs::read_to_string(directory.join(name)))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let values = values
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("application key inventory is incomplete"))?;
+    BootstrappedKeys::from_values(values)
 }
 
 pub fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
@@ -326,24 +340,27 @@ pub fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
         encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der},
         rsa::{KeySize, PrivateDecryptingKey},
     };
-
-    let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048)
+    let rsa = PrivateDecryptingKey::generate(KeySize::Rsa2048)
         .map_err(|_| anyhow::anyhow!("RSA key generation failed"))?;
-    let private_der = AsDer::<Pkcs8V1Der>::as_der(&private_key)
+    let private = AsDer::<Pkcs8V1Der>::as_der(&rsa)
         .map_err(|_| anyhow::anyhow!("encode private key failed"))?;
-    let public_der = AsDer::<PublicKeyX509Der>::as_der(&private_key.public_key())
+    let public_key = rsa.public_key();
+    let public = AsDer::<PublicKeyX509Der>::as_der(&public_key)
         .map_err(|_| anyhow::anyhow!("encode public key failed"))?;
-    let jwt_private_pem = pem::encode(&pem::Pem::new("PRIVATE KEY", private_der.as_ref()));
-    let jwt_public_pem = pem::encode(&pem::Pem::new("PUBLIC KEY", public_der.as_ref()));
-
-    let age_identity = age::x25519::Identity::generate();
-    let age_key = age_identity.to_string().expose_secret().to_owned();
-
-    Ok(BootstrappedKeys {
-        jwt_private_pem,
-        jwt_public_pem,
-        age_key,
-    })
+    let pem_pair = [
+        ("PRIVATE KEY", private.as_ref()),
+        ("PUBLIC KEY", public.as_ref()),
+    ]
+    .map(|(label, der)| pem::encode(&pem::Pem::new(label, der)));
+    let [private, public] = pem_pair;
+    BootstrappedKeys::from_values([
+        private,
+        public,
+        age::x25519::Identity::generate()
+            .to_string()
+            .expose_secret()
+            .to_owned(),
+    ])
 }
 
 #[cfg(test)]

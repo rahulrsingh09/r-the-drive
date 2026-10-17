@@ -6,31 +6,32 @@ use crate::{config::Config, errors::AppError};
 pub const HISTORY_POLICY: &str = include_str!("history.sql");
 
 pub async fn protect_history(pool: &PgPool, config: &Config) -> anyhow::Result<()> {
-    if !config.is_production() {
-        return Ok(());
+    if config.is_production() {
+        let mut transaction = pool.begin().await?;
+        sqlx::raw_sql(HISTORY_POLICY)
+            .execute(&mut *transaction)
+            .await
+            .context("installing vehicle history protection")?;
+        let forbidden: bool = sqlx::query_scalar(
+            "SELECT bool_or(has_table_privilege(current_user, relation, privilege))
+             FROM (VALUES
+               ('panda.vehicles', ARRAY['DELETE','TRUNCATE']),
+               ('panda.trips', ARRAY['DELETE','TRUNCATE']),
+               ('timeseries.telemetry', ARRAY['DELETE','TRUNCATE']),
+               ('panda.vehicle_state_periods', ARRAY['DELETE','TRUNCATE']),
+               ('panda.software_versions', ARRAY['DELETE','TRUNCATE']),
+               ('panda.battery_capacity_snapshots', ARRAY['DELETE','TRUNCATE']),
+               ('panda.charge_sessions', ARRAY['TRUNCATE'])
+             ) AS policy(relation, privileges)
+             CROSS JOIN LATERAL unnest(privileges) AS denied(privilege)",
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        if forbidden {
+            bail!("vehicle history protection requires a database role without overriding delete privileges");
+        }
+        transaction.commit().await?;
     }
-    let mut tx = pool.begin().await?;
-    sqlx::raw_sql(HISTORY_POLICY)
-        .execute(&mut *tx)
-        .await
-        .context("installing vehicle history protection")?;
-    let protected: bool = sqlx::query_scalar(
-        "SELECT NOT EXISTS (
-            SELECT FROM unnest(ARRAY[
-                'panda.vehicles', 'panda.trips', 'timeseries.telemetry',
-                'panda.vehicle_state_periods', 'panda.software_versions',
-                'panda.battery_capacity_snapshots'
-            ]) AS history_table
-            WHERE has_table_privilege(current_user, history_table, 'DELETE')
-               OR has_table_privilege(current_user, history_table, 'TRUNCATE')
-        ) AND NOT has_table_privilege(current_user, 'panda.charge_sessions', 'TRUNCATE')",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if !protected {
-        bail!("vehicle history protection requires a database role without overriding delete privileges");
-    }
-    tx.commit().await?;
     Ok(())
 }
 

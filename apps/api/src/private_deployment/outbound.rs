@@ -1,6 +1,10 @@
 //! Deployment policy for telemetry-only Rivian access and optional egress.
 //! Saved settings cannot relax this policy. Provider tokens are NOT read-only.
 
+#[cfg(test)]
+#[path = "full_replacement_key_custody_outbound_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 use crate::{
     errors::AppError,
     services::external_connections::{OPEN_METEO, RIVIAN_ACCOUNT, S3_BACKUP},
@@ -30,15 +34,13 @@ pub enum PolicyError {
 }
 
 pub fn connection_allowed(id: &str) -> bool {
-    matches!(id, RIVIAN_ACCOUNT | S3_BACKUP | OPEN_METEO) || optional_traffic_allowed()
+    [RIVIAN_ACCOUNT, S3_BACKUP, OPEN_METEO].contains(&id)
 }
 
 pub fn require_connection_allowed(id: &str) -> Result<(), AppError> {
-    if connection_allowed(id) {
-        Ok(())
-    } else {
-        Err(AppError::ExternalConnectionDisabled(id.to_string()))
-    }
+    connection_allowed(id)
+        .then_some(())
+        .ok_or_else(|| AppError::ExternalConnectionDisabled(id.to_owned()))
 }
 
 pub fn optional_traffic_allowed() -> bool {
@@ -46,38 +48,29 @@ pub fn optional_traffic_allowed() -> bool {
 }
 
 pub fn require_optional_traffic() -> Result<(), PolicyError> {
-    if optional_traffic_allowed() {
-        Ok(())
-    } else {
-        Err(PolicyError::OptionalTraffic)
-    }
+    Err(PolicyError::OptionalTraffic)
 }
 
 pub async fn optional_client_for_url(
     url: &url::Url,
     allowlist: &[ipnet::IpNet],
 ) -> Result<reqwest::Client, crate::errors::AppError> {
-    require_optional_traffic().map_err(|_| {
-        crate::errors::AppError::ExternalConnectionDisabled("optional providers".into())
-    })?;
-    crate::services::outbound::outbound_client_for_url(url, allowlist).await
+    let _ = (url, allowlist);
+    Err(crate::errors::AppError::ExternalConnectionDisabled(
+        "optional providers".into(),
+    ))
 }
 
 /// No operation-name exception: a mutation disguised as a telemetry operation
 /// is still denied. Auth mutations use the private, fixed auth flow.
 pub fn require_telemetry_query(query: &str) -> Result<(), PolicyError> {
-    let words: Vec<_> = query
+    let mut words = query
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .filter(|word| !word.is_empty())
-        .collect();
-    if words.first() != Some(&"query")
-        || words
-            .iter()
-            .any(|word| matches!(*word, "mutation" | "subscription"))
-    {
-        return Err(PolicyError::VehicleWrite);
+        .filter(|word| !word.is_empty());
+    match words.next() {
+        Some("query") if !words.any(|word| matches!(word, "mutation" | "subscription")) => Ok(()),
+        _ => Err(PolicyError::VehicleWrite),
     }
-    Ok(())
 }
 
 pub fn validate_http_destination(url: &str) -> Result<(), PolicyError> {
@@ -103,9 +96,8 @@ pub fn gateway_url() -> Result<String, PolicyError> {
     if let Ok(url) = MOCK_GATEWAY.try_with(Clone::clone) {
         return Ok(url);
     }
-    validated_gateway_url(
-        std::env::var("RIVIAN_GRAPHQL_GATEWAY_URL").unwrap_or_else(|_| GATEWAY_URL.into()),
-    )
+    let configured = std::env::var("RIVIAN_GRAPHQL_GATEWAY_URL").ok();
+    validated_gateway_url(configured.unwrap_or_else(|| GATEWAY_URL.to_owned()))
 }
 
 fn validated_gateway_url(url: String) -> Result<String, PolicyError> {
@@ -118,23 +110,33 @@ fn validated_gateway_url(url: String) -> Result<String, PolicyError> {
 /// Keep client ownership here: caller-supplied redirect/proxy policies must
 /// never affect requests containing Rivian passwords or session headers.
 pub fn rivian_post(url: &str) -> Result<reqwest::RequestBuilder, PolicyError> {
-    #[cfg(test)]
-    let is_mock = MOCK_GATEWAY.try_with(|mock| mock == url).unwrap_or(false);
-    #[cfg(not(test))]
-    let is_mock = false;
-    if !is_mock {
-        validate_http_destination(url)?;
+    let approved = match url {
+        GATEWAY_URL | CHARGING_URL => true,
+        _ => {
+            #[cfg(test)]
+            {
+                MOCK_GATEWAY.try_with(|mock| mock == url).unwrap_or(false)
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        }
+    };
+    if !approved {
+        return Err(PolicyError::Destination);
     }
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    let client = CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("fixed Rivian HTTP client")
-    });
-    Ok(client.post(url))
+    Ok(CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("fixed Rivian HTTP client")
+        })
+        .post(url))
 }
 
 pub async fn read_json<T: serde::de::DeserializeOwned>(
@@ -145,27 +147,36 @@ pub async fn read_json<T: serde::de::DeserializeOwned>(
 }
 
 pub async fn read_limited(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     limit: usize,
 ) -> Result<Vec<u8>, PolicyError> {
+    use futures::TryStreamExt;
     if response.status().is_redirection() {
         return Err(PolicyError::Redirect);
     }
     response.error_for_status_ref()?;
     if response
         .content_length()
-        .is_some_and(|length| length > limit as u64)
+        .is_some_and(|size| size > limit as u64)
     {
         return Err(PolicyError::ResponseTooLarge);
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if chunk.len() > limit.saturating_sub(bytes.len()) {
-            return Err(PolicyError::ResponseTooLarge);
+    futures::stream::try_unfold((response, limit), |(mut response, remaining)| async move {
+        match response.chunk().await? {
+            None => Ok(None),
+            Some(chunk) => {
+                let remaining = remaining
+                    .checked_sub(chunk.len())
+                    .ok_or(PolicyError::ResponseTooLarge)?;
+                Ok::<_, PolicyError>(Some((chunk, (response, remaining))))
+            }
         }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
+    })
+    .try_fold(Vec::new(), |mut body, chunk| async move {
+        body.extend_from_slice(&chunk);
+        Ok(body)
+    })
+    .await
 }
 
 // Compiled only into unit tests; task scoping prevents concurrent tests from
