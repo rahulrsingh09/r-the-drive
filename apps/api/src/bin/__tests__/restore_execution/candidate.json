@@ -99,7 +99,7 @@
         "foreign_keys_validated": true,
         "missing_relations": [],
         "required_relations_present": true,
-        "schema_fingerprint": "38263b6bc74efb3dfacf07e13f8af22590c63d2213bb032fcbc7c2ad5b2272f1",
+        "schema_fingerprint": "862a5ce8867bb10bd87de9dc1acb2b2d79795a6194d02cc32fcf6ec4f1c5c87d",
         "telemetry_hypertable": true
       },
       "target_schema": {
@@ -107,7 +107,7 @@
         "foreign_keys_validated": true,
         "missing_relations": [],
         "required_relations_present": true,
-        "schema_fingerprint": "38263b6bc74efb3dfacf07e13f8af22590c63d2213bb032fcbc7c2ad5b2272f1",
+        "schema_fingerprint": "862a5ce8867bb10bd87de9dc1acb2b2d79795a6194d02cc32fcf6ec4f1c5c87d",
         "telemetry_hypertable": true
       }
     }
