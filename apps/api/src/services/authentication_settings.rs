@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use url::Url;
 use uuid::Uuid;
 
@@ -71,7 +71,7 @@ pub struct AuthenticationSettingsUpdate {
     pub required_claim_value: Option<Option<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct StoredSettings {
     oidc_enabled: bool,
     password_login_enabled: bool,
@@ -113,6 +113,110 @@ pub struct EffectiveAuthenticationSettings {
     pub required_claim_value: Option<String>,
 }
 
+fn environment() -> Result<OidcEnvOverrides, AppError> {
+    let values =
+        OidcEnvOverrides::from_env().map_err(|error| AppError::Validation(error.to_string()))?;
+    match values.validate() {
+        Ok(()) => Ok(values),
+        Err(error) => Err(AppError::Validation(error.to_string())),
+    }
+}
+
+fn setting<T>(database: T, override_value: Option<T>) -> EffectiveValue<T> {
+    match override_value {
+        Some(value) => EffectiveValue {
+            value,
+            source: SettingSource::Environment,
+        },
+        None => EffectiveValue {
+            value: database,
+            source: SettingSource::Database,
+        },
+    }
+}
+
+fn optional_setting<T>(
+    database: Option<T>,
+    override_value: Option<T>,
+) -> EffectiveValue<Option<T>> {
+    setting(database, override_value.map(Some))
+}
+
+fn effective(s: StoredSettings, e: &OidcEnvOverrides) -> AuthenticationSettingsResponse {
+    let public_base_url = optional_setting(s.public_base_url, e.public_base_url.clone());
+    let callback_url = public_base_url
+        .value
+        .as_deref()
+        .map(|base| format!("{}/v1/auth/oidc/callback", base.trim_end_matches('/')));
+    AuthenticationSettingsResponse {
+        oidc_enabled: setting(s.oidc_enabled, e.oidc_enabled),
+        password_login_enabled: setting(s.password_login_enabled, e.password_login_enabled),
+        issuer_url: optional_setting(
+            s.issuer_url,
+            e.issuer_url.as_deref().map(canonicalize_issuer),
+        ),
+        public_base_url,
+        client_id: optional_setting(s.client_id, e.client_id.clone()),
+        client_secret: SecretStatus {
+            configured: e.client_secret.is_some() || s.client_secret_encrypted.is_some(),
+            source: setting(false, e.client_secret.as_ref().map(|_| true)).source,
+        },
+        button_label: setting(s.button_label, e.button_label.clone()),
+        scopes: setting(s.scopes, e.scopes.clone()),
+        token_auth_method: setting(s.token_auth_method, e.token_auth_method.clone()),
+        auto_signup: setting(s.auto_signup, e.auto_signup),
+        auto_link_verified_email: setting(s.auto_link_verified_email, e.auto_link_verified_email),
+        oidc_auto_login: setting(s.oidc_auto_login, e.oidc_auto_login),
+        allowed_email_domains: setting(s.allowed_email_domains, e.allowed_email_domains.clone()),
+        required_claim_name: optional_setting(s.required_claim_name, e.required_claim_name.clone()),
+        required_claim_value: optional_setting(
+            s.required_claim_value,
+            e.required_claim_value.clone(),
+        ),
+        last_validation_at: s.last_validation_at,
+        callback_url,
+    }
+}
+
+fn resolve(
+    stored: StoredSettings,
+    env: &OidcEnvOverrides,
+    age_key: &str,
+) -> Result<EffectiveAuthenticationSettings, AppError> {
+    let database_secret = stored
+        .client_secret_encrypted
+        .as_deref()
+        .map(|bytes| {
+            let identity = age_key
+                .parse::<age::x25519::Identity>()
+                .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age key")))?;
+            decrypt_json::<String>(bytes, &identity).map_err(AppError::Internal)
+        })
+        .transpose()?;
+    let public = effective(stored, env);
+    validate_required_claim_pair(
+        public.required_claim_name.value.as_deref(),
+        public.required_claim_value.value.as_deref(),
+    )?;
+    Ok(EffectiveAuthenticationSettings {
+        oidc_enabled: public.oidc_enabled.value,
+        password_login_enabled: public.password_login_enabled.value,
+        issuer_url: public.issuer_url.value,
+        public_base_url: public.public_base_url.value,
+        client_id: public.client_id.value,
+        client_secret: env.client_secret.clone().or(database_secret),
+        button_label: public.button_label.value,
+        scopes: public.scopes.value,
+        token_auth_method: public.token_auth_method.value,
+        auto_signup: public.auto_signup.value,
+        auto_link_verified_email: public.auto_link_verified_email.value,
+        oidc_auto_login: public.oidc_auto_login.value,
+        allowed_email_domains: public.allowed_email_domains.value,
+        required_claim_name: public.required_claim_name.value,
+        required_claim_value: public.required_claim_value.value,
+    })
+}
+
 pub async fn load_effective<'e, E>(
     executor: E,
     age_key: &str,
@@ -121,76 +225,19 @@ where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     let stored = load_stored(executor).await?;
-    let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
-    env.validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
-    let db_secret = match stored.client_secret_encrypted.as_deref() {
-        Some(bytes) => {
-            let identity = age_key
-                .parse::<age::x25519::Identity>()
-                .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age key")))?;
-            Some(decrypt_json::<String>(bytes, &identity).map_err(AppError::Internal)?)
-        }
-        None => None,
-    };
-    let effective = EffectiveAuthenticationSettings {
-        oidc_enabled: env.oidc_enabled.unwrap_or(stored.oidc_enabled),
-        password_login_enabled: env
-            .password_login_enabled
-            .unwrap_or(stored.password_login_enabled),
-        issuer_url: env
-            .issuer_url
-            .as_deref()
-            .map(canonicalize_issuer)
-            .or(stored.issuer_url),
-        public_base_url: env.public_base_url.clone().or(stored.public_base_url),
-        client_id: env.client_id.clone().or(stored.client_id),
-        client_secret: env.client_secret.clone().or(db_secret),
-        button_label: env.button_label.clone().unwrap_or(stored.button_label),
-        scopes: env.scopes.clone().unwrap_or(stored.scopes),
-        token_auth_method: env
-            .token_auth_method
-            .clone()
-            .unwrap_or(stored.token_auth_method),
-        auto_signup: env.auto_signup.unwrap_or(stored.auto_signup),
-        auto_link_verified_email: env
-            .auto_link_verified_email
-            .unwrap_or(stored.auto_link_verified_email),
-        oidc_auto_login: env.oidc_auto_login.unwrap_or(stored.oidc_auto_login),
-        allowed_email_domains: env
-            .allowed_email_domains
-            .clone()
-            .unwrap_or(stored.allowed_email_domains),
-        required_claim_name: env
-            .required_claim_name
-            .clone()
-            .or(stored.required_claim_name),
-        required_claim_value: env
-            .required_claim_value
-            .clone()
-            .or(stored.required_claim_value),
-    };
-    validate_required_claim_pair(
-        effective.required_claim_name.as_deref(),
-        effective.required_claim_value.as_deref(),
-    )?;
-    Ok(effective)
+    resolve(stored, &environment()?, age_key)
 }
 
 pub async fn load(
     pool: &PgPool,
     _age_key: &str,
 ) -> Result<AuthenticationSettingsResponse, AppError> {
-    let stored = load_stored(pool).await?;
-    let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
-    env.validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
-    let response = effective(stored, &env);
+    let response = effective(load_stored(pool).await?, &environment()?);
     validate_required_claim_pair(
         response.required_claim_name.value.as_deref(),
         response.required_claim_value.value.as_deref(),
-    )?;
-    Ok(response)
+    )
+    .map(|()| response)
 }
 
 pub async fn update(
@@ -199,177 +246,132 @@ pub async fn update(
     actor: Uuid,
     body: AuthenticationSettingsUpdate,
 ) -> Result<AuthenticationSettingsResponse, AppError> {
-    let body = normalize_update(body)?;
-    let current = load_stored(pool).await?;
-    let env = OidcEnvOverrides::from_env().map_err(|e| AppError::Validation(e.to_string()))?;
-    env.validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let mut body = normalize_update(body)?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM panda.authentication_settings WHERE id=TRUE FOR UPDATE")
+        .execute(&mut *tx)
+        .await?;
+    let current = load_stored(&mut *tx).await?;
+    let env = environment()?;
     reject_environment_owned_update(&body, &env)?;
-    let effective_before = load_effective(pool, age_key).await?;
-    let resulting_password_login = env.password_login_enabled.unwrap_or(
-        body.password_login_enabled
-            .unwrap_or(current.password_login_enabled),
-    );
-    let resulting_oidc_enabled = env
-        .oidc_enabled
-        .unwrap_or(body.oidc_enabled.unwrap_or(current.oidc_enabled));
-    let resulting_issuer = env.issuer_url.clone().or_else(|| {
-        body.issuer_url
-            .clone()
-            .unwrap_or_else(|| current.issuer_url.clone())
-    });
-    let resulting_public_base = env.public_base_url.clone().or_else(|| {
-        body.public_base_url
-            .clone()
-            .unwrap_or_else(|| current.public_base_url.clone())
-    });
-    if resulting_public_base.is_some() {
-        oidc_callback_url(resulting_public_base.as_deref())?;
-    }
-    let invalidates_validation = body.issuer_url.is_some()
+    let before = resolve(current.clone(), &env, age_key)?;
+    let invalidates = body.issuer_url.is_some()
         || body.public_base_url.is_some()
         || body.client_id.is_some()
         || body.client_secret.is_some()
         || body.scopes.is_some()
         || body.token_auth_method.is_some();
-    let required_claim_name = body
-        .required_claim_name
-        .clone()
-        .unwrap_or_else(|| current.required_claim_name.clone());
-    let required_claim_value = body
-        .required_claim_value
-        .clone()
-        .unwrap_or_else(|| current.required_claim_value.clone());
-    let effective_required_claim_name = env
-        .required_claim_name
-        .clone()
-        .or_else(|| required_claim_name.clone());
-    let effective_required_claim_value = env
-        .required_claim_value
-        .clone()
-        .or_else(|| required_claim_value.clone());
-    validate_required_claim_pair(
-        effective_required_claim_name.as_deref(),
-        effective_required_claim_value.as_deref(),
-    )?;
-    if !resulting_password_login {
-        if invalidates_validation {
+    let secret_update = body.client_secret.take();
+    let mut proposed = apply_update(current.clone(), body);
+    let public_after = effective(proposed.clone(), &env);
+    if public_after.public_base_url.value.is_some() {
+        oidc_callback_url(public_after.public_base_url.value.as_deref())?;
+    }
+    let after = resolve(proposed.clone(), &env, age_key)?;
+    if !after.password_login_enabled {
+        if invalidates {
             return Err(AppError::Validation(
                 "save and test provider changes before disabling password login".into(),
             ));
         }
-        let issuer = resulting_issuer.ok_or_else(|| {
+        let issuer = after.issuer_url.as_deref().ok_or_else(|| {
             AppError::Validation(
                 "password login cannot be disabled without a configured OIDC issuer".into(),
             )
         })?;
-        let current_fingerprint = validation_fingerprint(&effective_before, age_key);
-        if !resulting_oidc_enabled
-            || current.last_validation_at.is_none()
-            || current.last_validation_fingerprint.as_deref() != Some(current_fingerprint.as_str())
-        {
-            return Err(AppError::Validation(
-                "password login cannot be disabled until the effective OIDC configuration has been successfully tested".into(),
-            ));
+        let fingerprint = validation_fingerprint(&before, age_key);
+        let tested = current.last_validation_at.is_some()
+            && current.last_validation_fingerprint.as_deref() == Some(fingerprint.as_str());
+        if !after.oidc_enabled || !tested {
+            return Err(AppError::Validation("password login cannot be disabled until the effective OIDC configuration has been successfully tested".into()));
         }
-        let has_linked_super_user =
-            has_linked_super_user_for_issuer(pool, &canonicalize_issuer(&issuer)).await?;
-        if !has_linked_super_user {
+        if !has_linked_super_user_for_issuer(&mut *tx, issuer).await? {
             return Err(AppError::Validation(
                 "password login cannot be disabled until a super user has linked OIDC".into(),
             ));
         }
     }
-    let secret = match body.client_secret {
-        Some(Some(value)) => {
-            if value.trim().is_empty() {
-                None
-            } else {
-                let identity = age_key
-                    .parse::<age::x25519::Identity>()
-                    .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age key")))?;
-                Some(
-                    encrypt_json(&value.trim().to_owned(), &identity)
-                        .map_err(AppError::Internal)?,
-                )
-            }
-        }
-        Some(None) => None,
-        None => current.client_secret_encrypted,
-    };
-    sqlx::query("UPDATE panda.authentication_settings SET oidc_enabled=$1,password_login_enabled=$2,issuer_url=$3,public_base_url=$4,client_id=$5,client_secret_encrypted=$6,button_label=$7,scopes=$8,token_auth_method=$9,auto_signup=$10,auto_link_verified_email=$11,oidc_auto_login=$12,allowed_email_domains=$13,required_claim_name=$14,required_claim_value=$15,last_validation_at=CASE WHEN $17 THEN NULL ELSE last_validation_at END,last_validation_fingerprint=CASE WHEN $17 THEN NULL ELSE last_validation_fingerprint END,updated_at=now(),updated_by=$16 WHERE id=TRUE")
-        .bind(body.oidc_enabled.unwrap_or(current.oidc_enabled)).bind(body.password_login_enabled.unwrap_or(current.password_login_enabled))
-        .bind(body.issuer_url.unwrap_or(current.issuer_url)).bind(body.public_base_url.unwrap_or(current.public_base_url)).bind(body.client_id.unwrap_or(current.client_id)).bind(secret)
-        .bind(body.button_label.unwrap_or(current.button_label)).bind(body.scopes.unwrap_or(current.scopes)).bind(body.token_auth_method.unwrap_or(current.token_auth_method))
-        .bind(body.auto_signup.unwrap_or(current.auto_signup)).bind(body.auto_link_verified_email.unwrap_or(current.auto_link_verified_email)).bind(body.oidc_auto_login.unwrap_or(current.oidc_auto_login)).bind(body.allowed_email_domains.unwrap_or(current.allowed_email_domains))
-        .bind(required_claim_name).bind(required_claim_value).bind(actor).bind(invalidates_validation).execute(pool).await?;
+    if let Some(secret) = secret_update {
+        proposed.client_secret_encrypted = encrypt_secret(secret.as_deref(), age_key)?;
+    }
+    sqlx::query("UPDATE panda.authentication_settings SET oidc_enabled=$1,password_login_enabled=$2,issuer_url=$3,public_base_url=$4,client_id=$5,client_secret_encrypted=$6,button_label=$7,scopes=$8,token_auth_method=$9,auto_signup=$10,auto_link_verified_email=$11,oidc_auto_login=$12,allowed_email_domains=$13,required_claim_name=$14,required_claim_value=$15,updated_by=$16,last_validation_at=CASE WHEN $17 THEN NULL ELSE last_validation_at END,last_validation_fingerprint=CASE WHEN $17 THEN NULL ELSE last_validation_fingerprint END,updated_at=now() WHERE id=TRUE")
+        .bind(proposed.oidc_enabled).bind(proposed.password_login_enabled).bind(proposed.issuer_url).bind(proposed.public_base_url).bind(proposed.client_id).bind(proposed.client_secret_encrypted)
+        .bind(proposed.button_label).bind(proposed.scopes).bind(proposed.token_auth_method).bind(proposed.auto_signup).bind(proposed.auto_link_verified_email).bind(proposed.oidc_auto_login)
+        .bind(proposed.allowed_email_domains).bind(proposed.required_claim_name).bind(proposed.required_claim_value).bind(actor).bind(invalidates).execute(&mut *tx).await?;
+    tx.commit().await?;
     load(pool, age_key).await
 }
 
-async fn has_linked_super_user_for_issuer(pool: &PgPool, issuer: &str) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM panda.user_oidc_identities i JOIN panda.users u ON u.id=i.user_id WHERE u.role='super_user' AND NOT u.is_disabled AND rtrim(i.issuer, '/')=rtrim($1, '/'))",
-    )
-    .bind(canonicalize_issuer(issuer))
-    .fetch_one(pool)
-    .await?)
+fn apply_update(
+    mut stored: StoredSettings,
+    body: AuthenticationSettingsUpdate,
+) -> StoredSettings {
+    macro_rules! apply { ($($field:ident),+)=>{ $(if let Some(value)=body.$field { stored.$field=value; })+ }; }
+    apply!(
+        oidc_enabled,
+        password_login_enabled,
+        issuer_url,
+        public_base_url,
+        client_id,
+        button_label,
+        scopes,
+        token_auth_method,
+        auto_signup,
+        auto_link_verified_email,
+        oidc_auto_login,
+        allowed_email_domains,
+        required_claim_name,
+        required_claim_value
+    );
+    stored
 }
 
-/// Environment values are emergency/operator overrides, so the UI must not
-/// imply that a database write can change their effective value.
+fn encrypt_secret(secret: Option<&str>, age_key: &str) -> Result<Option<Vec<u8>>, AppError> {
+    secret
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let identity = age_key
+                .parse::<age::x25519::Identity>()
+                .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age key")))?;
+            encrypt_json(&value.to_owned(), &identity).map_err(AppError::Internal)
+        })
+        .transpose()
+}
+
+async fn has_linked_super_user_for_issuer<'e, E>(
+    executor: E,
+    issuer: &str,
+) -> Result<bool, AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM panda.users u WHERE u.role='super_user' AND NOT u.is_disabled AND EXISTS(SELECT 1 FROM panda.user_oidc_identities i WHERE i.user_id=u.id AND rtrim(i.issuer,'/')=$1))")
+        .bind(canonicalize_issuer(issuer)).fetch_one(executor).await.map_err(AppError::Database)
+}
+
 fn reject_environment_owned_update(
     body: &AuthenticationSettingsUpdate,
     env: &OidcEnvOverrides,
 ) -> Result<(), AppError> {
-    let overridden = [
-        (body.oidc_enabled.is_some(), env.oidc_enabled.is_some()),
-        (
-            body.password_login_enabled.is_some(),
-            env.password_login_enabled.is_some(),
-        ),
-        (body.issuer_url.is_some(), env.issuer_url.is_some()),
-        (
-            body.public_base_url.is_some(),
-            env.public_base_url.is_some(),
-        ),
-        (body.client_id.is_some(), env.client_id.is_some()),
-        (body.client_secret.is_some(), env.client_secret.is_some()),
-        (body.button_label.is_some(), env.button_label.is_some()),
-        (body.scopes.is_some(), env.scopes.is_some()),
-        (
-            body.token_auth_method.is_some(),
-            env.token_auth_method.is_some(),
-        ),
-        (body.auto_signup.is_some(), env.auto_signup.is_some()),
-        (
-            body.auto_link_verified_email.is_some(),
-            env.auto_link_verified_email.is_some(),
-        ),
-        (
-            body.oidc_auto_login.is_some(),
-            env.oidc_auto_login.is_some(),
-        ),
-        (
-            body.allowed_email_domains.is_some(),
-            env.allowed_email_domains.is_some(),
-        ),
-        (
-            body.required_claim_name.is_some(),
-            env.required_claim_name.is_some(),
-        ),
-        (
-            body.required_claim_value.is_some(),
-            env.required_claim_value.is_some(),
-        ),
-    ];
-    if overridden
-        .iter()
-        .any(|(submitted, owned)| *submitted && *owned)
-    {
-        return Err(AppError::Conflict(
-            "an environment-owned authentication setting cannot be changed in the UI".into(),
-        ));
-    }
+    macro_rules! check { ($($field:ident),+)=>{ $(if body.$field.is_some() && env.$field.is_some() { return Err(AppError::Conflict("an environment-owned authentication setting cannot be changed in the UI".into())); })+ }; }
+    check!(
+        oidc_enabled,
+        password_login_enabled,
+        issuer_url,
+        public_base_url,
+        client_id,
+        client_secret,
+        button_label,
+        scopes,
+        token_auth_method,
+        auto_signup,
+        auto_link_verified_email,
+        oidc_auto_login,
+        allowed_email_domains,
+        required_claim_name,
+        required_claim_value
+    );
     Ok(())
 }
 
@@ -378,10 +380,162 @@ pub async fn record_validation(
     settings: &EffectiveAuthenticationSettings,
     age_key: &str,
 ) -> Result<(), AppError> {
-    let fingerprint = validation_fingerprint(settings, age_key);
     sqlx::query("UPDATE panda.authentication_settings SET last_validation_at=now(),last_validation_fingerprint=$1 WHERE id=TRUE")
-        .bind(fingerprint).execute(pool).await?;
-    Ok(())
+        .bind(validation_fingerprint(settings,age_key)).execute(pool).await.map(|_|()).map_err(AppError::Database)
+}
+
+pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(), AppError> {
+    validate_required_claim_pair(
+        settings.required_claim_name.value.as_deref(),
+        settings.required_claim_value.value.as_deref(),
+    )?;
+    match settings.oidc_enabled.value {
+        false => Ok(()),
+        true => {
+            let complete = settings.issuer_url.value.is_some()
+                && settings.public_base_url.value.is_some()
+                && settings.client_id.value.is_some()
+                && settings.client_secret.configured;
+            if !complete {
+                return Err(AppError::Validation("OIDC is enabled but issuer, public base URL, client ID, or client secret is missing".into()));
+            }
+            normalize_oidc_scopes(&settings.scopes.value)?;
+            oidc_callback_url(settings.public_base_url.value.as_deref()).map(|_| ())
+        }
+    }
+}
+
+pub fn oidc_callback_url(public_base_url: Option<&str>) -> Result<String, AppError> {
+    let Some(base) = public_base_url.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Err(AppError::Validation(
+            "OIDC public base URL is not configured".into(),
+        ));
+    };
+    let callback = [base.trim_end_matches('/'), "/v1/auth/oidc/callback"].concat();
+    let parsed = Url::parse(&callback)
+        .map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))?;
+    let permitted = parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none();
+    if permitted {
+        Ok(callback)
+    } else {
+        Err(AppError::Validation(
+            "OIDC callback URL must be absolute HTTPS without credentials, query, or fragment"
+                .into(),
+        ))
+    }
+}
+
+fn validate_required_claim_pair(name: Option<&str>, value: Option<&str>) -> Result<(), AppError> {
+    let present = |v: Option<&str>| v.is_some_and(|v| !v.trim().is_empty());
+    if present(name) == present(value) {
+        Ok(())
+    } else {
+        Err(AppError::Validation(
+            "OIDC required claim name and value must be configured together".into(),
+        ))
+    }
+}
+
+fn normalize_update(
+    mut body: AuthenticationSettingsUpdate,
+) -> Result<AuthenticationSettingsUpdate, AppError> {
+    for field in [
+        &mut body.issuer_url,
+        &mut body.public_base_url,
+        &mut body.client_id,
+        &mut body.required_claim_name,
+        &mut body.required_claim_value,
+    ] {
+        *field = normalize_optional_update(field.take());
+    }
+    if let Some(Some(issuer)) = body.issuer_url.as_mut() {
+        *issuer = canonicalize_issuer(issuer);
+    }
+    if let Some(label) = body.button_label.as_mut() {
+        *label = label.trim().to_owned();
+        if label.is_empty() {
+            return Err(AppError::Validation(
+                "OIDC button label cannot be empty".into(),
+            ));
+        }
+    }
+    body.scopes = body
+        .scopes
+        .as_deref()
+        .map(normalize_oidc_scopes)
+        .transpose()?;
+    if let Some(method) = body.token_auth_method.as_mut() {
+        *method = method.trim().to_owned();
+        if !["auto", "client_secret_basic", "client_secret_post"].contains(&method.as_str()) {
+            return Err(AppError::Validation(
+                "OIDC token authentication method is invalid".into(),
+            ));
+        }
+    }
+    if let Some(domains) = body.allowed_email_domains.as_mut() {
+        let normalized: std::collections::BTreeSet<_> = domains
+            .iter()
+            .map(|d| d.trim().trim_start_matches('@').to_ascii_lowercase())
+            .filter(|d| !d.is_empty())
+            .collect();
+        *domains = normalized.into_iter().collect();
+    }
+    Ok(body)
+}
+
+fn normalize_optional_update(value: Option<Option<String>>) -> Option<Option<String>> {
+    match value {
+        None => None,
+        Some(None) => Some(None),
+        Some(Some(text)) => {
+            let trimmed = text.trim();
+            Some((!trimmed.is_empty()).then(|| trimmed.to_owned()))
+        }
+    }
+}
+
+pub fn canonicalize_issuer(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_owned()
+}
+
+pub fn normalize_oidc_scopes(scopes: &str) -> Result<String, AppError> {
+    let mut unique = std::collections::HashSet::new();
+    let mut ordered = Vec::new();
+    for scope in scopes.split_whitespace() {
+        if scope
+            .bytes()
+            .any(|b| !(0x21..=0x7e).contains(&b) || matches!(b, b'"' | b'\\'))
+        {
+            return Err(AppError::Validation(
+                "OIDC scopes contain an invalid character".into(),
+            ));
+        }
+        if unique.insert(scope) {
+            ordered.push(scope);
+        }
+    }
+    if unique.contains("openid") {
+        Ok(ordered.join(" "))
+    } else {
+        Err(AppError::Validation(
+            "OIDC scopes must include openid".into(),
+        ))
+    }
+}
+
+async fn load_stored<'e, E>(executor: E) -> Result<StoredSettings, AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let mut stored=sqlx::query_as::<_,StoredSettings>("SELECT oidc_enabled,password_login_enabled,issuer_url,public_base_url,client_id,client_secret_encrypted,button_label,scopes,token_auth_method,auto_signup,auto_link_verified_email,oidc_auto_login,allowed_email_domains,required_claim_name,required_claim_value,last_validation_at,last_validation_fingerprint FROM panda.authentication_settings WHERE id=TRUE")
+        .fetch_optional(executor).await?.ok_or_else(||AppError::Internal(anyhow::anyhow!("authentication settings row is missing")))?;
+    stored.issuer_url = stored.issuer_url.as_deref().map(canonicalize_issuer);
+    Ok(stored)
 }
 
 fn validation_fingerprint(settings: &EffectiveAuthenticationSettings, age_key: &str) -> String {
@@ -404,257 +558,6 @@ fn validation_fingerprint(settings: &EffectiveAuthenticationSettings, age_key: &
         .as_bytes(),
     );
     hex::encode(mac.finalize().into_bytes())
-}
-
-pub fn validate_effective(settings: &AuthenticationSettingsResponse) -> Result<(), AppError> {
-    validate_required_claim_pair(
-        settings.required_claim_name.value.as_deref(),
-        settings.required_claim_value.value.as_deref(),
-    )?;
-    if !settings.oidc_enabled.value {
-        return Ok(());
-    }
-    if settings.issuer_url.value.is_none()
-        || settings.public_base_url.value.is_none()
-        || settings.client_id.value.is_none()
-        || !settings.client_secret.configured
-    {
-        return Err(AppError::Validation(
-            "OIDC is enabled but issuer, public base URL, client ID, or client secret is missing"
-                .into(),
-        ));
-    }
-    normalize_oidc_scopes(&settings.scopes.value)?;
-    oidc_callback_url(settings.public_base_url.value.as_deref())?;
-    Ok(())
-}
-
-/// Builds the exact redirect URI accepted by the OIDC runtime. Keeping this
-/// validation at the settings boundary prevents the UI from advertising a
-/// provider configuration that the callback exchange will reject later.
-pub fn oidc_callback_url(public_base_url: Option<&str>) -> Result<String, AppError> {
-    let base = public_base_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::Validation("OIDC public base URL is not configured".into()))?;
-    let callback = format!("{}/v1/auth/oidc/callback", base.trim_end_matches('/'));
-    let parsed = Url::parse(&callback)
-        .map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(AppError::Validation(
-            "OIDC callback URL must be absolute HTTPS without credentials, query, or fragment"
-                .into(),
-        ));
-    }
-    Ok(callback)
-}
-
-fn validate_required_claim_pair(name: Option<&str>, value: Option<&str>) -> Result<(), AppError> {
-    match (
-        name.map(str::trim).filter(|value| !value.is_empty()),
-        value.map(str::trim).filter(|value| !value.is_empty()),
-    ) {
-        (None, None) => Ok(()),
-        (Some(_), Some(_)) => Ok(()),
-        _ => Err(AppError::Validation(
-            "OIDC required claim name and value must be configured together".into(),
-        )),
-    }
-}
-
-/// Normalize human-entered settings before they are compared, validated, or
-/// persisted. In particular, an empty optional field means "clear it" rather
-/// than a configured-but-unusable empty string.
-fn normalize_update(
-    mut body: AuthenticationSettingsUpdate,
-) -> Result<AuthenticationSettingsUpdate, AppError> {
-    body.issuer_url = normalize_optional_update(body.issuer_url);
-    body.issuer_url = body
-        .issuer_url
-        .map(|value| value.map(|value| canonicalize_issuer(&value)));
-    body.public_base_url = normalize_optional_update(body.public_base_url);
-    body.client_id = normalize_optional_update(body.client_id);
-    body.required_claim_name = normalize_optional_update(body.required_claim_name);
-    body.required_claim_value = normalize_optional_update(body.required_claim_value);
-
-    if let Some(label) = body.button_label.take() {
-        let label = label.trim();
-        if label.is_empty() {
-            return Err(AppError::Validation(
-                "OIDC button label cannot be empty".into(),
-            ));
-        }
-        body.button_label = Some(label.to_owned());
-    }
-    if let Some(scopes) = body.scopes.take() {
-        body.scopes = Some(normalize_oidc_scopes(&scopes)?);
-    }
-    if let Some(method) = body.token_auth_method.take() {
-        let method = method.trim();
-        if !matches!(
-            method,
-            "auto" | "client_secret_basic" | "client_secret_post"
-        ) {
-            return Err(AppError::Validation(
-                "OIDC token authentication method is invalid".into(),
-            ));
-        }
-        body.token_auth_method = Some(method.to_owned());
-    }
-    if let Some(domains) = body.allowed_email_domains.take() {
-        let mut normalized = domains
-            .into_iter()
-            .map(|domain| domain.trim().trim_start_matches('@').to_ascii_lowercase())
-            .filter(|domain| !domain.is_empty())
-            .collect::<Vec<_>>();
-        normalized.sort();
-        normalized.dedup();
-        body.allowed_email_domains = Some(normalized);
-    }
-    Ok(body)
-}
-
-fn normalize_optional_update(value: Option<Option<String>>) -> Option<Option<String>> {
-    value.map(|value| {
-        value
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-    })
-}
-
-/// Treat an issuer's trailing slash as presentation-only. OIDC discovery and
-/// identity mappings use the same canonical issuer, while accepting the
-/// slash variation commonly shown by provider documentation.
-pub fn canonicalize_issuer(value: &str) -> String {
-    value.trim().trim_end_matches('/').to_owned()
-}
-
-pub fn normalize_oidc_scopes(scopes: &str) -> Result<String, AppError> {
-    let mut normalized = Vec::new();
-    for scope in scopes.split_whitespace() {
-        let valid = scope.bytes().all(|byte| {
-            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
-        });
-        if !valid {
-            return Err(AppError::Validation(
-                "OIDC scopes contain an invalid character".into(),
-            ));
-        }
-        if !normalized.contains(&scope) {
-            normalized.push(scope);
-        }
-    }
-    if !normalized.contains(&"openid") {
-        return Err(AppError::Validation(
-            "OIDC scopes must include openid".into(),
-        ));
-    }
-    Ok(normalized.join(" "))
-}
-
-async fn load_stored<'e, E>(executor: E) -> Result<StoredSettings, AppError>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
-{
-    let row = sqlx::query("SELECT oidc_enabled,password_login_enabled,issuer_url,public_base_url,client_id,client_secret_encrypted,button_label,scopes,token_auth_method,auto_signup,auto_link_verified_email,oidc_auto_login,allowed_email_domains,required_claim_name,required_claim_value,last_validation_at,last_validation_fingerprint FROM panda.authentication_settings WHERE id=TRUE")
-        .fetch_optional(executor).await?.ok_or_else(|| AppError::Internal(anyhow::anyhow!("authentication settings row is missing")))?;
-    Ok(StoredSettings {
-        oidc_enabled: row.try_get("oidc_enabled")?,
-        password_login_enabled: row.try_get("password_login_enabled")?,
-        issuer_url: row
-            .try_get::<Option<String>, _>("issuer_url")?
-            .map(|value| canonicalize_issuer(&value)),
-        public_base_url: row.try_get("public_base_url")?,
-        client_id: row.try_get("client_id")?,
-        client_secret_encrypted: row.try_get("client_secret_encrypted")?,
-        button_label: row.try_get("button_label")?,
-        scopes: row.try_get("scopes")?,
-        token_auth_method: row.try_get("token_auth_method")?,
-        auto_signup: row.try_get("auto_signup")?,
-        auto_link_verified_email: row.try_get("auto_link_verified_email")?,
-        oidc_auto_login: row.try_get("oidc_auto_login")?,
-        allowed_email_domains: row.try_get("allowed_email_domains")?,
-        required_claim_name: row.try_get("required_claim_name")?,
-        required_claim_value: row.try_get("required_claim_value")?,
-        last_validation_at: row.try_get("last_validation_at")?,
-        last_validation_fingerprint: row.try_get("last_validation_fingerprint")?,
-    })
-}
-
-fn effective(s: StoredSettings, e: &OidcEnvOverrides) -> AuthenticationSettingsResponse {
-    macro_rules! field {
-        ($db:expr, $env:expr) => {
-            EffectiveValue {
-                value: $env.clone().unwrap_or($db),
-                source: if $env.is_some() {
-                    SettingSource::Environment
-                } else {
-                    SettingSource::Database
-                },
-            }
-        };
-    }
-    macro_rules! optional_field {
-        ($db:expr, $env:expr) => {
-            EffectiveValue {
-                value: $env.clone().or($db),
-                source: if $env.is_some() {
-                    SettingSource::Environment
-                } else {
-                    SettingSource::Database
-                },
-            }
-        };
-    }
-    let issuer = EffectiveValue {
-        value: e
-            .issuer_url
-            .as_deref()
-            .map(canonicalize_issuer)
-            .or(s.issuer_url),
-        source: if e.issuer_url.is_some() {
-            SettingSource::Environment
-        } else {
-            SettingSource::Database
-        },
-    };
-    let public_base = optional_field!(s.public_base_url, e.public_base_url);
-    let callback_url = public_base
-        .value
-        .as_ref()
-        .map(|base| format!("{}/v1/auth/oidc/callback", base.trim_end_matches('/')));
-    AuthenticationSettingsResponse {
-        oidc_enabled: field!(s.oidc_enabled, e.oidc_enabled),
-        password_login_enabled: field!(s.password_login_enabled, e.password_login_enabled),
-        issuer_url: issuer,
-        public_base_url: public_base,
-        client_id: optional_field!(s.client_id, e.client_id),
-        client_secret: SecretStatus {
-            configured: e.client_secret.is_some() || s.client_secret_encrypted.is_some(),
-            source: if e.client_secret.is_some() {
-                SettingSource::Environment
-            } else {
-                SettingSource::Database
-            },
-        },
-        button_label: field!(s.button_label, e.button_label),
-        scopes: field!(s.scopes, e.scopes),
-        token_auth_method: field!(s.token_auth_method, e.token_auth_method),
-        auto_signup: field!(s.auto_signup, e.auto_signup),
-        auto_link_verified_email: field!(s.auto_link_verified_email, e.auto_link_verified_email),
-        oidc_auto_login: field!(s.oidc_auto_login, e.oidc_auto_login),
-        allowed_email_domains: field!(s.allowed_email_domains, e.allowed_email_domains),
-        required_claim_name: optional_field!(s.required_claim_name, e.required_claim_name),
-        required_claim_value: optional_field!(s.required_claim_value, e.required_claim_value),
-        last_validation_at: s.last_validation_at,
-        callback_url,
-    }
 }
 
 #[cfg(test)]

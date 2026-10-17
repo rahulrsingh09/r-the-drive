@@ -12,7 +12,7 @@ use openidconnect::{
     AdditionalClaims, AsyncHttpClient, AuthType, AuthorizationCode, Client, ClientId, ClientSecret,
     EmptyExtraTokenFields, HttpRequest, HttpResponse, IdTokenFields, IssuerUrl, Nonce,
     OAuth2TokenResponse, PkceCodeVerifier, RedirectUrl, StandardErrorResponse,
-    StandardTokenResponse, SubjectIdentifier, UserInfoClaims,
+    StandardTokenResponse, SubjectIdentifier,
 };
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
@@ -52,59 +52,10 @@ enum HttpsOnlyClientError {
     UnsafeEndpoint,
     #[error(transparent)]
     Request(#[from] AppError),
-    #[error("Invalid OIDC HTTP response")]
-    InvalidResponse,
 }
 
 struct HttpsOnlyClient(crate::config::SecurityConfig);
 
-impl<'c> AsyncHttpClient<'c> for HttpsOnlyClient {
-    type Error = HttpsOnlyClientError;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<HttpResponse, Self::Error>> + Send + Sync + 'c>>;
-
-    fn call(&'c self, request: HttpRequest) -> Self::Future {
-        Box::pin(async move {
-            let request_url = request.uri().to_string();
-            validate_https_provider_endpoint("request", &request_url)
-                .map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
-            let url = Url::parse(&request_url).map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
-            let allowlist = crate::services::outbound::operator_allowlist(
-                &self.0.oidc_private_network_allowlist,
-            )?;
-            let client =
-                crate::services::outbound::outbound_client_for_url(&url, &allowlist).await?;
-            let (parts, body) = request.into_parts();
-            let response = client
-                .request(parts.method, url)
-                .headers(parts.headers)
-                .body(body)
-                .send()
-                .await
-                .map_err(|_| AppError::DependencyUnavailable("OIDC request failed".into()))?;
-            let status = response.status();
-            let headers = response.headers().clone();
-            let bytes = crate::services::outbound::read_response_limited(
-                response,
-                self.0.oidc_max_response_bytes,
-                "OIDC provider",
-            )
-            .await?;
-            let mut result = http::Response::builder()
-                .status(status)
-                .body(bytes)
-                .map_err(|_| HttpsOnlyClientError::InvalidResponse)?;
-            *result.headers_mut() = headers;
-            Ok(result)
-        })
-    }
-}
-
-fn https_only_client() -> Result<HttpsOnlyClient, AppError> {
-    Ok(HttpsOnlyClient(
-        crate::services::outbound::operator_security()?,
-    ))
-}
 type OidcClient<
     HasAuthUrl = openidconnect::EndpointNotSet,
     HasDeviceAuthUrl = openidconnect::EndpointNotSet,
@@ -163,54 +114,6 @@ pub struct VerifiedIdentity {
     pub claims: serde_json::Value,
 }
 
-pub fn random_token() -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(48)
-        .map(char::from)
-        .collect()
-}
-
-pub fn browser_binding(cookie_value: &str) -> String {
-    hex::encode(Sha256::digest(cookie_value.as_bytes()))
-}
-
-pub fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-
-pub fn validate_return_to(value: Option<&str>) -> Result<String, AppError> {
-    let value = value.unwrap_or("/");
-    if !value.starts_with('/')
-        || value.starts_with("//")
-        || value.contains('\\')
-        || value.to_ascii_lowercase().contains("%5c")
-        || value.starts_with("/login?")
-        || value == "/login"
-    {
-        return Err(AppError::Validation(
-            "return_to must be a relative application path".into(),
-        ));
-    }
-    let parsed = Url::parse(&format!("http://panda.invalid{value}"))
-        .map_err(|_| AppError::Validation("invalid return_to".into()))?;
-    if parsed.host_str() != Some("panda.invalid") {
-        return Err(AppError::Validation("return_to must be internal".into()));
-    }
-    // Canonicalize dot segments while keeping valid in-app query and fragment
-    // state.  This is the only value later used as a Location header.
-    let mut canonical = parsed.path().to_owned();
-    if let Some(query) = parsed.query() {
-        canonical.push('?');
-        canonical.push_str(query);
-    }
-    if let Some(fragment) = parsed.fragment() {
-        canonical.push('#');
-        canonical.push_str(fragment);
-    }
-    Ok(canonical)
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderMetadata {
     pub issuer: String,
@@ -224,34 +127,117 @@ pub struct ProviderMetadata {
     pub code_challenge_methods_supported: Vec<String>,
 }
 
+pub fn random_token() -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(48)
+        .map(char::from)
+        .collect()
+}
+pub fn browser_binding(cookie_value: &str) -> String {
+    hex::encode(Sha256::digest(cookie_value.as_bytes()))
+}
+pub fn pkce_challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+impl<'c> AsyncHttpClient<'c> for HttpsOnlyClient {
+    type Error = HttpsOnlyClientError;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<HttpResponse, Self::Error>> + Send + Sync + 'c>>;
+    fn call(&'c self, request: HttpRequest) -> Self::Future {
+        Box::pin(self.execute(request))
+    }
+}
+
+impl HttpsOnlyClient {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpsOnlyClientError> {
+        let (head, body) = request.into_parts();
+        let destination = head.uri.to_string();
+        validate_https_provider_endpoint("request", &destination)
+            .map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
+        let url = Url::parse(&destination).map_err(|_| HttpsOnlyClientError::UnsafeEndpoint)?;
+        let allowed =
+            crate::services::outbound::operator_allowlist(&self.0.oidc_private_network_allowlist)?;
+        let transport = crate::services::outbound::outbound_client_for_url(&url, &allowed).await?;
+        let response = transport
+            .request(head.method, url)
+            .body(body)
+            .headers(head.headers)
+            .send()
+            .await
+            .map_err(|_| AppError::DependencyUnavailable("OIDC request failed".into()))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = crate::services::outbound::read_response_limited(
+            response,
+            self.0.oidc_max_response_bytes,
+            "OIDC provider",
+        )
+        .await?;
+        let mut http = HttpResponse::new(bytes);
+        *http.status_mut() = status;
+        *http.headers_mut() = headers;
+        Ok(http)
+    }
+}
+
+fn https_only_client() -> Result<HttpsOnlyClient, AppError> {
+    crate::services::outbound::operator_security().map(HttpsOnlyClient)
+}
+
+pub fn validate_return_to(value: Option<&str>) -> Result<String, AppError> {
+    let target = value.unwrap_or("/");
+    let forbidden = [
+        !target.starts_with('/'),
+        target.starts_with("//"),
+        target.contains('\\'),
+        target.to_ascii_lowercase().contains("%5c"),
+        target.starts_with("/login?"),
+        target == "/login",
+    ];
+    if forbidden.into_iter().any(|test| test) {
+        return Err(AppError::Validation(
+            "return_to must be a relative application path".into(),
+        ));
+    }
+    let address = Url::parse(&["http://panda.invalid", target].concat())
+        .map_err(|_| AppError::Validation("invalid return_to".into()))?;
+    match address.host_str() {
+        Some("panda.invalid") => Ok(address[url::Position::BeforePath..].to_owned()),
+        _ => Err(AppError::Validation("return_to must be internal".into())),
+    }
+}
+
+fn configured_issuer(settings: &EffectiveAuthenticationSettings) -> Result<IssuerUrl, AppError> {
+    let Some(value) = settings.issuer_url.as_ref() else {
+        return Err(AppError::Validation("OIDC issuer is not configured".into()));
+    };
+    match IssuerUrl::new(value.clone()) {
+        Ok(issuer) if issuer.url().scheme() == "https" => Ok(issuer),
+        Ok(_) => Err(AppError::Validation("OIDC issuer must use HTTPS".into())),
+        Err(_) => Err(AppError::Validation("OIDC issuer is invalid".into())),
+    }
+}
+
 pub async fn discover(
     settings: &EffectiveAuthenticationSettings,
 ) -> Result<ProviderMetadata, AppError> {
-    let issuer = settings
-        .issuer_url
-        .as_deref()
-        .ok_or_else(|| AppError::Validation("OIDC issuer is not configured".into()))?;
-    let issuer_url = IssuerUrl::new(issuer.to_owned())
-        .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
-    if issuer_url.url().scheme() != "https" {
-        return Err(AppError::Validation("OIDC issuer must use HTTPS".into()));
-    }
-    // Do not use URL::join with a leading slash: that would discard Keycloak
-    // realm and other issuer path segments.
+    let issuer = configured_issuer(settings)?;
     let endpoint = Url::parse(&format!(
         "{}/.well-known/openid-configuration",
-        issuer.trim_end_matches('/')
+        issuer.as_str().trim_end_matches('/')
     ))
     .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
     let security = crate::services::outbound::operator_security()?;
-    let allowlist =
+    let allowed =
         crate::services::outbound::operator_allowlist(&security.oidc_private_network_allowlist)?;
-    let response = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist)
-        .await?
+    let transport = crate::services::outbound::outbound_client_for_url(&endpoint, &allowed).await?;
+    let response = transport
         .get(endpoint)
         .send()
         .await
-        .map_err(|_| AppError::Validation("OIDC provider is unavailable".into()))?
+        .map_err(|_| AppError::Validation("OIDC provider is unavailable".into()))?;
+    let response = response
         .error_for_status()
         .map_err(|_| AppError::Validation("OIDC provider discovery failed".into()))?;
     let metadata: ProviderMetadata = crate::services::outbound::read_json(
@@ -260,70 +246,85 @@ pub async fn discover(
         "OIDC discovery",
     )
     .await?;
-    if metadata.issuer.trim_end_matches('/') != issuer.trim_end_matches('/') {
+    if metadata.issuer.trim_end_matches('/') != issuer.as_str().trim_end_matches('/') {
         return Err(AppError::Validation("OIDC issuer mismatch".into()));
     }
-    validate_https_provider_endpoint("authorization", &metadata.authorization_endpoint)?;
-    validate_https_provider_endpoint("token", &metadata.token_endpoint)?;
-    if let Some(jwks_uri) = metadata.jwks_uri.as_deref() {
-        validate_https_provider_endpoint("JWKS", jwks_uri)?;
+    for (name, endpoint) in [
+        (
+            "authorization",
+            Some(metadata.authorization_endpoint.as_str()),
+        ),
+        ("token", Some(metadata.token_endpoint.as_str())),
+        ("JWKS", metadata.jwks_uri.as_deref()),
+    ] {
+        if let Some(endpoint) = endpoint {
+            validate_https_provider_endpoint(name, endpoint)?;
+        }
     }
     if !settings.oidc_enabled {
         return Err(AppError::Validation("OIDC is disabled".into()));
     }
-    if !metadata.code_challenge_methods_supported.is_empty()
-        && !metadata
-            .code_challenge_methods_supported
-            .iter()
-            .any(|m| m == "S256")
-    {
-        return Err(AppError::Validation(
+    match metadata.code_challenge_methods_supported.as_slice() {
+        [] => Ok(metadata),
+        methods if methods.iter().any(|method| method == "S256") => Ok(metadata),
+        _ => Err(AppError::Validation(
             "OIDC provider does not support PKCE S256".into(),
-        ));
+        )),
     }
-    Ok(metadata)
 }
 
 fn validate_https_provider_endpoint(name: &str, value: &str) -> Result<(), AppError> {
-    let parsed = Url::parse(value)
+    let address = Url::parse(value)
         .map_err(|_| AppError::Validation(format!("OIDC {name} endpoint is invalid")))?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(AppError::Validation(format!(
+    let safe = address.scheme() == "https"
+        && address.host_str().is_some()
+        && address.username().is_empty()
+        && address.password().is_none()
+        && address.fragment().is_none();
+    if safe {
+        Ok(())
+    } else {
+        Err(AppError::Validation(format!(
             "OIDC {name} endpoint must be absolute HTTPS without credentials or fragment"
-        )));
+        )))
     }
-    Ok(())
 }
 
 fn callback_url(settings: &EffectiveAuthenticationSettings) -> Result<RedirectUrl, AppError> {
-    let url = authentication_settings::oidc_callback_url(settings.public_base_url.as_deref())?;
-    RedirectUrl::new(url).map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))
+    authentication_settings::oidc_callback_url(settings.public_base_url.as_deref()).and_then(
+        |callback| {
+            RedirectUrl::new(callback)
+                .map_err(|_| AppError::Validation("OIDC callback URL is invalid".into()))
+        },
+    )
 }
 
 fn validate_client_configuration(
     settings: &EffectiveAuthenticationSettings,
 ) -> Result<(), AppError> {
-    let _id = settings
-        .client_id
-        .clone()
-        .filter(|v| !v.trim().is_empty())
-        .ok_or_else(|| AppError::Validation("OIDC client ID is not configured".into()))?;
-    let _secret = settings
-        .client_secret
-        .clone()
-        .filter(|v| !v.trim().is_empty())
-        .ok_or_else(|| AppError::Validation("OIDC client secret is not configured".into()))?;
+    for (value, message) in [
+        (
+            settings.client_id.as_deref(),
+            "OIDC client ID is not configured",
+        ),
+        (
+            settings.client_secret.as_deref(),
+            "OIDC client secret is not configured",
+        ),
+    ] {
+        if value.is_none_or(|s| s.trim().is_empty()) {
+            return Err(AppError::Validation(message.into()));
+        }
+    }
     authentication_settings::normalize_oidc_scopes(&settings.scopes)?;
-    match settings.token_auth_method.as_str() {
-        "auto" | "client_secret_basic" | "client_secret_post" => Ok(()),
-        _ => Err(AppError::Validation(
+    if ["auto", "client_secret_basic", "client_secret_post"]
+        .contains(&settings.token_auth_method.as_str())
+    {
+        Ok(())
+    } else {
+        Err(AppError::Validation(
             "OIDC token authentication method is invalid".into(),
-        )),
+        ))
     }
 }
 
@@ -333,50 +334,38 @@ async fn secure_metadata(
     if !settings.oidc_enabled {
         return Err(AppError::NotFound);
     }
-    let issuer = settings
-        .issuer_url
-        .as_deref()
-        .ok_or_else(|| AppError::Validation("OIDC issuer is not configured".into()))?;
-    let issuer = IssuerUrl::new(issuer.to_owned())
-        .map_err(|_| AppError::Validation("OIDC issuer is invalid".into()))?;
-    if issuer.url().scheme() != "https" {
-        return Err(AppError::Validation("OIDC issuer must use HTTPS".into()));
-    }
-    let http = https_only_client()?;
-    let metadata = CoreProviderMetadata::discover_async(issuer, &http)
+    let issuer = configured_issuer(settings)?;
+    let transport = https_only_client()?;
+    let metadata = CoreProviderMetadata::discover_async(issuer, &transport)
         .await
         .map_err(|_| {
             AppError::Validation("OIDC provider discovery or JWKS retrieval failed".into())
         })?;
-    validate_https_provider_endpoint(
-        "authorization",
-        metadata.authorization_endpoint().url().as_str(),
-    )?;
-    let token_endpoint = metadata
-        .token_endpoint()
-        .ok_or_else(|| AppError::Validation("OIDC provider has no token endpoint".into()))?;
-    validate_https_provider_endpoint("token", token_endpoint.url().as_str())?;
-    validate_https_provider_endpoint("JWKS", metadata.jwks_uri().url().as_str())?;
-    if let Some(userinfo) = metadata.userinfo_endpoint() {
-        validate_https_provider_endpoint("UserInfo", userinfo.url().as_str())?;
+    validate_https_provider_endpoint("authorization", metadata.authorization_endpoint().as_str())?;
+    let Some(token) = metadata.token_endpoint() else {
+        return Err(AppError::Validation(
+            "OIDC provider has no token endpoint".into(),
+        ));
+    };
+    for (name, endpoint) in [
+        ("token", Some(token.as_str())),
+        ("JWKS", Some(metadata.jwks_uri().as_str())),
+        ("UserInfo", metadata.userinfo_endpoint().map(|u| u.as_str())),
+    ] {
+        if let Some(endpoint) = endpoint {
+            validate_https_provider_endpoint(name, endpoint)?;
+        }
     }
     Ok(metadata)
 }
 
-/// A network-free readiness check used by the public login metadata and the
-/// account-link UI. Discovery and credentials still have to be tested through
-/// the explicit provider test and a real browser login.
 pub fn provider_configuration_ready(settings: &EffectiveAuthenticationSettings) -> bool {
-    let issuer_ready = settings
-        .issuer_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| IssuerUrl::new(value.to_owned()).ok())
-        .is_some_and(|issuer| issuer.url().scheme() == "https");
-    issuer_ready
-        && callback_url(settings).is_ok()
-        && validate_client_configuration(settings).is_ok()
+    let mut candidate = settings.clone();
+    candidate.issuer_url = candidate.issuer_url.map(|s| s.trim().to_owned());
+    configured_issuer(&candidate)
+        .and_then(|_| callback_url(settings))
+        .and_then(|_| validate_client_configuration(settings))
+        .is_ok()
 }
 
 pub async fn exchange_and_verify(
@@ -388,117 +377,99 @@ pub async fn exchange_and_verify(
     let metadata = secure_metadata(settings).await?;
     let issuer = metadata.issuer().as_str().trim_end_matches('/').to_owned();
     validate_client_configuration(settings)?;
-    let id = settings.client_id.clone().expect("validated client id");
-    let secret = settings
-        .client_secret
-        .clone()
-        .expect("validated client secret");
-    let http = https_only_client()?;
-    macro_rules! verify_with {
-        ($client:expr) => {{
-            let client = $client;
-            let response = client
-                .exchange_code(AuthorizationCode::new(code.to_owned()))
-                .map_err(|_| AppError::Unauthorized)?
-                .set_pkce_verifier(PkceCodeVerifier::new(transaction.verifier.clone()))
-                .request_async(&http)
-                .await
-                .map_err(|_| AppError::Unauthorized)?;
-            let token = response
-                .extra_fields()
-                .id_token()
-                .ok_or(AppError::Unauthorized)?;
-            let claims = token
-                .claims(
-                    &client.id_token_verifier(),
-                    &Nonce::new(transaction.nonce.clone()),
-                )
-                .map_err(|_| AppError::Unauthorized)?;
-            let subject = claims.subject().as_str().to_owned();
-            let mut email = claims
-                .email()
-                .map(|v| v.as_str().trim().to_ascii_lowercase())
-                .filter(|v| !v.is_empty());
-            let mut email_verified = claims.email_verified() == Some(true);
-            let mut provider_claims = claims.additional_claims().values.clone();
-            let required_claim_missing = settings
-                .required_claim_name
-                .as_deref()
-                .is_some_and(|name| !provider_claims.contains_key(name));
-
-            // The OIDC Core contract allows standard and custom claims to be
-            // supplied by UserInfo instead of the ID token. Fetch it only when
-            // it can fill a claim needed for admission/linking, bind the
-            // response to the already verified subject, and keep a valid
-            // issuer/subject login usable if the optional endpoint is down.
-            if (!email_verified || email.is_none() || required_claim_missing)
-                && client.user_info_url().is_some()
-            {
-                if let Ok(request) = client.user_info(
-                    response.access_token().to_owned(),
-                    Some(SubjectIdentifier::new(subject.clone())),
-                ) {
-                    let userinfo: Result<UserInfoClaims<ProviderClaims, CoreGenderClaim>, _> =
-                        request.request_async(&http).await;
-                    if let Ok(userinfo) = userinfo {
-                        if (!email_verified || email.is_none())
-                            && userinfo.email_verified() == Some(true)
-                        {
-                            email = userinfo
-                                .email()
-                                .map(|value| value.as_str().trim().to_ascii_lowercase())
-                                .filter(|value| !value.is_empty());
-                            email_verified = email.is_some();
-                        }
-                        merge_missing_claims(
-                            &mut provider_claims,
-                            &userinfo.additional_claims().values,
-                        );
-                    }
-                }
-            }
-            Ok(VerifiedIdentity {
-                issuer,
-                subject,
-                email,
-                email_verified,
-                claims: serde_json::to_value(provider_claims)
-                    .map_err(|_| AppError::Unauthorized)?,
-            })
-        }};
-    }
-    let base = || {
-        OidcClient::from_provider_metadata(
-            metadata.clone(),
-            ClientId::new(id.clone()),
-            Some(ClientSecret::new(secret.clone())),
-        )
-        .set_redirect_uri(redirect.clone())
-    };
-    match settings.token_auth_method.as_str() {
-        "client_secret_basic" => verify_with!(base().set_auth_type(AuthType::BasicAuth)),
-        "client_secret_post" => verify_with!(base().set_auth_type(AuthType::RequestBody)),
-        "auto" => verify_with!(base()),
-        _ => Err(AppError::Validation(
-            "OIDC token authentication method is invalid".into(),
+    let client = OidcClient::from_provider_metadata(
+        metadata,
+        ClientId::new(settings.client_id.clone().ok_or(AppError::Unauthorized)?),
+        Some(ClientSecret::new(
+            settings
+                .client_secret
+                .clone()
+                .ok_or(AppError::Unauthorized)?,
         )),
+    )
+    .set_redirect_uri(redirect);
+    let client = match settings.token_auth_method.as_str() {
+        "client_secret_basic" => client.set_auth_type(AuthType::BasicAuth),
+        "client_secret_post" => client.set_auth_type(AuthType::RequestBody),
+        _ => client,
+    };
+    let transport = https_only_client()?;
+    let exchange = client
+        .exchange_code(AuthorizationCode::new(code.to_owned()))
+        .map_err(|_| AppError::Unauthorized)?;
+    let response = exchange
+        .set_pkce_verifier(PkceCodeVerifier::new(transaction.verifier.clone()))
+        .request_async(&transport)
+        .await
+        .map_err(|_| AppError::Unauthorized)?;
+    let token = response
+        .extra_fields()
+        .id_token()
+        .ok_or(AppError::Unauthorized)?;
+    let claims = token
+        .claims(
+            &client.id_token_verifier(),
+            &Nonce::new(transaction.nonce.clone()),
+        )
+        .map_err(|_| AppError::Unauthorized)?;
+    let subject = claims.subject().as_str().to_owned();
+    let mut email = claims
+        .email()
+        .map(|e| e.as_str().trim().to_ascii_lowercase())
+        .filter(|e| !e.is_empty());
+    let mut verified = claims.email_verified() == Some(true);
+    let mut admitted_claims = claims.additional_claims().values.clone();
+    let missing_policy = settings
+        .required_claim_name
+        .as_ref()
+        .is_some_and(|name| !admitted_claims.contains_key(name));
+    let needs_userinfo =
+        (!verified || email.is_none() || missing_policy) && client.user_info_url().is_some();
+    if needs_userinfo {
+        // UserInfo is accepted only with the ID token's verified subject binding.
+        let request = client.user_info(
+            response.access_token().clone(),
+            Some(SubjectIdentifier::new(subject.clone())),
+        );
+        if let Ok(request) = request {
+            if let Ok(info) = request
+                .request_async::<ProviderClaims, _, CoreGenderClaim>(&transport)
+                .await
+            {
+                if (!verified || email.is_none()) && info.email_verified() == Some(true) {
+                    email = info
+                        .email()
+                        .map(|e| e.as_str().trim().to_ascii_lowercase())
+                        .filter(|e| !e.is_empty());
+                    verified = email.is_some();
+                }
+                merge_missing_claims(&mut admitted_claims, &info.additional_claims().values);
+            }
+        }
     }
+    Ok(VerifiedIdentity {
+        issuer,
+        subject,
+        email,
+        email_verified: verified,
+        claims: serde_json::to_value(admitted_claims).map_err(|_| AppError::Unauthorized)?,
+    })
 }
 
 fn merge_missing_claims(
     target: &mut BTreeMap<String, serde_json::Value>,
     fallback: &BTreeMap<String, serde_json::Value>,
 ) {
-    for (name, value) in fallback {
-        target.entry(name.clone()).or_insert_with(|| value.clone());
-    }
+    let mut merged = fallback.clone();
+    merged.append(target);
+    *target = merged;
 }
 
 pub async fn test_provider(settings: &EffectiveAuthenticationSettings) -> Result<(), AppError> {
-    let _ = callback_url(settings)?;
-    let _ = secure_metadata(settings).await?;
-    validate_client_configuration(settings)?;
-    Ok(())
+    callback_url(settings)?;
+    secure_metadata(settings)
+        .await
+        .and_then(|_| validate_client_configuration(settings))
 }
 
 pub fn claim_matches(
@@ -506,30 +477,35 @@ pub fn claim_matches(
     name: Option<&str>,
     expected: Option<&str>,
 ) -> bool {
-    let (name, expected) = match (name, expected) {
-        (None, None) => return true,
-        (Some(name), Some(expected)) if !name.trim().is_empty() && !expected.trim().is_empty() => {
-            (name, expected)
-        }
-        _ => return false,
-    };
-    match identity.claims.get(name) {
-        Some(serde_json::Value::String(v)) => v == expected,
-        Some(serde_json::Value::Array(v)) => v.iter().any(|item| item.as_str() == Some(expected)),
-        _ => false,
+    if name.is_none() && expected.is_none() {
+        return true;
     }
+    let Some((name, expected)) = name
+        .zip(expected)
+        .filter(|(n, v)| !n.trim().is_empty() && !v.trim().is_empty())
+    else {
+        return false;
+    };
+    let Some(claim) = identity.claims.get(name) else {
+        return false;
+    };
+    if let Some(values) = claim.as_array() {
+        return values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|value| value == expected);
+    }
+    claim.as_str() == Some(expected)
 }
 
 pub fn domain_allowed(email: &str, domains: &[String]) -> bool {
-    domains.is_empty()
-        || email
-            .rsplit_once('@')
-            .map(|(_, domain)| {
-                domains
-                    .iter()
-                    .any(|allowed| allowed.eq_ignore_ascii_case(domain))
-            })
-            .unwrap_or(false)
+    match (domains.is_empty(), email.rsplit_once('@')) {
+        (true, _) => true,
+        (false, Some((_, domain))) => domains
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(domain)),
+        _ => false,
+    }
 }
 
 pub fn authorization_url(
@@ -540,24 +516,25 @@ pub fn authorization_url(
 ) -> Result<Url, AppError> {
     validate_client_configuration(settings)?;
     let scopes = authentication_settings::normalize_oidc_scopes(&settings.scopes)?;
-    let mut url = Url::parse(&metadata.authorization_endpoint)
+    let challenge = pkce_challenge(&tx.verifier);
+    let mut authorization = Url::parse(&metadata.authorization_endpoint)
         .map_err(|_| AppError::Validation("OIDC authorization endpoint is invalid".into()))?;
-    url.query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair(
-            "client_id",
-            settings
-                .client_id
-                .as_deref()
-                .ok_or_else(|| AppError::Validation("OIDC client ID is not configured".into()))?,
-        )
-        .append_pair("redirect_uri", callback)
-        .append_pair("scope", &scopes)
-        .append_pair("state", &tx.state)
-        .append_pair("nonce", &tx.nonce)
-        .append_pair("code_challenge", &pkce_challenge(&tx.verifier))
-        .append_pair("code_challenge_method", "S256");
-    Ok(url)
+    let id = settings
+        .client_id
+        .as_deref()
+        .ok_or_else(|| AppError::Validation("OIDC client ID is not configured".into()))?;
+    let parameters = [
+        ("response_type", "code"),
+        ("client_id", id),
+        ("redirect_uri", callback),
+        ("scope", scopes.as_str()),
+        ("state", tx.state.as_str()),
+        ("nonce", tx.nonce.as_str()),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+    ];
+    authorization.query_pairs_mut().extend_pairs(parameters);
+    Ok(authorization)
 }
 
 #[cfg(test)]
