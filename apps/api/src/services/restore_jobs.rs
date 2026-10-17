@@ -293,19 +293,14 @@ pub fn token_matches(job: &RestoreJob, token: &str) -> bool {
 /// reveal how many leading bytes were correct. Length is folded into the
 /// accumulator so malformed tokens do not get a shorter comparison path.
 pub fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
-    let width = left.len().max(right.len());
-    let padded_left = left.iter().copied().chain(std::iter::repeat(0)).take(width);
-    let padded_right = right
-        .iter()
-        .copied()
-        .chain(std::iter::repeat(0))
-        .take(width);
-    padded_left
-        .zip(padded_right)
-        .fold(u8::from(left.len() != right.len()), |difference, (a, b)| {
-            difference | (a ^ b)
-        })
-        == 0
+    let mut difference = u8::from(left.len() != right.len());
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        difference |= left_byte ^ right_byte;
+    }
+    difference == 0
 }
 
 pub fn agent_key_path(config: &Config) -> PathBuf {
