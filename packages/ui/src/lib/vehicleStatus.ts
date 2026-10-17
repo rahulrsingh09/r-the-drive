@@ -2,7 +2,6 @@ import type {
   VehicleStatus,
   VehicleStatusAvailabilityReason,
   VehicleStatusAvailabilityState,
-  VehicleStatusFieldAvailability,
 } from '@panda/types';
 import { formatAppDateTime } from './dateTime';
 
@@ -56,382 +55,126 @@ export function getStatusDefinitionFields(definitionId: string): string[] {
   return DEFINITION_FIELDS[definitionId] ?? [];
 }
 
-export function summarizeStatusAvailability(
-  status: VehicleStatus | null | undefined,
-  fields: string[]
-): StatusAvailabilitySummary {
-  const entries = fields
-    .map((field) => status?.field_availability?.[field])
-    .filter((entry): entry is VehicleStatusFieldAvailability => !!entry);
-
-  const latestEventAt = entries.find((entry) => entry.latest_event_at)?.latest_event_at ?? null;
-  const lastSeenAt = maxIso(entries.map((entry) => entry.last_seen_at));
-  const everSeen = entries.some((entry) => entry.ever_seen);
-  const hasCurrent = entries.some((entry) => entry.availability === 'current');
-  const hasHistorical = entries.some((entry) => entry.availability === 'historical');
-  const hasInvalidSensor = entries.some((entry) => entry.reason_code === 'invalid_sensor');
-
-  const availability: VehicleStatusAvailabilityState = hasCurrent
-    ? 'current'
-    : hasHistorical
-      ? 'historical'
-      : 'never_seen';
-
-  const reasonCode: VehicleStatusAvailabilityReason | null = hasInvalidSensor
-    ? 'invalid_sensor'
-    : availability === 'historical'
-      ? 'missing_recent_payload'
-      : availability === 'never_seen'
-        ? 'never_seen'
-        : null;
-
-  return {
-    availability,
-    reasonCode,
-    lastSeenAt,
-    latestEventAt,
-    everSeen,
-  };
+export function summarizeStatusAvailability(status: VehicleStatus | null | undefined, fields: string[]): StatusAvailabilitySummary {
+  const summary: StatusAvailabilitySummary = { availability: 'never_seen', reasonCode: 'never_seen', lastSeenAt: null, latestEventAt: null, everSeen: false };
+  let invalid = false;
+  for (const field of fields) {
+    const entry = status?.field_availability?.[field];
+    if (!entry) continue;
+    summary.latestEventAt ||= entry.latest_event_at || null;
+    summary.everSeen ||= Boolean(entry.ever_seen);
+    if (entry.last_seen_at && (!summary.lastSeenAt || new Date(entry.last_seen_at).getTime() > new Date(summary.lastSeenAt).getTime())) summary.lastSeenAt = entry.last_seen_at;
+    if (entry.availability === 'current' || (entry.availability === 'historical' && summary.availability !== 'current')) summary.availability = entry.availability;
+    invalid ||= entry.reason_code === 'invalid_sensor';
+  }
+  summary.reasonCode = invalid ? 'invalid_sensor' : summary.availability === 'historical' ? 'missing_recent_payload' : summary.availability === 'never_seen' ? 'never_seen' : null;
+  return summary;
 }
 
-export function buildAvailabilityTooltip(
-  label: string,
-  availability: StatusAvailabilitySummary
-): string | null {
-  if (availability.reasonCode === 'invalid_sensor') {
-    return `${label} is currently unavailable because Rivian marked the sensor as invalid.`;
-  }
-  if (availability.availability === 'historical' && availability.lastSeenAt) {
-    return `${label} is showing the last known value from ${formatDateTimeShort(availability.lastSeenAt)} because the latest vehicle event did not include a new reading.`;
-  }
-  if (availability.availability === 'never_seen') {
-    return `${label} is unavailable because Panda has not stored a reading for this field yet. This may mean the vehicle has not emitted it or Rivian does not expose it for this model.`;
-  }
-  return null;
-}
-
-export function formatAvailabilityLastUpdated(
-  availability: StatusAvailabilitySummary
-): string | null {
-  if (availability.availability !== 'historical' || !availability.lastSeenAt) return null;
-  return `Last updated ${formatDateTimeShort(availability.lastSeenAt)}`;
-}
-
-export function presentVehicleStatusDefinition(
-  definitionId: string,
-  status: VehicleStatus | null | undefined
-): PresentedVehicleStatusValue {
-  const availability = summarizeStatusAvailability(status, getStatusDefinitionFields(definitionId));
-  const tooltip = buildAvailabilityTooltip(getStatusLabel(definitionId), availability);
-  const unavailableBase = {
-    label: availability.reasonCode === 'invalid_sensor' ? 'Invalid Sensor' : 'Unavailable',
-    variant: 'info' as const,
-    availability,
-    tooltip,
-    lastUpdatedLabel: formatAvailabilityLastUpdated(availability),
-    secondaryText: null,
-    renderUnavailableChip: true,
-  };
-
-  if (availability.reasonCode === 'invalid_sensor') {
-    return unavailableBase;
-  }
-
-  switch (definitionId) {
-    case 'hv_thermal': {
-      const value = status?.hv_thermal_event;
-      if (!value) return unavailableBase;
-      if (/fault|fail|critical|error|overheat|warning/i.test(value)) {
-        return presentResolvedStatus('Warning', 'warning', availability, tooltip);
-      }
-      if (/^(off|none|inactive|normal|ok|good)$/i.test(value)) {
-        return presentResolvedStatus('Nominal', 'success', availability, tooltip);
-      }
-      return presentResolvedStatus(titleCase(value), 'warning', availability, tooltip);
-    }
-    case 'twelve_volt_health': {
-      const value = status?.twelve_volt_health;
-      if (!value) return unavailableBase;
-      if (/normal|good|ok/i.test(value)) {
-        return presentResolvedStatus(titleCase(value), 'success', availability, tooltip);
-      }
-      if (/critical|fault|fail/i.test(value)) {
-        return presentResolvedStatus(titleCase(value), 'danger', availability, tooltip);
-      }
-      return presentResolvedStatus(titleCase(value), 'warning', availability, tooltip);
-    }
-    case 'ota_current_version': {
-      const value = status?.ota_current_version;
-      return value
-        ? presentResolvedStatus(value, 'default', availability, tooltip)
-        : unavailableBase;
-    }
-    case 'ota_available_version': {
-      const value = status?.ota_available_version;
-      return value ? presentResolvedStatus(value, 'info', availability, tooltip) : unavailableBase;
-    }
-    case 'charge_port_open':
-      return presentBoolLikeStatus(status?.charge_port_open, availability, tooltip, {
-        active: 'Open',
-        inactive: 'Closed',
-        activeTone: 'warning',
-        inactiveTone: 'success',
-      });
-    case 'charger_derate_active':
-      return presentBoolLikeStatus(status?.charger_derate_active, availability, tooltip, {
-        active: 'Active',
-        inactive: 'Off',
-        activeTone: 'warning',
-        inactiveTone: 'success',
-      });
-    case 'cabin_precon': {
-      const value = status?.cabin_precon_status;
-      if (!value) return unavailableBase;
-      const inactive = /off|none|inactive/i.test(value);
-      return {
-        ...presentResolvedStatus(
-          inactive ? titleCase(value) : titleCase(value),
-          inactive ? 'success' : 'info',
-          availability,
-          tooltip
-        ),
-        secondaryText: status?.cabin_precon_type ? titleCase(status.cabin_precon_type) : null,
-      };
-    }
-    case 'defrost_active':
-      return presentBoolLikeStatus(status?.defrost_active, availability, tooltip, {
-        active: 'Active',
-        inactive: 'Off',
-        activeTone: 'info',
-        inactiveTone: 'success',
-      });
-    case 'pet_mode': {
-      const presented = presentBoolLikeStatus(status?.pet_mode_active, availability, tooltip, {
-        active: 'Active',
-        inactive: 'Off',
-        activeTone: 'info',
-        inactiveTone: 'success',
-      });
-      if (presented.renderUnavailableChip) return presented;
-      const tempOk = normalizeBoolLike(status?.pet_mode_temp_ok);
-      return {
-        ...presented,
-        secondaryText: tempOk === null ? null : `Temp ${tempOk ? 'OK' : 'Check'}`,
-      };
-    }
-    case 'seat_fl_heat':
-    case 'seat_fr_heat':
-    case 'seat_rl_heat':
-    case 'seat_rr_heat':
-    case 'seat_fl_vent':
-    case 'seat_fr_vent':
-    case 'steering_wheel_heat':
-      return presentLevelStatus(readStatusNumber(status, definitionId), availability, tooltip);
-    case 'tonneau_status': {
-      const closed = status?.tonneau_closed;
-      const locked = status?.tonneau_locked;
-      const presented = presentClosedStatus(closed, availability, tooltip);
-      if (presented.renderUnavailableChip) return presented;
-      return {
-        ...presented,
-        secondaryText:
-          locked === null || locked === undefined ? null : `Locked: ${locked ? 'Yes' : 'No'}`,
-      };
-    }
-    case 'gear_guard_locked': {
-      const presented = presentBoolLikeStatus(status?.gear_guard_locked, availability, tooltip, {
-        active: 'Locked',
-        inactive: 'Unlocked',
-        activeTone: 'success',
-        inactiveTone: 'warning',
-      });
-      if (presented.renderUnavailableChip) return presented;
-      return {
-        ...presented,
-        secondaryText: status?.gear_guard_video_status
-          ? titleCase(status.gear_guard_video_status)
-          : null,
-      };
-    }
-    case 'brake_fluid_warning':
-      return presentBoolLikeStatus(status?.brake_fluid_low, availability, tooltip, {
-        active: 'Warning',
-        inactive: 'OK',
-        activeTone: 'warning',
-        inactiveTone: 'success',
-      });
-    case 'wiper_fluid_warning':
-      return presentBoolLikeStatus(status?.wiper_fluid_low, availability, tooltip, {
-        active: 'Warning',
-        inactive: 'OK',
-        activeTone: 'warning',
-        inactiveTone: 'success',
-      });
-    case 'alarm_status':
-      return presentBoolLikeStatus(status?.alarm_active, availability, tooltip, {
-        active: 'Triggered',
-        inactive: 'Armed',
-        activeTone: 'danger',
-        inactiveTone: 'success',
-      });
-    case 'service_mode':
-      return presentBoolLikeStatus(status?.service_mode, availability, tooltip, {
-        active: 'In Service',
-        inactive: 'OK',
-        activeTone: 'warning',
-        inactiveTone: 'success',
-      });
-    case 'window_status': {
-      const values = [
-        status?.window_fl_closed,
-        status?.window_fr_closed,
-        status?.window_rl_closed,
-        status?.window_rr_closed,
-      ];
-      const known = values.filter((value): value is boolean => typeof value === 'boolean');
-      const open = known.filter((value) => value === false).length;
-      if (known.length === 0) return unavailableBase;
-      if (open > 0) {
-        return presentResolvedStatus(`${open} open`, 'warning', availability, tooltip);
-      }
-      return presentResolvedStatus(
-        known.length === 4 ? 'Closed' : `${known.length}/4 closed`,
-        known.length === 4 ? 'success' : 'info',
-        availability,
-        tooltip
-      );
-    }
-    default:
-      return unavailableBase;
+export function buildAvailabilityTooltip(label: string, availability: StatusAvailabilitySummary): string | null {
+  const state = availability.reasonCode === 'invalid_sensor' ? 'invalid' : availability.availability;
+  switch (state) {
+    case 'invalid': return `${label} is currently unavailable because Rivian marked the sensor as invalid.`;
+    case 'historical': return availability.lastSeenAt ? `${label} is showing the last known value from ${formatDateTimeShort(availability.lastSeenAt)} because the latest vehicle event did not include a new reading.` : null;
+    case 'never_seen': return `${label} is unavailable because Panda has not stored a reading for this field yet. This may mean the vehicle has not emitted it or Rivian does not expose it for this model.`;
+    default: return null;
   }
 }
-
-function presentResolvedStatus(
-  label: string,
-  variant: StatusTone,
-  availability: StatusAvailabilitySummary,
-  tooltip: string | null
-): PresentedVehicleStatusValue {
-  return {
-    label,
-    variant,
-    availability,
-    tooltip,
-    lastUpdatedLabel: formatAvailabilityLastUpdated(availability),
-    secondaryText: null,
-    renderUnavailableChip: false,
-  };
+export function formatAvailabilityLastUpdated(availability: StatusAvailabilitySummary): string | null {
+  return availability.availability === 'historical' && availability.lastSeenAt
+    ? `Last updated ${formatDateTimeShort(availability.lastSeenAt)}` : null;
 }
 
-function presentBoolLikeStatus(
-  value: boolean | string | null | undefined,
-  availability: StatusAvailabilitySummary,
-  tooltip: string | null,
-  labels: {
-    active: string;
-    inactive: string;
-    activeTone: StatusTone;
-    inactiveTone: StatusTone;
-  }
-): PresentedVehicleStatusValue {
-  const normalized = normalizeBoolLike(value);
-  if (normalized === null) {
-    return {
-      label: availability.reasonCode === 'invalid_sensor' ? 'Invalid Sensor' : 'Unavailable',
-      variant: 'info',
-      availability,
-      tooltip,
-      lastUpdatedLabel: formatAvailabilityLastUpdated(availability),
-      secondaryText: null,
-      renderUnavailableChip: true,
-    };
-  }
-  return presentResolvedStatus(
-    normalized ? labels.active : labels.inactive,
-    normalized ? labels.activeTone : labels.inactiveTone,
-    availability,
-    tooltip
-  );
-}
-
-function presentLevelStatus(
-  value: number | null,
-  availability: StatusAvailabilitySummary,
-  tooltip: string | null
-): PresentedVehicleStatusValue {
-  if (value === null) {
-    return {
-      label: availability.reasonCode === 'invalid_sensor' ? 'Invalid Sensor' : 'Unavailable',
-      variant: 'info',
-      availability,
-      tooltip,
-      lastUpdatedLabel: formatAvailabilityLastUpdated(availability),
-      secondaryText: null,
-      renderUnavailableChip: true,
-    };
-  }
-  if (value <= 0) return presentResolvedStatus('Off', 'success', availability, tooltip);
-  return presentResolvedStatus(`Level ${value}`, 'info', availability, tooltip);
-}
-
-function presentClosedStatus(
-  value: boolean | null | undefined,
-  availability: StatusAvailabilitySummary,
-  tooltip: string | null
-): PresentedVehicleStatusValue {
-  const normalized = normalizeBoolLike(value);
-  if (normalized === null) {
-    return {
-      label: 'Unavailable',
-      variant: 'info',
-      availability,
-      tooltip,
-      lastUpdatedLabel: formatAvailabilityLastUpdated(availability),
-      secondaryText: null,
-      renderUnavailableChip: true,
-    };
-  }
-  return presentResolvedStatus(
-    normalized ? 'Closed' : 'Open',
-    normalized ? 'success' : 'warning',
-    availability,
-    tooltip
-  );
-}
-
-function getStatusLabel(definitionId: string) {
-  const title = definitionId.replace(/_/g, ' ');
-  return titleCase(title);
-}
-
-function readStatusNumber(status: VehicleStatus | null | undefined, field: string): number | null {
-  const value = status?.[field as keyof VehicleStatus];
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function normalizeBoolLike(value: boolean | string | null | undefined): boolean | null {
+type Reading = { label: string; variant: StatusTone; secondaryText?: string | null };
+type BoolRule = readonly [field: keyof VehicleStatus, active: string, inactive: string, activeTone: StatusTone, inactiveTone: StatusTone];
+const BOOLEAN_READINGS: Record<string, BoolRule> = {
+  charge_port_open: ['charge_port_open', 'Open', 'Closed', 'warning', 'success'],
+  charger_derate_active: ['charger_derate_active', 'Active', 'Off', 'warning', 'success'],
+  defrost_active: ['defrost_active', 'Active', 'Off', 'info', 'success'],
+  pet_mode: ['pet_mode_active', 'Active', 'Off', 'info', 'success'],
+  tonneau_status: ['tonneau_closed', 'Closed', 'Open', 'success', 'warning'],
+  gear_guard_locked: ['gear_guard_locked', 'Locked', 'Unlocked', 'success', 'warning'],
+  brake_fluid_warning: ['brake_fluid_low', 'Warning', 'OK', 'warning', 'success'],
+  wiper_fluid_warning: ['wiper_fluid_low', 'Warning', 'OK', 'warning', 'success'],
+  alarm_status: ['alarm_active', 'Triggered', 'Armed', 'danger', 'success'],
+  service_mode: ['service_mode', 'In Service', 'OK', 'warning', 'success'],
+};
+const LEVEL_READINGS = new Set(['seat_fl_heat', 'seat_fr_heat', 'seat_rl_heat', 'seat_rr_heat', 'seat_fl_vent', 'seat_fr_vent', 'steering_wheel_heat']);
+const TRUE_WORDS = new Set(['true', 'on', 'open', 'active', 'locked', 'triggered', 'yes']);
+const FALSE_WORDS = new Set(['false', 'off', 'closed', 'inactive', 'disabled', 'unlocked', 'no']);
+function boolValue(value: unknown): boolean | null {
   if (typeof value === 'boolean') return value;
   if (typeof value !== 'string') return null;
-  if (/^(true|on|open|active|locked|triggered|yes)$/i.test(value)) return true;
-  if (/^(false|off|closed|inactive|disabled|unlocked|no)$/i.test(value)) return false;
+  const word = value.toLowerCase();
+  return TRUE_WORDS.has(word) ? true : FALSE_WORDS.has(word) ? false : null;
+}
+function readDefinition(id: string, status: VehicleStatus | null | undefined): Reading | null {
+  const boolean = BOOLEAN_READINGS[id];
+  if (boolean) {
+    const [field, active, inactive, activeTone, inactiveTone] = boolean;
+    const value = boolValue(status?.[field]);
+    if (value === null) return null;
+    const reading: Reading = { label: value ? active : inactive, variant: value ? activeTone : inactiveTone };
+    if (id === 'pet_mode') {
+      const ok = boolValue(status?.pet_mode_temp_ok);
+      reading.secondaryText = ok === null ? null : `Temp ${ok ? 'OK' : 'Check'}`;
+    }
+    if (id === 'tonneau_status') reading.secondaryText = status?.tonneau_locked == null ? null : `Locked: ${status.tonneau_locked ? 'Yes' : 'No'}`;
+    if (id === 'gear_guard_locked') reading.secondaryText = status?.gear_guard_video_status ? titleCase(status.gear_guard_video_status) : null;
+    return reading;
+  }
+  const value = status?.[id as keyof VehicleStatus];
+  if (LEVEL_READINGS.has(id)) {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? { label: value <= 0 ? 'Off' : `Level ${value}`, variant: value <= 0 ? 'success' : 'info' } : null;
+  }
+  if (id === 'window_status') {
+    const windows = DEFINITION_FIELDS.window_status!.reduce((counts, field) => {
+      const closed = status?.[field as keyof VehicleStatus];
+      if (typeof closed === 'boolean') { counts.known += 1; if (!closed) counts.open += 1; }
+      return counts;
+    }, { known: 0, open: 0 });
+    if (!windows.known) return null;
+    return windows.open ? { label: `${windows.open} open`, variant: 'warning' }
+      : { label: windows.known === 4 ? 'Closed' : `${windows.known}/4 closed`, variant: windows.known === 4 ? 'success' : 'info' };
+  }
+  if (id === 'hv_thermal') {
+    const thermal = status?.hv_thermal_event;
+    if (!thermal) return null;
+    const rules: Array<readonly [RegExp, string, StatusTone]> = [
+      [/fault|fail|critical|error|overheat|warning/i, 'Warning', 'warning'],
+      [/^(off|none|inactive|normal|ok|good)$/i, 'Nominal', 'success'],
+    ];
+    const match = rules.find(([pattern]) => pattern.test(thermal));
+    return match ? { label: match[1], variant: match[2] } : { label: titleCase(thermal), variant: 'warning' };
+  }
+  if (id === 'twelve_volt_health') {
+    const health = status?.twelve_volt_health;
+    if (!health) return null;
+    return { label: titleCase(health), variant: /normal|good|ok/i.test(health) ? 'success' : /critical|fault|fail/i.test(health) ? 'danger' : 'warning' };
+  }
+  if (id === 'ota_current_version' || id === 'ota_available_version') return value ? { label: value as string, variant: id === 'ota_current_version' ? 'default' : 'info' } : null;
+  if (id === 'cabin_precon' && status?.cabin_precon_status) {
+    return { label: titleCase(status.cabin_precon_status), variant: /off|none|inactive/i.test(status.cabin_precon_status) ? 'success' : 'info', secondaryText: status.cabin_precon_type ? titleCase(status.cabin_precon_type) : null };
+  }
   return null;
 }
-
-function maxIso(values: Array<string | null | undefined>): string | null {
-  let best: string | null = null;
-  for (const value of values) {
-    if (!value) continue;
-    if (!best || new Date(value).getTime() > new Date(best).getTime()) best = value;
-  }
-  return best;
+export function presentVehicleStatusDefinition(definitionId: string, status: VehicleStatus | null | undefined): PresentedVehicleStatusValue {
+  const availability = summarizeStatusAvailability(status, getStatusDefinitionFields(definitionId));
+  const invalid = availability.reasonCode === 'invalid_sensor';
+  const reading = invalid ? null : readDefinition(definitionId, status);
+  return {
+    label: reading?.label ?? (invalid ? 'Invalid Sensor' : 'Unavailable'),
+    variant: reading?.variant ?? 'info', availability,
+    tooltip: buildAvailabilityTooltip(titleCase(definitionId.replace(/_/g, ' ')), availability),
+    lastUpdatedLabel: formatAvailabilityLastUpdated(availability),
+    secondaryText: reading?.secondaryText ?? null,
+    renderUnavailableChip: reading === null,
+  };
 }
-
 function formatDateTimeShort(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'an unknown time';
-  return formatAppDateTime(date, { month: 'short', day: 'numeric' });
+  return Number.isNaN(Date.parse(value)) ? 'an unknown time' : formatAppDateTime(value, { month: 'short', day: 'numeric' });
 }
-
 function titleCase(value: string) {
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

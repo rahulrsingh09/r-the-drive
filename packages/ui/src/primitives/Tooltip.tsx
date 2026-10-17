@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../lib/utils';
+import { useDisclosure, useDismissLayer, useViewportPlacement } from '../hooks/useOverlayInteraction';
+import { floatingPosition } from '../lib/overlayLayout';
 
 export interface TooltipProps {
   content: React.ReactNode;
@@ -19,7 +21,7 @@ export function Tooltip({
   className,
   contentClassName,
 }: TooltipProps) {
-  const [open, setOpen] = React.useState(false);
+  const { open, setOpen } = useDisclosure();
   const [position, setPosition] = React.useState<{ top: number; left: number; visibility: 'hidden' | 'visible' }>({
     top: 0,
     left: 0,
@@ -30,85 +32,12 @@ export function Tooltip({
   const contentRef = React.useRef<HTMLSpanElement | null>(null);
   const tooltipId = React.useId();
 
-  React.useLayoutEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const updatePosition = () => {
-      const trigger = triggerRef.current;
-      const content = contentRef.current;
-
-      if (!trigger || !content) {
-        return;
-      }
-
-      const gap = 8;
-      const viewportPadding = 8;
-      const triggerRect = trigger.getBoundingClientRect();
-      const contentRect = content.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-
-      const preferredTop = side === 'top'
-        ? triggerRect.top - contentRect.height - gap
-        : triggerRect.bottom + gap;
-      const flippedTop = side === 'top'
-        ? triggerRect.bottom + gap
-        : triggerRect.top - contentRect.height - gap;
-
-      let top = preferredTop;
-      if (top < viewportPadding || top + contentRect.height > viewportHeight - viewportPadding) {
-        top = flippedTop;
-      }
-      top = Math.min(
-        Math.max(top, viewportPadding),
-        Math.max(viewportPadding, viewportHeight - viewportPadding - contentRect.height),
-      );
-
-      let left = triggerRect.left;
-      if (align === 'center') {
-        left = triggerRect.left + (triggerRect.width / 2) - (contentRect.width / 2);
-      } else if (align === 'end') {
-        left = triggerRect.right - contentRect.width;
-      }
-
-      left = Math.min(
-        Math.max(left, viewportPadding),
-        Math.max(viewportPadding, viewportWidth - viewportPadding - contentRect.width),
-      );
-
-      setPosition({ top, left, visibility: 'visible' });
-    };
-
-    updatePosition();
-
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [align, open, side, content]);
-
-  React.useEffect(() => {
-    if (!open) return;
-
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node | null)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [open]);
+  const measure = React.useCallback(() => {
+    const trigger = triggerRef.current, popup = contentRef.current;
+    if (trigger && popup) setPosition(floatingPosition(trigger.getBoundingClientRect(), popup.getBoundingClientRect(), side, align));
+  }, [side, align, content]);
+  useViewportPlacement(open, measure);
+  useDismissLayer({ enabled: open, roots: [rootRef], dismiss: () => setOpen(false) });
 
   const tooltip = open ? (
     <span
@@ -127,18 +56,14 @@ export function Tooltip({
     </span>
   ) : null;
 
-  const describedBy = React.isValidElement(children)
-    ? [
-      (children as React.ReactElement<{ 'aria-describedby'?: string }>).props['aria-describedby'],
-      open ? tooltipId : null,
-    ].filter((value): value is string => Boolean(value)).join(' ')
-    : '';
-  const describedChild = React.isValidElement(children)
-    ? React.cloneElement(
-      children as React.ReactElement<{ 'aria-describedby'?: string }>,
-      describedBy ? { 'aria-describedby': describedBy } : {},
-    )
-    : children;
+  let describedChild = children;
+  if (React.isValidElement<{ 'aria-describedby'?: string }>(children)) {
+    const current = children.props['aria-describedby'];
+    const ids: string[] = [];
+    if (current) ids.push(current);
+    if (open) ids.push(tooltipId);
+    describedChild = React.cloneElement(children, ids.length ? { 'aria-describedby': ids.join(' ') } : {});
+  }
 
   return (
     <span

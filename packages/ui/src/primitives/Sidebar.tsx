@@ -7,6 +7,8 @@ import { TbCarSuv } from 'react-icons/tb';
 import { FaChargingStation } from 'react-icons/fa6';
 import { BiTrip } from 'react-icons/bi';
 import { cn } from '../lib/utils';
+import { listen, lockBodyScroll } from '../lib/browserRuntime';
+import { useDisclosure } from '../hooks/useOverlayInteraction';
 import { useThemeRuntime } from '../lib/themeRuntime';
 
 export interface NavItem {
@@ -70,7 +72,7 @@ export function Sidebar({
     },
     [collapsed, collapsedProp, onCollapsedChange]
   );
-  const [mobileOpen, setMobileOpen] = React.useState(false);
+  const { open: mobileOpen, setOpen: setMobileOpen } = useDisclosure();
   const mobileMenuButtonRef = React.useRef<HTMLButtonElement>(null);
   const mobileCloseButtonRef = React.useRef<HTMLButtonElement>(null);
   const lastMobileFocusRef = React.useRef<HTMLElement | null>(null);
@@ -90,47 +92,38 @@ export function Sidebar({
 
   React.useEffect(() => {
     if (!mobileOpen) return;
-
-    const previousOverflow = document.body.style.overflow;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeMobileNavigation();
-      }
-    };
-    const focusTimer = window.setTimeout(() => mobileCloseButtonRef.current?.focus(), 0);
-
-    document.body.style.overflow = 'hidden';
-    document.addEventListener('keydown', handleKeyDown);
-
+    const unlock = lockBodyScroll();
+    const focus = window.setTimeout(() => mobileCloseButtonRef.current?.focus(), 0);
+    const stop = listen([[document, 'keydown', event => {
+      if ((event as KeyboardEvent).key !== 'Escape') return;
+      event.preventDefault();
+      closeMobileNavigation();
+    }]]);
     return () => {
-      window.clearTimeout(focusTimer);
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener('keydown', handleKeyDown);
-
-      if (restoreFocusOnCloseRef.current) {
-        window.setTimeout(() => (mobileMenuButtonRef.current ?? lastMobileFocusRef.current)?.focus(), 0);
-      }
+      window.clearTimeout(focus);
+      stop();
+      unlock();
+      if (!restoreFocusOnCloseRef.current) return;
+      window.setTimeout(() => (mobileMenuButtonRef.current ?? lastMobileFocusRef.current)?.focus(), 0);
     };
   }, [closeMobileNavigation, mobileOpen]);
 
-  function isItemActive(item: NavItem) {
-    if (item.key === activeKey) return true;
-    return (item.children ?? []).some((child) => child.key === activeKey);
-  }
-
-  const pinnedItems = items.filter((item) => item.pinToBottom);
-  const regularItems = items.filter((item) => !item.pinToBottom);
+  const groups = items.reduce((result, item) => {
+    result[item.pinToBottom ? 'pinnedItems' : 'regularItems'].push(item);
+    if (item.key === activeKey || item.children?.some(child => child.key === activeKey)) result.active.add(item.key);
+    return result;
+  }, { pinnedItems: [] as NavItem[], regularItems: [] as NavItem[], active: new Set<string>() });
+  const { pinnedItems, regularItems } = groups;
+  function navigate(href: string) { onNavigate(href); closeMobileNavigation(false); }
 
   function renderItem(item: NavItem, mobile = false) {
-    const isActive = isItemActive(item);
-    const activeChildKey = (item.children ?? []).find((child) => child.key === activeKey)?.key;
+    const isActive = groups.active.has(item.key);
+    const activeChildKey = activeKey;
     return (
       <div key={item.key} className={cn('w-full', !mobile && collapsed && 'flex justify-center')}>
         <button
           onClick={() => {
-            onNavigate(item.href);
-            closeMobileNavigation(false);
+            navigate(item.href);
           }}
           title={!mobile && collapsed ? item.label : undefined}
           aria-current={isActive ? 'page' : undefined}
@@ -169,8 +162,7 @@ export function Sidebar({
                 <button
                   key={child.key}
                   onClick={() => {
-                    onNavigate(child.href);
-                    closeMobileNavigation(false);
+                    navigate(child.href);
                   }}
                   aria-current={childIsActive ? 'page' : undefined}
                   className={cn(
@@ -247,8 +239,7 @@ export function Sidebar({
             <button
               type="button"
               onClick={() => {
-                onNavigate('/');
-                closeMobileNavigation(false);
+                navigate('/');
               }}
               className="flex items-center"
               aria-label="Go to home"

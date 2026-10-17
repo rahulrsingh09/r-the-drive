@@ -1,27 +1,13 @@
 import * as React from 'react';
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
-import type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@panda/types';
-import {
-  addMonths,
-  endOfMonth,
-  format,
-  getYear,
-  isSameMonth,
-  isValid,
-  parse,
-  startOfMonth,
-  subHours,
-} from 'date-fns';
+import type { DashboardTimeframe, PresetKey } from '@panda/types';
+import { addMonths, format, getYear, isSameMonth, startOfMonth } from 'date-fns';
 import { cn } from '../lib/utils';
-import {
-  appDatePartsToDate,
-  endOfAppDay,
-  formatAppDate,
-  formatAppDateTime,
-  getAppDateParts,
-  shiftAppCalendarDays,
-  startOfAppDay,
-} from '../lib/dateTime';
+import { formatAppDate, formatAppDateTime, getAppDateParts } from '../lib/dateTime';
+import { calendarCells } from '../lib/dateRange';
+import { useDateRangeEditor } from '../hooks/useDateRangeEditor';
+import { useDisclosure, useDismissLayer } from '../hooks/useOverlayInteraction';
+export { presetToRange } from '../lib/dateRange';
 import { SelectPicker } from './SelectPicker';
 
 export type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@panda/types';
@@ -48,48 +34,11 @@ const YEAR_OPTIONS = Array.from({ length: 31 }, (_, offset) => {
   return { value: year, label: String(year) };
 });
 
-const TIMEFRAME_PARSE_PATTERNS = [
-  'M/d/yy',
-  'M/d/yyyy',
-  'M/d/yy h:mm a',
-  'M/d/yyyy h:mm a',
-  'M/d/yy HH:mm',
-  'M/d/yyyy HH:mm',
-  'MM/dd/yy',
-  'MM/dd/yyyy',
-  'MM/dd/yy h:mm a',
-  'MM/dd/yyyy h:mm a',
-  'MM/dd/yy HH:mm',
-  'MM/dd/yyyy HH:mm',
-];
-
 export interface DateRangePickerProps {
   timeframe: DashboardTimeframe;
   onChange: (timeframe: DashboardTimeframe) => void;
   className?: string;
   triggerClassName?: string;
-}
-
-export function presetToRange(preset: BoundedPresetKey): DateRange {
-  const now = new Date();
-  switch (preset) {
-    case '1h':
-      return { from: subHours(now, 1), to: now };
-    case '6h':
-      return { from: subHours(now, 6), to: now };
-    case '12h':
-      return { from: subHours(now, 12), to: now };
-    case '24h':
-      return { from: subHours(now, 24), to: now };
-    case '7d':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -7)), to: endOfAppDay(now) };
-    case '30d':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -30)), to: endOfAppDay(now) };
-    case '90d':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -90)), to: endOfAppDay(now) };
-    case '1y':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -365)), to: endOfAppDay(now) };
-  }
 }
 
 export function DateRangePicker({
@@ -98,105 +47,25 @@ export function DateRangePicker({
   className,
   triggerClassName,
 }: DateRangePickerProps) {
-  const [open, setOpen] = React.useState(false);
-  const [customExpanded, setCustomExpanded] = React.useState(timeframe.kind === 'custom');
-  const resolvedRange = React.useMemo(() => timeframeToRange(timeframe), [timeframe]);
-  const [customFrom, setCustomFrom] = React.useState(resolvedRange?.from ?? new Date());
-  const [customTo, setCustomTo] = React.useState(resolvedRange?.to ?? new Date());
-  const [customFromInput, setCustomFromInput] = React.useState(
-    formatDateInputValue(resolvedRange?.from ?? new Date())
-  );
-  const [customToInput, setCustomToInput] = React.useState(
-    formatDateInputValue(resolvedRange?.to ?? new Date())
-  );
-  const [inputError, setInputError] = React.useState<string | null>(null);
-  const [monthCursor, setMonthCursor] = React.useState(
-    startOfMonth(resolvedRange?.from ?? new Date())
-  );
-  const [target, setTarget] = React.useState<'from' | 'to'>('from');
+  const { open, setOpen } = useDisclosure();
+  const editor = useDateRangeEditor(timeframe);
+  const { state, send } = editor;
+  const { expanded: customExpanded, month: monthCursor, target, error: inputError } = state;
+  const { date: customFrom, input: customFromInput } = state.from;
+  const { date: customTo, input: customToInput } = state.to;
   const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    function handler(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') setOpen(false);
-    }
-
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('keydown', handleEscape);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (timeframe.kind === 'custom') {
-      setCustomExpanded(true);
-    }
-
-    const nextRange = timeframeToRange(timeframe);
-    const fallbackRange = nextRange ?? { from: new Date(), to: new Date() };
-    setCustomFrom(fallbackRange.from);
-    setCustomTo(fallbackRange.to);
-    setCustomFromInput(formatDateInputValue(fallbackRange.from));
-    setCustomToInput(formatDateInputValue(fallbackRange.to));
-    setMonthCursor(startOfMonth(fallbackRange.from));
-    setInputError(null);
-  }, [timeframe]);
-
-  const displayLabel = React.useMemo(() => {
-    if (timeframe.kind === 'lifetime') return 'Lifetime';
-    if (timeframe.kind === 'preset') {
-      return PRESETS.find((preset) => preset.key === timeframe.preset)?.label ?? 'Custom range';
-    }
-    return `${formatAppDateTime(timeframe.from)} - ${formatAppDateTime(timeframe.to)}`;
-  }, [timeframe]);
-
-  const handleDayPick = (picked: Date) => {
-    const base = getAppDateParts(target === 'from' ? customFrom : customTo) ?? {
-      year: picked.getFullYear(),
-      month: picked.getMonth() + 1,
-      day: picked.getDate(),
-      hour: 0,
-      minute: 0,
-      second: 0,
-    };
-    const next = appDatePartsToDate({
-      ...base,
-      year: picked.getFullYear(),
-      month: picked.getMonth() + 1,
-      day: picked.getDate(),
-    });
-    if (target === 'from') {
-      setCustomFrom(next);
-      setCustomFromInput(formatDateInputValue(next));
-      setMonthCursor(startOfMonth(next));
-    } else {
-      setCustomTo(next);
-      setCustomToInput(formatDateInputValue(next));
-      setMonthCursor(startOfMonth(next));
-    }
-    setInputError(null);
-  };
-
-  const applyCustomRange = () => {
-    const parsedFrom = parseUserInput(customFromInput, customFrom);
-    const parsedTo = parseUserInput(customToInput, customTo);
-    if (!parsedFrom || !parsedTo) {
-      setInputError('Enter a valid From and To date, like 1/7/25 6:30 PM.');
-      return;
-    }
-    const normalized =
-      parsedFrom <= parsedTo
-        ? { from: parsedFrom, to: parsedTo }
-        : { from: parsedTo, to: parsedFrom };
-    onChange({ kind: 'custom', ...normalized });
+  useDismissLayer({ roots: [ref], pointer: 'mousedown', requireRoot: true, dismiss: () => setOpen(false) });
+  const displayLabel = timeframe.kind === 'custom' ? `${formatAppDateTime(timeframe.from)} - ${formatAppDateTime(timeframe.to)}`
+    : PRESETS.find(preset => preset.key === (timeframe.kind === 'lifetime' ? 'lifetime' : timeframe.preset))?.label ?? 'Custom range';
+  function applyCustomRange() {
+    const range = editor.range();
+    if (range) { onChange({ kind: 'custom', ...range }); setOpen(false); }
+  }
+  function choosePreset(key: PresetKey) {
+    send({ type: 'preset' });
+    onChange(key === 'lifetime' ? { kind: 'lifetime' } : { kind: 'preset', preset: key });
     setOpen(false);
-  };
+  }
 
   return (
     <div ref={ref} className={cn('relative', className)}>
@@ -236,19 +105,10 @@ export function DateRangePicker({
                 <button
                   key={preset.key}
                   type="button"
-                  onClick={() => {
-                    if (preset.key === 'lifetime') {
-                      setCustomExpanded(false);
-                      onChange({ kind: 'lifetime' });
-                    } else {
-                      setCustomExpanded(false);
-                      onChange({ kind: 'preset', preset: preset.key });
-                    }
-                    setOpen(false);
-                  }}
+                  onClick={() => choosePreset(preset.key)}
                   className={cn(
                     'rounded-md px-3 py-1.5 text-left text-sm transition-colors',
-                    matchesPreset(timeframe, preset.key)
+                    (timeframe.kind === 'lifetime' ? preset.key === 'lifetime' : timeframe.kind === 'preset' && timeframe.preset === preset.key)
                       ? 'bg-accent-muted text-accent'
                       : 'text-fg-secondary hover:bg-bg-surface hover:text-fg'
                   )}
@@ -258,13 +118,7 @@ export function DateRangePicker({
               ))}
               <button
                 type="button"
-                onClick={() => {
-                  setCustomExpanded((value) => !value);
-                  if (!customExpanded) {
-                    setTarget('from');
-                    setMonthCursor(startOfMonth(customFrom));
-                  }
-                }}
+                onClick={() => send({ type: 'expand' })}
                 className={cn(
                   'flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition-colors',
                   customExpanded || timeframe.kind === 'custom'
@@ -292,58 +146,20 @@ export function DateRangePicker({
                     active={target === 'from'}
                     value={customFrom}
                     inputValue={customFromInput}
-                    onInputChange={(value) => {
-                      setCustomFromInput(value);
-                      const parsed = parseUserInput(value, customFrom);
-                      if (parsed) {
-                        setCustomFrom(parsed);
-                        setMonthCursor(startOfMonth(parsed));
-                        setInputError(null);
-                      }
-                    }}
-                    onTarget={() => {
-                      setTarget('from');
-                      setMonthCursor(startOfMonth(customFrom));
-                    }}
-                    onHour={(hours) => {
-                      const next = setAppTime(customFrom, { hour: hours });
-                      setCustomFrom(next);
-                      setCustomFromInput(formatDateInputValue(next));
-                    }}
-                    onMinute={(minutes) => {
-                      const next = setAppTime(customFrom, { minute: minutes });
-                      setCustomFrom(next);
-                      setCustomFromInput(formatDateInputValue(next));
-                    }}
+                    onInputChange={value => send({ type: 'input', target: 'from', value })}
+                    onTarget={() => send({ type: 'target', target: 'from' })}
+                    onHour={hour => send({ type: 'time', target: 'from', patch: { hour } })}
+                    onMinute={minute => send({ type: 'time', target: 'from', patch: { minute } })}
                   />
                   <DateTimeRow
                     label="To"
                     active={target === 'to'}
                     value={customTo}
                     inputValue={customToInput}
-                    onInputChange={(value) => {
-                      setCustomToInput(value);
-                      const parsed = parseUserInput(value, customTo);
-                      if (parsed) {
-                        setCustomTo(parsed);
-                        setMonthCursor(startOfMonth(parsed));
-                        setInputError(null);
-                      }
-                    }}
-                    onTarget={() => {
-                      setTarget('to');
-                      setMonthCursor(startOfMonth(customTo));
-                    }}
-                    onHour={(hours) => {
-                      const next = setAppTime(customTo, { hour: hours });
-                      setCustomTo(next);
-                      setCustomToInput(formatDateInputValue(next));
-                    }}
-                    onMinute={(minutes) => {
-                      const next = setAppTime(customTo, { minute: minutes });
-                      setCustomTo(next);
-                      setCustomToInput(formatDateInputValue(next));
-                    }}
+                    onInputChange={value => send({ type: 'input', target: 'to', value })}
+                    onTarget={() => send({ type: 'target', target: 'to' })}
+                    onHour={hour => send({ type: 'time', target: 'to', patch: { hour } })}
+                    onMinute={minute => send({ type: 'time', target: 'to', patch: { minute } })}
                   />
                 </div>
 
@@ -352,8 +168,8 @@ export function DateRangePicker({
                   selected={target === 'from' ? customFrom : customTo}
                   from={customFrom}
                   to={customTo}
-                  onMonth={setMonthCursor}
-                  onPick={handleDayPick}
+                  onMonth={date => send({ type: 'month', date })}
+                  onPick={date => send({ type: 'day', date })}
                 />
 
                 {inputError ? (
@@ -478,16 +294,7 @@ function ThemedCalendar({
   onMonth: (next: Date) => void;
   onPick: (date: Date) => void;
 }) {
-  const monthStart = startOfMonth(month);
-  const monthEnd = endOfMonth(month);
-  const startDayOffset = monthStart.getDay();
-  const totalDays = monthEnd.getDate();
-  const cells: Array<Date | null> = [];
-
-  for (let index = 0; index < startDayOffset; index += 1) cells.push(null);
-  for (let day = 1; day <= totalDays; day += 1) {
-    cells.push(new Date(monthStart.getFullYear(), monthStart.getMonth(), day));
-  }
+  const cells = calendarCells(month, selected, from, to);
 
   return (
     <div className="rounded-lg border border-border bg-bg-surface p-2">
@@ -535,23 +342,9 @@ function ThemedCalendar({
         ))}
       </div>
       <div className="mt-1 grid grid-cols-7 gap-1">
-        {cells.map((date, index) => {
-          if (!date) return <div key={`blank-${index}`} className="h-8" />;
-          const dateInstant = appDatePartsToDate({
-            year: date.getFullYear(),
-            month: date.getMonth() + 1,
-            day: date.getDate(),
-            hour: 0,
-            minute: 0,
-            second: 0,
-          });
-          const inRange = dateInstant >= startOfAppDay(from) && dateInstant <= startOfAppDay(to);
-          const dateParts = getAppDateParts(dateInstant);
-          const selectedParts = getAppDateParts(selected);
-          const selectedDay =
-            dateParts?.year === selectedParts?.year &&
-            dateParts?.month === selectedParts?.month &&
-            dateParts?.day === selectedParts?.day;
+        {cells.map((cell, index) => {
+          if (!cell) return <div key={`blank-${index}`} className="h-8" />;
+          const { date, inRange, selectedDay } = cell;
           return (
             <button
               key={date.toISOString()}
@@ -575,61 +368,6 @@ function ThemedCalendar({
   );
 }
 
-function timeframeToRange(timeframe: DashboardTimeframe): DateRange | null {
-  switch (timeframe.kind) {
-    case 'preset':
-      return presetToRange(timeframe.preset);
-    case 'custom':
-      return normalizeRange({ from: timeframe.from, to: timeframe.to });
-    case 'lifetime':
-      return null;
-  }
-}
-
-function normalizeRange(range: DateRange): DateRange {
-  return range.from <= range.to ? range : { from: range.to, to: range.from };
-}
-
-function parseUserInput(value: string, fallback: Date): Date | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  for (const pattern of TIMEFRAME_PARSE_PATTERNS) {
-    const parsed = parse(trimmed, pattern, fallback);
-    if (isValid(parsed)) {
-      return appDatePartsToDate({
-        year: parsed.getFullYear(),
-        month: parsed.getMonth() + 1,
-        day: parsed.getDate(),
-        hour: parsed.getHours(),
-        minute: parsed.getMinutes(),
-        second: 0,
-      });
-    }
-  }
-
-  const nativeDate = new Date(trimmed);
-  return isValid(nativeDate) ? nativeDate : null;
-}
-
-function formatDateInputValue(value: Date) {
-  return formatAppDate(value, { year: '2-digit', month: 'numeric', day: 'numeric' });
-}
-
-function setAppTime(value: Date, changes: Partial<{ hour: number; minute: number }>) {
-  const parts = getAppDateParts(value);
-  if (!parts) return value;
-  return appDatePartsToDate({ ...parts, ...changes });
-}
-
 function snapMinuteToOption(value: number) {
-  return [0, 15, 30, 45].reduce(
-    (closest, option) => (Math.abs(option - value) < Math.abs(closest - value) ? option : closest),
-    0
-  );
-}
-
-function matchesPreset(timeframe: DashboardTimeframe, preset: PresetKey) {
-  if (preset === 'lifetime') return timeframe.kind === 'lifetime';
-  return timeframe.kind === 'preset' && timeframe.preset === preset;
+  return [0, 15, 30, 45].sort((first, second) => Math.abs(first - value) - Math.abs(second - value))[0]!;
 }

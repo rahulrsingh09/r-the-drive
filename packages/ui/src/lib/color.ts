@@ -2,124 +2,135 @@ export interface RgbColor { r: number; g: number; b: number }
 export interface HslColor { h: number; s: number; l: number }
 export interface OklchColor { l: number; c: number; h: number }
 
+type Triple = readonly [number, number, number];
+type Matrix = readonly [Triple, Triple, Triple];
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 const round = (value: number, digits = 3) => Number(value.toFixed(digits));
-
-export function normalizeHex(value: string): `#${string}` | null {
+const wrapHue = (hue: number) => ((hue % 360) + 360) % 360;
+const rgbVector = ({ r, g, b }: RgbColor): Triple => [r, g, b];
+const fromVector = ([r, g, b]: Triple): RgbColor => ({ r, g, b });
+function transform(vector: Triple, matrix: Matrix): Triple {
+  return matrix.map(row => row[0] * vector[0] + row[1] * vector[1] + row[2] * vector[2]) as unknown as Triple;
+}
+const RGB_TO_LMS: Matrix = [
+  [0.4122214708, 0.5363325363, 0.0514459929],
+  [0.2119034982, 0.6806995451, 0.1073969566],
+  [0.0883024619, 0.2817188376, 0.6299787005],
+];
+const LMS_TO_LAB: Matrix = [
+  [0.2104542553, 0.793617785, -0.0040720468],
+  [1.9779984951, -2.428592205, 0.4505937099],
+  [0.0259040371, 0.7827717662, -0.808675766],
+];
+const LAB_TO_LMS: Matrix = [
+  [1, 0.3963377774, 0.2158037573],
+  [1, -0.1055613458, -0.0638541728],
+  [1, -0.0894841775, -1.291485548],
+];
+const LMS_TO_RGB: Matrix = [
+  [4.0767416621, -3.3077115913, 0.2309699292],
+  [-1.2684380046, 2.6097574011, -0.3413193965],
+  [-0.0041960863, -0.7034186147, 1.707614701],
+];
+function decodeHex(value: string): RgbColor | null {
   const text = value.trim();
-  const short = /^#([0-9a-f]{3})$/i.exec(text)?.[1];
-  if (short) return `#${[...short].map((digit) => digit + digit).join('').toLowerCase()}`;
-  const full = /^#([0-9a-f]{6})$/i.exec(text)?.[1];
-  return full ? `#${full.toLowerCase()}` : null;
+  if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(text)) return null;
+  const packed = Number.parseInt(text.slice(1), 16);
+  const short = text.length === 4;
+  const mask = short ? 15 : 255;
+  const bits = short ? 4 : 8;
+  const factor = short ? 17 : 1;
+  return { r: ((packed >> (bits * 2)) & mask) * factor, g: ((packed >> bits) & mask) * factor, b: (packed & mask) * factor };
 }
-
+export function normalizeHex(value: string): `#${string}` | null {
+  const rgb = decodeHex(value);
+  return rgb ? rgbToHex(rgb) : null;
+}
 export function hexToRgb(value: string): RgbColor | null {
-  const hex = normalizeHex(value);
-  if (!hex) return null;
-  return {
-    r: Number.parseInt(hex.slice(1, 3), 16),
-    g: Number.parseInt(hex.slice(3, 5), 16),
-    b: Number.parseInt(hex.slice(5, 7), 16),
-  };
+  return decodeHex(value);
 }
-
-export function rgbToHex({ r, g, b }: RgbColor): `#${string}` {
-  const channel = (value: number) => Math.round(clamp(value, 0, 255)).toString(16).padStart(2, '0');
-  return `#${channel(r)}${channel(g)}${channel(b)}`;
+export function rgbToHex(rgb: RgbColor): `#${string}` {
+  const encoded = rgbVector(rgb).map(value => Math.round(clamp(value, 0, 255)).toString(16).padStart(2, '0'));
+  return `#${encoded.join('')}`;
 }
-
+const CSS_CHANNELS = {
+  rgb: /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*[\d.]+%?)?\s*\)$/i,
+  hsl: /^hsla?\(\s*([\d.-]+)(?:deg)?[,\s]+([\d.]+)%[,\s]+([\d.]+)%(?:\s*[,/]\s*[\d.]+%?)?\s*\)$/i,
+};
 export function parseCssColor(value: string): RgbColor | null {
-  const hex = hexToRgb(value);
-  if (hex) return hex;
-  const rgb = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*[\d.]+%?)?\s*\)$/i.exec(value.trim());
-  if (rgb) return { r: clamp(Number(rgb[1]), 0, 255), g: clamp(Number(rgb[2]), 0, 255), b: clamp(Number(rgb[3]), 0, 255) };
-  const hsl = /^hsla?\(\s*([\d.-]+)(?:deg)?[,\s]+([\d.]+)%[,\s]+([\d.]+)%(?:\s*[,/]\s*[\d.]+%?)?\s*\)$/i.exec(value.trim());
-  return hsl ? hslToRgb({ h: Number(hsl[1]), s: Number(hsl[2]), l: Number(hsl[3]) }) : null;
+  const text = value.trim();
+  if (text.startsWith('#')) return decodeHex(text);
+  const kind = text.slice(0, 3).toLowerCase();
+  if (kind !== 'rgb' && kind !== 'hsl') return null;
+  const match = CSS_CHANNELS[kind].exec(text);
+  if (!match) return null;
+  const channels = match.slice(1, 4).map(Number) as [number, number, number];
+  return kind === 'hsl'
+    ? hslToRgb({ h: channels[0], s: channels[1], l: channels[2] })
+    : fromVector(channels.map(channel => clamp(channel, 0, 255)) as [number, number, number]);
 }
-
-export function rgbToHsl({ r, g, b }: RgbColor): HslColor {
-  const red = r / 255; const green = g / 255; const blue = b / 255;
-  const max = Math.max(red, green, blue); const min = Math.min(red, green, blue);
-  const delta = max - min; const l = (max + min) / 2;
-  let h = 0;
-  if (delta) {
-    if (max === red) h = 60 * (((green - blue) / delta) % 6);
-    else if (max === green) h = 60 * ((blue - red) / delta + 2);
-    else h = 60 * ((red - green) / delta + 4);
-  }
-  if (h < 0) h += 360;
-  const s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1));
-  return { h: round(h, 1), s: round(s * 100, 1), l: round(l * 100, 1) };
+export function rgbToHsl(rgb: RgbColor): HslColor {
+  const channels = rgbVector(rgb).map(value => value / 255) as [number, number, number];
+  const high = Math.max(...channels), low = Math.min(...channels);
+  const delta = high - low, lightness = (high + low) / 2;
+  const dominant = channels.indexOf(high);
+  const differences = [channels[1] - channels[2], channels[2] - channels[0], channels[0] - channels[1]];
+  const sector = delta ? differences[dominant]! / delta + dominant * 2 : 0;
+  const rawHue = 60 * (dominant === 0 ? sector % 6 : sector);
+  const hue = rawHue < 0 ? rawHue + 360 : rawHue;
+  return { h: round(hue, 1), s: round((delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1))) * 100, 1), l: round(lightness * 100, 1) };
 }
-
 export function hslToRgb({ h, s, l }: HslColor): RgbColor {
-  const hue = ((h % 360) + 360) % 360;
-  const saturation = clamp(s / 100); const lightness = clamp(l / 100);
-  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const hue = wrapHue(h), lightness = clamp(l / 100);
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * clamp(s / 100);
   const x = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
-  const m = lightness - chroma / 2;
-  const [r, g, b] = hue < 60 ? [chroma, x, 0] : hue < 120 ? [x, chroma, 0] : hue < 180 ? [0, chroma, x] : hue < 240 ? [0, x, chroma] : hue < 300 ? [x, 0, chroma] : [chroma, 0, x];
-  return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
+  const offset = lightness - chroma / 2;
+  const sectors: Triple[] = [[chroma, x, 0], [x, chroma, 0], [0, chroma, x], [0, x, chroma], [x, 0, chroma], [chroma, 0, x]];
+  const channels = sectors[Math.floor(hue / 60)] ?? sectors[5]!;
+  return fromVector(channels.map(value => (value + offset) * 255) as [number, number, number]);
 }
-
 const srgbToLinear = (value: number) => {
   const channel = value / 255;
   return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
 };
 const linearToSrgb = (value: number) => 255 * (value <= 0.0031308 ? 12.92 * value : 1.055 * value ** (1 / 2.4) - 0.055);
-
-export function rgbToOklch({ r, g, b }: RgbColor): OklchColor {
-  const lr = srgbToLinear(r); const lg = srgbToLinear(g); const lb = srgbToLinear(b);
-  const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
-  const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
-  const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
-  const lightness = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
-  const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
-  const yellowBlue = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
-  const chroma = Math.sqrt(a * a + yellowBlue * yellowBlue);
-  let hue = Math.atan2(yellowBlue, a) * 180 / Math.PI;
-  if (hue < 0) hue += 360;
-  return { l: round(lightness * 100, 2), c: round(chroma, 4), h: round(hue, 2) };
+export function rgbToOklch(rgb: RgbColor): OklchColor {
+  const linear = rgbVector(rgb).map(srgbToLinear) as [number, number, number];
+  const roots = transform(linear, RGB_TO_LMS).map(Math.cbrt) as [number, number, number];
+  const [lightness, a, b] = transform(roots, LMS_TO_LAB);
+  const hue = Math.atan2(b, a) * 180 / Math.PI;
+  return { l: round(lightness * 100, 2), c: round(Math.sqrt(a * a + b * b), 4), h: round(hue < 0 ? hue + 360 : hue, 2) };
 }
-
 function rawOklchToRgb({ l, c, h }: OklchColor): RgbColor {
-  const lightness = l / 100; const radians = h * Math.PI / 180;
-  const a = c * Math.cos(radians); const b = c * Math.sin(radians);
-  const ll = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
-  const mm = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
-  const ss = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
-  return {
-    r: linearToSrgb(4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss),
-    g: linearToSrgb(-1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss),
-    b: linearToSrgb(-0.0041960863 * ll - 0.7034186147 * mm + 1.707614701 * ss),
-  };
+  const radians = h * Math.PI / 180;
+  const lab: Triple = [l / 100, c * Math.cos(radians), c * Math.sin(radians)];
+  const cubes = transform(lab, LAB_TO_LMS).map(value => value ** 3) as [number, number, number];
+  return fromVector(transform(cubes, LMS_TO_RGB).map(linearToSrgb) as [number, number, number]);
 }
-
+function inGamut(rgb: RgbColor) {
+  return rgb.r >= 0 && rgb.r <= 255 && rgb.g >= 0 && rgb.g <= 255 && rgb.b >= 0 && rgb.b <= 255;
+}
 export function oklchToHex(value: OklchColor): `#${string}` {
-  const normalized = { l: clamp(value.l, 0, 100), c: Math.max(0, value.c), h: ((value.h % 360) + 360) % 360 };
-  let rgb = rawOklchToRgb(normalized);
-  const inGamut = ({ r, g, b }: RgbColor) => [r, g, b].every((channel) => channel >= 0 && channel <= 255);
-  if (!inGamut(rgb)) {
-    let low = 0; let high = normalized.c;
-    for (let index = 0; index < 18; index += 1) {
-      const candidate = (low + high) / 2;
-      const next = rawOklchToRgb({ ...normalized, c: candidate });
-      if (inGamut(next)) { low = candidate; rgb = next; } else high = candidate;
-    }
+  const target = { l: clamp(value.l, 0, 100), c: Math.max(0, value.c), h: wrapHue(value.h) };
+  let accepted = rawOklchToRgb(target);
+  if (inGamut(accepted)) return rgbToHex(accepted);
+  let minimum = 0, maximum = target.c;
+  // The 18-step chroma boundary is part of saved-color compatibility.
+  for (let remaining = 18; remaining > 0; remaining -= 1) {
+    const middle = (minimum + maximum) / 2;
+    const candidate = rawOklchToRgb({ ...target, c: middle });
+    if (inGamut(candidate)) { minimum = middle; accepted = candidate; }
+    else maximum = middle;
   }
-  return rgbToHex(rgb);
+  return rgbToHex(accepted);
 }
-
 export function canonicalColor(value: string, fallback = '#fd8304'): `#${string}` {
-  return normalizeHex(value) ?? rgbToHex(parseCssColor(value) ?? hexToRgb(fallback)!);
+  return rgbToHex(parseCssColor(value) ?? decodeHex(fallback)!);
 }
-
 export function contrastRatio(first: string, second: string): number {
-  const luminance = (value: string) => {
-    const rgb = parseCssColor(value) ?? { r: 0, g: 0, b: 0 };
-    const [r, g, b] = [rgb.r, rgb.g, rgb.b].map(srgbToLinear);
-    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-  };
-  const a = luminance(first); const b = luminance(second);
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  const luminances = [first, second].map(value => {
+    const channels = rgbVector(parseCssColor(value) ?? { r: 0, g: 0, b: 0 }).map(srgbToLinear);
+    return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722;
+  }).sort((a, b) => a - b);
+  return (luminances[1]! + 0.05) / (luminances[0]! + 0.05);
 }

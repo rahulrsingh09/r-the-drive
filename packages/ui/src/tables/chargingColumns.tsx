@@ -2,7 +2,7 @@ import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
 import { Badge } from '../primitives/Badge';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '../lib/utils';
-import { formatAppCalendarDate, formatAppDate, formatAppTime } from '../lib/dateTime';
+import { chargeSample, chargeTimes, chargeType } from './chargePresentation';
 
 export interface ChargeSessionRow {
   id: string;
@@ -51,56 +51,17 @@ const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success' | 'warning'>
   dcfc: 'warning', dc: 'warning', ac: 'success', ac_l2: 'success',
 };
 
-function normalizeAcDcType(chargerType: string | null | undefined): 'ac' | 'dc' | null {
-  if (!chargerType) return null;
-  const normalized = chargerType.toLowerCase();
-  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
-  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
-  return null;
-}
-
-function deriveAcDcType(row: ChargeSessionRow): 'ac' | 'dc' | null {
-  const explicit = normalizeAcDcType(row.charger_type);
-  if (explicit) return explicit;
-
-  const vendor = (row.network_vendor ?? '').trim().toLowerCase();
-  if (vendor && ['tesla', 'rivian', 'electrify america', 'evgo'].includes(vendor)) {
-    return 'dc';
-  }
-
-  const observedPower = row.ended_at == null ? row.live_power_kw ?? row.peak_power_kw : row.peak_power_kw;
-  if (observedPower != null && Number.isFinite(observedPower)) {
-    return observedPower < 20 ? 'ac' : 'dc';
-  }
-
-  return null;
-}
-
-function formatSessionDayLabel(row: ChargeSessionRow): string {
-  if (row.session_day_local) {
-    return formatAppCalendarDate(row.session_day_local);
-  }
-  return formatAppDate(row.started_at);
-}
-
 export const chargingColumns = [
   col.accessor('started_at', {
     header: 'Date / Time',
     cell: (info) => {
-      const row = info.row.original;
-      const start = new Date(info.getValue());
-      const duration = row.ended_at == null && row.live_time_elapsed_seconds != null
-        ? row.live_time_elapsed_seconds / 60 : row.duration_min;
-      const endDate =
-        duration != null
-          ? new Date(start.getTime() + duration * 60000)
-          : null;
+      const times = chargeTimes(info.row.original);
       return (
         <div className="flex flex-col gap-px">
-          <span className="text-sm font-medium text-fg leading-tight">{formatSessionDayLabel(row)}</span>
+          <span className="text-sm font-medium text-fg leading-tight">{times.day}</span>
           <span className="text-xs text-fg-tertiary leading-tight">
-            {formatAppTime(start)}
-            {endDate ? ` – ${formatAppTime(endDate)}` : null}
+            {times.start}
+            {times.end ? ` – ${times.end}` : null}
           </span>
         </div>
       );
@@ -137,7 +98,7 @@ export const chargingColumns = [
     enableSorting: false,
     cell: (info) => {
       const row = info.row.original;
-      const inferred = deriveAcDcType(row);
+      const inferred = chargeType(row);
       if (!inferred) return <span className="text-fg-tertiary">—</span>;
       return (
         <Badge variant={CHARGER_VARIANT[inferred] ?? 'default'} size="sm">
@@ -150,9 +111,9 @@ export const chargingColumns = [
     header: 'Energy Added',
     cell: (info) => {
       const row = info.row.original;
-      const v = row.ended_at == null ? row.live_total_charged_kwh ?? info.getValue() : info.getValue();
+      const { value: v, suffix } = chargeSample(row, 'energy');
       return v !== null ? (
-        <span className="font-mono">{formatKwh(v)}{row.ended_at == null && row.live_total_charged_kwh != null ? ' · Live' : ''}</span>
+        <span className="font-mono">{formatKwh(v)}{suffix}</span>
       ) : <span className="text-fg-tertiary">—</span>;
     },
   }),
@@ -162,11 +123,11 @@ export const chargingColumns = [
     cell: (info) => {
       const row = info.row.original;
       const start = row.soc_start;
-      const end = row.ended_at == null ? row.live_soc_pct ?? row.soc_end : row.soc_end;
+      const { value: end, suffix } = chargeSample(row, 'soc');
       if (start === null || end === null) return <span className="text-fg-tertiary">—</span>;
       return (
         <span className="font-mono text-fg">
-          {formatPercent(start, 0)} → {formatPercent(end, 0)}{row.ended_at == null && row.live_soc_pct != null ? ' · Live' : ''}
+          {formatPercent(start, 0)} → {formatPercent(end, 0)}{suffix}
         </span>
       );
     },
@@ -175,7 +136,7 @@ export const chargingColumns = [
     header: 'Peak',
     cell: (info) => {
       const row = info.row.original;
-      const v = row.ended_at == null ? row.live_power_kw ?? info.getValue() : info.getValue();
+      const { value: v } = chargeSample(row, 'power');
       return v !== null ? (
         <span className="font-mono">{v.toFixed(1)} kW</span>
       ) : <span className="text-fg-tertiary">—</span>;
@@ -185,8 +146,8 @@ export const chargingColumns = [
     header: 'Duration',
     cell: (info) => {
       const row = info.row.original;
-      const v = row.ended_at == null && row.live_time_elapsed_seconds != null ? row.live_time_elapsed_seconds / 60 : info.getValue();
-      return v !== null ? <>{formatDuration(v)}{row.ended_at == null && row.live_time_elapsed_seconds != null ? ' · Live' : ''}</> : <span className="text-fg-tertiary">—</span>;
+      const { value: v, suffix } = chargeSample(row, 'duration');
+      return v !== null ? <>{formatDuration(v)}{suffix}</> : <span className="text-fg-tertiary">—</span>;
     },
   }),
   col.accessor('cost_usd', {

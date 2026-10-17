@@ -40,100 +40,61 @@ const TIRE_WHEEL_DEFINITIONS = [
   ['rr', 'Rear Right'],
 ] as const;
 
-export function normalizeTireWheels(
-  status: TireValues | null | undefined,
-  tires: TireValues | null | undefined
-): TireWheel[] {
+export function normalizeTireWheels(status: TireValues | null | undefined, tires: TireValues | null | undefined): TireWheel[] {
+  const fallback = { ...tires };
+  for (const [key, value] of Object.entries(status ?? {})) {
+    if (value != null) fallback[key as keyof TireValues] = value;
+  }
   return TIRE_WHEEL_DEFINITIONS.map(([position, label]) => ({
-    position,
-    label,
-    psi: (status?.[`tire_${position}_psi`] ?? tires?.[`tire_${position}_psi`] ?? null) as number | null,
-    status: (status?.[`tire_${position}_status`] ?? tires?.[`tire_${position}_status`] ?? null) as string | null,
+    position, label,
+    psi: (fallback[`tire_${position}_psi`] ?? null) as number | null,
+    status: (fallback[`tire_${position}_status`] ?? null) as string | null,
     valid: (status?.[`tire_${position}_valid`] ?? null) as boolean | null,
   }));
 }
-
 export function formatTireLabel(psi: number | null | undefined, status?: string | null | undefined) {
-  if (psi !== null && psi !== undefined) return formatPressure(psi);
-  return status ? prettifyTireStatus(status) : '-';
+  return psi == null ? prettifyTireStatus(status) : formatPressure(psi);
 }
-
-export function getTireHealthTone({
-  psi,
-  status,
-  targetPsi,
-}: {
-  psi: number | null | undefined;
-  status?: string | null | undefined;
-  targetPsi?: number | null | undefined;
-}): TireHealthTone {
-  const normalizedStatus = status?.trim().toLowerCase() ?? '';
-  if (normalizedStatus.includes('invalid_sensor')) return 'neutral';
-  if (psi === null || psi === undefined) {
-    if (/(low|high|warn|critical|fault)/i.test(normalizedStatus)) return 'warning';
-    return 'neutral';
+const TONE_BORDERS = {
+  neutral: 'border-border', success: 'border-status-positive/70',
+  warning: 'border-status-warning/70', danger: 'border-status-danger/70',
+};
+const HEALTH_BANDS = [
+  { tone: 'success', maximumDeficit: 2, label: 'Green', detail: 'Within 2 PSI of target or above it' },
+  { tone: 'warning', maximumDeficit: 5, label: 'Yellow', detail: '3-5 PSI below target' },
+  { tone: 'danger', maximumDeficit: Infinity, label: 'Red', detail: '6+ PSI below target' },
+] as const;
+export function getTireHealthTone({ psi, status, targetPsi }: { psi: number | null | undefined; status?: string | null | undefined; targetPsi?: number | null | undefined }): TireHealthTone {
+  const sensor = status?.trim().toLowerCase() ?? '';
+  if (sensor.includes('invalid_sensor')) return 'neutral';
+  if (psi == null) return /(low|high|warn|critical|fault)/i.test(sensor) ? 'warning' : 'neutral';
+  const deficit = Math.round(targetPsi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI) - Math.round(psi);
+  return HEALTH_BANDS.find(band => deficit <= band.maximumDeficit)?.tone ?? 'danger';
+}
+export function summarizeTireHealth(wheels: TireWheel[], targetPsi?: number | null | undefined) {
+  const result: { tones: TireHealthTone[]; hasInvalidSensor: boolean; readings: number[]; tone: TireHealthTone } = { tones: [], hasInvalidSensor: false, readings: [], tone: 'neutral' };
+  const ranks = { neutral: 0, success: 1, warning: 2, danger: 3 };
+  for (const wheel of wheels) {
+    const tone = getTireHealthTone({ psi: wheel.psi, status: wheel.status, targetPsi });
+    result.tones.push(tone);
+    result.hasInvalidSensor ||= wheel.valid === false;
+    if (typeof wheel.psi === 'number') result.readings.push(wheel.psi);
+    if (ranks[tone] > ranks[result.tone]) result.tone = tone;
   }
-
-  const resolvedTarget = Math.round(targetPsi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI);
-  const displayPsi = Math.round(psi);
-  const delta = resolvedTarget - displayPsi;
-  if (delta <= 2) return 'success';
-  if (delta <= 5) return 'warning';
-  return 'danger';
+  return result;
 }
-
-export function summarizeTireHealth(
-  wheels: TireWheel[],
-  targetPsi?: number | null | undefined
-) {
-  const tones = wheels.map((wheel) =>
-    getTireHealthTone({ psi: wheel.psi, status: wheel.status, targetPsi })
-  );
-  return {
-    tones,
-    hasInvalidSensor: wheels.some((wheel) => wheel.valid === false),
-    readings: wheels.filter((wheel) => typeof wheel.psi === 'number').map((wheel) => wheel.psi as number),
-    tone: tones.includes('danger')
-      ? ('danger' as const)
-      : tones.includes('warning')
-        ? ('warning' as const)
-        : tones.includes('success')
-          ? ('success' as const)
-          : ('neutral' as const),
-  };
-}
-
 export function tireHealthBorderClass(tone: TireHealthTone) {
-  if (tone === 'success') return 'border-status-positive/70';
-  if (tone === 'warning') return 'border-status-warning/70';
-  if (tone === 'danger') return 'border-status-danger/70';
-  return 'border-border';
+  return TONE_BORDERS[tone] ?? TONE_BORDERS.neutral;
 }
-
 export function getTireHealthLegend(targetPsi?: number | null | undefined): TireHealthLegendEntry[] {
-  const resolvedTarget = Math.round(targetPsi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI);
-  return [
-    {
-      tone: 'success',
-      label: 'Green',
-      rangeLabel: `${Math.ceil(resolvedTarget - 2)}+ psi`,
-      detail: 'Within 2 PSI of target or above it',
-    },
-    {
-      tone: 'warning',
-      label: 'Yellow',
-      rangeLabel: `${Math.ceil(resolvedTarget - 5)}-${Math.ceil(resolvedTarget - 3)} psi`,
-      detail: '3-5 PSI below target',
-    },
-    {
-      tone: 'danger',
-      label: 'Red',
-      rangeLabel: `<=${Math.ceil(resolvedTarget - 6)} psi`,
-      detail: '6+ PSI below target',
-    },
-  ];
+  const target = Math.round(targetPsi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI);
+  return HEALTH_BANDS.map((band, index) => ({
+    tone: band.tone, label: band.label, detail: band.detail,
+    rangeLabel: index === 0 ? `${Math.ceil(target - 2)}+ psi`
+      : index === 1 ? `${Math.ceil(target - 5)}-${Math.ceil(target - 3)} psi`
+      : `<=${Math.ceil(target - 6)} psi`,
+  }));
 }
-
 function prettifyTireStatus(value: string | null | undefined) {
   if (!value) return '-';
   return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());

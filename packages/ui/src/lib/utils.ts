@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { browserStorage } from './browserRuntime';
 
 export type UnitSystem = 'imperial' | 'metric';
 export type EfficiencyDisplay = 'distance_per_energy' | 'energy_per_distance';
@@ -56,75 +57,52 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-function clonePrefs(prefs: UnitPreferences): UnitPreferences {
-  return { ...prefs };
-}
+const PREFERENCE_VALUES = {
+  mode: ['imperial', 'metric', 'custom'],
+  distance_unit: ['miles', 'kilometers'],
+  speed_unit: ['mph', 'kmh'],
+  temperature_unit: ['fahrenheit', 'celsius'],
+  pressure_unit: ['psi', 'kpa'],
+  altitude_unit: ['feet', 'meters'],
+  place_radius_unit: ['feet', 'meters'],
+  efficiency_display: ['distance_per_energy', 'energy_per_distance'],
+} satisfies Record<keyof UnitPreferences, readonly string[]>;
 
 function isUnitPreferences(value: unknown): value is UnitPreferences {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Partial<UnitPreferences>;
-  return (
-    (v.mode === 'imperial' || v.mode === 'metric' || v.mode === 'custom') &&
-    (v.distance_unit === 'miles' || v.distance_unit === 'kilometers') &&
-    (v.speed_unit === 'mph' || v.speed_unit === 'kmh') &&
-    (v.temperature_unit === 'fahrenheit' || v.temperature_unit === 'celsius') &&
-    (v.pressure_unit === 'psi' || v.pressure_unit === 'kpa') &&
-    (v.altitude_unit === 'feet' || v.altitude_unit === 'meters') &&
-    (v.place_radius_unit === 'feet' || v.place_radius_unit === 'meters') &&
-    (v.efficiency_display === 'distance_per_energy' || v.efficiency_display === 'energy_per_distance')
+  if (typeof value !== 'object' || value === null) return false;
+  return Object.entries(PREFERENCE_VALUES).every(([field, choices]) =>
+    choices.includes((value as Record<string, string>)[field]!),
   );
 }
 
-function readLegacyPreferences(): UnitPreferences {
-  const base = clonePrefs(IMPERIAL_PREFS);
-  try {
-    const system = window.localStorage.getItem(UNIT_SYSTEM_STORAGE_KEY);
-    if (system === 'metric') Object.assign(base, METRIC_PREFS);
-    const efficiencyDisplay = window.localStorage.getItem(EFFICIENCY_DISPLAY_STORAGE_KEY);
-    base.efficiency_display =
-      efficiencyDisplay === 'energy_per_distance' ? 'energy_per_distance' : 'distance_per_energy';
-  } catch {
-    // Ignore.
-  }
-  return base;
-}
-
 export function getUnitPreferences(): UnitPreferences {
-  if (typeof window === 'undefined') return clonePrefs(IMPERIAL_PREFS);
-  try {
-    const stored = window.localStorage.getItem(UNIT_PREFERENCES_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as unknown;
-      if (isUnitPreferences(parsed)) return parsed;
-    }
-  } catch {
-    // Ignore parse/storage errors.
-  }
-
-  const migrated = readLegacyPreferences();
-  setUnitPreferences(migrated, { suppressEvent: true });
-  return migrated;
+  const defaults = { ...IMPERIAL_PREFS };
+  return browserStorage(defaults, (storage) => {
+    let stored: unknown;
+    try { stored = JSON.parse(storage.getItem(UNIT_PREFERENCES_STORAGE_KEY) ?? 'null'); } catch { /* Try legacy keys. */ }
+    if (isUnitPreferences(stored)) return stored;
+    const migrated = { ...defaults };
+    try {
+      if (storage.getItem(UNIT_SYSTEM_STORAGE_KEY) === 'metric') Object.assign(migrated, METRIC_PREFS);
+      migrated.efficiency_display = storage.getItem(EFFICIENCY_DISPLAY_STORAGE_KEY) === 'energy_per_distance'
+        ? 'energy_per_distance' : 'distance_per_energy';
+    } catch { /* Preserve any preference read before storage failed. */ }
+    setUnitPreferences(migrated, { suppressEvent: true });
+    return migrated;
+  });
 }
 
-export function setUnitPreferences(
-  preferences: UnitPreferences,
-  options: { suppressEvent?: boolean } = {},
-) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(UNIT_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
-    window.localStorage.setItem(
-      UNIT_SYSTEM_STORAGE_KEY,
-      preferences.distance_unit === 'kilometers' ? 'metric' : 'imperial',
-    );
-    window.localStorage.setItem(EFFICIENCY_DISPLAY_STORAGE_KEY, preferences.efficiency_display);
-    if (!options.suppressEvent) {
-      window.dispatchEvent(new Event('rm-units-change'));
-      window.dispatchEvent(new Event('rm-efficiency-display-change'));
-    }
-  } catch {
-    // Ignore storage errors.
-  }
+export function setUnitPreferences(preferences: UnitPreferences, options: { suppressEvent?: boolean } = {}) {
+  browserStorage(undefined, (storage, browser) => {
+    const writes = [
+      [UNIT_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences)],
+      [UNIT_SYSTEM_STORAGE_KEY, preferences.distance_unit === 'kilometers' ? 'metric' : 'imperial'],
+      [EFFICIENCY_DISPLAY_STORAGE_KEY, preferences.efficiency_display],
+    ] as const;
+    for (const [key, value] of writes) storage.setItem(key, value);
+    if (options.suppressEvent) return;
+    for (const name of ['rm-units-change', 'rm-efficiency-display-change']) browser.dispatchEvent(new Event(name));
+  });
 }
 
 export function getUnitSystem(): UnitSystem {
@@ -132,8 +110,7 @@ export function getUnitSystem(): UnitSystem {
 }
 
 export function setUnitSystem(system: UnitSystem) {
-  const next = system === 'metric' ? clonePrefs(METRIC_PREFS) : clonePrefs(IMPERIAL_PREFS);
-  setUnitPreferences(next);
+  setUnitPreferences({ ...(system === 'metric' ? METRIC_PREFS : IMPERIAL_PREFS) });
 }
 
 export function getEfficiencyDisplay(): EfficiencyDisplay {
@@ -141,161 +118,116 @@ export function getEfficiencyDisplay(): EfficiencyDisplay {
 }
 
 export function setEfficiencyDisplay(display: EfficiencyDisplay) {
-  const next = getUnitPreferences();
-  next.efficiency_display = display;
-  setUnitPreferences(next);
+  mergeUnitPreferences({ efficiency_display: display });
 }
 
 export function mergeUnitPreferences(partial: Partial<UnitPreferences>) {
-  const current = getUnitPreferences();
-  setUnitPreferences({ ...current, ...partial });
+  setUnitPreferences(Object.assign(getUnitPreferences(), partial));
 }
 
-export function formatNumber(value: number | null | undefined, decimals = 1): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-
-  return value.toLocaleString('en-US', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
+type Numeric = number | null | undefined;
+const missingNumber = (value: Numeric): value is null | undefined => value == null || Number.isNaN(value);
+function numberText(value: Numeric, options: Intl.NumberFormatOptions): string {
+  return missingNumber(value) ? '-' : new Intl.NumberFormat('en-US', options).format(value);
+}
+export function formatNumber(value: Numeric, decimals = 1): string {
+  return numberText(value, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+export function formatSmartNumber(value: Numeric, decimals = 1): string {
+  return numberText(value, { minimumFractionDigits: 0, maximumFractionDigits: decimals });
 }
 
-export function formatSmartNumber(value: number | null | undefined, decimals = 1): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+type Measurement = readonly [label: string, digits: number, factor: number, divide?: boolean];
+const MEASUREMENTS = {
+  miles: ['mi', 0, 1], kilometers: ['km', 1, MILES_TO_KM],
+  mph: ['mph', 0, 1], kmh: ['km/h', 0, MPH_TO_KMH],
+  psi: ['psi', 0, 1], kpa: ['kPa', 0, PSI_TO_KPA],
+  feet: ['ft', 0, METERS_TO_FEET], meters: ['m', 0, 1],
+} satisfies Record<string, Measurement>;
 
-  return value.toLocaleString('en-US', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  });
+function measurement(value: Numeric, specification: Measurement | (() => Measurement), decimals?: number): string {
+  if (missingNumber(value)) return '-';
+  const [label, digits, factor, divide] = typeof specification === 'function' ? specification() : specification;
+  const converted = divide ? value / factor : value * factor;
+  return `${formatNumber(converted, decimals ?? digits)} ${label}`;
 }
-
-export function formatMiles(value: number | null | undefined, decimals?: number): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.distance_unit === 'kilometers') return `${formatNumber(value * MILES_TO_KM, decimals ?? 1)} km`;
-  return `${formatNumber(value, decimals ?? 0)} mi`;
+export function formatMiles(value: Numeric, decimals?: number): string {
+  return measurement(value, () => MEASUREMENTS[getUnitPreferences().distance_unit], decimals);
 }
-
-export function formatDistanceKm(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.distance_unit === 'kilometers') return `${formatNumber(value, 1)} km`;
-  return `${formatNumber(value / MILES_TO_KM, 0)} mi`;
+export function formatDistanceKm(value: Numeric): string {
+  return measurement(value, () => getUnitPreferences().distance_unit === 'kilometers' ? ['km', 1, 1] : ['mi', 0, MILES_TO_KM, true]);
 }
-
 export function formatPercent(value: number, decimals = 0): string {
   return `${formatNumber(value, decimals)}%`;
 }
-
 export function formatSmartPercent(value: number, decimals = 0): string {
   return `${formatSmartNumber(value, decimals)}%`;
 }
-
-export function formatKwh(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  return `${formatNumber(value, 1)} kWh`;
+export function formatKwh(value: Numeric): string {
+  return measurement(value, ['kWh', 1, 1]);
 }
-
-export function formatMph(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.speed_unit === 'kmh') return `${formatNumber(value * MPH_TO_KMH, 0)} km/h`;
-  return `${formatNumber(value, 0)} mph`;
+export function formatMph(value: Numeric): string {
+  return measurement(value, () => MEASUREMENTS[getUnitPreferences().speed_unit]);
 }
-
-export function formatEfficiency(value: number | null | undefined): string {
-  const formatted = formatEfficiencyValue(value);
-  if (formatted === '-') return '-';
-  return `${formatted} ${getEfficiencyUnitLabel()}`;
+export function formatEfficiency(value: Numeric): string {
+  const text = formatEfficiencyValue(value);
+  return text === '-' ? text : [text, getEfficiencyUnitLabel()].join(' ');
 }
-
-export function formatEfficiencyFromWhPerKm(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  return formatEfficiency(value * MILES_TO_KM);
+export function formatEfficiencyFromWhPerKm(value: Numeric): string {
+  return formatEfficiency(missingNumber(value) ? value : value * MILES_TO_KM);
 }
-
-export function formatMassKg(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.distance_unit === 'kilometers') return `${formatNumber(value, 0)} kg`;
-  return `${formatNumber(value * 2.2046226218, 0)} lb`;
+export function formatMassKg(value: Numeric): string {
+  return measurement(value, () => getUnitPreferences().distance_unit === 'kilometers' ? ['kg', 0, 1] : ['lb', 0, 2.2046226218]);
 }
-
 export function getEfficiencyUnitLabel(): string {
-  const prefs = getUnitPreferences();
-  if (prefs.efficiency_display === 'energy_per_distance') {
-    return prefs.distance_unit === 'kilometers' ? 'Wh/km' : 'Wh/mi';
-  }
-  return prefs.distance_unit === 'kilometers' ? 'km/kWh' : 'mi/kWh';
+  const { distance_unit, efficiency_display } = getUnitPreferences();
+  const distance = distance_unit === 'kilometers' ? 'km' : 'mi';
+  return efficiency_display === 'energy_per_distance' ? `Wh/${distance}` : `${distance}/kWh`;
 }
-
-export function formatEfficiencyValue(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.efficiency_display === 'energy_per_distance') {
-    if (prefs.distance_unit === 'kilometers') return formatNumber(value / MILES_TO_KM, 0);
-    return formatNumber(value, 0);
-  }
-  if (prefs.distance_unit === 'kilometers') {
-    const converted = whPerMileToKmPerKwh(value);
-    return converted === null ? '-' : formatNumber(converted, 1);
-  }
-  const converted = whPerMileToMiPerKwh(value);
-  return converted === null ? '-' : formatNumber(converted, 1);
+export function formatEfficiencyValue(value: Numeric): string {
+  if (missingNumber(value)) return '-';
+  const { distance_unit, efficiency_display } = getUnitPreferences();
+  const metric = distance_unit === 'kilometers';
+  const reciprocal = efficiency_display !== 'energy_per_distance';
+  const converted = reciprocal
+    ? (metric ? whPerMileToKmPerKwh(value) : whPerMileToMiPerKwh(value))
+    : (metric ? value / MILES_TO_KM : value);
+  return formatNumber(converted, reciprocal ? 1 : 0);
 }
-
-export function formatEnergyPerDistance(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.distance_unit === 'kilometers') return `${formatNumber(value / MILES_TO_KM, 0)} Wh/km`;
-  return `${formatNumber(value, 0)} Wh/mi`;
+export function formatEnergyPerDistance(value: Numeric): string {
+  return measurement(value, () => getUnitPreferences().distance_unit === 'kilometers' ? ['Wh/km', 0, MILES_TO_KM, true] : ['Wh/mi', 0, 1]);
 }
-
-export function whPerMileToMiPerKwh(value: number | null | undefined): number | null {
+export function whPerMileToMiPerKwh(value: Numeric): number | null {
   if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) return null;
   return 1000 / value;
 }
-
-export function whPerMileToKmPerKwh(value: number | null | undefined): number | null {
+export function whPerMileToKmPerKwh(value: Numeric): number | null {
   const miPerKwh = whPerMileToMiPerKwh(value);
   return miPerKwh === null ? null : miPerKwh * MILES_TO_KM;
 }
-
-export function whPerMileToWhPerKm(value: number | null | undefined): number | null {
+export function whPerMileToWhPerKm(value: Numeric): number | null {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
   return value / MILES_TO_KM;
 }
-
-export function formatPressure(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.pressure_unit === 'kpa') return `${formatNumber(value * PSI_TO_KPA, 0)} kPa`;
-  return `${formatNumber(value, 0)} psi`;
+export function formatPressure(value: Numeric): string {
+  return measurement(value, () => MEASUREMENTS[getUnitPreferences().pressure_unit]);
 }
-
-export function formatAltitude(valueMeters: number | null | undefined): string {
-  if (valueMeters === null || valueMeters === undefined || Number.isNaN(valueMeters)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.altitude_unit === 'meters') return `${formatNumber(valueMeters, 0)} m`;
-  return `${formatNumber(valueMeters * METERS_TO_FEET, 0)} ft`;
+export function formatAltitude(valueMeters: Numeric): string {
+  return measurement(valueMeters, () => MEASUREMENTS[getUnitPreferences().altitude_unit]);
 }
-
-export function formatCurrency(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+export function formatCurrency(value: Numeric): string {
+  return numberText(value, { style: 'currency', currency: 'USD' });
 }
-
-export function formatDuration(minutes: number | null | undefined): string {
-  if (minutes === null || minutes === undefined || Number.isNaN(minutes)) return '-';
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+export function formatDuration(minutes: Numeric): string {
+  if (missingNumber(minutes)) return '-';
+  const hours = minutes < 60 ? null : Math.floor(minutes / 60);
+  const remainder = Math.round(hours === null ? minutes : minutes % 60);
+  const pieces = hours === null ? [] : [`${hours}h`];
+  if (hours === null || remainder !== 0) pieces.push(`${remainder}m`);
+  return pieces.join(' ');
 }
-
-export function formatTemp(celsius: number | null | undefined): string {
-  if (celsius === null || celsius === undefined || Number.isNaN(celsius)) return '-';
-  const prefs = getUnitPreferences();
-  if (prefs.temperature_unit === 'celsius') return `${Math.round(celsius)} C`;
-  return `${Math.round(celsius * 9 / 5 + 32)} F`;
+export function formatTemp(celsius: Numeric): string {
+  if (missingNumber(celsius)) return '-';
+  const fahrenheit = getUnitPreferences().temperature_unit !== 'celsius';
+  return `${Math.round(fahrenheit ? celsius * 9 / 5 + 32 : celsius)} ${fahrenheit ? 'F' : 'C'}`;
 }

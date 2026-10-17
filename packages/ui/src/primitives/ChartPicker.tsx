@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Check, ChevronDown, Search, Star } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useDisclosure, useDismissLayer } from '../hooks/useOverlayInteraction';
 
 export interface ChartPickerOption {
   value: string;
@@ -36,37 +37,18 @@ export function ChartPicker<TValue extends string = string>({
   onSetDefault,
   variant = 'default',
 }: ChartPickerProps<TValue>) {
-  const [isOpen, setIsOpen] = React.useState(false);
+  const { open: isOpen, setOpen: setIsOpen } = useDisclosure();
   const rootRef = React.useRef<HTMLDivElement>(null);
-  const normalizedSearch = searchValue.trim().toLowerCase();
-  const filteredOptions = normalizedSearch
-    ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
-    : options;
-  const visibleOptions = filteredOptions.some((option) => option.value === value)
-    ? filteredOptions
-    : options.filter((option) => option.value === value).concat(filteredOptions);
-  const selectedOption = options.find((option) => option.value === value) ?? options[0];
-
-  React.useEffect(() => {
-    function handlePointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    }
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, []);
+  const query = searchValue.trim().toLowerCase();
+  const selection = options.reduce((result, option) => {
+    if (option.value === value) result.selected.push(option);
+    if (!query || option.label.toLowerCase().includes(query)) result.matches.push(option);
+    return result;
+  }, { selected: [] as typeof options, matches: [] as typeof options });
+  const visibleOptions = selection.matches.some(option => option.value === value)
+    ? selection.matches : [...selection.selected, ...selection.matches];
+  const selectedOption = selection.selected[0] ?? options[0];
+  useDismissLayer({ roots: [rootRef], pointer: 'mousedown', dismiss: () => setIsOpen(false) });
 
   function handleSelect(nextValue: TValue) {
     onChange(nextValue);

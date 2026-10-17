@@ -1,7 +1,9 @@
 import * as React from 'react';
 import { ArrowLeftRight, Copy, Palette } from 'lucide-react';
 import type { ThemeColorPair } from '@panda/themes';
-import { canonicalColor, contrastRatio, hexToRgb, hslToRgb, oklchToHex, rgbToHex, rgbToHsl, rgbToOklch } from '../lib/color';
+import { canonicalColor, contrastRatio, oklchToHex } from '../lib/color';
+import { rovingIndex } from '../lib/overlayLayout';
+import { useColorEditor } from '../hooks/useColorEditor';
 import { cn } from '../lib/utils';
 import { Button } from './Button';
 import { ResponsiveDialog } from './ResponsiveDialog';
@@ -17,9 +19,6 @@ export interface ColorPickerProps {
   contrastBackground?: ThemeColorPair;
   minimumContrast?: number;
 }
-
-type ColorMode = 'light' | 'dark';
-type InputFormat = 'hex' | 'rgb' | 'hsl' | 'oklch';
 
 const DEFAULT_SWATCHES: ColorPickerSwatch[] = Array.from({ length: 16 }, (_, index) => {
   const slot = String(index + 1).padStart(2, '0');
@@ -45,54 +44,11 @@ export function ColorPicker({
   minimumContrast = 3,
 }: ColorPickerProps) {
   const titleId = React.useId();
-  const [draft, setDraft] = React.useState<ThemeColorPair>(() => ({ light: canonicalColor(value.light), dark: canonicalColor(value.dark) }));
-  const [mode, setMode] = React.useState<ColorMode>('dark');
-  const [linked, setLinked] = React.useState(value.light === value.dark);
-  const [format, setFormat] = React.useState<InputFormat>('hex');
-  const [input, setInput] = React.useState('');
-  const [error, setError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-    const next = { light: canonicalColor(value.light), dark: canonicalColor(value.dark) };
-    setDraft(next);
-    setLinked(next.light === next.dark);
-    setError(null);
-  }, [open, value.dark, value.light]);
-
-  const active = draft[mode];
-  const rgb = hexToRgb(active)!;
-  const hsl = rgbToHsl(rgb);
-  const oklch = rgbToOklch(rgb);
-
-  React.useEffect(() => {
-    const formatted = format === 'hex'
-      ? active
-      : format === 'rgb'
-        ? `${Math.round(rgb.r)}, ${Math.round(rgb.g)}, ${Math.round(rgb.b)}`
-        : format === 'hsl'
-          ? `${hsl.h}, ${hsl.s}, ${hsl.l}`
-          : `${oklch.l}, ${oklch.c}, ${oklch.h}`;
-    setInput(formatted);
-  }, [active, format, hsl.h, hsl.l, hsl.s, oklch.c, oklch.h, oklch.l, rgb.b, rgb.g, rgb.r]);
-
+  const { state, send, active, oklch, parseInput } = useColorEditor(open, value);
+  const { draft, mode, linked, format, input, error } = state;
   if (!open) return null;
-
-  const setColor = (next: string) => {
-    const color = canonicalColor(next);
-    setDraft((current) => linked ? { light: color, dark: color } : { ...current, [mode]: color });
-    setError(null);
-  };
+  const setColor = (color: string) => send({ type: 'color', color });
   const setOklch = (patch: Partial<typeof oklch>) => setColor(oklchToHex({ ...oklch, ...patch }));
-  const parseInput = () => {
-    const numbers = input.split(/[\s,]+/).filter(Boolean).map(Number);
-    let parsed: string | null = null;
-    if (format === 'hex') parsed = /^#[0-9a-f]{3,6}$/i.test(input.trim()) ? canonicalColor(input) : null;
-    if (format === 'rgb' && numbers.length === 3 && numbers.every(Number.isFinite)) parsed = rgbToHex({ r: numbers[0]!, g: numbers[1]!, b: numbers[2]! });
-    if (format === 'hsl' && numbers.length === 3 && numbers.every(Number.isFinite)) parsed = rgbToHex(hslToRgb({ h: numbers[0]!, s: numbers[1]!, l: numbers[2]! }));
-    if (format === 'oklch' && numbers.length === 3 && numbers.every(Number.isFinite)) parsed = oklchToHex({ l: numbers[0]!, c: numbers[1]!, h: numbers[2]! });
-    if (!parsed) setError(`Enter a valid ${format.toUpperCase()} color.`); else setColor(parsed);
-  };
   const background = contrastBackground ? concrete(contrastBackground[mode]) : null;
   const ratio = background ? contrastRatio(active, background) : null;
 
@@ -104,7 +60,7 @@ export function ColorPicker({
           <p className="mt-1 text-xs text-fg-tertiary">Pick from the theme, then tune perceptual lightness, chroma, and hue.</p>
         </div>
         <div className="flex rounded-lg border border-border bg-bg-elevated p-0.5" aria-label="Color mode">
-          {(['light', 'dark'] as const).map((item) => <button key={item} type="button" onClick={() => setMode(item)} className={cn('min-h-8 rounded-md px-3 text-xs font-medium capitalize', mode === item ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-secondary hover:text-fg')}>{item}</button>)}
+          {(['light', 'dark'] as const).map((item) => <button key={item} type="button" onClick={() => send({ type: 'mode', mode: item })} className={cn('min-h-8 rounded-md px-3 text-xs font-medium capitalize', mode === item ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-secondary hover:text-fg')}>{item}</button>)}
         </div>
       </div>
 
@@ -118,10 +74,9 @@ export function ColorPicker({
                   const color = concrete(swatch[mode]);
                   const selected = color === active;
                   return <button key={swatch.id} type="button" role="radio" aria-checked={selected} aria-label={swatch.label} title={swatch.label} className={cn('aspect-square min-h-9 rounded-lg border outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-page', selected ? 'border-fg ring-2 ring-accent' : 'border-border')} style={{ backgroundColor: color }} onClick={() => setColor(color)} onKeyDown={(event) => {
-                    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+                    const next = rovingIndex(event.key, index, swatches.length);
+                    if (next === null) return;
                     event.preventDefault();
-                    const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
-                    const next = event.key === 'Home' ? 0 : event.key === 'End' ? swatches.length - 1 : (index + direction + swatches.length) % swatches.length;
                     const nextButton = event.currentTarget.parentElement?.children[next] as HTMLElement | undefined;
                     setColor(concrete(swatches[next]![mode]));
                     nextButton?.focus();
@@ -139,10 +94,10 @@ export function ColorPicker({
 
             <div className="grid gap-2">
               <div className="flex flex-wrap gap-2">
-                {(['hex', 'rgb', 'hsl', 'oklch'] as const).map((item) => <button key={item} type="button" onClick={() => setFormat(item)} className={cn('min-h-8 rounded-lg border px-3 text-xs font-medium uppercase', format === item ? 'border-accent bg-accent-muted text-fg' : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong')}>{item}</button>)}
+                {(['hex', 'rgb', 'hsl', 'oklch'] as const).map((item) => <button key={item} type="button" onClick={() => send({ type: 'format', format: item })} className={cn('min-h-8 rounded-lg border px-3 text-xs font-medium uppercase', format === item ? 'border-accent bg-accent-muted text-fg' : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong')}>{item}</button>)}
               </div>
               <div className="flex gap-2">
-                <input aria-label={`${format.toUpperCase()} color`} value={input} onChange={(event) => setInput(event.target.value)} onBlur={parseInput} onKeyDown={(event) => { if (event.key === 'Enter') parseInput(); }} className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg-elevated px-3 font-mono text-base text-fg outline-none focus:border-accent focus:ring-1 focus:ring-accent sm:text-sm" />
+                <input aria-label={`${format.toUpperCase()} color`} value={input} onChange={(event) => send({ type: 'input', input: event.target.value })} onBlur={parseInput} onKeyDown={(event) => { if (event.key === 'Enter') parseInput(); }} className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-bg-elevated px-3 font-mono text-base text-fg outline-none focus:border-accent focus:ring-1 focus:ring-accent sm:text-sm" />
                 <Button type="button" variant="secondary" onClick={parseInput}>Set</Button>
               </div>
               {error ? <p className="text-xs text-status-danger" role="alert">{error}</p> : null}
@@ -156,11 +111,11 @@ export function ColorPicker({
             <code className="rounded-lg bg-bg-elevated px-3 py-2 text-center text-sm text-fg">{active}</code>
             <label className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-border px-3 text-sm text-fg-secondary">
               Link light and dark
-              <input type="checkbox" checked={linked} onChange={(event) => { setLinked(event.target.checked); if (event.target.checked) setDraft({ light: active, dark: active }); }} className="h-4 w-4 accent-[color:var(--rm-accent)]" />
+              <input type="checkbox" checked={linked} onChange={(event) => { send({ type: 'link', linked: event.target.checked }); }} className="h-4 w-4 accent-[color:var(--rm-accent)]" />
             </label>
             {!linked ? <div className="grid grid-cols-2 gap-2">
-              <Button type="button" size="sm" variant="secondary" iconLeft={<Copy className="h-3.5 w-3.5" />} onClick={() => setDraft((current) => ({ ...current, dark: current.light }))}>Light → dark</Button>
-              <Button type="button" size="sm" variant="secondary" iconLeft={<ArrowLeftRight className="h-3.5 w-3.5" />} onClick={() => setDraft((current) => ({ ...current, light: current.dark }))}>Dark → light</Button>
+              <Button type="button" size="sm" variant="secondary" iconLeft={<Copy className="h-3.5 w-3.5" />} onClick={() => send({ type: 'copy', source: 'light' })}>Light → dark</Button>
+              <Button type="button" size="sm" variant="secondary" iconLeft={<ArrowLeftRight className="h-3.5 w-3.5" />} onClick={() => send({ type: 'copy', source: 'dark' })}>Dark → light</Button>
             </div> : null}
             {ratio !== null ? <p className={cn('rounded-lg px-3 py-2 text-xs', ratio >= minimumContrast ? 'bg-status-positive/10 text-status-positive' : 'bg-status-warning/10 text-status-warning')} role="status">Contrast {ratio.toFixed(2)}:1 {ratio >= minimumContrast ? 'passes' : 'needs attention'}</p> : null}
           </aside>

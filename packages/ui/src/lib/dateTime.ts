@@ -1,3 +1,5 @@
+import { browserStorage } from './browserRuntime';
+
 const DEFAULT_APP_TIMEZONE = 'UTC';
 const APP_TIMEZONE_STORAGE_KEY = 'rm-app-timezone';
 export const APP_TIMEZONE_CHANGE_EVENT = 'rm-app-timezone-change';
@@ -19,218 +21,130 @@ const FALLBACK_TIMEZONES = [
   'Pacific/Auckland',
 ];
 
+const DATE_FIELDS = ['year', 'month', 'day', 'hour', 'minute', 'second'] as const;
+const PART_OPTIONS: Intl.DateTimeFormatOptions = {
+  hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+};
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+function formatter(locale: string | undefined, options: Intl.DateTimeFormatOptions) {
+  const key = JSON.stringify([locale, options]);
+  let result = formatterCache.get(key);
+  if (!result) {
+    result = new Intl.DateTimeFormat(locale, options);
+    formatterCache.set(key, result);
+  }
+  return result;
+}
 function isValidTimezone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
-    return true;
-  } catch {
-    return false;
-  }
+  try { formatter('en-US', { timeZone: value }); return true; } catch { return false; }
 }
-
 export function getAppTimezone(): string {
-  if (typeof window === 'undefined') return DEFAULT_APP_TIMEZONE;
-  try {
-    const value = window.localStorage.getItem(APP_TIMEZONE_STORAGE_KEY);
-    return value && isValidTimezone(value) ? value : DEFAULT_APP_TIMEZONE;
-  } catch {
-    return DEFAULT_APP_TIMEZONE;
-  }
+  return browserStorage(DEFAULT_APP_TIMEZONE, storage => {
+    const candidate = storage.getItem(APP_TIMEZONE_STORAGE_KEY);
+    return candidate && isValidTimezone(candidate) ? candidate : DEFAULT_APP_TIMEZONE;
+  });
 }
-
 export function setAppTimezone(timezone: string): void {
-  if (typeof window === 'undefined' || !isValidTimezone(timezone)) return;
-  try {
-    window.localStorage.setItem(APP_TIMEZONE_STORAGE_KEY, timezone);
-    window.dispatchEvent(new Event(APP_TIMEZONE_CHANGE_EVENT));
-  } catch {
-    // Storage may be unavailable; callers still retain the server value.
-  }
+  if (!isValidTimezone(timezone)) return;
+  browserStorage(undefined, (storage, browser) => {
+    storage.setItem(APP_TIMEZONE_STORAGE_KEY, timezone);
+    browser.dispatchEvent(new Event(APP_TIMEZONE_CHANGE_EVENT));
+  });
 }
-
 export function listAppTimezones(currentTimezone?: string): string[] {
-  const supportedValuesOf = Intl.supportedValuesOf as ((key: string) => string[]) | undefined;
-  const values = supportedValuesOf?.('timeZone') ?? FALLBACK_TIMEZONES;
-  return Array.from(new Set([DEFAULT_APP_TIMEZONE, ...(currentTimezone ? [currentTimezone] : []), ...values]));
+  const supported = Intl.supportedValuesOf?.('timeZone') ?? FALLBACK_TIMEZONES;
+  const unique = new Set<string>();
+  for (const zone of [DEFAULT_APP_TIMEZONE, currentTimezone, ...supported]) {
+    if (zone) unique.add(zone);
+  }
+  return [...unique];
 }
-
 export function formatTimezoneOffset(timezone: string): string {
   try {
-    const offset = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      timeZoneName: 'longOffset',
-    })
-      .formatToParts(new Date())
-      .find((part) => part.type === 'timeZoneName')?.value;
-    if (!offset || offset === 'GMT') return 'UTC+00:00';
-    return `UTC${offset.replace(/^GMT/, '')}`;
-  } catch {
-    return 'UTC offset unavailable';
-  }
+    const parts = formatter('en-US', { timeZone: timezone, timeZoneName: 'longOffset' }).formatToParts(new Date());
+    const name = parts.find(part => part.type === 'timeZoneName')?.value;
+    return name && name !== 'GMT' ? `UTC${name.replace(/^GMT/, '')}` : 'UTC+00:00';
+  } catch { return 'UTC offset unavailable'; }
 }
-
 export function appTimezoneOptions(currentTimezone?: string) {
-  return listAppTimezones(currentTimezone).map((timezone) => ({
-    value: timezone,
-    label: `${timezone} (${formatTimezoneOffset(timezone)})`,
+  return listAppTimezones(currentTimezone).map(timezone => ({
+    value: timezone, label: `${timezone} (${formatTimezoneOffset(timezone)})`,
   }));
 }
-
+export interface AppDateParts {
+  year: number; month: number; day: number; hour: number; minute: number; second: number;
+}
 function asDate(value: Date | string | number): Date {
   return value instanceof Date ? value : new Date(value);
 }
-
-export interface AppDateParts {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
+function readParts(date: Date, timezone: string): AppDateParts {
+  const numeric: Record<string, number> = {};
+  for (const part of formatter('en-US', { timeZone: timezone, ...PART_OPTIONS }).formatToParts(date)) {
+    if ((DATE_FIELDS as readonly string[]).includes(part.type)) numeric[part.type] = Number(part.value);
+  }
+  return { year: numeric.year ?? 0, month: numeric.month ?? 1, day: numeric.day ?? 1,
+    hour: numeric.hour ?? 0, minute: numeric.minute ?? 0, second: numeric.second ?? 0 };
 }
-
 export function getAppDateParts(value: Date | string | number): AppDateParts | null {
   const date = asDate(value);
-  if (Number.isNaN(date.getTime())) return null;
-
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: getAppTimezone(),
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
-  if (!values.year || !values.month || !values.day || values.hour === undefined) return null;
-  return {
-    year: values.year,
-    month: values.month,
-    day: values.day,
-    hour: values.hour,
-    minute: values.minute ?? 0,
-    second: values.second ?? 0,
-  };
+  return Number.isNaN(date.getTime()) ? null : readParts(date, getAppTimezone());
 }
-
-function getTimezoneOffsetMs(date: Date, timezone: string): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
-  const year = values.year ?? 0;
-  const month = values.month ?? 1;
-  const day = values.day ?? 1;
-  const hour = values.hour ?? 0;
-  const minute = values.minute ?? 0;
-  const second = values.second ?? 0;
-  const asUtc = Date.UTC(
-    year,
-    month - 1,
-    day,
-    hour,
-    minute,
-    second,
-  );
-  return asUtc - date.getTime();
+function wallTime(parts: AppDateParts): number {
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
 }
-
 export function appDatePartsToDate(parts: AppDateParts): Date {
-  const timezone = getAppTimezone();
-  const wallTimestamp = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-  let timestamp = wallTimestamp - getTimezoneOffsetMs(new Date(wallTimestamp), timezone);
-  timestamp = wallTimestamp - getTimezoneOffsetMs(new Date(timestamp), timezone);
-  return new Date(timestamp);
+  const zone = getAppTimezone();
+  const target = wallTime(parts);
+  let candidate = target;
+  // Two projections preserve the established choice at gaps and repeated hours.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const projected = wallTime(readParts(new Date(candidate), zone));
+    candidate += target - projected;
+  }
+  return new Date(candidate);
 }
-
-export function startOfAppDay(value: Date | string | number): Date {
+function dayBoundary(value: Date | string | number, nextDay: boolean): Date {
   const parts = getAppDateParts(value);
-  return parts ? appDatePartsToDate({ ...parts, hour: 0, minute: 0, second: 0 }) : new Date(NaN);
-}
-
-export function endOfAppDay(value: Date | string | number): Date {
-  const start = startOfAppDay(value);
-  if (Number.isNaN(start.getTime())) return start;
-  const parts = getAppDateParts(start);
   if (!parts) return new Date(NaN);
-  return new Date(appDatePartsToDate({ ...parts, day: parts.day + 1, hour: 0, minute: 0, second: 0 }).getTime() - 1);
+  const midnight = appDatePartsToDate({ ...parts, hour: 0, minute: 0, second: 0 });
+  if (!nextDay) return midnight;
+  const projected = getAppDateParts(midnight);
+  if (!projected) return new Date(NaN);
+  return new Date(appDatePartsToDate({ ...projected, day: projected.day + 1, hour: 0, minute: 0, second: 0 }).getTime() - 1);
 }
-
+export function startOfAppDay(value: Date | string | number): Date {
+  return dayBoundary(value, false);
+}
+export function endOfAppDay(value: Date | string | number): Date {
+  return dayBoundary(value, true);
+}
 export function shiftAppCalendarDays(value: Date | string | number, days: number): Date {
   const parts = getAppDateParts(value);
   if (!parts) return new Date(NaN);
-  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12));
-  return appDatePartsToDate({
-    year: shifted.getUTCFullYear(),
-    month: shifted.getUTCMonth() + 1,
-    day: shifted.getUTCDate(),
-    hour: parts.hour,
-    minute: parts.minute,
-    second: parts.second,
-  });
+  const calendar = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 12));
+  return appDatePartsToDate(Object.assign(parts, {
+    year: calendar.getUTCFullYear(), month: calendar.getUTCMonth() + 1, day: calendar.getUTCDate(),
+  }));
 }
-
-export function formatAppDateTime(
-  value: Date | string | number,
-  options: Intl.DateTimeFormatOptions = {},
-): string {
+const DATE_FORMAT: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
+const TIME_FORMAT: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+function display(value: Date | string | number, defaults: Intl.DateTimeFormatOptions, options: Intl.DateTimeFormatOptions): string {
   const date = asDate(value);
-  if (Number.isNaN(date.getTime())) return 'Invalid date';
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    ...options,
-    timeZone: getAppTimezone(),
-  }).format(date);
+  return Number.isNaN(date.getTime()) ? 'Invalid date'
+    : formatter(undefined, { ...defaults, ...options, timeZone: getAppTimezone() }).format(date);
 }
-
-export function formatAppDate(
-  value: Date | string | number,
-  options: Intl.DateTimeFormatOptions = {},
-): string {
-  const date = asDate(value);
-  if (Number.isNaN(date.getTime())) return 'Invalid date';
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    ...options,
-    timeZone: getAppTimezone(),
-  }).format(date);
+export function formatAppDateTime(value: Date | string | number, options: Intl.DateTimeFormatOptions = {}): string {
+  return display(value, { ...DATE_FORMAT, ...TIME_FORMAT }, options);
 }
-
-export function formatAppTime(
-  value: Date | string | number,
-  options: Intl.DateTimeFormatOptions = {},
-): string {
-  const date = asDate(value);
-  if (Number.isNaN(date.getTime())) return 'Invalid date';
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    ...options,
-    timeZone: getAppTimezone(),
-  }).format(date);
+export function formatAppDate(value: Date | string | number, options: Intl.DateTimeFormatOptions = {}): string {
+  return display(value, DATE_FORMAT, options);
 }
-
+export function formatAppTime(value: Date | string | number, options: Intl.DateTimeFormatOptions = {}): string {
+  return display(value, TIME_FORMAT, options);
+}
 export function formatAppCalendarDate(value: string): string {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return 'Invalid date';
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeZone: 'UTC',
-  }).format(date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'Invalid date';
+  const [year, month, day] = value.split('-').map(Number) as [number, number, number];
+  return formatter(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(Date.UTC(year, month - 1, day, 12)));
 }

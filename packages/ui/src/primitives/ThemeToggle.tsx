@@ -2,6 +2,8 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Laptop, Moon, Sun, type LucideIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useDisclosure, useDismissLayer, useMediaQuery, useViewportPlacement } from '../hooks/useOverlayInteraction';
+import { floatingPosition, rovingIndex } from '../lib/overlayLayout';
 import {
   applyThemeMode,
   resolveThemeMode,
@@ -55,17 +57,6 @@ const THEME_OPTIONS: Array<{
   },
 ];
 
-function isMobileViewport() {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return false;
-  }
-  return window.matchMedia('(max-width: 639px)').matches;
-}
-
-function getModeLabel(mode: ThemeMode) {
-  return mode === 'system' ? 'System' : `${mode.charAt(0).toUpperCase()}${mode.slice(1)}`;
-}
-
 export function ThemeToggle({
   className,
   label = 'Theme',
@@ -81,8 +72,8 @@ export function ThemeToggle({
 }: ThemeToggleProps) {
   const [uncontrolledMode, setUncontrolledMode] = React.useState<ThemeMode>('dark');
   const mode = controlledMode ?? uncontrolledMode;
-  const [open, setOpen] = React.useState(false);
-  const [isMobile, setIsMobile] = React.useState(isMobileViewport);
+  const { open, setOpen } = useDisclosure();
+  const isMobile = useMediaQuery('(max-width: 639px)');
   const [position, setPosition] = React.useState<Position>({
     top: 0,
     left: 0,
@@ -91,110 +82,29 @@ export function ThemeToggle({
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
   const menuRef = React.useRef<HTMLDivElement | null>(null);
   const ModeIcon = mode === 'system' ? Laptop : resolveThemeMode(mode) === 'dark' ? Moon : Sun;
-  const modeLabel = getModeLabel(mode);
+  const modeLabel = THEME_OPTIONS.find(option => option.mode === mode)!.label;
   const triggerAriaLabel = ariaLabel ?? (showLabel ? undefined : 'Theme options');
 
+  useDismissLayer({ enabled: open, roots: [triggerRef, menuRef], captureEscape: true, preventEscape: true, dismiss: reason => {
+    setOpen(false);
+    if (reason === 'escape') triggerRef.current?.focus();
+  } });
   React.useEffect(() => {
-    const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 639px)')
-      : null;
-    const handleViewportChange = () => setIsMobile(mediaQuery ? mediaQuery.matches : false);
-
-    mediaQuery?.addEventListener?.('change', handleViewportChange);
-    mediaQuery?.addListener?.(handleViewportChange);
-
-    return () => {
-      mediaQuery?.removeEventListener?.('change', handleViewportChange);
-      mediaQuery?.removeListener?.(handleViewportChange);
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (!open) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) {
-        return;
-      }
-      setOpen(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown, true);
-
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [open]);
-
-  React.useEffect(() => {
-    if (open && (isMobile || position.visibility === 'visible')) {
-      menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
-    }
+    if (!open || (!isMobile && position.visibility !== 'visible')) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
   }, [open, isMobile, position.visibility]);
-
-  React.useLayoutEffect(() => {
-    if (!open || isMobile) return;
-
-    const updatePosition = () => {
-      const trigger = triggerRef.current;
-      const menu = menuRef.current;
-
-      if (!trigger || !menu) return;
-
-      const gap = 8;
-      const padding = 8;
-      const triggerRect = trigger.getBoundingClientRect();
-      const menuRect = menu.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-
-      let top = triggerRect.bottom + gap;
-      if (top + menuRect.height > viewportHeight - padding) {
-        top = triggerRect.top - menuRect.height - gap;
-      }
-      top = Math.min(
-        Math.max(top, padding),
-        Math.max(padding, viewportHeight - padding - menuRect.height),
-      );
-
-      let left = align === 'start'
-        ? triggerRect.left
-        : triggerRect.right - menuRect.width;
-
-      left = Math.min(
-        Math.max(left, padding),
-        Math.max(padding, viewportWidth - padding - menuRect.width),
-      );
-
-      setPosition({
-        top,
-        left,
-        visibility: 'visible',
-      });
-    };
-
-    updatePosition();
-
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [align, isMobile, open]);
+  const measure = React.useCallback(() => {
+    const trigger = triggerRef.current, menu = menuRef.current;
+    if (trigger && menu) setPosition(floatingPosition(trigger.getBoundingClientRect(), menu.getBoundingClientRect(), 'bottom', align, false));
+  }, [align]);
+  useViewportPlacement(open && !isMobile, measure);
+  function navigateMenu(event: React.KeyboardEvent) {
+    const buttons = [...menuRef.current!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (!['Home', 'End', 'ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    const next = rovingIndex(event.key, index, buttons.length);
+    if (next !== null && next >= 0) { event.preventDefault(); buttons[next]?.focus(); }
+  }
 
   function setThemeMode(next: ThemeMode) {
     if (onModeChange) {
@@ -247,14 +157,7 @@ export function ThemeToggle({
       ref={menuRef}
       role="menu"
       aria-label="Theme options"
-      onKeyDown={(event) => {
-        const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
-        const current = items.indexOf(document.activeElement as HTMLButtonElement);
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
-          : event.key === 'ArrowDown' ? (current + 1) % items.length
-          : event.key === 'ArrowUp' ? (current - 1 + items.length) % items.length : -1;
-        if (next >= 0) { event.preventDefault(); items[next]?.focus(); }
-      }}
+      onKeyDown={navigateMenu}
       className={cn(
         'fixed z-[70] overflow-hidden rounded-2xl border border-border bg-bg-surface shadow-xl',
         isMobile

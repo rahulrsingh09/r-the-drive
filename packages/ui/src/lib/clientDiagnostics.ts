@@ -1,3 +1,5 @@
+import { listen } from './browserRuntime';
+
 export type ClientErrorSeverity = 'warn' | 'error';
 
 export interface ClientErrorContext {
@@ -27,192 +29,112 @@ const REPORT_DEDUPE_WINDOW_MS = 5_000;
 const MAX_TEXT_LENGTH = 240;
 const reportedErrors = new WeakSet<object>();
 const recentReports = new Map<string, number>();
+const TOKEN_FIELDS = ['code', 'provider', 'style', 'resourceKind', 'sourceId', 'requestId'] as const;
+const WARNING_AREAS = new Set(['api', 'query', 'mutation']);
 
-/** Returns true for fetch/request cancellations that are expected control flow. */
 export function isAbortError(error: unknown): boolean {
-  const isDomAbort = typeof DOMException !== 'undefined'
-    && error instanceof DOMException
-    && error.name === 'AbortError';
-  return isDomAbort || (isRecord(error) && error.name === 'AbortError');
+  return isRecord(error) && error.name === 'AbortError';
 }
 
-/**
- * Emit a safe, structured browser diagnostic. This intentionally only writes
- * to the local console; user-facing error state and toasts remain owned by
- * the feature that can explain the failure to the user.
- */
-export function reportClientError(
-  error: unknown,
-  context: ClientErrorContext,
-): void {
-  if (isAbortError(error)) return;
-
-  const normalized = normalizeError(error);
-  if (isRecord(error) && reportedErrors.has(error)) return;
-
-  const record = {
-    event: context.event,
-    area: context.area,
-    operation: context.operation,
-    method: context.method,
-    path: sanitizePath(context.path),
-    status: finiteNumber(context.status),
-    code: sanitizeToken(context.code),
-    provider: sanitizeToken(context.provider),
-    style: sanitizeToken(context.style),
-    resourceKind: sanitizeToken(context.resourceKind),
-    sourceId: sanitizeToken(context.sourceId),
-    requestId: sanitizeToken(context.requestId),
-    url: sanitizePath(context.url),
-    error: normalized,
-  };
-  const dedupeKey = JSON.stringify(record);
+function claimReport(error: unknown, record: object): boolean {
   const now = Date.now();
-  pruneRecentReports(now);
-  if (recentReports.has(dedupeKey)) return;
-
-  if (isRecord(error)) reportedErrors.add(error);
-  recentReports.set(dedupeKey, now);
-
-  const severity = context.severity ?? defaultSeverity(context.area);
-  const summary = `[Panda client] ${record.event}: ${record.error.name}: ${record.error.message}`;
-  if (severity === 'error') {
-    console.error(summary, record);
-  } else {
-    console.warn(summary, record);
+  for (const [key, time] of recentReports) {
+    if (time <= now - REPORT_DEDUPE_WINDOW_MS) recentReports.delete(key);
   }
+  const key = JSON.stringify(record);
+  if (recentReports.has(key)) return false;
+  recentReports.set(key, now);
+  if (isRecord(error)) reportedErrors.add(error);
+  return true;
 }
 
-/** Install global browser diagnostics and return a cleanup function for tests. */
+export function reportClientError(error: unknown, context: ClientErrorContext): void {
+  if (isAbortError(error) || (isRecord(error) && reportedErrors.has(error))) return;
+  const tokens = Object.fromEntries(TOKEN_FIELDS.map(field => [field, sanitizeToken(context[field])]));
+  const record = {
+    event: context.event, area: context.area, operation: context.operation,
+    method: context.method, path: sanitizePath(context.path),
+    status: typeof context.status === 'number' && Number.isFinite(context.status) ? context.status : undefined,
+    ...tokens, url: sanitizePath(context.url), error: normalizeError(error),
+  };
+  if (!claimReport(error, record)) return;
+  const severity = context.severity ?? (WARNING_AREAS.has(context.area) ? 'warn' : 'error');
+  const summary = `[Panda client] ${record.event}: ${record.error.name}: ${record.error.message}`;
+  if (severity === 'error') console.error(summary, record);
+  else console.warn(summary, record);
+}
+
 export function installGlobalClientErrorHandlers(): () => void {
   if (typeof window === 'undefined') return () => undefined;
-
-  const handleError = (event: ErrorEvent | Event) => {
-    if (event instanceof ErrorEvent || 'error' in event) {
-      const errorEvent = event as ErrorEvent;
-      reportClientError(errorEvent.error ?? errorEvent.message, {
-        event: 'browser.error',
-        area: 'browser',
-        operation: 'window.error',
-        url: errorEvent.filename,
-        severity: 'error',
-      });
-      event.preventDefault();
-      return;
+  const handle: EventListener = event => {
+    let error: unknown;
+    let context: ClientErrorContext;
+    switch (event.type) {
+      case 'unhandledrejection':
+        error = (event as PromiseRejectionEvent).reason;
+        context = { event: 'browser.unhandled_rejection', area: 'browser', operation: 'window.unhandledrejection' };
+        break;
+      case 'securitypolicyviolation': {
+        const violation = event as SecurityPolicyViolationEvent;
+        error = new Error(`Blocked ${violation.violatedDirective}`);
+        context = { event: 'browser.csp_violation', area: 'browser', operation: violation.violatedDirective, url: violation.blockedURI };
+        break;
+      }
+      default:
+        if (event instanceof ErrorEvent || 'error' in event) {
+          const failure = event as ErrorEvent;
+          error = failure.error ?? failure.message;
+          context = { event: 'browser.error', area: 'browser', operation: 'window.error', url: failure.filename };
+        } else {
+          const target = event.target as Element | null;
+          error = new Error('Browser resource failed to load');
+          context = { event: 'browser.resource_load_failed', area: 'asset', operation: target?.tagName?.toLowerCase() ?? 'unknown-resource', url: target?.getAttribute?.('src') ?? target?.getAttribute?.('href') ?? undefined };
+        }
     }
-
-    const target = event.target as (Element & { src?: string; href?: string }) | null;
-    reportClientError(new Error('Browser resource failed to load'), {
-      event: 'browser.resource_load_failed',
-      area: 'asset',
-      operation: target?.tagName?.toLowerCase() ?? 'unknown-resource',
-      url: target?.getAttribute?.('src') ?? target?.getAttribute?.('href') ?? undefined,
-      severity: 'error',
-    });
+    reportClientError(error, { ...context, severity: 'error' });
     event.preventDefault();
   };
-
-  const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-    reportClientError(event.reason, {
-      event: 'browser.unhandled_rejection',
-      area: 'browser',
-      operation: 'window.unhandledrejection',
-      severity: 'error',
-    });
-    event.preventDefault();
-  };
-
-  const handleCspViolation = (event: SecurityPolicyViolationEvent) => {
-    reportClientError(new Error(`Blocked ${event.violatedDirective}`), {
-      event: 'browser.csp_violation',
-      area: 'browser',
-      operation: event.violatedDirective,
-      url: event.blockedURI,
-      severity: 'error',
-    });
-    event.preventDefault();
-  };
-
-  window.addEventListener('error', handleError, true);
-  window.addEventListener('unhandledrejection', handleUnhandledRejection);
-  window.addEventListener('securitypolicyviolation', handleCspViolation);
-
-  return () => {
-    window.removeEventListener('error', handleError, true);
-    window.removeEventListener('unhandledrejection', handleUnhandledRejection);
-    window.removeEventListener('securitypolicyviolation', handleCspViolation);
-  };
+  return listen([
+    [window, 'error', handle, true],
+    [window, 'unhandledrejection', handle],
+    [window, 'securitypolicyviolation', handle],
+  ]);
 }
 
 function normalizeError(error: unknown): NormalizedError {
-  if (error instanceof Error) {
-    return {
-      name: sanitizeToken(error.name) ?? 'Error',
-      message: sanitizeText(error.message) || 'Unknown error',
-      ...(error.stack ? { stack: sanitizeText(error.stack) } : {}),
-    };
+  const source = typeof error === 'string' ? { message: error, name: 'Error' }
+    : isRecord(error) ? error : null;
+  const message = typeof source?.message === 'string' ? source.message : undefined;
+  const name = typeof source?.name === 'string' ? source.name : undefined;
+  if (!(error instanceof Error) && typeof error !== 'string' && !message && !name) {
+    return { name: 'UnknownError', message: 'Unknown error' };
   }
-
-  if (typeof error === 'string') {
-    return { name: 'Error', message: sanitizeText(error) || 'Unknown error' };
-  }
-
-  if (isRecord(error)) {
-    const message = typeof error.message === 'string' ? error.message : undefined;
-    const name = typeof error.name === 'string' ? error.name : undefined;
-    if (message || name) {
-      return {
-        name: sanitizeToken(name) ?? 'Error',
-        message: sanitizeText(message) || 'Unknown error',
-      };
-    }
-  }
-
-  return { name: 'UnknownError', message: 'Unknown error' };
+  const normalized: NormalizedError = {
+    name: sanitizeToken(name) ?? 'Error', message: sanitizeText(message) || 'Unknown error',
+  };
+  if (error instanceof Error && error.stack) normalized.stack = sanitizeText(error.stack);
+  return normalized;
 }
 
-function defaultSeverity(area: string): ClientErrorSeverity {
-  return area === 'api' || area === 'query' || area === 'mutation' ? 'warn' : 'error';
-}
-
-function pruneRecentReports(now: number) {
-  for (const [key, timestamp] of recentReports) {
-    if (now - timestamp >= REPORT_DEDUPE_WINDOW_MS) recentReports.delete(key);
-  }
-}
-
+const PATH_REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\/v[0-9]+\/external\/basemap\/openfreemap\/planet\/[^/]+\/[^/]+\/[^/]+\/[^/]+\.pbf$/i, '/v1/external/basemap/openfreemap/planet/<tile>.pbf'],
+  [/\/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '/<id>'],
+  [/\/[0-9]+\/[0-9]+\/[0-9]+\.(pbf|png)$/i, '/<tile>.$1'],
+];
 function sanitizePath(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  let path: string;
-  try {
-    path = new URL(value, 'http://localhost').pathname;
-  } catch {
-    path = value.split(/[?#]/, 1)[0] ?? value;
-  }
-  return path
-    .replace(/\/v[0-9]+\/external\/basemap\/openfreemap\/planet\/[^/]+\/[^/]+\/[^/]+\/[^/]+\.pbf$/i, '/v1/external/basemap/openfreemap/planet/<tile>.pbf')
-    .replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '/<id>')
-    .replace(/\/[0-9]+\/[0-9]+\/[0-9]+\.(pbf|png)$/i, '/<tile>.$1')
-    .slice(0, MAX_TEXT_LENGTH);
+  let pathname = value.split(/[?#]/, 1)[0] ?? value;
+  try { pathname = new URL(value, 'http://localhost').pathname; } catch { /* Use the path before URL metadata. */ }
+  for (const [pattern, replacement] of PATH_REDACTIONS) pathname = pathname.replace(pattern, replacement);
+  return pathname.slice(0, MAX_TEXT_LENGTH);
 }
-
-function sanitizeToken(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return sanitizeText(value).replace(/^Bearer\s+.+$/i, 'Bearer <redacted>');
-}
-
 function sanitizeText(value: string | undefined): string {
-  if (!value) return '';
-  return value
-    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer <redacted>')
-    .replace(/https?:\/\/[^\s)]+/gi, (url) => sanitizePath(url) ?? '<url>')
-    .slice(0, MAX_TEXT_LENGTH);
+  const bearerRemoved = (value ?? '').replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer <redacted>');
+  return bearerRemoved.replace(/https?:\/\/[^\s)]+/gi, url => sanitizePath(url) ?? '<url>').slice(0, MAX_TEXT_LENGTH);
 }
-
-function finiteNumber(value: number | undefined): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+function sanitizeToken(value: string | undefined): string | undefined {
+  return value ? sanitizeText(value).replace(/^Bearer\s+.+$/i, 'Bearer <redacted>') : undefined;
 }
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

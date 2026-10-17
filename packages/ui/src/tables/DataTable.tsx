@@ -5,12 +5,11 @@ import {
   getSortedRowModel,
   flexRender,
   type ColumnDef,
-  type VisibilityState,
-  type SortingState,
   type Row,
 } from '@tanstack/react-table';
 import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useDataTableState } from '../hooks/useDataTableState';
 import { Skeleton } from '../primitives/Skeleton';
 import { EmptyState } from '../primitives/EmptyState';
 import { SelectPicker } from '../primitives/SelectPicker';
@@ -54,33 +53,7 @@ export function DataTable<TData>({
   defaultHiddenColumns,
   renderMobileRow,
 }: DataTableProps<TData>) {
-  const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
-    const hidden = defaultHiddenColumns ?? [];
-    return hidden.reduce<VisibilityState>((acc, id) => {
-      acc[id] = false;
-      return acc;
-    }, {});
-  });
-  const [menuPosition, setMenuPosition] = React.useState<{ x: number; y: number } | null>(null);
-
-  React.useEffect(() => {
-    if (!columnVisibilityMenu || !menuPosition) return;
-
-    const close = () => setMenuPosition(null);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenuPosition(null);
-    };
-
-    document.addEventListener('click', close);
-    document.addEventListener('contextmenu', close);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('click', close);
-      document.removeEventListener('contextmenu', close);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [columnVisibilityMenu, menuPosition]);
+  const { sorting, columnVisibility, menuPosition, setSorting, setColumnVisibility, openColumnMenu, chooseSort, reverseSort } = useDataTableState(defaultHiddenColumns, columnVisibilityMenu);
 
   const table = useReactTable({
     data,
@@ -93,20 +66,12 @@ export function DataTable<TData>({
   });
 
   const visibleColumns = table.getVisibleLeafColumns();
-  const menuColumns = table
-    .getAllLeafColumns()
-    .filter((column) => {
-      const header = column.columnDef.header;
-      const meta = column.columnDef.meta as ColumnMeta | undefined;
-      return typeof header === 'string' || typeof meta?.columnLabel === 'string';
-    });
-
-  const openColumnMenu = (event: React.MouseEvent) => {
-    if (!columnVisibilityMenu) return;
-    event.preventDefault();
-    event.stopPropagation();
-    setMenuPosition({ x: event.clientX, y: event.clientY });
-  };
+  const menuColumns = table.getAllLeafColumns().flatMap(column => {
+    const { header, meta } = column.columnDef;
+    const metadata = meta as ColumnMeta | undefined;
+    const label = typeof header === 'string' ? header : metadata?.columnLabel;
+    return typeof label === 'string' ? [{ column, label, sortLabel: metadata?.columnLabel ?? String(header) }] : [];
+  });
 
   return (
     <div className={cn('relative w-full overflow-x-auto', className)}>
@@ -117,20 +82,17 @@ export function DataTable<TData>({
               aria-label="Sort rows by"
               className="min-w-0 flex-1"
               value={sorting[0]?.id ?? ''}
-              onChange={(id) => setSorting(id ? [{ id, desc: sorting[0]?.desc ?? false }] : [])}
+              onChange={chooseSort}
               options={[
                 { value: '', label: 'Original order' },
-                ...menuColumns.filter((column) => column.getCanSort()).map((column) => ({
-                  value: column.id,
-                  label: (column.columnDef.meta as ColumnMeta | undefined)?.columnLabel ?? String(column.columnDef.header),
-                })),
+                ...menuColumns.filter(({ column }) => column.getCanSort()).map(({ column, sortLabel }) => ({ value: column.id, label: sortLabel })),
               ]}
             />
             <button
               type="button"
               aria-label={sorting[0]?.desc ? 'Sort ascending' : 'Sort descending'}
               disabled={!sorting.length}
-              onClick={() => setSorting((current) => current.map((sort) => ({ ...sort, desc: !sort.desc })))}
+              onClick={reverseSort}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-secondary transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               {sorting[0]?.desc ? <ChevronDown aria-hidden="true" className="h-4 w-4" /> : <ChevronUp aria-hidden="true" className="h-4 w-4" />}
@@ -238,12 +200,7 @@ export function DataTable<TData>({
           onClick={(event) => event.stopPropagation()}
         >
           <p className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">Columns</p>
-          {menuColumns.map((column) => {
-            const meta = column.columnDef.meta as ColumnMeta | undefined;
-            const label = typeof column.columnDef.header === 'string'
-              ? column.columnDef.header
-              : meta?.columnLabel;
-            if (typeof label !== 'string') return null;
+          {menuColumns.map(({ column, label }) => {
             return (
               <label
                 key={column.id}

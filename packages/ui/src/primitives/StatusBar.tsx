@@ -25,12 +25,21 @@ export interface StatusBarProps {
   className?: string | undefined;
 }
 
-/** Lucide offers three fill levels, so charge is bucketed into thirds plus a critical warning. */
+const BATTERY_LEVELS = [
+  { above: 66, Component: BatteryFull, variant: 'full' },
+  { above: 33, Component: BatteryMedium, variant: 'medium' },
+  { above: 10, Component: BatteryLow, variant: 'low' },
+] as const;
+const CONNECTION = {
+  online: { label: 'Online', icon: Wifi, color: 'text-status-positive', spin: false },
+  connecting: { label: 'Reconnecting...', icon: Loader2, color: 'text-accent', spin: true },
+  unhealthy: { label: 'Feed unhealthy', icon: TriangleAlert, color: 'text-status-danger', spin: false },
+  error: { label: 'Connection failed', icon: WifiOff, color: 'text-status-danger', spin: false },
+  offline: { label: 'Offline', icon: WifiOff, color: 'text-fg-tertiary', spin: false },
+};
 export function getBatteryIcon(socPercent: number) {
-  if (socPercent > 66) return { Component: BatteryFull, variant: 'full' };
-  if (socPercent > 33) return { Component: BatteryMedium, variant: 'medium' };
-  if (socPercent > 10) return { Component: BatteryLow, variant: 'low' };
-  return { Component: BatteryWarning, variant: 'critical' };
+  const level = BATTERY_LEVELS.find(level => socPercent > level.above);
+  return level ? { Component: level.Component, variant: level.variant } : { Component: BatteryWarning, variant: 'critical' };
 }
 
 export function StatusBar({
@@ -49,16 +58,9 @@ export function StatusBar({
         ? { Component: BatteryCharging, variant: 'charging' }
         : getBatteryIcon(socPercent)
       : undefined;
-  const statusLabel =
-    onlineState === 'online'
-      ? 'Online'
-      : onlineState === 'connecting'
-        ? 'Reconnecting...'
-        : onlineState === 'unhealthy'
-          ? 'Feed unhealthy'
-          : onlineState === 'error'
-            ? 'Connection failed'
-            : 'Offline';
+  const connection = CONNECTION[onlineState] ?? CONNECTION.offline;
+  const statusLabel = connection.label;
+  const ConnectionIcon = connection.icon;
 
   const showBattery = socPercent !== undefined && onlineState === 'online';
   const shouldCenterConnection = compact && !showBattery;
@@ -77,30 +79,12 @@ export function StatusBar({
         title={`Vehicle status: ${statusLabel}`}
         aria-label={`Vehicle status: ${statusLabel}`}
       >
-        {onlineState === 'connecting' ? (
-          <Loader2 className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-accent animate-spin')} />
-        ) : onlineState === 'online' ? (
-          <Wifi className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-status-positive')} />
-        ) : onlineState === 'unhealthy' ? (
-          <TriangleAlert className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-status-danger')} />
-        ) : onlineState === 'error' ? (
-          <WifiOff className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-status-danger')} />
-        ) : (
-          <WifiOff className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0 text-fg-tertiary')} />
-        )}
+        <ConnectionIcon className={cn(size === 'menu' ? 'h-5 w-5' : 'h-4 w-4', 'shrink-0', connection.color, connection.spin && 'animate-spin')} />
         {!compact && (
           <span
             className={cn(
               'text-sm font-medium',
-              onlineState === 'online'
-                ? 'text-status-positive'
-                : onlineState === 'connecting'
-                  ? 'text-accent'
-                  : onlineState === 'unhealthy'
-                    ? 'text-status-danger'
-                    : onlineState === 'error'
-                      ? 'text-status-danger'
-                      : 'text-fg-tertiary'
+              connection.color
             )}
           >
             {statusLabel}

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { createColumnHelper } from '@tanstack/react-table';
+import { createColumnHelper, type CellContext } from '@tanstack/react-table';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { Tooltip } from '../primitives/Tooltip';
 import { formatKwh, formatMiles, formatPercent, formatSmartNumber } from '../lib/utils';
@@ -39,22 +39,34 @@ function formatDateTime(value: string | null) {
   return formatAppDateTime(value);
 }
 
+function drainNumber(value: number | null, decimals: number, suffix: string, factor = 1) {
+  return value == null || Number.isNaN(value) ? '-' : `${formatSmartNumber(value / factor, decimals)}${suffix}`;
+}
 export function formatDurationHours(value: number | null) {
-  if (value == null || Number.isNaN(value)) return '-';
-  return `${formatSmartNumber(value, 1)} h`;
+  return drainNumber(value, 1, ' h');
 }
-
 export function formatPowerWatts(value: number | null) {
-  if (value == null || Number.isNaN(value)) return '-';
-  if (Math.abs(value) >= 1000) {
-    return `${formatSmartNumber(value / 1000, 2)} kW`;
-  }
-  return `${formatSmartNumber(value, 0)} W`;
+  const kilo = value != null && Math.abs(value) >= 1000;
+  return drainNumber(value, kilo ? 2 : 0, kilo ? ' kW' : ' W', kilo ? 1000 : 1);
 }
-
 export function formatRatioPercent(value: number | null, decimals = 0) {
-  if (value == null || Number.isNaN(value)) return '-';
-  return formatPercent(value * 100, decimals);
+  return value == null || Number.isNaN(value) ? '-' : formatPercent(value * 100, decimals);
+}
+const DRAIN_METRICS = {
+  sleep_share_pct: { empty: 'Unknown', className: 'font-mono text-fg-secondary', format: (value: number) => formatRatioPercent(value, 0) },
+  state_coverage_pct: { empty: '-', className: 'font-mono text-fg-secondary', format: (value: number) => formatRatioPercent(value, 0) },
+  soc_lost_pct: { empty: '-', className: 'font-mono text-fg', format: (value: number) => `-${formatPercent(value, 2)}` },
+  drain_pct_per_hour: { empty: '-', className: 'font-mono text-fg', format: (value: number) => `${formatPercent(value, 2)} / h` },
+  range_lost_mi: { empty: '-', className: 'font-mono text-fg', format: formatMiles },
+  range_lost_per_hour_mi: { empty: '-', className: 'font-mono text-fg-secondary', format: (value: number) => `${formatMiles(value, 2)} / h` },
+} as const;
+function metricCell(field: keyof typeof DRAIN_METRICS) {
+  const contract = DRAIN_METRICS[field];
+  return (info: CellContext<PhantomDrainRow, number | null>) => {
+    const value = info.getValue();
+    const missing = value == null || Number.isNaN(value);
+    return <span className={missing ? 'text-fg-tertiary' : contract.className}>{missing ? contract.empty : contract.format(value)}</span>;
+  };
 }
 
 function infoHeader(label: string, description: string) {
@@ -132,11 +144,7 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Sleep',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">Unknown</span>;
-      return <span className="font-mono text-fg-secondary">{formatRatioPercent(value, 0)}</span>;
-    },
+    cell: metricCell('sleep_share_pct'),
   }),
   col.accessor('state_coverage_pct', {
     header: () => infoHeader(
@@ -149,11 +157,7 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'State Coverage',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
-      return <span className="font-mono text-fg-secondary">{formatRatioPercent(value, 0)}</span>;
-    },
+    cell: metricCell('state_coverage_pct'),
   }),
   col.accessor('soc_start', {
     id: 'soc_range',
@@ -185,11 +189,7 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'SoC Diff',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
-      return <span className="font-mono text-fg">-{formatPercent(value, 2)}</span>;
-    },
+    cell: metricCell('soc_lost_pct'),
   }),
   col.accessor('drain_pct_per_hour', {
     header: () => infoHeader('Drain / h', 'Validated battery percentage lost per parked hour during this session.'),
@@ -199,11 +199,7 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Drain / h',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
-      return <span className="font-mono text-fg">{formatPercent(value, 2)} / h</span>;
-    },
+    cell: metricCell('drain_pct_per_hour'),
   }),
   col.accessor('range_lost_mi', {
     header: () => infoHeader(
@@ -216,11 +212,7 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Range',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
-      return <span className="font-mono text-fg">{formatMiles(value)}</span>;
-    },
+    cell: metricCell('range_lost_mi'),
   }),
   col.accessor('range_lost_per_hour_mi', {
     header: () => infoHeader('Range / h', 'Estimated miles of range lost per hour over this validated parked session.'),
@@ -230,11 +222,7 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Range / h',
     },
-    cell: (info) => {
-      const value = info.getValue();
-      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
-      return <span className="font-mono text-fg-secondary">{`${formatMiles(value, 2)} / h`}</span>;
-    },
+    cell: metricCell('range_lost_per_hour_mi'),
   }),
   col.accessor('energy_drained_kwh', {
     header: 'kWh',

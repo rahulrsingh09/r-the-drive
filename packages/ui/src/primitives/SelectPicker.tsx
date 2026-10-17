@@ -2,6 +2,8 @@ import * as React from 'react';
 import { OverlayPortal } from './ResponsiveDialog';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useDisclosure, useDismissLayer, useViewportPlacement } from '../hooks/useOverlayInteraction';
+import { nextEnabledOption, selectPosition } from '../lib/overlayLayout';
 
 export interface SelectPickerOption<TValue extends string = string> {
   value: TValue;
@@ -40,7 +42,7 @@ export function SelectPicker<TValue extends string = string>({
   size = 'md',
   align = 'left',
 }: SelectPickerProps<TValue>) {
-  const [open, setOpen] = React.useState(false);
+  const { open, setOpen } = useDisclosure();
   const [activeIndex, setActiveIndex] = React.useState(-1);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
@@ -51,73 +53,21 @@ export function SelectPicker<TValue extends string = string>({
   const selectedIndex = options.findIndex((option) => option.value === value);
   const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : undefined;
 
-  const firstEnabledIndex = React.useMemo(
-    () => options.findIndex((option) => !option.disabled),
-    [options]
-  );
-
+  const enabled = options.flatMap((option, index) => option.disabled ? [] : [index]);
+  const naturalWidth = React.useRef(0);
   React.useLayoutEffect(() => {
-    if (!open) { setPosition(null); return; }
-    const naturalWidth = (menuRef.current?.scrollWidth ?? 0) + 2;
-    const place = () => {
-      const trigger = triggerRef.current;
-      const menu = menuRef.current;
-      if (!trigger || !menu) return;
-      const rect = trigger.getBoundingClientRect();
-      const viewport = window.visualViewport;
-      const leftEdge = (viewport?.offsetLeft ?? 0) + 12;
-      const topEdge = (viewport?.offsetTop ?? 0) + 12;
-      const rightEdge = leftEdge + (viewport?.width ?? window.innerWidth) - 24;
-      const bottomEdge = topEdge + (viewport?.height ?? window.innerHeight) - 24;
-      const width = Math.min(Math.max(rect.width, naturalWidth), rightEdge - leftEdge);
-      const gap = size === 'sm' ? 4 : 6;
-      const below = bottomEdge - rect.bottom - gap;
-      const above = rect.top - topEdge - gap;
-      const down = below >= Math.min(288, menu.scrollHeight) || below >= above;
-      const maxHeight = Math.max(32, Math.min(288, down ? below : above));
-      const height = Math.min(menu.scrollHeight, maxHeight);
-      setPosition({
-        left: Math.max(leftEdge, Math.min(align === 'right' ? rect.right - width : rect.left, rightEdge - width)),
-        top: Math.max(topEdge, down ? rect.bottom + gap : rect.top - gap - height),
-        width, maxHeight,
-      });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    window.visualViewport?.addEventListener('resize', place);
-    window.visualViewport?.addEventListener('scroll', place);
-    return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
-      window.visualViewport?.removeEventListener('resize', place);
-      window.visualViewport?.removeEventListener('scroll', place);
-    };
+    naturalWidth.current = (menuRef.current?.scrollWidth ?? 0) + 2;
+    if (!open) setPosition(null);
   }, [open, align, size, options.length]);
-
-  React.useEffect(() => {
-    if (!open) return;
-
-    function handlePointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-        triggerRef.current?.focus({ preventScroll: true });
-      }
-    }
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleEscape, true);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleEscape, true);
-    };
-  }, [open]);
+  const place = React.useCallback(() => {
+    const trigger = triggerRef.current, menu = menuRef.current;
+    if (trigger && menu) setPosition(selectPosition(trigger.getBoundingClientRect(), naturalWidth.current, menu.scrollHeight, align, size === 'sm'));
+  }, [align, size, options.length]);
+  useViewportPlacement(open, place, true);
+  useDismissLayer({ enabled: open, roots: [rootRef, menuRef], captureEscape: true, preventEscape: true, dismiss: reason => {
+    setOpen(false);
+    if (reason === 'escape') triggerRef.current?.focus({ preventScroll: true });
+  } });
 
   const positioned = position !== null;
   React.useEffect(() => {
@@ -126,71 +76,43 @@ export function SelectPicker<TValue extends string = string>({
     const menu = menuRef.current;
     option?.focus({ preventScroll: true });
     if (option && menu) {
-      if (option.offsetTop < menu.scrollTop) menu.scrollTop = option.offsetTop;
-      else if (option.offsetTop + option.offsetHeight > menu.scrollTop + menu.clientHeight) {
-        menu.scrollTop = option.offsetTop + option.offsetHeight - menu.clientHeight;
-      }
+      const before = option.offsetTop < menu.scrollTop;
+      const bottom = option.offsetTop + option.offsetHeight - menu.clientHeight;
+      menu.scrollTop = before ? option.offsetTop : Math.max(menu.scrollTop, bottom);
     }
   }, [activeIndex, open, positioned]);
 
-  function getEnabledIndex(start: number, direction: 1 | -1) {
-    if (options.length === 0) return -1;
-    let index = start;
-    for (let count = 0; count < options.length; count += 1) {
-      if (index < 0) index = options.length - 1;
-      if (index >= options.length) index = 0;
-      if (!options[index]?.disabled) return index;
-      index += direction;
-    }
-    return -1;
-  }
-
   function openPicker() {
-    if (disabled) return;
-    setActiveIndex(getEnabledIndex(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex, 1));
-    setOpen(true);
+    if (!disabled) {
+      setActiveIndex(nextEnabledOption(enabled, options.length, selectedIndex >= 0 ? selectedIndex : enabled[0] ?? -1, 1));
+      setOpen(true);
+    }
   }
-
   function selectOption(nextValue: TValue) {
     onChange(nextValue);
     setOpen(false);
     triggerRef.current?.focus({ preventScroll: true });
   }
-
   function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
-    if (disabled) return;
-    if (
-      event.key === 'ArrowDown' ||
-      event.key === 'ArrowUp' ||
-      event.key === 'Enter' ||
-      event.key === ' '
-    ) {
-      event.preventDefault();
-      openPicker();
-    }
+    if (disabled || !['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    openPicker();
   }
-
   function handleOptionKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const navigation: Record<string, readonly [number, 1 | -1]> = {
+      ArrowDown: [index + 1, 1], ArrowUp: [index - 1, -1], Home: [0, 1], End: [options.length - 1, -1],
+    };
+    const move = navigation[event.key];
+    if (move) {
       event.preventDefault();
-      const nextIndex = getEnabledIndex(
-        index + (event.key === 'ArrowDown' ? 1 : -1),
-        event.key === 'ArrowDown' ? 1 : -1
-      );
-      setActiveIndex(nextIndex);
-    } else if (event.key === 'Home' || event.key === 'End') {
-      event.preventDefault();
-      const nextIndex =
-        event.key === 'Home' ? getEnabledIndex(0, 1) : getEnabledIndex(options.length - 1, -1);
-      setActiveIndex(nextIndex);
-    } else if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      const option = options[index];
-      if (option && !option.disabled) selectOption(option.value);
-    } else if (event.key === 'Tab') {
-      triggerRef.current?.focus({ preventScroll: true });
-      setOpen(false);
+      setActiveIndex(nextEnabledOption(enabled, options.length, ...move));
+      return;
     }
+    if (event.key === 'Tab') { triggerRef.current?.focus({ preventScroll: true }); setOpen(false); return; }
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    const option = options[index];
+    if (option && !option.disabled) selectOption(option.value);
   }
 
   const triggerSize = size === 'sm' ? 'h-8 px-2.5 text-xs' : 'h-9 px-3 text-sm';

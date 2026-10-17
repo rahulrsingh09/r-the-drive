@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readMedia } from './browserRuntime';
 import {
   DEFAULT_THEME_PREFERENCES,
   type ThemeMode,
@@ -14,33 +15,23 @@ export { resolveTheme } from '@panda/themes';
 
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 
+const MODES: readonly unknown[] = ['light', 'dark', 'system'];
+const PALETTES: readonly unknown[] = ['classic', 'rad'];
 export function isThemeMode(value: unknown): value is ThemeMode {
-  return value === 'light' || value === 'dark' || value === 'system';
+  return MODES.includes(value);
 }
-
 export function isThemePalette(value: unknown): value is ThemePalette {
-  return value === 'classic' || value === 'rad';
+  return PALETTES.includes(value);
 }
-
 export function normalizeThemePreferences(value: unknown): ThemePreferences {
-  const candidate = value as Partial<ThemePreferences> | null | undefined;
-  return {
-    mode: isThemeMode(candidate?.mode) ? candidate.mode : DEFAULT_THEME_PREFERENCES.mode,
-    palette: isThemePalette(candidate?.palette) ? candidate.palette : DEFAULT_THEME_PREFERENCES.palette,
-  };
+  const input = value as Partial<ThemePreferences> | null | undefined;
+  const normalized = { ...DEFAULT_THEME_PREFERENCES };
+  if (isThemeMode(input?.mode)) normalized.mode = input.mode;
+  if (isThemePalette(input?.palette)) normalized.palette = input.palette;
+  return normalized;
 }
-
-function getThemeMediaQueryList() {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return null;
-  }
-
-  return window.matchMedia(THEME_MEDIA_QUERY);
-}
-
 export function getSystemThemeMode(): Exclude<ThemeMode, 'system'> {
-  const mediaQuery = getThemeMediaQueryList();
-  return mediaQuery?.matches ? 'dark' : 'light';
+  return readMedia(THEME_MEDIA_QUERY)?.matches ? 'dark' : 'light';
 }
 
 export function resolveThemeMode(mode: ThemeMode): Exclude<ThemeMode, 'system'> {
