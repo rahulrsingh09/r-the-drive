@@ -465,3 +465,47 @@ mod full_replacement_tests {
         f.cleanup().await;
     }
 }
+
+#[cfg(test)]
+mod readiness_characterization {
+    use super::*;
+    use crate::authorization_test_support::Fixture;
+    #[tokio::test]
+    #[ignore = "requires disposable TimescaleDB DATABASE_URL and REDIS_URL"]
+    async fn trip_readiness_predicate_characterization() {
+        let f=Fixture::new().await;
+        let owner=f.user("user").await;
+        let vehicle=f.vehicle(owner,"demo-readiness-characterization").await;
+        let read=|pool: sqlx::PgPool| async move {serde_json::to_value(fetch_trip_capture_health(&pool,vehicle).await.unwrap()).unwrap()};
+        let empty=read(f.state.pool.clone()).await;
+        assert_eq!(empty,serde_json::json!({"ready":false,"collector_heartbeat_at":null,"checkpoint_at":null,"pending_completions":0,"persistence_error":null}));
+        sqlx::query("INSERT INTO panda.active_trip_checkpoints(vehicle_id,snapshot,updated_at) VALUES($1,'{}','2026-01-01Z')").bind(vehicle).execute(&f.state.pool).await.unwrap();
+        sqlx::query("INSERT INTO panda.vehicle_runtime_state(vehicle_id,collector_heartbeat_at,auth_state,worker_health,updated_at) VALUES($1,'2099-01-01Z','authorized','connected','2026-01-01Z') ON CONFLICT (vehicle_id) DO UPDATE SET collector_heartbeat_at=EXCLUDED.collector_heartbeat_at,auth_state=EXCLUDED.auth_state,worker_health=EXCLUDED.worker_health,updated_at=EXCLUDED.updated_at").bind(vehicle).execute(&f.state.pool).await.unwrap();
+        let healthy=read(f.state.pool.clone()).await;
+        assert_eq!(healthy,serde_json::json!({"ready":true,"collector_heartbeat_at":"2099-01-01T00:00:00Z","checkpoint_at":"2026-01-01T00:00:00Z","pending_completions":0,"persistence_error":null}));
+        for assignments in ["collector_heartbeat_at='2026-01-01Z'", "collector_heartbeat_at=NULL", "auth_state='expired'", "auth_state=NULL", "worker_health='starting'", "trip_persistence_error='synthetic persistence failure'"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE panda.vehicle_runtime_state SET {assignments} WHERE vehicle_id=$1"))).bind(vehicle).execute(&f.state.pool).await.unwrap();
+            assert_eq!(read(f.state.pool.clone()).await["ready"],false,"{assignments}");
+            sqlx::query("UPDATE panda.vehicle_runtime_state SET collector_heartbeat_at='2099-01-01Z',auth_state='authorized',worker_health='connected',trip_persistence_error=NULL WHERE vehicle_id=$1").bind(vehicle).execute(&f.state.pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO panda.pending_trip_completions(trip_id,vehicle_id,trip) VALUES($1,$2,'{}')").bind(Uuid::new_v4()).bind(vehicle).execute(&f.state.pool).await.unwrap();
+        let pending=read(f.state.pool.clone()).await;
+        assert_eq!(pending["ready"],false);assert_eq!(pending["pending_completions"],1);
+        assert!(matches!(fetch_trip_capture_health(&f.state.pool,Uuid::new_v4()).await,Err(AppError::Database(sqlx::Error::RowNotFound))));
+        let mut cleanup_url=url::Url::parse(&f.state.config.database_url).unwrap();
+        let database=cleanup_url.path().trim_start_matches('/').to_owned();
+        assert!(database.starts_with("authorization_test_"));
+        cleanup_url.set_path("/postgres");
+        f.state.pool.close().await;
+        let probe=sqlx::PgPool::connect(cleanup_url.as_str()).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5),async {
+            loop {
+                let connections:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=$1 AND backend_type='client backend'").bind(&database).fetch_one(&probe).await.unwrap();
+                if connections==0 {break;}
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }).await.expect("fixture clients closed");
+        probe.close().await;
+        f.cleanup().await;
+    }
+}
