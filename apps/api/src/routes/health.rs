@@ -407,3 +407,61 @@ async fn fetch_runtime(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<RuntimeH
     .map_err(AppError::from)?;
     Ok(row)
 }
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+    use crate::authorization_test_support::Fixture;
+    use serde_json::json;
+
+    #[tokio::test]
+    #[ignore = "requires disposable TimescaleDB DATABASE_URL and REDIS_URL"]
+    async fn health_complete_projection_characterization() {
+        let f = Fixture::new().await;
+        let owner = f.user("user").await;
+        let vehicle = f.vehicle(owner, "demo-health-projection").await;
+        let mut observations = vec![serde_json::to_value(fetch_extended_telemetry(&f.state.pool, vehicle).await.unwrap()).unwrap()];
+        assert_eq!(observations[0]["legacy_charging_session"]["classification"], "not_observed");
+        sqlx::query("INSERT INTO panda.parallax_collector_state(vehicle_id,status,owner_kind,connected_at,last_event_at,last_error,updated_at,last_frame_at,last_meaningful_frame_at,reconnect_count,decode_error_count,empty_frame_count,ambiguity_count,legacy_last_classification,legacy_null_count,legacy_missing_count,legacy_malformed_count,legacy_all_null_count,legacy_meaningful_count) VALUES($1,'connected','in_process','2026-01-01Z','2026-01-02Z','synthetic error','2026-01-03Z','2026-01-04Z','2026-01-05Z',1,2,3,4,'meaningful',5,6,7,8,9)")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.parallax_network_samples(vehicle_id,source_at,received_at,payload_hash,wifi_connected,wifi_rssi_dbm,wifi_link_speed_mbps,wifi_frequency_mhz,wifi_channel_width_mhz,cellular_access_technology,cellular_signal_dbm) VALUES($1,'2026-01-01Z','2026-01-01Z',decode('aa','hex'),true,-50,42,2400,20,'fixture',-80)")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.parallax_efficiency_samples(vehicle_id,source_at,received_at,payload_hash,reference_wh_per_km,learned_wh_per_km,mode_ranges_km) VALUES($1,'2026-01-01Z','2026-01-01Z',decode('ab','hex'),200,210,'{\"all_purpose\":300}')")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.parallax_mass_samples(vehicle_id,source_at,received_at,payload_hash,estimated_mass_kg) VALUES($1,'2026-01-01Z','2026-01-01Z',decode('ac','hex'),3000)")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        sqlx::query("INSERT INTO timeseries.parallax_cold_weather_samples(vehicle_id,source_at,received_at,payload_hash,available_soc_pct,cold_limited_soc_pct,cold_range_impact_km) VALUES($1,'2026-01-01Z','2026-01-01Z',decode('ad','hex'),80,10,20.5)")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        let stale = serde_json::to_value(fetch_extended_telemetry(&f.state.pool, vehicle).await.unwrap()).unwrap();
+        assert_eq!(stale["collector"]["status"], "stale");
+        assert_eq!(stale["collector"]["running"], false);
+        assert_eq!(stale["parallax"]["reconnect_count"], 1);
+        assert_eq!(stale["legacy_charging_session"]["meaningful_count"], 9);
+        observations.push(stale);
+        sqlx::query("UPDATE panda.parallax_collector_state SET updated_at='2099-01-01Z' WHERE vehicle_id=$1")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        let active = serde_json::to_value(fetch_extended_telemetry(&f.state.pool, vehicle).await.unwrap()).unwrap();
+        assert_eq!(active["collector"]["status"], "connected");
+        assert_eq!(active["collector"]["running"], true);
+        observations.push(active);
+        sqlx::query("UPDATE panda.parallax_collector_state SET owner_kind=NULL,status='disconnected' WHERE vehicle_id=$1")
+            .bind(vehicle).execute(&f.state.pool).await.unwrap();
+        let duplicate = serde_json::to_value(fetch_extended_telemetry(&f.state.pool, vehicle).await.unwrap()).unwrap();
+        assert_eq!(duplicate["collector"]["status"], "duplicate_owner");
+        assert_eq!(duplicate["parallax"]["status"], "disconnected");
+        observations.push(duplicate);
+        sqlx::query("ALTER TABLE timeseries.parallax_network_samples RENAME TO parallax_network_samples_fault").execute(&f.state.pool).await.unwrap();
+        assert!(matches!(fetch_extended_telemetry(&f.state.pool, vehicle).await, Err(AppError::Database(_))));
+        sqlx::query("ALTER TABLE timeseries.parallax_network_samples_fault RENAME TO parallax_network_samples").execute(&f.state.pool).await.unwrap();
+        assert_eq!(serde_json::to_value(fetch_extended_telemetry(&f.state.pool, vehicle).await.unwrap()).unwrap(), observations[3]);
+        let evidence = json!(observations);
+        if let Ok(path) = std::env::var("HEALTH_CHARACTERIZATION_CAPTURE") {
+            std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+        }
+        if let Ok(path) = std::env::var("HEALTH_CHARACTERIZATION_COMPARE") {
+            let original: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(evidence, original);
+        }
+        f.cleanup().await;
+    }
+}
