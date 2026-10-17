@@ -1,8 +1,9 @@
 # Bootstrap validation
 
-The current rewrite candidate has completed local acceptance. See
-[Functional rewrite readiness](#functional-rewrite-readiness) for its results
-and limits. The earlier sections below record historical bootstrap checks.
+This page records historical bootstrap and bounded rewrite validation. Every
+result applies to the source revision named in its section. The comprehensive
+implementation replacement requires its own final validation; the results
+below are not evidence that a later revision has passed.
 
 Validated locally on 2026-10-16 from source snapshot `f9482c7dc207adbdb2b43c3f247023f2e20323d6`. The repository has a new Git history, PANDA package/configuration/schema names and the existing R interface. No application deployment was performed.
 
