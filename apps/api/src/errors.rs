@@ -173,3 +173,7 @@ impl IntoResponse for AppError {
         response
     }
 }
+
+#[cfg(test)]
+#[path = "errors_full_replacement_tests.rs"]
+mod full_replacement_tests;

@@ -1483,3 +1483,7 @@ mod tests {
             .expect("a unique 32-byte setup token is valid");
     }
 }
+
+#[cfg(test)]
+#[path = "config_full_replacement_tests.rs"]
+mod full_replacement_tests;

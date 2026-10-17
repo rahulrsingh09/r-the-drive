@@ -5,3 +5,6 @@ pub mod state_period;
 pub mod telemetry;
 pub mod trip;
 pub mod vehicle;
+
+#[cfg(test)]
+mod full_replacement_tests;
