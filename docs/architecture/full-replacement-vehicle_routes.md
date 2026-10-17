@@ -30,6 +30,21 @@ jobs retain the atomic database claim, three attempts and five-minute lease
 recovery. Local integrity checks and outbound policy apply before a cached
 asset or provider response is accepted.
 
+Artwork refresh builds a `CacheProjection` by reducing streamed database rows
+through the existing filesystem inventory checks. A query or row-decoding
+failure discards the entire observation, including earlier rows. The projection
+owns counts, status and the fixed sanitized diagnostic before persistence;
+raw repair errors never enter it. Complete nonempty inventories take precedence
+over repair failures. Persistence keeps the last success timestamp on a
+non-ready observation, advances it on readiness, and remains best effort.
+
+`vehicles/readiness.rs` owns the credential-refresh readiness window. Its
+observation stream carries the remaining read budget and any delay owed by
+the previous unsuccessful observation. It reads immediately, stops on success,
+and otherwise performs ten reads and ten 500 ms delays, including a delay after
+the final failure. Missing rows, null state and query failures remain not ready.
+Dropping the wait drops the active read or delay; no polling task is detached.
+
 Capture routes share an authorized action dispatcher. Exports emit the header
 first, then advance an ID cursor in pages of 1,000 events. A database failure
 while reading a page terminates the body with an error. Capture data remains
@@ -79,6 +94,12 @@ instances on an internal network.
 Backfill coverage checks both POST aliases, read versus manager access,
 missing credentials, already-running responses and all service error
 conversions without launching a provider request.
+
+Additional frozen baseline checks cover artwork filesystem faults, status and
+timestamp precedence, ignored persistence errors, real database polling errors,
+bounded wall-clock timing and cancellation. Injected read and delay boundaries
+also verify exact polling order and destruction of the active future without
+requiring virtual-time features or additional dependencies.
 
 Fixed route declarations, wire-field projections, SQL schema predicates,
 cryptographic library adapters and minimal authorization predicates have

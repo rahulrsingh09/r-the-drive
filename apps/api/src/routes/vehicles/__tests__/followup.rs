@@ -249,3 +249,69 @@ async fn followup_artwork_projection_filesystem_and_database_faults() {
     assert_eq!(cache_row(&f).await, before_failed_write);
     f.cleanup().await;
 }
+#[tokio::test]
+#[ignore = "requires unique disposable restricted-role DB and Redis"]
+async fn followup_artwork_discards_partial_rows_and_advances_success() {
+    use futures::TryStreamExt;
+
+    let f = Fixture::new().await;
+    f.seed().await;
+    let root = std::path::Path::new(&f.state.config.vehicle_image_cache_dir);
+    std::fs::create_dir_all(root).unwrap();
+    std::fs::write(root.join("valid.webp"), b"synthetic").unwrap();
+    let metadata = json!({
+        "mirror_status":"ready","mirror_relpath":"valid.webp",
+        "sha256":hex::encode(Sha256::digest(b"synthetic"))
+    });
+    sqlx::query("INSERT INTO panda.vehicle_images(vehicle_id,placement,size,url,metadata,overlays) VALUES($1,'side','large','https://synthetic.invalid/artwork',$2,'[]')")
+        .bind(id(101)).bind(metadata).execute(&f.state.pool).await.unwrap();
+    refresh_and_check(&f, None, "ready", 1, 1).await;
+    f.state
+        .pool
+        .execute(
+            "UPDATE panda.vehicle_artwork_cache_state SET last_repair_success_at='2026-01-01Z'",
+        )
+        .await
+        .unwrap();
+    let previous = cache_row(&f).await;
+    f.state
+        .pool
+        .execute(
+            r#"ALTER TABLE panda.vehicle_images RENAME TO followup_original_images;
+           CREATE VIEW panda.vehicle_images AS
+           SELECT vehicle_id,placement,design,size,resolution,url,overlays,metadata
+           FROM (
+             SELECT vehicle_id,placement,design,size,resolution,url,overlays,metadata,0 AS ordering
+             FROM panda.followup_original_images
+             UNION ALL
+             SELECT vehicle_id,NULL::text,design,size,resolution,url,overlays,metadata,1 AS ordering
+             FROM panda.followup_original_images
+           ) rows ORDER BY ordering"#,
+        )
+        .await
+        .unwrap();
+    {
+        let mut rows = sqlx::query_as::<_, VehicleImageRow>(
+            "SELECT placement, design, size, resolution, url, overlays, metadata
+             FROM panda.vehicle_images WHERE vehicle_id=$1",
+        )
+        .bind(id(101))
+        .fetch(&f.state.pool);
+        assert!(rows.try_next().await.unwrap().is_some());
+        assert!(rows.try_next().await.is_err());
+    }
+    let partial = refresh_and_check(&f, Some("decoding detail"), "failed", 0, 0).await;
+    assert_eq!(
+        partial["last_repair_success_at"],
+        previous["last_repair_success_at"]
+    );
+    f.state.pool.execute(
+        "DROP VIEW panda.vehicle_images; ALTER TABLE panda.followup_original_images RENAME TO vehicle_images",
+    ).await.unwrap();
+    let ready = refresh_and_check(&f, Some("repair diagnostic"), "ready", 1, 1).await;
+    assert_ne!(
+        ready["last_repair_success_at"],
+        previous["last_repair_success_at"]
+    );
+    f.cleanup().await;
+}

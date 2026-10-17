@@ -55,6 +55,8 @@ mod connection;
 mod enrollment;
 #[path = "vehicles/membership.rs"]
 mod membership;
+#[path = "vehicles/readiness.rs"]
+mod readiness;
 #[path = "vehicles/status.rs"]
 mod status;
 use status::StatusFieldAvailability;
@@ -1214,25 +1216,7 @@ async fn refresh_vehicle_credentials(
 }
 
 async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
-    for _ in 0..10 {
-        let runtime = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT worker_health, auth_state
-             FROM panda.vehicle_runtime_state WHERE vehicle_id = $1",
-        )
-        .bind(vehicle_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-        if runtime
-            .as_ref()
-            .is_some_and(|(health, auth)| vehicle_data_ready(health.as_deref(), auth.as_deref()))
-        {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    false
+    readiness::wait(pool, vehicle_id).await
 }
 
 fn vehicle_data_ready(worker_health: Option<&str>, auth_state: Option<&str>) -> bool {
@@ -2339,38 +2323,10 @@ async fn refresh_vehicle_artwork_cache_state(
     vehicle_id: Uuid,
     error: Option<&str>,
 ) {
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
-         FROM panda.vehicle_images WHERE vehicle_id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    let (asset_count, ready_asset_count) = artwork_asset_counts(config, &rows);
-    let status = artwork::CacheInventory {
-        total: asset_count,
-        ready: ready_asset_count,
-    }
-    .status(error.is_some());
-    let sanitized_error = error.map(|_| "Rivian artwork repair failed; retry is scheduled.");
-    let _ = sqlx::query(
-        r#"INSERT INTO panda.vehicle_artwork_cache_state
-              (vehicle_id, status, asset_count, ready_asset_count, last_repair_success_at, last_error, updated_at)
-           VALUES ($1, $2, $3, $4, CASE WHEN $2 = 'ready' THEN now() ELSE NULL END, $5, now())
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = EXCLUDED.status, asset_count = EXCLUDED.asset_count,
-             ready_asset_count = EXCLUDED.ready_asset_count,
-             last_repair_success_at = CASE WHEN EXCLUDED.status = 'ready' THEN now() ELSE panda.vehicle_artwork_cache_state.last_repair_success_at END,
-             last_error = EXCLUDED.last_error, updated_at = now()"#,
-    )
-    .bind(vehicle_id)
-    .bind(status)
-    .bind(asset_count)
-    .bind(ready_asset_count)
-    .bind(sanitized_error)
-    .execute(pool)
-    .await;
+    artwork::CacheProjection::read(pool, config, vehicle_id, error.is_some())
+        .await
+        .persist(pool, vehicle_id)
+        .await;
 }
 
 async fn vehicle_artwork_cache_state_json(

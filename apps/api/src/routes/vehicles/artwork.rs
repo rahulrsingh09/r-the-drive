@@ -1,4 +1,64 @@
 use super::*;
+use futures::TryStreamExt;
+
+pub(super) struct CacheProjection {
+    inventory: CacheInventory,
+    status: &'static str,
+    error: Option<&'static str>,
+}
+
+impl CacheProjection {
+    pub async fn read(
+        pool: &sqlx::PgPool,
+        config: &crate::config::Config,
+        vehicle: Uuid,
+        failed: bool,
+    ) -> Self {
+        let inventory = sqlx::query_as::<_, VehicleImageRow>(
+            "SELECT placement, design, size, resolution, url, overlays, metadata
+             FROM panda.vehicle_images WHERE vehicle_id = $1",
+        )
+        .bind(vehicle)
+        .fetch(pool)
+        .try_fold(
+            CacheInventory { total: 0, ready: 0 },
+            |mut inventory, row| async move {
+                let observed = CacheInventory::inspect(config, std::slice::from_ref(&row));
+                inventory.total += observed.total;
+                inventory.ready += observed.ready;
+                Ok(inventory)
+            },
+        )
+        .await
+        // A failed read invalidates the entire observation, including any earlier rows.
+        .unwrap_or(CacheInventory { total: 0, ready: 0 });
+        Self {
+            status: inventory.status(failed),
+            inventory,
+            error: failed.then_some("Rivian artwork repair failed; retry is scheduled."),
+        }
+    }
+
+    pub async fn persist(self, pool: &sqlx::PgPool, vehicle: Uuid) {
+        let _ = sqlx::query(
+            r#"INSERT INTO panda.vehicle_artwork_cache_state
+                  (vehicle_id, status, asset_count, ready_asset_count, last_repair_success_at, last_error, updated_at)
+               VALUES ($1, $2, $3, $4, CASE WHEN $2 = 'ready' THEN now() ELSE NULL END, $5, now())
+               ON CONFLICT (vehicle_id) DO UPDATE SET
+                 status = EXCLUDED.status, asset_count = EXCLUDED.asset_count,
+                 ready_asset_count = EXCLUDED.ready_asset_count,
+                 last_repair_success_at = CASE WHEN EXCLUDED.status = 'ready' THEN now() ELSE panda.vehicle_artwork_cache_state.last_repair_success_at END,
+                 last_error = EXCLUDED.last_error, updated_at = now()"#,
+        )
+        .bind(vehicle)
+        .bind(self.status)
+        .bind(self.inventory.total)
+        .bind(self.inventory.ready)
+        .bind(self.error)
+        .execute(pool)
+        .await;
+    }
+}
 
 #[derive(Default)]
 struct PlacementCandidates {
