@@ -105,7 +105,8 @@ it.each(['admin', 'super_user', 'viewer', 'user', 'unknown'])('keeps Explore lin
 });
 
 it('ignores stale edit flags and edit URL hints while preserving home readiness', () => {
-  const current = { ...state(), isEditMode: true };
+  // Deliberately inject legacy runtime input outside the shell's read-only type.
+  const current = { ...state(), isEditMode: true } as unknown as DashboardPageShellRenderState;
   const view = render(<RDashboardSurface state={current} ready actions={null}>Route body</RDashboardSurface>);
   expect(screen.queryByText('Route body')).toBeNull();
   expect(view.container.querySelector('[data-r-default-layout]')).toHaveAttribute('data-r-default-layout', 'true');
