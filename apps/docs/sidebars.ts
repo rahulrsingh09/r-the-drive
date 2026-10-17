@@ -93,6 +93,8 @@ const sidebars: SidebarsConfig = {
     },
   ],
   developmentSidebar: [
+    'architecture/full-replacement-backend-foundation',
+    'architecture/full-replacement-acquisition',
     'architecture/build-workflow-programs',
     'development',
     {

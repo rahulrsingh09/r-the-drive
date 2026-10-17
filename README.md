@@ -9,7 +9,7 @@
 
 **Your vehicle. Your history. Your server.**
 
-R:The Drive is a private, self-hosted application for understanding your Rivian. See your vehicle at a glance, explore every recorded trip, follow charging and battery trends, and build dashboards around the information that matters to you. The responsive R interface works on desktop and mobile, with light and dark modes.
+R:The Drive is a private, self-hosted application for understanding your Rivian. See your vehicle at a glance, explore every recorded trip, and follow charging and battery trends in dedicated dashboards. The responsive R interface works on desktop and mobile, with light and dark modes.
 
 [Deploy with the setup script](./scripts/deploy.py) · [Installation guide](./docs/guides/getting-started.md) · [Documentation](./docs/index.md)
 
@@ -19,7 +19,7 @@ R:The Drive is a private, self-hosted application for understanding your Rivian.
 - **Explore recorded trips:** Review routes, distance, duration, efficiency and driving samples. Tag trips and inspect the map and graphs together.
 - **Understand charging:** Follow session history, charging curves, energy added and available cost information.
 - **Track battery and efficiency:** Compare state of charge, range, parked battery loss, drive modes and longer-term trends.
-- **Make it yours:** Customize dashboards, charts, units and saved places. Import, export or duplicate dashboard configurations.
+- **Make it yours:** Customize chart definitions, choose favorite charts, and set units and saved places. Dashboard layouts stay fixed; existing saved layouts remain available.
 - **Manage access:** Connect multiple vehicles, invite users and assign vehicle-specific owner, manager or viewer access.
 - **Keep your history:** Store telemetry on your own infrastructure and use the backup and recovery tools to protect it.
 - **Try sample data:** Create a demo R1T, R1S or R2 without connecting a vehicle account.

@@ -10,7 +10,9 @@ Open **Settings > Charts** to manage chart defaults and personal charts. The man
 
 - App defaults and same-slug customizations always use the same established production renderer. Rich-editable charts expose the curve, axis, color, mark, fill, ordering, and display inputs their specialized renderer consumes. Fixed-geometry aggregate, charging-curve, pill-bar, phantom-drain, and tire charts expose only supported color controls; ignored visual edits are rejected instead of being silently saved.
 - A disabled chart keeps its dashboard assignments. Re-enabling restores those placements and preserves the stored favorite.
-- Assignments control which dashboard catalogs include an enabled chart. An enabled chart with no assignments is saved as **Unassigned**.
+- Stored assignments determine which dashboard catalogs include an enabled chart.
+  They remain visible as badges; the manager has no dashboard-assignment editor.
+  An enabled chart with no assignments is saved as **Unassigned**.
 
 Bundled charts are protected by the revision-5 compatibility contract. The
 Overview, Battery, Charging, Efficiency, and Trips pages share one chart host
@@ -29,7 +31,8 @@ The full-window editor is available at `/settings/charts/new` and `/settings/cha
 
 Bundled charts always use the active dashboard date range. An independent chart may use a relative or lifetime policy, labeled by the editor and runtime so its scope is explicit. Dashboard-specific display settings continue to override visual defaults without changing the saved chart.
 
-The manager and editor are responsive surfaces. On mobile, assignment choices open in a touch-sized selector, editor sections are single-column, and Save remains in the sticky top bar.
+The manager and editor are responsive surfaces. On mobile, editor sections are
+single-column and Save remains in the sticky top bar.
 
 When an old mileage record is detected, Panda repairs only the known
 incomplete migration fingerprint, keeps its allowed placement/color

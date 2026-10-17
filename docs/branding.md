@@ -98,15 +98,13 @@ entry or interface selector.
   totals, recent trips/charging, then charts. The optional Overview Charts
   catalog stays last; charts never displace recent activity.
   Home groups saved widgets into vehicle, totals and chart sections, each
-  using the normal dashboard renderer. Home has no Edit dashboard control,
-  including when the account enables dashboard edit shortcuts. Editing remains
-  in the dashboard library under Settings, retaining add/remove, sizes and options;
-  removing the car removes its summary from Home. Dashboard tools retain
-  duplication, export and import. Imported dashboards open as personal copies
-  after confirmation. Untouched bundled dashboards flow to fit content;
-  Home's vehicle expands to its content without an inner scrollbar, including
-  when the saved widget is short. Custom dashboard pages and the editor
-  retain saved geometry and constrained-widget scrolling.
+  using the normal dashboard renderer. Dashboard layouts are fixed throughout
+  the interface, including the Settings library and old edit URLs. Existing saved
+  widget positions and settings remain readable; dashboard export remains
+  available. Untouched bundled dashboards flow to fit content. Home's vehicle
+  expands to its content without an inner scrollbar, including when the saved
+  widget is short. Custom dashboard pages retain saved geometry and
+  constrained-widget scrolling.
 - Multi-trip maps assign colors before filtering selection so a route keeps its
   color when other routes are added or removed. Use sixteen token-based colors,
   numbered route keys with dates and destinations, and a tap-to-highlight action
@@ -256,15 +254,14 @@ Common usage:
 - New-password inputs keep their real requirement directly below the field. Start neutral, show unmet requirements while the user types, and use the positive status treatment only once every displayed rule is satisfied; do not make users discover password policy through a failed submission.
 - Dashboard toolbar controls use the elevated surface consistently across vehicle selection, efficiency toggles, date-range triggers, and compact leading filters. Keep neighboring controls on the same 36px height, preserve a 44px minimum hit target when a control is used in a dense content panel, and place page-specific leading actions before vehicle selection.
 - Compact Health telemetry uses the same card, line, icon, and efficiency-toggle language as dashboard surfaces. Group the top panel under Connectivity with separate Wi-Fi signal, throughput, and Wi-Fi status metrics; use the shared Material Wi-Fi statusbar icon series, expose numeric dBm and throughput values, and let selected unit preferences control efficiency and mass values.
-- Dashboard management rows use matching secondary icon-plus-label buttons for Open, Edit, and Export. Action groups wrap on small screens without shrinking below touch-safe targets; destructive Reset, Delete, and Restore actions remain visually distinct.
+- Dashboard library rows use matching secondary icon-plus-label buttons for Open and Export. Actions wrap on small screens without shrinking below touch-safe targets. The library exposes no layout mutation actions.
 - Long-running destructive operations use a confirmation dialog with explicit impact copy and a typed phrase, followed by one viewport-bounded progress surface. Run compatibility or safety preflight before enabling the destructive action and summarize blockers in the dialog. Report byte progress only when measurable and use named phases for server work; keep validation failures, rollback state, and recovery actions visible instead of implying false precision.
 - User-facing choice menus use the shared `SelectPicker` surface with a checkmarked selected state, keyboard navigation, and in-app dismissal; native browser select menus are not part of the product UI.
 - Boolean settings use the compact shared `Switch` primitive with native button keyboard behavior and `role="switch"`; do not substitute oversized route-local toggles or checkboxes.
 - Authentication settings lead with sign-in options (SSO, password login, and automatic SSO), followed by provider connection, account access, and advanced provider options. Show environment ownership where it explains a disabled control; omit repeated saved-state badges. Client-secret replacement or removal stays pending until the form's single Save settings action succeeds.
 - Account invitations show the site's available sign-in methods beside the invited email, default to all currently available methods, and explain the selected account policy before the administrator creates the one-time link. Activation shows only methods permitted by the invitation and currently available on the site.
-- Chart-assignment badges use the shared tag icon and deterministic token colors. Keep the assignment editor icon-only, chip-height, and immediately adjacent to the badge group; enabled state belongs at the bottom-right of the chart card, apart from ordinary actions.
-- Dashboard edit mode uses compact icon controls directly on each widget. Keep edit and move controls visibly present with subdued default contrast, strengthen them on hover/focus/selection, and never make pointer hover the only way to discover or activate them.
-- Resizable dashboard widgets use a persistent subtle corner handle in edit mode. Fixed-size widgets use a lock indicator and must not expose a resize hit target.
+- Stored chart-assignment badges use the shared tag icon and deterministic token colors. They are informational, with no assignment-edit control; enabled state belongs at the bottom-right of the chart card, apart from ordinary actions.
+- Dashboard widgets have no edit, move, resize, add, or remove controls. Preserve the displayed layout and the existing chart and map interactions.
 - Theme selection is an account-backed Settings → Appearance interaction, not a
   shell/sidebar toggle. Keep mode and theme as separate responsive controls,
   show loading/conflict/rollback/error states, and pin custom selections to an
@@ -275,14 +272,13 @@ Common usage:
 - Shared control surfaces must be mobile-friendly by default. Validate the real interaction at small-screen breakpoints in the same change.
 - On desktop, compact settings surfaces should anchor to their trigger instead of covering unrelated content.
 - On mobile, the same shared surface should fall back to a bottom sheet or modal with safe-area padding, clear dismissal, and stacked full-width controls.
-- Chart assignment and chart confirmation dialogs are opaque portalled surfaces: constrained dialogs on desktop and full-viewport, safe-area-aware dialogs on mobile. They trap and restore focus, lock background scrolling, keep the heading/actions reachable, and scroll only the choice or content region.
+- Chart confirmation dialogs are opaque portalled surfaces: constrained dialogs on desktop and full-viewport, safe-area-aware dialogs on mobile. They trap and restore focus, lock background scrolling, keep the heading/actions reachable, and scroll only the content region.
 - The chart editor places its wide production preview before a narrower single-column form on desktop and stacks preview before controls on mobile. Section navigation may scroll horizontally, but form content and save actions must remain viewport-reachable.
 - The chart editor is curve-first. Its ordinary sections are Basics, Curves, Display, and Advanced; source bindings and raw domain fields are implementation details, not primary navigation. The editor derives a compatible shared domain from the chosen curves, keeps incompatible curves searchable with a plain explanation, and puts uncommon data controls in progressive disclosure inside the affected curve. Every curve uses the same card and offers independent mark, fill, color, axis, order, legend, removal, and data controls; changes must update the production preview immediately.
 - Chart settings use one centered, viewport-bounded modal on desktop and mobile. Keep its sections scrollable inside the dialog, keep the header visible, and group display/curve controls and per-axis range controls in collapsible sections. Lay paired numeric range fields out as two distinct columns. Entering Manual range mode seeds empty fields from the chart's currently rendered axis range.
 - Mobile primary navigation is a full-screen sheet, not a scaled-down desktop rail. Keep destination navigation at the top and vehicle/account utilities at the bottom; use an explicit close control, preserve focus on dismissal, and provide at least 44px touch targets (56px for primary destinations).
 - In the collapsed desktop sidebar, center the vehicle connection indicator when no live battery indicator is available; use the two-column status layout only when both indicators are present.
-- The dashboard editor follows this rule as a bounded bottom panel on mobile and must reserve enough document space to keep widget controls scrollable above it.
-- Conditional dashboard previews use a compact labeled segmented control in the shared editor drawer. The selected state uses the existing accent treatment, while both choices remain readable and touch-safe on mobile.
+- Conditional dashboard widgets follow the live vehicle state without a layout scenario editor.
 - Compact controls still need touch-safe hit targets, readable labels, and enough spacing for numeric inputs, segmented toggles, and sliders.
 - Reusable settings panels should stay within shared seams such as `packages/ui`, dashboard widgets, or shared shell controls rather than route-local popovers.
 

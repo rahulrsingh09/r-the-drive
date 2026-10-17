@@ -1,11 +1,11 @@
 ---
-title: Using R in the private fork
+title: Using R:The Drive
 description: Navigate the R interface, inspect trips and find settings.
 ---
 
-# Using R in the private fork
+# Using R:The Drive
 
-R is the interface for this fork. Navigation appears at the top on desktop and
+R is the interface for R:The Drive. Navigation appears at the top on desktop and
 bottom on mobile. The header sun/moon control changes light/dark mode. There is
 no separate Appearance page or interface selector.
 
@@ -20,7 +20,8 @@ Open a trip and tap or drag on the main map to select a recorded point. Use
 keys step through recorded points. Charts and route selection share the time.
 
 **Explore** opens Vehicle health, Battery, the dashboard library and all settings.
-**Open full dashboard** on the overview opens the editable data workspace.
+**Open full dashboard** on the overview opens the saved dashboard. Layouts are
+fixed in the interface; existing saved widget positions and settings are retained.
 
 Settings form a searchable directory. Existing vehicle, chart, dashboard,
 charging, place, API and operational settings remain available according to

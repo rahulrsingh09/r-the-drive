@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Use this guide when adding a dashboard, adding a widget, or extending dashboard editing behavior.
+Use this maintainer guide when adding a bundled dashboard or widget. The application displays fixed layouts and existing saved dashboards; it does not expose layout editing.
 
 The main goal is to keep future work inside the shared dashboard seams instead of reintroducing route-level duplication.
 
@@ -13,7 +13,7 @@ Decide which layer owns the change.
 | Change                                              | Put it here                         |
 | --------------------------------------------------- | ----------------------------------- |
 | New route path, URL params, route-local composition | `apps/web/src/routes`               |
-| Shared page scaffolding, edit flow, common actions  | `apps/web/src/components/dashboard` |
+| Shared page scaffolding, view state, common actions  | `apps/web/src/components/dashboard` |
 | New dashboard widget or default config              | `packages/dashboards/src`           |
 | New API query hook or response normalization        | `packages/hooks/src`                |
 | Reusable chart, table, badge, primitive             | `packages/ui/src`                   |
@@ -38,7 +38,7 @@ If the change crosses more than one row, start from the lowest reusable layer an
 3. Create the widget module in `packages/dashboards/src/widgets/`.
 4. Register it via the existing widget barrel and registry.
 5. Keep the widget focused on one concern.
-6. Declare editor capabilities in the widget registry entry.
+6. Preserve the widget definition and geometry contracts needed by existing saved layouts.
 7. Declare `dataRequirements(instance)` in the registry entry for every dashboard-wide source or metric chip. Return only the sources the widget actually reads; metric entries should state whether they need a latest value, sparkline series, or both.
 
 A widget should usually:
@@ -62,7 +62,7 @@ Use `line` or `area` for curve interpolation and store the amount in
 
 This setting changes the visual path between samples; it is not a moving-average
 or other data-smoothing operation. Keep the option on the shared sensor widget
-contract so edited, imported, and saved dashboards behave consistently.
+contract so bundled configurations and existing saved dashboards render consistently.
 
 ### Dashboard Data Requirements
 
@@ -77,19 +77,12 @@ dataRequirements: (instance) => ({
 
 Use `useDashboardDataSelector` or `useDashboardMetric` in the widget to read that data. Keep specialized sources—trip geometry, trip detail samples, table paging/search, and active chart sources—outside the generic metric batch. Unknown or older widget definitions safely contribute no requirements and retain their own data behavior.
 
-### Widget Editor Capabilities
+### Saved widget geometry
 
-Every widget can declare editor metadata through `WidgetDef.editor`.
-
-Use this for:
-
-- `category` and `description` in the editor palette.
-- `fixedSize: true` for composed/custom chips whose layout should not be resized.
-- `resizable: false` or `movable: false` for special-case components.
-- `maxSize` when a widget can grow but has a meaningful upper bound.
-- `deprecated: true` to hide a component from the palette without breaking existing saved dashboards.
-
-Compact source-backed sensor chips should normally stay resizable. Trips summary chips belong here too. Custom visual composites such as vehicle artwork or charging connection cards should opt into fixed size when resizing would break the composition.
+Preserve geometry validation and legacy registry metadata required to read saved
+configurations. These fields do not enable a widget palette, movement, resizing,
+or editing controls. New bundled geometry belongs in the default configuration
+and must work on desktop and mobile without user rearrangement.
 
 ## Adding A Table
 
@@ -139,7 +132,7 @@ For source-backed chips, define the canonical behavior in `packages/dashboards/s
 
 For `timeframeScope: "range"`, the chip value is the server-calculated aggregate for the dashboard's selected dates; its sparkline is context only and must not replace that aggregate. Derived measures should aggregate their components directly (for example, distance-weighted consumption), and expose coverage or a tooltip when incomplete source data affects confidence.
 
-The editor exposes the same language under the sensor settings:
+Maintainers declare the sensor settings in the widget configuration:
 
 - `Data source` chooses the backing object or metric catalog.
 - `Value path`, `Fallback path`, `Formula`, and `Unit` define the primary value.
@@ -171,19 +164,21 @@ Use it for:
 
 Do not implement this by branching on dashboard slug inside the shell or renderer. Pass it in explicitly from the route or route-local wrapper.
 
-## Editing Flow Rules
+## Fixed-layout rules
 
-Default dashboards and user dashboards should share the same basic behaviors:
+`DashboardPageShell` fetches the selected saved configuration and coordinates the
+page timeframe and ordinary viewing actions. It does not create edit drafts,
+render save/discard controls, or accept an edit query parameter as permission to
+change the layout. Keep the same boundary for administrators and ordinary users.
 
-- edit mode
-- save/cancel
-- lock handling
-- clone/customize
-- import/export
+Settings > Dashboards supports opening and exporting existing rows. Do not add
+create, customize, import, duplicate, reset, delete, restore, lock, or layout-edit
+controls. Chart definition editing and account-backed chart favorites have their
+own supported workflows and remain available.
 
-### Conditional Visibility
+### Conditional visibility
 
-Every widget can opt into shared conditional visibility:
+Widgets may carry typed visibility rules, for example:
 
 ```json
 {
@@ -193,75 +188,29 @@ Every widget can opt into shared conditional visibility:
 }
 ```
 
-Multiple rules use AND semantics. An absent or empty rule list means Always. The shared widget editor exposes Always, Vehicle plugged in, and Vehicle unplugged. In dashboard edit mode, the editor drawer provides a prominent scenario preview switch and labels the active state, such as `Previewing: Vehicle plugged in`. This is transient editor state and is never saved or exported. When a visibility edit would hide the selected widget, the editor switches its temporary preview to keep that widget selected. A manual preview change that hides it closes the form.
+Multiple rules use AND semantics. An absent or empty rule list means always
+visible. Resolve these rules from live status through
+`packages/dashboards/src/dashboardVisibility.ts`; connected standby counts as
+plugged in. Keep hidden widgets in the saved configuration. There is no editable
+scenario preview or layout draft in the interface.
 
-Condition definitions, labels, values, live-state resolvers, and legacy normalization live in `packages/dashboards/src/dashboardVisibility.ts`. Add future condition types there and extend the schema; do not branch on dashboard slug. The editor canvas and data manifest use only preview-visible widgets, but mutations always apply to the full draft so overlapping state-specific layouts cannot erase one another.
+## Bundled baseline and saved-layout contract
 
-## Bundled Baseline Contract
+The five system dashboards are authored in
+`packages/dashboards/src/defaults/`. Files under `apps/api/dashboards/` are
+generated seed copies; run `pnpm dashboards:sync-defaults` and verify with
+`pnpm dashboards:sync-defaults --check` after changing a bundled default.
 
-The five system dashboards (Overview, Battery, Efficiency, Charging, and
-Trips) are authored in `packages/dashboards/src/defaults/`. The matching files
-under `apps/api/dashboards/` are generated seed copies for the Rust binary; do
-not hand-edit them. `pnpm dashboards:sync-defaults --check` enforces parity in
-CI.
+Startup creates missing system dashboards and applies an explicitly newer
+bundled revision once. Existing personal dashboards retain their widgets,
+positions, titles, visibility, and settings. Narrow, versioned compatibility
+updates for widgets marked `managed` with a stable `managedKey` remain server
+responsibilities; do not inject replacements into a saved layout during render.
 
-Startup creates a missing system dashboard but does not overwrite an existing
-admin-managed layout. The explicit admin restore action is the only path that
-applies the bundled baseline to an existing system dashboard. User-owned
-dashboard copies retain their saved widgets, positions, titles, visibility, and
-settings; the only upgrade exception is an additive compatibility patch for
-widgets explicitly marked `managed` with a stable `managedKey`. That patch may
-add a missing fixed-composition widget or mark a canonical legacy instance, but
-it never replaces the personal layout. Do not add client-side widget injection
-to redefine a saved dashboard at render time; keep persistence in the explicit
-server-side compatibility migration.
-
-If you need to change one of those flows, change the shared shell or the shared action wiring. Do not add a second implementation for one route family.
-
-`DashboardPageShell` owns the page-level edit entry and the save/discard actions for grid-backed dashboards. Route wrappers may add adjacent utilities such as import, export, or duplicate, but they should not provide their own edit-mode toggle or save controls.
-
-Dashboard configs are sanitized at the dashboard package boundary before render, import, and save. Sanitization clamps grid positions, enforces fixed-size widgets, and keeps restored/imported JSON from violating current editor capabilities.
-
-Use the dashboard model helpers for shared editing behavior:
-
-- `dashboardKey` scopes drafts to the active dashboard identity.
-- `materializeUserDashboardDraft` saves a user-owned copy without leaking system-default metadata.
-- `materializeSystemDashboardDraft` preserves system-default identity for admin/super-user edits.
-- `applyWidgetLayout` is the shared layout patch path for drag and resize changes.
-- `resolveDashboardViewWidgets` owns view-only visibility transforms such as plugged/unplugged charging widgets.
-
-In edit mode, widget chrome is split by purpose:
-
-- move and edit affordances remain visibly present on every widget, with hover, focus, drag, and selected states increasing their emphasis
-- resize handles remain subtly visible only for resizable widgets and increase emphasis during interaction
-- fixed-size widgets show a lock indicator instead of a resize handle while keeping their move and edit controls
-- destructive removal lives in the right-side widget editor and requires confirmation
-
-`WidgetChrome` owns the shared frame and edit overlay. Do not add per-widget or per-route hover edit buttons. `GridEditor` should only decide selection, layout, palette, and drawer state, then delegate frame rendering to `WidgetChrome`.
-
-The editor owns the overlay's placement, stacking, and pointer behavior through its package CSS. The web app must explicitly scan `packages/dashboards/src` from its Tailwind CSS entrypoint; do not make widget editing depend only on utility discovery from a consuming route or a long-running dev-server cache.
-
-The editor drawer is a full-height right panel on desktop. At mobile breakpoints it becomes a bounded bottom panel and reserves matching page space so the grid remains scrollable and widget controls cannot be covered by the editor surface.
-
-Dashboard layout persistence remains explicit-save:
-
-- Dragging, resizing, adding, deleting, and configuring widgets update the shell's local draft.
-- Save writes the whole sanitized dashboard config through the dashboard mutation hooks.
-- Cancel discards the local draft and returns to the last saved config.
-- Successful mutations update the dashboard list and by-slug caches immediately, then invalidate for server truth.
-- Exact Settings actions also populate and invalidate by-ID caches; `/d/$slug?dashboardId=<uuid>` must fail inline rather than silently resolving a same-slug copy.
-- Failed saves keep edit mode open and surface an in-page error so the user's draft is not lost.
-
-Use Settings > Dashboards for durable dashboard management:
-
-- open or edit an exact system or personal dashboard row
-- customize a system default into a same-slug personal override
-- export YAML
-- reset a same-slug personal override to fall back to its system default
-- delete standalone personal dashboards
-- admin/super-user lock, unlock, and restore bundled defaults
-
-Normal routing selects a same-slug personal dashboard before the system default. Settings marks that row Active for you. System defaults remain installation-wide and admin-managed; Restore bundled is distinct from personal Reset to default. Managed page-composition additions do not require users to reset a personal dashboard.
+The normal route selects a same-slug personal dashboard before the system row.
+An exact `/d/$slug?dashboardId=<uuid>` lookup must fail inline if unavailable,
+rather than silently showing another row. Preserve configuration sanitization
+and saved geometry without mounting a drag/resize grid or mutation controls.
 
 ## Data and Adapter Rules
 
@@ -293,7 +242,7 @@ Preview the unsaved definition through `ManagedChartRuntime`, the same productio
 - new widgets in `packages/dashboards/src/widgets/`
 - new hooks in `packages/hooks/src/`
 
-### New user-dashboard capability
+### Existing saved-dashboard support
 
 - shared shell behavior in `apps/web/src/components/dashboard/`
 - dashboard framework support in `packages/dashboards/src/`
@@ -308,7 +257,7 @@ Before merging dashboard frontend work, verify:
 3. No new slug-based branching was added to the shell or renderer.
 4. Generic UI stayed in `packages/ui`.
 5. Data access stayed in `packages/hooks`.
-6. Default and user dashboards still follow the same edit/lock mental model.
+6. Built-in and saved personal dashboards render without layout-editing controls or edit-link bypasses.
 7. Empty, loading, and error states still exist.
 
 ## When To Introduce a New Abstraction

@@ -40,7 +40,7 @@ Never connect this renamed schema to a database from another installation.
 
 - Preserve shared page and dashboard behavior by changing the shared seam before patching route-local code.
 - For dashboard pages, audit `DashboardPageShell`, `DashboardRenderer`, `WidgetHost`, sensor widgets, shared tables, and hooks before adding one-off behavior.
-- The legacy dashboard chart renderer is the canonical visual contract for every known bundled chart slug. Chart-editor work may change chart sources, definitions, or dashboard assignments, but must not route bundled charts through the generic definition renderer unless the user explicitly requests a renderer migration. Treat the pre-migration renderer at `dbd7ae58` as the compatibility source and maintain the hand-authored oracle and shared dashboard/editor preview parity checks described in `docs/frontend/chart-compatibility-testing.md`.
+- The legacy dashboard chart renderer is the canonical visual contract for every known bundled chart slug. Chart-editor work may change chart sources and definitions, but must not route bundled charts through the generic definition renderer unless the user explicitly requests a renderer migration. Dashboard layouts are fixed in the interface: preserve existing saved layouts and chart favorites without restoring layout or dashboard-assignment editing controls. Treat the pre-migration renderer at `dbd7ae58` as the compatibility source and maintain the hand-authored oracle and shared dashboard/editor preview parity checks described in `docs/frontend/chart-compatibility-testing.md`.
 - Route files stay thin. Put reusable or page-specific composition in components, hooks, definitions, or widgets rather than route conditionals.
 
 ### Visual consistency is not optional

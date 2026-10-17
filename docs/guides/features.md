@@ -13,7 +13,7 @@ Panda is a private dashboard for the Rivian data you already have access to. It 
 - **Charging:** charging sessions and energy history.
 - **Trips and efficiency:** trip history, route context where available, mileage, efficiency trends, signed net power (direct when available or averaged from SoC updates), and route-aware estimated exterior temperature with explicit provenance.
 - **External connections:** installation-wide remote, self-hosted, or disabled policies for weather, geocoding, basemaps, and other optional providers.
-- **Dashboards:** compose saved views from the available widgets.
+- **Dashboards:** explore the built-in views and existing saved layouts. Choose favorite charts while the dashboard layout stays fixed.
 - **Accounts:** the first account owns the instance; owners can create activation links for other people they choose to invite. Each invitation can allow password sign-in, SSO, or both, according to the site's available methods. During invitation, an owner can assign any number of vehicles, including none; the invited account receives viewer access for every selected vehicle after activation.
 - **Demo vehicles:** administrators can create an R1T, R1S, or R2 with a realistic rolling 14-day history, including sparse telemetry, trips and maps, stored weather, charging sessions and a DC curve, software and battery history, health signals, and phantom-drain periods. No Rivian credentials or optional provider calls are required. Existing R2S demo records are renamed to R2 in place during migration, preserving their history and memberships.
 

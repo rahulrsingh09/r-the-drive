@@ -1,66 +1,44 @@
 ---
-title: Dashboard customization
-description: Understand system defaults, personal dashboards, editing, previews, and recovery.
+title: Dashboards and chart preferences
+description: Explore fixed dashboards, existing saved layouts, and account-backed chart favorites.
 slug: /using-panda/dashboard-customization/
 ---
 
-# Dashboard customization
+# Dashboards and chart preferences
 
-Panda keeps an installation-wide system version of each built-in dashboard and can also keep personal dashboards for each user. Open **Settings > Dashboards** to see which version you are managing.
+R:The Drive provides dedicated dashboards for Overview, Battery, Efficiency,
+Charging, and Trips. Their layout is fixed in the interface: widgets cannot be
+moved, resized, added, or removed.
 
-## System defaults and personal copies
+## Existing saved layouts
 
-System defaults are shared within your Panda installation. Administrators and super users can edit them, and those changes affect everyone who has not made a personal override.
+Existing personal dashboards keep their saved widgets, positions, titles,
+settings, and conditional visibility. A personal dashboard with the same slug
+as a system dashboard continues to take precedence for its owner.
 
-Choose **Customize** on a system row to create your own copy with the same dashboard slug. That copy becomes **Active for you** and takes precedence when you open the normal dashboard route. Customizing does not change the system version or another user's view.
-
-Settings actions target the row they appear on:
-
-- **Open default** and **Edit default** open the exact system row, even if you have a personal copy.
-- **Open** and **Edit** on a personal row open that exact copy.
-- **Duplicate** creates an independent personal dashboard from an existing personal dashboard.
-- **Export** downloads the selected row as YAML, including conditional visibility rules.
+Open **Settings > Dashboards** to browse saved dashboards. Open displays the
+selected row; Export downloads its existing YAML configuration. The library
+has no controls to create, edit, import, duplicate, reset, delete, restore, or
+lock layouts. Old edit links and saved edit-button preferences do not enable
+layout editing.
 
 ## Chart picker defaults
 
 Chart widgets can be switched temporarily from their chart picker. To keep a
 chart as the default for that widget, hover its row and click the favorite star.
 The choice is stored in your account for that dashboard component and returns
-after a reload or sign-in from another browser; it does not change other chart
-widgets. The bundled Overview dashboard defaults to **Battery Capacity by
-Mileage**.
+after a reload or sign-in from another browser. Other chart widgets keep their
+own selections.
 
-## Reset, delete, and restore
+Chart definitions have a separate editor in **Settings > Charts**. See
+[Chart customization](./chart-customization.md) for personal overrides,
+chart import and export, and the full-window editor. Editing a chart changes
+its supported presentation and data inputs without rearranging the dashboard.
 
-The recovery action depends on who owns the row:
+## Conditional widgets
 
-- **Reset to default** deletes a same-slug personal override. The system version immediately becomes active for that user again.
-- **Delete** removes a standalone personal dashboard that does not override a system slug.
-- **Restore bundled** is an administrator action for system defaults. It replaces that system row with the layout shipped in the installed Panda version.
-
-For the administrator performing the restore, the saved default for the restored
-managed Overview chart is also aligned with the chart in that bundle. Other
-users' chart preferences are unchanged.
-
-Resetting a personal copy does not restore or modify the system row. Restoring a bundled system dashboard does not delete personal copies. Personal dashboards are never replaced by an upgrade: saved widgets, positions, and settings remain yours. A release may apply a narrow additive patch for a bundled widget explicitly marked as managed, preserving the existing layout while adding fixed page composition that is not editor-configurable. System edits survive ordinary restarts, but a release that intentionally ships a newer dashboard baseline updates the shared system row once; users with a same-slug personal copy continue to see their own version plus any managed composition additions.
-
-## Conditional dashboard previews
-
-Some widgets appear only in a particular vehicle state. The Charging dashboard, for example, can use different widgets and overlapping positions for **Plugged in** and **Unplugged** views. A connected vehicle in standby counts as plugged in.
-
-When a dashboard contains conditional widgets, edit mode shows a **Preview** control in the editor drawer. Switch between Plugged in and Unplugged to arrange and review both layouts. Always-visible widgets appear in both states.
-
-## Dashboard page edit button
-
-Dashboard page edit buttons are hidden by default. Open **Settings > Dashboards** and enable **Show edit button on dashboard pages** to show the page-level shortcut across every dashboard. The preference is per signed-in user. When it is off, dashboards remain editable from Settings; only the page-level shortcuts are hidden.
-
-Each widget's **Visibility** setting offers:
-
-- **Always**
-- **Vehicle plugged in**
-- **Vehicle unplugged**
-
-Changing the preview does not change vehicle data and is not itself saved. Widget visibility and layout changes remain part of the normal draft and persist only after **Save**. Widgets hidden by the current preview remain in the draft, so editing one state cannot erase the other state's widgets.
-# Chart manager
-
-Chart definitions now have their own lifecycle in **Settings > Charts**. See [Chart customization](./chart-customization.md) for assignments, personal overrides, import/export, and the full-window editor.
+Some widgets appear only in a particular vehicle state. The Charging dashboard,
+for example, uses different widgets for plugged-in and unplugged views.
+A connected vehicle in standby counts as plugged in. These views follow the
+vehicle's reported state automatically; the interface has no layout scenario
+editor.

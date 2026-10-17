@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Panda dashboards will keep growing. The frontend needs one maintainable composition model instead of multiple route-specific implementations that each re-own layout, date range, edit state, and dashboard actions.
+Panda dashboards will keep growing. The frontend needs one maintainable composition model instead of multiple route-specific implementations that each re-own layout, date range, and dashboard viewing actions.
 
 This document defines the approved layering for dashboard work and the package boundaries that keep the system maintainable.
 
@@ -39,10 +39,9 @@ to use the stable chart slug.
   document-theme hook. Routes and widgets consume `useDocumentTheme` from
   `@panda/ui/hooks`; do not duplicate theme/media-query listeners in
   app-local code. `ThemeToggle` remains the shared control.
-- `packages/dashboards` owns dashboard framework, widget registry, grid editor,
-  and the responsive editor drawer. The drawer is a full-height right panel on
-  desktop and a bounded bottom panel on mobile; page code must not create a
-  competing route-local editor panel.
+- `packages/dashboards` owns the dashboard framework, widget registry, fixed
+  grid, and saved-layout rendering. Page code must not mount layout editors or
+  add drag, resize, or widget-mutation controls.
 - `packages/hooks` owns typed API hooks and cache contracts, including
   `useBasemapConfig`. `TripMapChart` in `packages/ui` owns map rendering and
   receives the authenticated same-origin basemap configuration and per-user map-style preference from its caller.
@@ -82,10 +81,9 @@ Route files should not directly recreate dashboard scaffolding that already exis
 - app layout and page layout
 - dashboard config fetch with fallback to bundled defaults
 - date range state
-- edit/view mode state through `useDashboardEditDraft`
-- dashboard-scoped local working config state
-- rendering of common actions around the dashboard
-- visible save-error feedback while edits remain open
+- rendering the selected saved configuration
+- common viewing actions and ordinary loading/error feedback
+- a fixed-layout boundary, including when an old edit URL or preference exists
 
 If a new dashboard page needs standard dashboard behavior, start here instead of creating a second scaffold.
 
@@ -110,13 +108,11 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 
 - schema and validation
 - widget registry
-- dashboard model helpers for identity, ownership, layout patches, and view-only widget visibility
-- a typed visibility-rule registry that owns condition labels, preview values, and runtime resolution
-- view grid renderer
-- edit grid renderer
-- shared widget chrome and edit overlay
-- dashboard CRUD helpers
-- YAML import and export
+- dashboard model helpers for saved identity, geometry, and widget visibility
+- a typed visibility-rule registry and live-state resolution
+- responsive fixed grid renderer and shared widget chrome
+- compatible persistence contracts for existing saved configurations
+- YAML export without an interactive layout-import workflow
 - bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
 
 Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and personal layout/widget settings remain untouched. Explicitly managed page-composition widgets are the narrow exception: startup may add a missing managed widget, mark a canonical legacy instance, or remove a specifically retired managed widget. Retirements may compact only unchanged canonical layouts, so custom widget positions remain user-owned. Personal same-slug dashboards continue to win normal route resolution.
@@ -127,7 +123,7 @@ Conditional widgets use `WidgetInstance.visibility`. Rules are evaluated with AN
 
 Conditional variants may intentionally share grid coordinates. Keep the always-visible content and each complete scenario compact before the next full-width section; hiding one scenario must not leave reserved blank rows in the other. The bundled Charging dashboard uses a six-row summary region in both states, followed immediately by its chart and sessions table.
 
-In view mode, `DashboardRenderer` resolves visibility from live status. In edit mode it owns a temporary, named scenario preview state, filters both the canvas and dashboard-wide data requirements to preview-visible widgets, and keeps the complete draft in `GridEditor`. The editor drawer presents the active scenario prominently, for example `Previewing: Vehicle plugged in`, and lets the user switch between registered condition values. Preview state never persists or enters the dashboard schema. Legacy `options.chargingConnectionVisibility` values are normalized to typed rules at API/import boundaries and are written in the typed form on the next save.
+`DashboardRenderer` resolves visibility from live status and collects data requirements for visible widgets. It preserves the complete saved configuration without a layout editor or scenario-preview draft. Legacy `options.chargingConnectionVisibility` remains readable through typed normalization at the configuration boundary.
 
 ### 5. Widget Layer
 
@@ -150,7 +146,7 @@ The shared chart widget owns reusable chart display controls.
 - Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
 - Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
 - The shared settings panel groups display filtering, curve shaping, and supported axis ranges into collapsible sections. Display filtering and smoothing apply to every compatible curve in the active chart; a series may opt out only when its data semantics require it.
-- Treat dashboard edit mode as the only persistent write seam. In edit mode, widget-level settings changes should flow back through the dashboard shell's local config update path. In view mode, the same UI can preview changes locally, but those changes should not autosave.
+- Widget-level display controls preview changes locally without autosaving the dashboard configuration. Persistent chart definition changes use Settings > Charts; favorite selection uses the account preferences API. Do not restore a dashboard-edit mode to persist these previews.
 - Saved chart display settings remain part of the account-owned dashboard configuration; do not add browser-storage persistence for them.
 - Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. The favorite is stored in the authenticated account's database-backed preferences per dashboard/widget instance, so it survives browser changes and remains available when a managed catalog gains new chart definitions. `DashboardChartWidget` owns the preference interaction; the account preferences API owns persistence.
 - Keep the settings UI inside the shared chart widget and shared chart primitives. Do not recreate chart-settings popovers in route files or page components.
@@ -179,8 +175,8 @@ Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/
 
 Some built-in widgets are layout-bearing anchors for page composition rather than
 user-configurable widget definitions. Their `managed` and `managedKey` fields
-identify the composition contract; the user can still move or resize the widget,
-but the editor does not expose controls to replace its content or remove it.
+identify the composition contract. Saved geometry is retained, and the interface
+provides no controls to move, resize, replace, or remove dashboard widgets.
 Managed catalog charts derive their available chart definitions from the current
 page catalog instead of persisting a second chart-membership list in each user
 copy. Startup applies an additive, idempotent compatibility patch for existing
@@ -260,10 +256,9 @@ packages/dashboards/src/
   registry.tsx                # widget definitions
   dashboardModel.ts           # identity, ownership, layout, and visibility helpers
   dashboardVisibility.ts      # typed conditions, runtime resolution, compatibility migration
-  DashboardRenderer.tsx       # mode orchestration between view and edit grids
-  DashboardGrid.tsx           # view-mode CSS grid
-  GridEditor.tsx              # edit-mode React Grid Layout canvas
-  WidgetChrome.tsx            # shared widget frame and edit overlay
+  DashboardRenderer.tsx       # saved-layout and live visibility orchestration
+  DashboardGrid.tsx           # fixed responsive CSS grid
+  WidgetChrome.tsx            # shared display frame
   widgets/                    # widget modules
   defaults/                   # bundled defaults
   api.ts                      # dashboard CRUD helpers
@@ -283,10 +278,10 @@ packages/ui/src/
 ### Do
 
 - keep dashboard routes declarative
-- put shared edit/view/dashboard state in the shell
+- put shared dashboard view and timeframe state in the shell
 - keep renderer layout-only
-- keep widget hover/edit chrome in `WidgetChrome`
-- keep layout mutation rules in `dashboardModel.ts`
+- keep widget display chrome in `WidgetChrome`
+- preserve saved-layout validation in `dashboardModel.ts`
 - add reusable conditional states through `dashboardVisibility.ts`
 - compose page extras explicitly
 - reuse `packages/ui` before creating page-local visuals
@@ -297,7 +292,7 @@ packages/ui/src/
 - add `if (slug === ...)` branching inside the shared shell for page-only content
 - add direct page composition logic to `DashboardRenderer`
 - add dashboard- or route-specific conditional visibility branches
-- duplicate edit, clone, export, import, or lock handling in a second route scaffold
+- reintroduce layout-editing, drag/resize, clone, import, or lock controls through another route
 - put page-specific API calls inside `packages/ui`
 - use widgets as a substitute for page-level orchestration when several widgets need shared context
 
