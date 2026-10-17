@@ -69,6 +69,12 @@ retry exhaustion, cleanup, and argument forwarding without executing deployment
 or pull-request commands. Real local nginx, Compose rendering, browser CSP, and
 container permission probes complement those tests.
 
+Operational driver tests also record the exact image digest passed to Compose,
+reuse the original owner token after restart, and verify mount preparation before
+both source and target startup. Mutation cases remove each protected smoke-test
+operation and require the release guard to reject it, including asynchronous
+backup completion, both artifact stores, and restore error diagnostics.
+
 Run the strict repository guards, `pnpm build`, `pnpm docs:check`, and
 `pnpm docs:build` when changing this boundary. A new documentation page must
 appear exactly once in the shared sidebar when integrated.

@@ -128,15 +128,15 @@ const fileContracts = {
   ],
   'scripts/verify-fresh-install.mjs': [
     [
-      /const imageRef = value\('--image-ref'\)/,
+      /const fields = \[[^\]]*'image-ref'[^\]]*\];[\s\S]*?this\.options = Object\.fromEntries\(fields\.map\(name => \[name, option\(args, '--' \+ name\)\]\)\)/,
       'fresh-install verification must accept --image-ref',
     ],
     [
-      /PANDA_IMAGE: imageRef/,
+      /ref = this\.options\['image-ref'\][\s\S]*?const image = this\.sourceBuild \? 'panda:local' : ref \|\|[\s\S]*?if \(image\) this\.environment\.PANDA_IMAGE = image/,
       'fresh-install verification must pass the exact image reference to Compose',
     ],
     [
-      /restart', 'panda'[\s\S]*?verifyBundledDashboards\(baseUrl, accessToken\)/,
+      /const token = await this\.owner\(origin\);[\s\S]*?this\.command\(\['restart', 'panda'\]\);[\s\S]*?await this\.dashboards\(origin, token\)/,
       'fresh-install verification must prove pre-restart access tokens survive a service restart',
     ],
   ],
@@ -174,19 +174,19 @@ const fileContracts = {
       'S3 drill must prepare disposable bind mounts for the production container user',
     ],
     [
-      /prepareDataDirectory\(sourceData\);[\s\S]*?startStack\(sourceProject/,
+      /stack\(name, offset\) \{[\s\S]*?this\.dataCommand\(directory, [^\n]*chown 1001:1001[^\n]*\);[\s\S]*?this\.commands\.invoke\('docker', \[\.\.\.this\.compose\(stack\.project, envFile\), 'up'[\s\S]*?const source = this\.stack\('source', 1000\)/,
       'S3 drill must prepare the source bind mount before starting its stack',
     ],
     [
-      /prepareDataDirectory\(targetData\);[\s\S]*?startStack\(targetProject/,
+      /stack\(name, offset\) \{[\s\S]*?this\.dataCommand\(directory, [^\n]*chown 1001:1001[^\n]*\);[\s\S]*?this\.commands\.invoke\('docker', \[\.\.\.this\.compose\(stack\.project, envFile\), 'up'[\s\S]*?const target = this\.stack\('target', 2000\)/,
       'S3 drill must prepare the target bind mount before starting its stack',
     ],
     [
-      /waitForBackupCompletion\(sourceUrl, sourceToken, backup\.run\.id\)/,
+      /await this\.backup\(source, sourceToken, backup\.run\.id\);[\s\S]*?this\.dataCommand\(source\.directory, "find \/data\/backups/,
       'S3 drill must wait for the asynchronous backup run before restoring it',
     ],
     [
-      /run\?\.status === 'succeeded'[\s\S]*?storage_type === 'local'[\s\S]*?storage_type === 's3'/,
+      /if \(run\?\.status !== 'succeeded'\) return false;[\s\S]*?artifacts = overview\.artifacts\?\.filter\(row => row\.run_id === id\)[\s\S]*?stores = new Set\(artifacts\.map\(row => row\.storage_type\)\)[\s\S]*?if \(!stores\.has\('local'\) \|\| !stores\.has\('s3'\)\) throw/,
       'S3 drill must require both local and S3 artifacts from the completed run',
     ],
     [
@@ -194,7 +194,7 @@ const fileContracts = {
       'S3 drill must surface terminal restore-agent errors instead of swallowing them',
     ],
     [
-      /RUST_LOG=panda_api=info,panda_restore_agent=error,tower_http=info/,
+      /RUST_LOG: 'panda_api=info,panda_restore_agent=error,tower_http=info'/,
       'S3 drill must retain restore-agent error diagnostics',
     ],
   ],

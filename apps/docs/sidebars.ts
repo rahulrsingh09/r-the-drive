@@ -143,6 +143,7 @@ const sidebars: SidebarsConfig = {
         'architecture/rewrite-demo-generation',
         'architecture/rewrite-restore-execution',
         'architecture/validation-tooling-replacement',
+        'architecture/operational-tooling-replacement',
         'architecture/rewrite-enrichment-jobs',
         'architecture/unification-baseline',
         'architecture/theming',
