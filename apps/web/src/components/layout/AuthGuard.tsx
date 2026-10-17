@@ -8,23 +8,19 @@ type LoginLocation = Pick<Location, 'pathname' | 'replace'>;
 type LoginRedirectScheduler = (callback: () => void, delayMs: number) => unknown;
 
 export function normalizeLoginRedirectTarget(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return null;
-
-  try {
-    const url = new URL(trimmed, 'https://panda.local');
-    if (url.origin !== 'https://panda.local') return null;
-    if (url.pathname === '/login') return null;
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return null;
-  }
+  const input = value?.trim() ?? '';
+  const base = 'https://panda.local';
+  if (!/^\/(?!\/)/.test(input)) return null;
+  let target: URL;
+  try { target = new URL(input, base); } catch { return null; }
+  // Compare the canonical authority after URL parsing resolves backslashes and controls.
+  const allowed = target.protocol === 'https:' && target.host === 'panda.local' && target.pathname !== '/login';
+  return allowed ? [target.pathname, target.search, target.hash].join('') : null;
 }
 
 function currentProtectedTarget(locationLike: Pick<Location, 'pathname'> & Partial<Pick<Location, 'search' | 'hash'>> | null) {
-  if (!locationLike || locationLike.pathname === '/login') return null;
-  return normalizeLoginRedirectTarget(`${locationLike.pathname}${locationLike.search ?? ''}${locationLike.hash ?? ''}`);
+  const parts = locationLike && [locationLike.pathname, locationLike.search, locationLike.hash];
+  return normalizeLoginRedirectTarget(parts ? parts.join('') : null);
 }
 
 function buildLoginUrl(redirectTarget: string | null) {

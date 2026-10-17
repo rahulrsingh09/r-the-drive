@@ -8,7 +8,6 @@ export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProp
       slug={slug}
       title={title}
       showEfficiencyDisplayToggle
-      enableDashboardEditing={false}
     />
   );
 }

@@ -7,20 +7,20 @@ interface AppErrorBoundaryProps {
 }
 
 interface AppErrorBoundaryState {
-  error: Error | null;
+  failure: React.ReactNode;
 }
 
 export class AppErrorBoundary extends React.Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
-  override state: AppErrorBoundaryState = { error: null };
+  override state: AppErrorBoundaryState = { failure: null };
 
-  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
-    return { error };
+  static getDerivedStateFromError(): AppErrorBoundaryState {
+    return { failure: <AppFailure /> };
   }
 
   override componentDidCatch(error: Error, info: React.ErrorInfo) {
-    const diagnosticError = info.componentStack
-      ? new Error(`${error.message}\n${info.componentStack}`)
-      : error;
+    const details = [error.message];
+    if (info.componentStack) details.push(info.componentStack);
+    const diagnosticError = details.length > 1 ? new Error(details.join('\n')) : error;
     reportClientError(diagnosticError, {
       event: 'react.render_failed',
       area: 'render',
@@ -29,25 +29,23 @@ export class AppErrorBoundary extends React.Component<AppErrorBoundaryProps, App
     });
   }
 
-  private reload = () => {
-    window.location.reload();
-  };
-
   override render() {
-    if (!this.state.error) return this.props.children;
+    return this.state.failure ?? this.props.children;
+  }
+}
 
-    return (
+function AppFailure() {
+  return (
       <main className="flex min-h-screen items-center justify-center bg-bg-page p-6" role="alert">
         <Card className="w-full max-w-md text-center">
           <h1 className="text-lg font-semibold text-fg">Panda needs to reload</h1>
           <p className="mt-2 text-sm text-fg-secondary">
             The app hit an unexpected error. Reload to try again.
           </p>
-          <Button type="button" className="mt-5" onClick={this.reload}>
+          <Button type="button" className="mt-5" onClick={() => window.location.reload()}>
             Reload app
           </Button>
         </Card>
       </main>
-    );
-  }
+  );
 }

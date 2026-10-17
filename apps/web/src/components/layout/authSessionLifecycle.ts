@@ -13,11 +13,10 @@ export interface AuthObservation {
 }
 
 function jwtUserId(token: string): string | null {
+  const encoded = /^[^.]*\.([^.]+)/.exec(token)?.[1];
+  if (encoded === undefined) return null;
   try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const payload = JSON.parse(atob(part)) as { sub?: string };
-    return payload.sub ?? null;
+    return (JSON.parse(atob(encoded)) as { sub?: string }).sub ?? null;
   } catch {
     return null;
   }

@@ -12,14 +12,10 @@ export interface RivianCredentialRenewalNotice {
 }
 
 export function formatRivianRenewalDate(value?: string | null): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(date);
+  const timestamp = Date.parse(value || '');
+  return Number.isFinite(timestamp)
+    ? new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' }).format(timestamp)
+    : null;
 }
 
 const RENEWAL_NOTICES = {

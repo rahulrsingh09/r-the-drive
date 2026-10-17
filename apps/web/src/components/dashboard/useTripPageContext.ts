@@ -1,15 +1,22 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useResolvedVehicleSelection } from '@panda/hooks';
-import { createTripTagFilterAdapter } from '../../features/trip-tags/tripTagFilter';
+import { createTripTagFilterAdapter, type TripTagSearch } from '../../features/trip-tags/tripTagFilter';
 
 export function useTripPageContext(route: '/trips' | '/efficiency') {
   const search = useSearch({ from: route });
   const navigate = useNavigate();
   const selection = useResolvedVehicleSelection();
-  const tripTagFilter = useMemo(() => createTripTagFilterAdapter(search, next => {
+  const replaceSearch = useCallback((next: TripTagSearch) => {
     navigate({ to: route, search: next, replace: true });
-  }), [navigate, route, search]);
-  const membership = selection.vehicles.find(vehicle => vehicle.id === selection.effectiveVehicleId)?.membership_role;
-  return { tripTagFilter, canManageTripTags: membership === 'owner' || membership === 'manager' };
+  }, [navigate, route]);
+  const tripTagFilter = useMemo(() => createTripTagFilterAdapter(search, replaceSearch), [replaceSearch, search]);
+  const permissions = new Map<string, boolean>();
+  for (const vehicle of selection.vehicles) {
+    if (!permissions.has(vehicle.id)) {
+      permissions.set(vehicle.id, vehicle.membership_role === 'owner' || vehicle.membership_role === 'manager');
+    }
+  }
+  const canManageTripTags = selection.effectiveVehicleId !== null && permissions.get(selection.effectiveVehicleId) === true;
+  return { tripTagFilter, canManageTripTags };
 }

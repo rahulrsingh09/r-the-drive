@@ -2,8 +2,8 @@ import React from 'react';
 import { CurrentVehicleStatePanel } from '@panda/dashboards';
 import { DashboardPageShell } from './DashboardPageShell';
 
-export { canManageSystemDashboards, createDefaultDashboardEditActions } from './DashboardPageShell';
-export type { DashboardEditMutations, DashboardPageShellRenderState } from './DashboardPageShell';
+export { canManageSystemDashboards } from './dashboardPermissions';
+export type { DashboardPageShellRenderState } from './DashboardPageShell';
 // Compatibility export for route-local imports. The dashboard widget owns the
 // production implementation so both surfaces render the same vehicle state.
 export { CurrentVehicleStatePanel };
@@ -17,17 +17,15 @@ export interface DashboardPageProps {
   title?: string | undefined;
   /** Show the page-level efficiency unit toggle next to the date range picker. */
   showEfficiencyDisplayToggle?: boolean | undefined;
-  enableDashboardEditing?: boolean | undefined;
 }
 
-export function DashboardPage({ navKey, slug, title, showEfficiencyDisplayToggle = false, enableDashboardEditing = true }: DashboardPageProps) {
+export function DashboardPage({ navKey, slug, title, showEfficiencyDisplayToggle = false }: DashboardPageProps) {
   return (
     <DashboardPageShell
       navKey={navKey}
       slug={slug}
       title={title}
       showEfficiencyDisplayToggle={showEfficiencyDisplayToggle}
-      enableDashboardEditing={enableDashboardEditing}
     />
   );
 }

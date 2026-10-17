@@ -159,15 +159,23 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function formatEnergy(value: number | null) {
-  return value == null ? '—' : `${value.toFixed(2)} kWh`;
+  return formatMeasurement(value, 1, 2, 'kWh');
 }
 
 function formatRange(value: number | null) {
-  return value == null ? '—' : `${(value * 0.621371).toFixed(1)} mi`;
+  return formatMeasurement(value, 0.621371, 1, 'mi');
 }
 
 function formatDuration(value: number | null) {
+  const minutes = value == null || value < 60;
+  return minutes
+    ? formatMeasurement(value, 1, null, 'min')
+    : formatMeasurement(value / 60, 1, value % 60 === 0 ? 0 : 1, 'h');
+}
+
+function formatMeasurement(value: number | null, scale: number, digits: number | null, unit: string) {
   if (value == null) return '—';
-  if (value < 60) return `${value} min`;
-  return `${(value / 60).toFixed(value % 60 === 0 ? 0 : 1)} h`;
+  const amount = value * scale;
+  const text = digits === null ? String(amount) : amount.toFixed(digits);
+  return `${text} ${unit}`;
 }

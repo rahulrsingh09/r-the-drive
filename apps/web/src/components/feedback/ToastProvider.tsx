@@ -85,33 +85,38 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         aria-atomic="true"
         className="fixed right-4 top-4 z-50 flex w-[min(420px,calc(100vw-2rem))] flex-col gap-3"
       >
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-lg backdrop-blur-md ${TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'].container}`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className={`text-sm font-semibold leading-6 ${TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'].title}`}>{toast.title}</p>
-                {toast.code && (
-                  <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-fg-secondary">
-                    {toast.code}
-                  </p>
-                )}
-                <p className="mt-1 break-words text-sm leading-6 text-fg">{toast.message}</p>
-              </div>
-              <button
-                type="button"
-                aria-label="Dismiss notification"
-                className="rounded-md px-2 py-1 text-sm font-medium text-fg-secondary hover:bg-bg-elevated hover:text-fg"
-                onClick={() => dispatch({ type: 'dismiss', id: toast.id })}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        ))}
+        {toasts.map(toast => <ToastCard key={toast.id} toast={toast} dismiss={() => dispatch({ type: 'dismiss', id: toast.id })} />)}
       </div>
     </>
+  );
+}
+
+function ToastCard({ toast, dismiss }: { toast: Toast; dismiss: () => void }) {
+  const appearance = TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'];
+  const paragraphs = new Map([
+    ['title', { text: toast.title, className: `text-sm font-semibold leading-6 ${appearance.title}` }],
+  ]);
+  if (toast.code) paragraphs.set('code', {
+    text: toast.code,
+    className: 'mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-fg-secondary',
+  });
+  paragraphs.set('message', { text: toast.message, className: 'mt-1 break-words text-sm leading-6 text-fg' });
+
+  return (
+    <div className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-lg backdrop-blur-md ${appearance.container}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          {Array.from(paragraphs, ([key, paragraph]) => <p key={key} className={paragraph.className}>{paragraph.text}</p>)}
+        </div>
+        <button
+          type="button"
+          aria-label="Dismiss notification"
+          className="rounded-md px-2 py-1 text-sm font-medium text-fg-secondary hover:bg-bg-elevated hover:text-fg"
+          onClick={dismiss}
+        >
+          Close
+        </button>
+      </div>
+    </div>
   );
 }

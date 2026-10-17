@@ -158,9 +158,10 @@ function installQueryCachePersistence(client: QueryClient) {
 }
 
 function shouldDehydrateQuery(query: Query) {
-  return query.state.status === 'success'
-    && isPersistedQueryKey(query.queryKey)
-    && (query.meta as { persist?: unknown } | undefined)?.persist !== false;
+  const eligible = query.state.status === 'success' && isPersistedQueryKey(query.queryKey);
+  if (!eligible) return false;
+  const { persist = true } = query.meta ?? {};
+  return persist !== false;
 }
 
 function isPersistedQueryKey(queryKey: QueryKey) {
@@ -169,11 +170,15 @@ function isPersistedQueryKey(queryKey: QueryKey) {
 }
 
 function queryOperation(queryKey: QueryKey): string {
-  const root = queryKey[0];
-  return typeof root === 'string' ? root : 'unknown-query';
+  return diagnosticOperation(queryKey, 'query');
 }
 
 function mutationOperation(mutation: Mutation<unknown, unknown, unknown, unknown>): string {
-  const root = mutation.options.mutationKey?.[0];
-  return typeof root === 'string' ? root : 'unknown-mutation';
+  return diagnosticOperation(mutation.options.mutationKey ?? [], 'mutation');
+}
+
+function diagnosticOperation(key: readonly unknown[], area: string): string {
+  const [operation] = key;
+  if (typeof operation !== 'string') return `unknown-${area}`;
+  return operation;
 }

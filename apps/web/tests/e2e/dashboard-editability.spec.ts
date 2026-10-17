@@ -1,9 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import {
-  DEFAULT_DASHBOARD_VISIBILITY_STATE,
-  isWidgetVisible,
-} from '../../../../packages/dashboards/src/dashboardVisibility';
 import type { DashboardConfig } from '../../../../packages/dashboards/src/schema';
 
 const dashboard = loadDashboard('dashboard');
@@ -21,7 +17,7 @@ const chartSeeds = readJson<Array<{
 const chartSources = readJson<unknown[]>('../../../../packages/dashboards/src/charts/sources/sources.json');
 const customDashboard: DashboardConfig = {
   ...dashboard,
-  id: '11111111-1111-1111-1111-111111111111',
+  id: '11111111-1111-4111-8111-111111111111',
   slug: 'custom-dashboard',
   name: 'Custom Dashboard',
   isDefault: false,
@@ -34,6 +30,22 @@ const customDashboard: DashboardConfig = {
       definitionId: 'total_miles',
       title: 'Custom miles',
       layout: { x: 0, y: 0, w: 3, h: 2 },
+      options: {},
+    },
+    {
+      id: '33333333-3333-3333-3333-333333333334',
+      componentType: 'sensor',
+      definitionId: 'total_miles',
+      title: 'Offset miles',
+      layout: { x: 5, y: 0, w: 5, h: 3 },
+      options: {},
+    },
+    {
+      id: '33333333-3333-3333-3333-333333333335',
+      componentType: 'sensor',
+      definitionId: 'total_miles',
+      title: 'Lower miles',
+      layout: { x: 1, y: 4, w: 4, h: 2 },
       options: {},
     },
   ],
@@ -57,16 +69,6 @@ const routeCases = [
   { path: '/trips', slug: 'trips', widgetId: 'd5000005-0000-0000-0000-000000000005' },
   { path: '/d/custom-dashboard', slug: 'custom-dashboard', widgetId: '33333333-3333-3333-3333-333333333333' },
 ] as const;
-
-const EDIT_CONTROL_GEOMETRY = {
-  position: 'absolute',
-  top: '8px',
-  right: '8px',
-  zIndex: '200',
-  pointerEvents: 'auto',
-  anchored: true,
-  hit: true,
-};
 
 test.describe('dashboard editability in a browser', () => {
   test('renders the R1T fallback overview with tailgate and side-bin cover states', async ({ page }) => {
@@ -121,123 +123,142 @@ test.describe('dashboard editability in a browser', () => {
   });
 
   for (const routeCase of routeCases) {
-    test(`${routeCase.slug} exposes visible, hit-testable widget editing`, async ({ page }) => {
-      await installApiMocks(page);
-      await page.goto(routeCase.path);
-
-      await expect(page.getByRole('button', { name: 'Edit dashboard' })).toBeVisible();
-      await expect(page.locator('[data-widget-edit-control="true"]')).toHaveCount(0);
-
-      await page.getByRole('button', { name: 'Edit dashboard' }).click();
-      await expect(page.locator('.rgl-editor')).toBeVisible();
-
-      const config = dashboards.get(routeCase.slug)!;
-      const visibleWidgets = config.widgets.filter((widget) => isWidgetVisible(widget, DEFAULT_DASHBOARD_VISIBILITY_STATE));
-      await expect(page.locator('[data-widget-frame="edit"]')).toHaveCount(visibleWidgets.length);
-      const editControls = page.locator('[data-widget-edit-control="true"]');
-      await expect(editControls).toHaveCount(visibleWidgets.filter((widget) => !widget.managed).length);
-
-      for (let index = 0; index < await editControls.count(); index += 1) {
-        const button = editControls.nth(index).getByRole('button', { name: 'Edit widget settings' });
-        await button.scrollIntoViewIfNeeded();
-        await expectEditControl(button);
-      }
-
-      const frame = page.locator(`[data-widget-id="${routeCase.widgetId}"]`);
-      const editControl = frame.locator('[data-widget-edit-control="true"]');
-      const editButton = editControl.getByRole('button', { name: 'Edit widget settings' });
-      await editButton.scrollIntoViewIfNeeded();
-
-      await expect(frame).toHaveAttribute('data-widget-resizable', 'true');
-      await expect(editControl).toBeVisible();
-      await expect(editButton).toBeVisible();
-      await expect(frame.locator('.react-resizable-handle-se')).toBeVisible();
-      await expectEditControl(editButton);
-
-      await editButton.click();
-      await expect(page.getByText('Editing', { exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Remove component' })).toBeVisible();
-      await expect(frame).toHaveAttribute('data-editing', 'true');
+    test(`${routeCase.slug} renders a fixed layout with no edit entry points`, async ({ page }) => {
+      const state = await installApiMocks(page);
+      await page.goto(routeCase.path + '?edit=1');
+      const widget = page.locator(`[data-widget-id="${routeCase.widgetId}"]`).first();
+      await expect(widget).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Edit dashboard', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Save dashboard changes' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Discard dashboard changes' })).toHaveCount(0);
+      await expect(page.locator('[data-widget-frame="edit"], .react-resizable-handle, [data-widget-edit-control="true"]')).toHaveCount(0);
+      await expect(page.getByTitle('Duplicate dashboard')).toHaveCount(0);
+      await expect(page.getByTitle('Import from YAML')).toHaveCount(0);
+      expect(state.layoutMutations).toEqual([]);
     });
   }
+});
 
-  test('fixed-size widgets keep edit and move controls but never expose a resize handle', async ({ page }) => {
-    await installApiMocks(page);
-    await page.goto('/charging');
-    await page.getByRole('button', { name: 'Edit dashboard' }).click();
-    await page.getByRole('button', { name: 'Plugged in' }).click();
-
-    const frame = page.locator('[data-widget-id="d4000004-0000-0000-0000-000000000013"]');
-    await expect(frame).toHaveAttribute('data-fixed-size', 'true');
-    await expect(frame).toHaveAttribute('data-widget-resizable', 'false');
-    await expect(frame.getByLabel('Fixed-size widget')).toBeVisible();
-    await expect(frame.getByRole('button', { name: 'Drag to move' })).toBeVisible();
-    await expect(frame.getByRole('button', { name: 'Edit widget settings' })).toBeVisible();
-    await expect(frame.locator('.react-resizable-handle')).toHaveCount(0);
-  });
-
-  test('resizing a non-Overview widget changes the draft and saves a user-owned copy', async ({ page }) => {
-    const apiState = await installApiMocks(page);
-    await page.goto('/battery');
-    await page.getByRole('button', { name: 'Edit dashboard' }).click();
-
-    const widgetId = 'd2000002-0000-0000-0000-000000000001';
-    const frame = page.locator(`[data-widget-id="${widgetId}"]`);
-    const handle = frame.locator('.react-resizable-handle-se');
-    await handle.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(350);
-
-    const before = await frame.boundingBox();
-    const handleBox = await handle.boundingBox();
-    expect(before).not.toBeNull();
-    expect(handleBox).not.toBeNull();
-
-    const startX = handleBox!.x + handleBox!.width / 2;
-    const startY = handleBox!.y + handleBox!.height / 2;
-    await page.mouse.move(startX, startY);
+for (const width of [390, 1440]) {
+  for (const role of ['user', 'admin', 'super_user']) {
+  test(`web shell preserves exact saved placement through edit bypass and reload for ${role} at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const state = await installApiMocks(page, { role });
+    const path = `/d/custom-dashboard?dashboardId=${customDashboard.id}`;
+    await page.goto(path);
+    const frame = page.locator(`[data-widget-id="${customDashboard.widgets[0]!.id}"]`).first();
+    await expect(frame).toContainText('Custom miles');
+    await expect(frame).toBeVisible();
+    await expectSavedPlacement(page, width);
+    const before = await savedWidgetBoxes(page);
+    await page.goto(`${path}&edit=1`);
+    await expectSavedPlacement(page, width);
+    await expect.poll(() => savedWidgetBoxes(page)).toEqual(before);
+    await page.mouse.move(before[0]!.x + 15, before[0]!.y + 15);
     await page.mouse.down();
-    await page.mouse.move(startX + 130, startY + 90, { steps: 8 });
+    await page.mouse.move(before[0]!.x + 100, before[0]!.y + 100, { steps: 8 });
     await page.mouse.up();
-
-    const after = await frame.boundingBox();
-    expect(after).not.toBeNull();
-    expect(after!.width).toBeGreaterThan(before!.width);
-    expect(after!.height).toBeGreaterThan(before!.height);
-    await expect(page.getByText('Unsaved', { exact: true })).toBeVisible();
-
-    await page.getByRole('button', { name: 'Save dashboard changes' }).click();
-    await expect(page.locator('.rgl-editor')).toHaveCount(0);
-    expect(apiState.createdDashboards).toHaveLength(1);
-
-    const saved = apiState.createdDashboards[0]!.config as DashboardConfig;
-    const savedWidget = saved.widgets.find((widget) => widget.id === widgetId)!;
-    const originalWidget = battery.widgets.find((widget) => widget.id === widgetId)!;
-    expect(saved.isDefault).toBe(false);
-    expect(saved.isLocked).toBe(false);
-    expect(savedWidget.layout.w).toBeGreaterThan(originalWidget.layout.w);
-    expect(savedWidget.layout.h).toBeGreaterThan(originalWidget.layout.h);
+    expect(await savedWidgetBoxes(page)).toEqual(before);
+    await expectNoLayoutControls(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.reload();
+    await expectSavedPlacement(page, width);
+    await expect.poll(() => savedWidgetBoxes(page)).toEqual(before);
+    await expectNoLayoutControls(page);
+    expect(state.layoutMutations).toEqual([]);
+    await testInfo.attach('saved-layout', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+    await testInfo.attach('saved-placement', { body: JSON.stringify({ width, role, boxes: before, layoutMutations: state.layoutMutations }), contentType: 'application/json' });
   });
+  }
+}
+
+for (const width of [390, 1440]) {
+test(`web shell admin dashboard opens the exact saved view without layout mutations at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  const state = await installApiMocks(page, { role: 'admin' });
+  await page.goto('/admin/dashboards');
+  await expect(page.getByText('Admin: Dashboards', { exact: true })).toBeVisible();
+  await expect(page.getByTitle('Edit (admin)')).toHaveCount(0);
+  await expect(page.getByTitle('Lock', { exact: true })).toHaveCount(0);
+  await expect(page.getByTitle('Unlock', { exact: true })).toHaveCount(0);
+  await page.getByTitle('View', { exact: true }).last().click();
+  await expect(page).toHaveURL(new RegExp(`/d/custom-dashboard\\?dashboardId=${customDashboard.id}`));
+  await expect(page.getByText('Custom miles', { exact: true })).toBeVisible();
+  await expectSavedPlacement(page, width);
+  await expectNoLayoutControls(page);
+  expect(state.layoutMutations).toEqual([]);
 });
+}
 
-test.describe('dashboard editability on coarse pointers', () => {
-  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+async function expectNoLayoutControls(page: Page) {
+  await expect(page.getByRole('button', { name: /^(Edit dashboard|Save dashboard changes|Discard dashboard changes)$/ })).toHaveCount(0);
+  await expect(page.locator('[data-widget-frame="edit"], .react-resizable-handle, [data-widget-edit-control="true"]')).toHaveCount(0);
+  await expect(page.getByTitle('Duplicate dashboard')).toHaveCount(0);
+  await expect(page.getByTitle('Import from YAML')).toHaveCount(0);
+}
 
-  test('keeps component controls fully visible and actionable', async ({ page }) => {
-    await installApiMocks(page);
-    await page.goto('/battery');
-    await page.getByRole('button', { name: 'Edit dashboard' }).click();
+async function savedWidgetBoxes(page: Page) {
+  return page.locator('[data-dashboard-grid="view"] > [data-widget-id]').evaluateAll(elements =>
+    elements.map(element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    }),
+  );
+}
 
-    const frame = page.locator('[data-widget-id="d2000002-0000-0000-0000-000000000001"]');
-    const control = frame.locator('[data-widget-edit-control="true"]');
-    const button = control.getByRole('button', { name: 'Edit widget settings' });
-    await button.scrollIntoViewIfNeeded();
-
-    await expect(control).toBeVisible();
-    await expectEditControl(button, 1);
-    await button.click();
-    await expect(page.getByText('Editing', { exact: true })).toBeVisible();
+async function expectSavedPlacement(page: Page, width: number) {
+  const grid = page.locator('[data-dashboard-grid="view"]');
+  await expect(grid.locator(':scope > [data-widget-id]')).toHaveCount(3);
+  const expected = [
+    { id: '33333333-3333-3333-3333-333333333333', title: 'Custom miles', column: '1 / span 3', row: '1 / span 2', height: '80px' },
+    { id: '33333333-3333-3333-3333-333333333334', title: 'Offset miles', column: '6 / span 5', row: '1 / span 3', height: '120px' },
+    { id: '33333333-3333-3333-3333-333333333335', title: 'Lower miles', column: '2 / span 4', row: '5 / span 2', height: '80px' },
+  ];
+  for (const [index, fixture] of expected.entries()) {
+    const frame = grid.locator(':scope > [data-widget-id]').nth(index);
+    await expect(frame).toHaveAttribute('data-widget-id', fixture.id);
+    await expect(frame).toContainText(fixture.title);
+    if (width < 640) {
+      expect(await frame.evaluate(element => element.style.minHeight)).toBe(fixture.height);
+      await expect(frame).toHaveCSS('min-height', '96px');
+      await expect(frame).toHaveCSS('grid-column', 'auto');
+      await expect(frame).toHaveCSS('grid-row', 'auto');
+    } else {
+      await expect(frame).toHaveCSS('grid-column', fixture.column);
+      await expect(frame).toHaveCSS('grid-row', fixture.row);
+    }
+  }
+  await expect(grid).toHaveCSS('row-gap', '16px');
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all(document.getAnimations()
+      .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
+      .map(animation => animation.finished.catch(() => {})));
   });
-});
+  const boxes = await savedWidgetBoxes(page);
+  const bounds = (await grid.boundingBox())!;
+  if (width < 640) {
+    const column = (bounds.width - 16) / 2;
+    await expect(grid).toHaveCSS('grid-template-columns', `${column}px ${column}px`);
+    for (const [index, box] of boxes.entries()) {
+      expect(box.x).toBe(bounds.x + (index % 2) * (column + 16));
+      expect(box.width).toBe(column);
+      expect(box.y).toBe(index < 2 ? bounds.y : bounds.y + boxes[0]!.height + 16);
+      expect(box.height).toBeGreaterThanOrEqual(96);
+    }
+    expect(boxes[0]!.height).toBe(boxes[1]!.height);
+  } else {
+    const column = (bounds.width - 11 * 16) / 12;
+    const layouts = [{ x: 0, y: 0, w: 3, h: 2 }, { x: 5, y: 0, w: 5, h: 3 }, { x: 1, y: 4, w: 4, h: 2 }];
+    for (const [index, layout] of layouts.entries()) {
+      const box = boxes[index]!;
+      expect(box.x).toBeCloseTo(bounds.x + layout.x * (column + 16), 1);
+      expect(box.y).toBe(bounds.y + layout.y * 56);
+      expect(box.width).toBeCloseTo(layout.w * column + (layout.w - 1) * 16, 1);
+      expect(box.height).toBe(layout.h * 40 + (layout.h - 1) * 16);
+    }
+  }
+}
 
 test.describe('mobile app navigation', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
@@ -372,8 +393,9 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as T;
 }
 
-async function installApiMocks(page: Page, options: { vehicleStatus?: Record<string, unknown> } = {}) {
+async function installApiMocks(page: Page, options: { vehicleStatus?: Record<string, unknown>; role?: string } = {}) {
   const createdDashboards: Array<{ config: DashboardConfig }> = [];
+  const layoutMutations: string[] = [];
 
   await page.addInitScript(() => {
     window.localStorage.setItem('rm-show-dashboard-edit-button:e2e-user', 'true');
@@ -390,6 +412,7 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
+    if (path.includes('/dashboards') && !['GET', 'HEAD'].includes(method)) layoutMutations.push(`${method} ${path}`);
 
     if (path === '/v1/auth/bootstrap') {
       return json(route, authTokens());
@@ -398,7 +421,7 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
       return json(route, {
         user_id: 'e2e-user',
         email: 'editor@panda.test',
-        role: 'user',
+        role: options.role ?? 'user',
         default_vehicle_id: 'vehicle-1',
       });
     }
@@ -420,6 +443,9 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
     if (path.startsWith('/v1/dashboards/by-slug/')) {
       const slug = decodeURIComponent(path.slice('/v1/dashboards/by-slug/'.length));
       return json(route, dashboards.get(slug) ?? customDashboard);
+    }
+    if (method === 'GET' && path.startsWith('/v1/dashboards/')) {
+      return json(route, [...dashboards.values()].find(config => config.id === path.split('/').at(-1)) ?? customDashboard);
     }
     if (path === '/v1/charts/effective') {
       const dashboardSlug = url.searchParams.get('dashboard_slug');
@@ -458,44 +484,7 @@ async function installApiMocks(page: Page, options: { vehicleStatus?: Record<str
     return json(route, fallbackApiResponse(path));
   });
 
-  return { createdDashboards };
-}
-
-async function controlHitTest(button: ReturnType<Page['locator']>) {
-  return button.evaluate((buttonElement) => {
-    const control = buttonElement.closest('[data-widget-edit-control="true"]');
-    if (!control) throw new Error('Widget edit control is missing');
-    const frame = control.closest('[data-widget-frame="edit"]');
-    if (!frame) throw new Error('Widget edit frame is missing');
-    const style = getComputedStyle(control);
-    const controlRect = control.getBoundingClientRect();
-    const frameRect = frame.getBoundingClientRect();
-    const buttonRect = buttonElement.getBoundingClientRect();
-    const topmost = document.elementFromPoint(
-      buttonRect.left + buttonRect.width / 2,
-      buttonRect.top + buttonRect.height / 2,
-    );
-    return {
-      opacity: Number(style.opacity),
-      position: style.position,
-      top: style.top,
-      right: style.right,
-      zIndex: style.zIndex,
-      pointerEvents: style.pointerEvents,
-      anchored:
-        Math.abs(controlRect.top - frameRect.top - 8) <= 1 &&
-        Math.abs(frameRect.right - controlRect.right - 8) <= 1,
-      hit: topmost === buttonElement || buttonElement.contains(topmost),
-      obstruction: topmost === buttonElement || buttonElement.contains(topmost) ? null : topmost?.outerHTML.slice(0, 400),
-      buttonTop: buttonRect.top,
-    };
-  });
-}
-
-async function expectEditControl(button: ReturnType<Page['locator']>, minimumOpacity = 0.72) {
-  const state = await controlHitTest(button);
-  expect(state, JSON.stringify(state)).toMatchObject(EDIT_CONTROL_GEOMETRY);
-  expect(state.opacity).toBeGreaterThanOrEqual(minimumOpacity);
+  return { createdDashboards, layoutMutations };
 }
 
 function fallbackApiResponse(path: string): unknown {

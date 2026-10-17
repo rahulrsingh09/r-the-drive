@@ -78,13 +78,18 @@ describe('Admin dashboards route', () => {
     adminRouteMocks.apiFetch.mockResolvedValue({ ok: true });
   });
 
-  it('routes dashboard lock changes through the shared API client', async () => {
+  it('opens the exact saved dashboard without any layout administration actions', async () => {
     const user = userEvent.setup();
     renderPage();
-
-    await user.click(screen.getByTitle('Lock'));
-
-    expect(adminRouteMocks.apiFetch).toHaveBeenCalledWith('POST', '/v1/admin/dashboards/default-1/lock', { locked: true });
-    expect(adminRouteMocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['dashboards'] });
+    expect(screen.getByText('Overview')).toBeInTheDocument();
+    expect(screen.queryByTitle('Edit (admin)')).toBeNull();
+    expect(screen.queryByTitle('Lock')).toBeNull();
+    expect(screen.queryByTitle('Unlock')).toBeNull();
+    await user.click(screen.getByTitle('View'));
+    expect(adminRouteMocks.navigate).toHaveBeenCalledWith({
+      to: '/d/$slug', params: { slug: 'dashboard' }, search: { dashboardId: 'default-1' },
+    });
+    expect(adminRouteMocks.apiFetch).not.toHaveBeenCalled();
+    expect(adminRouteMocks.invalidateQueries).not.toHaveBeenCalled();
   });
 });

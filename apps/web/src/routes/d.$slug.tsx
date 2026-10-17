@@ -6,7 +6,7 @@ import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { UserDashboardPage } from '../components/dashboard/UserDashboardPage';
 
 const searchSchema = z.object({
-  edit: z.literal(1).optional(),
+  edit: z.unknown().transform((): 1 | undefined => undefined).optional(),
   dashboardId: z.string().uuid().optional(),
 });
 
@@ -15,7 +15,7 @@ export const userDashboardRoute = createRoute({
   path: '/d/$slug',
   validateSearch: searchSchema,
   beforeLoad: ({ params, search }) => {
-    if (params.slug === 'dashboard' && !search.edit && !search.dashboardId) throw redirect({ to: '/', replace: true });
+    if (params.slug === 'dashboard' && !search.dashboardId) throw redirect({ to: '/', replace: true });
   },
   component: UserDashboardPageWrapper,
 });

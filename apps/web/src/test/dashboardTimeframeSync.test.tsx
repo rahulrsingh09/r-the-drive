@@ -265,27 +265,27 @@ describe('DashboardPageShell timeframe sync', () => {
   });
 
   it.each(['dashboard', 'battery', 'charging', 'efficiency', 'trips'] as const)(
-    'passes edit mode through the shared renderer for %s',
+    'ignores controlled edit mode in the shared renderer for %s',
     (slug) => {
       render(<DashboardPageShell navKey={slug} slug={slug} title={slug} isEditMode />);
 
-      expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
+      expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'view');
     },
   );
 
-  it('keeps edit drafts scoped when switching dashboard slugs', () => {
+  it('keeps saved layouts scoped when switching dashboard slugs', () => {
     const { rerender } = render(
       <DashboardPageShell navKey="battery" slug="battery" title="Battery" isEditMode />,
     );
 
-    expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
+    expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'view');
     expect(screen.getByText('Battery chart')).toBeInTheDocument();
 
     rerender(
       <DashboardPageShell navKey="charging" slug="charging" title="Charging" isEditMode />,
     );
 
-    expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
+    expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'view');
     expect(screen.queryByText('Battery chart')).not.toBeInTheDocument();
     expect(screen.getByText('Charging chart')).toBeInTheDocument();
   });

@@ -23,30 +23,38 @@ const PHANTOM_DRAIN_CHART_INSTANCE: WidgetInstance = {
   },
 };
 
-function formatRatioPercent(value: number | null | undefined, decimals = 0) {
-  if (value == null || Number.isNaN(value)) return null;
-  return formatPercent(value * 100, decimals);
-}
+const PERIOD_SEARCH_FIELDS = [
+  ['duration_hours', 'decimal', 1, '', ' h'],
+  ['sleep_share_pct', 'ratio', 0, '', ''],
+  ['state_coverage_pct', 'ratio', 0, '', ' coverage'],
+  ['soc_start', 'percent', 0, '', ''],
+  ['soc_end', 'percent', 0, '', ''],
+  ['soc_lost_pct', 'percent', 2, '-', ''],
+  ['drain_pct_per_hour', 'percent', 2, 'drain ', ' / h'],
+  ['range_lost_mi', 'decimal', 1, '', ' mi'],
+  ['energy_drained_kwh', 'decimal', 2, '', ' kWh'],
+  ['avg_power_w', 'decimal', 0, '', ' W'],
+] as const;
 
 function formatPeriodSearchText(period: PhantomDrainPeriod) {
-  const parts = [
-    period.period_start,
-    period.period_end,
-    period.duration_hours == null ? null : `${period.duration_hours.toFixed(1)} h`,
-    formatRatioPercent(period.sleep_share_pct, 0),
-    period.state_coverage_pct == null ? null : `${formatRatioPercent(period.state_coverage_pct, 0)} coverage`,
-    period.soc_start == null ? null : formatPercent(period.soc_start, 0),
-    period.soc_end == null ? null : formatPercent(period.soc_end, 0),
-    period.soc_lost_pct == null ? null : `-${formatPercent(period.soc_lost_pct, 2)}`,
-    period.drain_pct_per_hour == null ? null : `drain ${formatPercent(period.drain_pct_per_hour, 2)} / h`,
-    period.range_lost_mi == null ? null : `${period.range_lost_mi.toFixed(1)} mi`,
-    period.energy_drained_kwh == null ? null : `${period.energy_drained_kwh.toFixed(2)} kWh`,
-    period.avg_power_w == null ? null : `${period.avg_power_w.toFixed(0)} W`,
-    period.has_reduced_range ? 'reduced range' : null,
-    period.validation_reason,
-  ];
-
-  return parts.filter((part): part is string => !!part).join(' ').toLowerCase();
+  const parts: string[] = [];
+  const append = (text: string | null | undefined) => { if (text) parts.push(text); };
+  append(period.period_start);
+  append(period.period_end);
+  for (const [field, format, digits, prefix, suffix] of PERIOD_SEARCH_FIELDS) {
+    const value = period[field];
+    if (value == null) continue;
+    let text: string | null;
+    switch (format) {
+      case 'decimal': text = value.toFixed(digits); break;
+      case 'percent': text = formatPercent(value, digits); break;
+      case 'ratio': text = Number.isNaN(value) ? null : formatPercent(value * 100, digits); break;
+    }
+    append(prefix || suffix ? `${prefix}${text}${suffix}` : text);
+  }
+  if (period.has_reduced_range) append('reduced range');
+  append(period.validation_reason);
+  return parts.join(' ').toLowerCase();
 }
 
 function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }) {
@@ -78,17 +86,16 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
       </div>
 
       <div className="grid min-w-0 grid-cols-2 gap-3 xl:grid-cols-4">
-        {summaryCards.map((card) => (
+        {summaryCards.map(({ key, dataAccent, title, value, icon, ...optional }) => (
           <SensorChipSummary
-            key={card.key}
-            title={card.title}
-            value={card.value}
-            icon={card.icon}
-            dataAccent={card.dataAccent}
+            key={key}
+            title={title}
+            value={value}
+            icon={icon}
+            dataAccent={dataAccent}
             valueColor="data"
             valueSize="sm"
-            {...(card.accentBorder === undefined ? {} : { accentBorder: card.accentBorder })}
-            {...(card.secondary === undefined ? {} : { secondary: card.secondary })}
+            {...optional}
           />
         ))}
       </div>
@@ -162,7 +169,6 @@ export function BatteryPhantomDrainPage({ navKey, slug, title }: DashboardPagePr
       navKey={navKey}
       slug={slug}
       title={title}
-      enableDashboardEditing={false}
       renderBeforeDashboard={(state) => <PhantomDrainContent state={state} />}
       renderDashboard={() => false}
     />

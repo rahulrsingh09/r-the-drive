@@ -30,12 +30,11 @@ export function getFeedHealthIssue(status?: FeedHealthStatus | null) {
 }
 
 export function shouldEmitFeedHealthToast(storage: Storage, key: string, now = Date.now()) {
-  const lastEmittedAt = Number(storage.getItem(key));
-  if (Number.isFinite(lastEmittedAt) && now - lastEmittedAt < FEED_HEALTH_TOAST_COOLDOWN_MS) {
-    return false;
-  }
-  storage.setItem(key, String(now));
-  return true;
+  const previous = Number(storage.getItem(key));
+  const elapsed = Number.isFinite(previous) ? now - previous : Infinity;
+  const ready = !(elapsed < FEED_HEALTH_TOAST_COOLDOWN_MS);
+  if (ready) storage.setItem(key, String(now));
+  return ready;
 }
 
 export function resolveVehicleOnlineState({
@@ -51,12 +50,8 @@ export function resolveVehicleOnlineState({
   connected: boolean;
   feedHealthIssue: ReturnType<typeof getFeedHealthIssue>;
 }): VehicleOnlineState {
-  if (!liveVehicleId) return 'offline';
-  if (!vehicleSelectionReady) return 'connecting';
-  // Browser-to-Panda transport is the first boundary. A stale or failed
-  // browser socket must not surface an old server-side feed error as if it
-  // were the current connection state.
-  if (!connected || connectionState === 'failed') return 'connecting';
-  if (feedHealthIssue) return 'unhealthy';
-  return 'online';
+  const transportReady = vehicleSelectionReady && connected && connectionState !== 'failed';
+  const states: VehicleOnlineState[] = ['offline', 'connecting', feedHealthIssue ? 'unhealthy' : 'online'];
+  const stage = liveVehicleId ? 1 + Number(transportReady) : 0;
+  return states[stage]!;
 }

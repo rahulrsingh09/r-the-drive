@@ -14,8 +14,36 @@ export function EfficiencyDashboardPage({
   widgetCtx,
 }: DashboardPageProps & { widgetCtx?: Pick<WidgetCtx, 'tripTagFilter' | 'canManageTripTags'> }) {
   const filter = widgetCtx?.tripTagFilter;
-  const hasActiveFilter = Boolean(filter?.tagIds.length || filter?.untagged);
-  const [showTagFilters, setShowTagFilters] = React.useState(hasActiveFilter);
+  const hasActiveFilter = (filter?.tagIds.length ?? 0) > 0 || filter?.untagged === true;
+  const [visibility, toggleVisibility] = React.useReducer(
+    (current: 'open' | 'closed') => current === 'open' ? 'closed' : 'open',
+    hasActiveFilter ? 'open' : 'closed',
+  );
+  let controls: React.ReactNode = null;
+  let content: ((state: { vehicleId: string | null }) => React.ReactNode) | undefined;
+  if (filter?.setFilter) {
+    const showTagFilters = visibility === 'open';
+    const label = `${showTagFilters ? 'Hide' : 'Show'} efficiency filters`;
+    const tone = showTagFilters || hasActiveFilter
+      ? 'border-accent/40 bg-accent/10 text-accent'
+      : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong hover:text-fg';
+    controls = (
+      <Tooltip content={label}>
+        <button
+          type="button"
+          className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent ${tone}`}
+          onClick={toggleVisibility}
+          aria-label={label}
+          aria-expanded={showTagFilters}
+          aria-controls="efficiency-tag-filters"
+          title={label}
+        >
+          <Filter className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </Tooltip>
+    );
+    if (showTagFilters) content = ({ vehicleId }) => <EfficiencyTagFilterBar vehicleId={vehicleId} filter={filter} />;
+  }
 
   return (
     <DashboardPageShell
@@ -23,28 +51,9 @@ export function EfficiencyDashboardPage({
       slug={slug}
       title={title}
       showEfficiencyDisplayToggle
-      renderLeadingActions={() => filter?.setFilter ? (
-        <Tooltip content={showTagFilters ? 'Hide efficiency filters' : 'Show efficiency filters'}>
-          <button
-            type="button"
-            className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent ${showTagFilters || hasActiveFilter ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong hover:text-fg'}`}
-            onClick={() => setShowTagFilters((value) => !value)}
-            aria-label={showTagFilters ? 'Hide efficiency filters' : 'Show efficiency filters'}
-            aria-expanded={showTagFilters}
-            aria-controls="efficiency-tag-filters"
-            title={showTagFilters ? 'Hide efficiency filters' : 'Show efficiency filters'}
-          >
-            <Filter className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </Tooltip>
-      ) : null}
+      renderLeadingActions={() => controls}
       {...(widgetCtx ? { widgetCtx } : {})}
-      renderBeforeDashboard={(state) => filter?.setFilter && showTagFilters ? (
-        <EfficiencyTagFilterBar
-          vehicleId={state.vehicleId}
-          filter={filter}
-        />
-      ) : null}
+      {...(content ? { renderBeforeDashboard: content } : {})}
     />
   );
 }
@@ -70,6 +79,12 @@ function EfficiencyTagFilterBar({
   const count = filter.tagIds.length;
   const summaries = { all: 'All trips', untagged: 'Untagged trips', tags: `${count} tag${count === 1 ? '' : 's'} selected` };
   const filterSummary = summaries[filter.untagged ? 'untagged' : count ? 'tags' : 'all'];
+  const matchDisabled = filter.untagged || count === 0;
+  const matchClasses = {
+    all: 'text-fg-tertiary hover:text-fg',
+    any: 'text-fg-tertiary hover:text-fg',
+  };
+  matchClasses[filter.tagMatch] = 'bg-bg-surface text-fg shadow-sm';
 
   return (
     <section id="efficiency-tag-filters" className="mb-4 rounded-xl border border-border bg-bg-elevated/40 p-3" aria-label="Efficiency tag filters">
@@ -96,9 +111,9 @@ function EfficiencyTagFilterBar({
             <button
               key={match}
               type="button"
-              disabled={filter.untagged || filter.tagIds.length === 0}
+              disabled={matchDisabled}
               onClick={() => changeFilter({ type: 'match', match })}
-              className={`h-9 rounded-md px-3 font-medium capitalize transition-colors ${filter.tagMatch === match ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-tertiary hover:text-fg'} disabled:opacity-40`}
+              className={`h-9 rounded-md px-3 font-medium capitalize transition-colors ${matchClasses[match]} disabled:opacity-40`}
             >
               {match}
             </button>

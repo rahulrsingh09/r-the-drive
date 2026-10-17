@@ -8,8 +8,9 @@ origins.
 
 ## Routes and account entry
 
-Route definitions retain their paths, search schemas, parent callbacks, and guard
-placement. Login and activation render from `components/auth`; their route modules
+Route definitions retain their paths, parent callbacks, and guard placement.
+The dashboard route accepts legacy `edit` search input but discards its value;
+`dashboardId` still requires a UUID. Login and activation render from `components/auth`; their route modules
 re-export the existing page names. The shared form reducer keeps passwords in
 component memory and models pending methods and errors. Login retains its single
 loading indicator; activation tracks password and SSO operations independently.
@@ -23,16 +24,24 @@ session is being resumed.
 
 ## Dashboard state
 
-`dashboardEditSession` and `useDashboardEditDraft` remain the existing replacement
-state machine. They reconcile saved configuration before children commit and retain
-dirty drafts across refreshes. `dashboardShellModel` resolves exact dashboard
-identity separately from optional bundled fallback and produces immutable widget
-height edits.
+`DashboardPageShell` renders saved layouts in view mode. It has no layout draft,
+save/discard action, resize callback, or dashboard mutation hook. Legacy controlled
+edit props cannot activate editing. The shell passes the selected configuration
+object directly to `DashboardRenderer`; it does not reset, merge, or migrate saved
+widget positions. Vehicle selection, date range, units, filters, loading states,
+and exact-dashboard errors retain their existing behavior.
 
-`dashboardSave` chooses a system update, an owned-copy update, or initial creation.
-Only a failed creation enters the refetch-and-update recovery path. Saved identity
-and permissions come from the selected target, while editable content comes from
-the draft. Save failures keep the draft open.
+`dashboardShellModel` resolves exact dashboard identity separately from optional
+bundled fallback. An unavailable exact dashboard never silently opens a bundled
+layout. The user-dashboard route retains YAML export and removes clone/import
+actions. The admin dashboard list opens a saved dashboard by its ID and exposes
+no edit or lock action. `/d/dashboard` still redirects to Overview unless an exact
+dashboard ID is supplied, including when legacy edit search input is present.
+
+The old edit session, draft hook, and save dispatcher have been removed.
+`useDashboardEditButtonPreference` is an inert compatibility export for a separately
+owned settings caller during integration: it always returns false and performs no
+storage reads, writes, or subscriptions.
 
 The phantom-drain table has a reducer for search, page size, page navigation, and
 source changes. Its summary accumulator maintains independent duration weights for
@@ -55,8 +64,7 @@ current tab's attempted timestamp until a newer durable result is available.
 
 Root preferences preserve session and account query gates. Theme mode writes retain
 custom theme definitions and revisions, require the cached ETag, and ignore
-completion for a different authenticated owner. Dashboard edit-button preferences
-subscribe directly to per-account browser storage.
+completion for a different authenticated owner.
 
 The timeframe codec accepts current and legacy stored shapes. Typed numeric date
 input selects a date-fns grammar from its year and clock form; native date parsing
@@ -65,9 +73,22 @@ ranges.
 
 ## Validation
 
-Original tests and goldens remain unchanged. Additional tests prefixed
+Original tests and goldens unrelated to the removed layout capability remain
+unchanged. The complete prior capability test files and SHA256 hashes are archived
+in the recovery review ledger before their narrow updates. Additional tests prefixed
 `fullReplacementWebShell` exercise cache privacy, request deadlines, storage
-failure handling, draft resolution, session lifecycle, account isolation, and
-notification expiry. Static JSX contracts and loopback browser checks accompany
-the focused route tests. Integration with other frontend scopes and final
-application-wide mobile acceptance remain coordinator responsibilities.
+failure handling, saved configuration identity, session lifecycle, redirect
+canonicalization, password progress, efficiency filters, and notification expiry.
+The browser editability suite checks fixed widget placement and the absence of
+dashboard writes on desktop and mobile, including manual edit queries and admin
+entry points. Integration with other frontend scopes and final application-wide
+mobile acceptance remain coordinator responsibilities.
+
+## Documentation integration
+
+Documentation impact: both internal and user-facing docs required. This page
+records the shell behavior. The integrating owner must register it in the shared
+sidebar and update `docs/branding.md`, `docs/frontend/dashboard-architecture.md`,
+`docs/frontend/dashboard-authoring.md`, and user-facing dashboard guidance to
+describe the combined removal across the shell, Settings, R tools, and renderer.
+Those shared documents are outside this leaf's ownership.

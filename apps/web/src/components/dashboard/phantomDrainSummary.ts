@@ -20,10 +20,6 @@ export interface PhantomDrainSummaryCard {
   secondary?: string;
 }
 
-function formatRatioPercent(value: number | null, decimals = 0) {
-  return value == null ? '-' : formatPercent(value * 100, decimals);
-}
-
 export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): PhantomDrainSummary {
   const totals = { energy: 0, hours: 0, loss: 0 };
   const weighted = {
@@ -59,38 +55,25 @@ export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): Pha
 }
 
 export function buildPhantomDrainSummaryCards(summary: PhantomDrainSummary): PhantomDrainSummaryCard[] {
-  return [
-    {
-      key: 'max-drain-rate',
-      title: 'Max drain rate',
-      value: summary.maxDrainPctPerHour == null ? '-' : `${formatPercent(summary.maxDrainPctPerHour, 2)} / h`,
-      icon: 'lucide:activity',
-      dataAccent: 'series-02',
-      accentBorder: true,
-    },
-    {
-      key: 'avg-sleep',
-      title: 'Avg sleep',
-      value: formatRatioPercent(summary.avgSleepPct, 1),
-      icon: 'lucide:moon-star',
-      dataAccent: 'series-03',
-      secondary: `State coverage ${summary.avgStateCoveragePct == null ? 'unknown' : formatRatioPercent(summary.avgStateCoveragePct, 0)}`,
-    },
-    {
-      key: 'total-energy-drained',
-      title: 'Total energy drained',
-      value: formatKwh(summary.totalEnergyDrainedKwh),
-      icon: 'lucide:bolt',
-      dataAccent: 'series-01',
-    },
-    {
-      key: 'avg-drain-per-hour',
-      title: 'Avg drain per hour',
-      value: summary.avgDrainPctPerHour == null ? '-' : `${formatPercent(summary.avgDrainPctPerHour, 2)} / h`,
-      icon: 'lucide:timer',
-      dataAccent: 'series-04',
-    },
+  const rows: Array<[keyof PhantomDrainSummary, string, string, string, SensorDataAccent, number, number, string]> = [
+    ['maxDrainPctPerHour', 'max-drain-rate', 'Max drain rate', 'activity', 'series-02', 1, 2, ' / h'],
+    ['avgSleepPct', 'avg-sleep', 'Avg sleep', 'moon-star', 'series-03', 100, 1, ''],
+    ['totalEnergyDrainedKwh', 'total-energy-drained', 'Total energy drained', 'bolt', 'series-01', 1, 1, ''],
+    ['avgDrainPctPerHour', 'avg-drain-per-hour', 'Avg drain per hour', 'timer', 'series-04', 1, 2, ' / h'],
   ];
+  return rows.map(([field, key, title, icon, dataAccent, scale, digits, suffix]) => {
+    const reading = summary[field];
+    let value = '-';
+    if (field === 'totalEnergyDrainedKwh') value = formatKwh(reading);
+    else if (reading != null) value = formatPercent(reading * scale, digits) + suffix;
+    const card: PhantomDrainSummaryCard = { key, title, value, icon: `lucide:${icon}`, dataAccent };
+    if (field === 'maxDrainPctPerHour') card.accentBorder = true;
+    if (field === 'avgSleepPct') {
+      const coverage = summary.avgStateCoveragePct;
+      card.secondary = `State coverage ${coverage == null ? 'unknown' : formatPercent(coverage * 100, 0)}`;
+    }
+    return card;
+  });
 }
 
 function finiteNumber(value: number | null | undefined) {

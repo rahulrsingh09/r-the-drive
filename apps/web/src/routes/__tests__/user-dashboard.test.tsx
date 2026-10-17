@@ -1,17 +1,17 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const routeState = vi.hoisted(() => ({
   slug: 'custom-dashboard',
-  search: {} as { edit?: 1 },
+  search: {} as { edit?: 1; dashboardId?: string },
   navigate: vi.fn(),
 }));
 
 const shellState = vi.hoisted(() => ({
   props: null as null | {
     slug: string;
+    dashboardId?: string;
     isEditMode?: boolean;
     onEditModeChange?: (next: boolean) => void;
   },
@@ -70,6 +70,7 @@ vi.mock('../../components/layout/ProtectedRoute', () => ({
 vi.mock('../../components/dashboard/DashboardPageShell', () => ({
   DashboardPageShell: (props: {
     slug: string;
+    dashboardId?: string;
     isEditMode?: boolean;
     onEditModeChange?: (next: boolean) => void;
   }) => {
@@ -80,12 +81,6 @@ vi.mock('../../components/dashboard/DashboardPageShell', () => ({
         data-slug={props.slug}
         data-edit-mode={props.isEditMode ? 'true' : 'false'}
       >
-        <button type="button" onClick={() => props.onEditModeChange?.(false)}>
-          Leave edit
-        </button>
-        <button type="button" onClick={() => props.onEditModeChange?.(true)}>
-          Enter edit
-        </button>
       </div>
     );
   },
@@ -103,34 +98,27 @@ describe('user dashboard route', () => {
     shellState.props = null;
   });
 
-  it('passes URL edit state into the shared dashboard shell', () => {
-    routeState.search = { edit: 1 };
-
+  it('ignores manual edit input while preserving slug and dashboard identity', () => {
+    routeState.search = { edit: 1, dashboardId: '11111111-1111-4111-8111-111111111111' };
     render(<RouteComponent />);
-
     expect(screen.getByTestId('dashboard-shell')).toHaveAttribute('data-slug', 'custom-dashboard');
-    expect(screen.getByTestId('dashboard-shell')).toHaveAttribute('data-edit-mode', 'true');
+    expect(screen.getByTestId('dashboard-shell')).toHaveAttribute('data-edit-mode', 'false');
+    expect(shellState.props?.dashboardId).toBe(routeState.search.dashboardId);
+    expect(shellState.props?.onEditModeChange).toBeUndefined();
+    expect(routeState.navigate).not.toHaveBeenCalled();
   });
 
-  it('updates the edit query through the shared shell callback', async () => {
-    const user = userEvent.setup();
-    routeState.search = { edit: 1 };
+  it.each([1, '1', true, 'anything'])('normalizes legacy edit=%s search to read-only', (edit) => {
+    const schema = userDashboardRoute.options.validateSearch as { parse: (input: unknown) => { edit?: unknown; dashboardId?: string } };
+    const dashboardId = '11111111-1111-4111-8111-111111111111';
+    expect(schema.parse({ edit, dashboardId })).toEqual({ edit: undefined, dashboardId });
+    expect(() => schema.parse({ edit, dashboardId: 'invalid' })).toThrow();
+  });
 
-    render(<RouteComponent />);
-    await user.click(screen.getByRole('button', { name: 'Leave edit' }));
-
-    expect(routeState.navigate).toHaveBeenCalledWith({
-      to: '/d/$slug',
-      params: { slug: 'custom-dashboard' },
-      search: {},
-    });
-
-    await user.click(screen.getByRole('button', { name: 'Enter edit' }));
-
-    expect(routeState.navigate).toHaveBeenCalledWith({
-      to: '/d/$slug',
-      params: { slug: 'custom-dashboard' },
-      search: { edit: 1 },
-    });
+  it('redirects the overview alias regardless of a manual edit query but keeps exact identity', () => {
+    const beforeLoad = userDashboardRoute.options.beforeLoad as (input: unknown) => unknown;
+    expect(() => beforeLoad({ params: { slug: 'dashboard' }, search: { edit: 1 } })).toThrow();
+    expect(beforeLoad({ params: { slug: 'dashboard' }, search: { edit: 1, dashboardId: 'saved' } })).toBeUndefined();
+    expect(beforeLoad({ params: { slug: 'custom-dashboard' }, search: { edit: 1 } })).toBeUndefined();
   });
 });

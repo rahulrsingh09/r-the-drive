@@ -37,14 +37,14 @@ export function presetToRange(preset: BoundedPresetKey): DateRange {
 }
 
 export function getTimeframeRange(timeframe: DashboardTimeframe): DateRange | null {
-  switch (timeframe.kind) {
-    case 'preset':
-      return presetToRange(timeframe.preset);
-    case 'custom':
-      return normalizeDateRange({ from: timeframe.from, to: timeframe.to });
-    case 'lifetime':
-      return null;
-  }
+  const bounds = timeframeBounds(timeframe);
+  return bounds === null ? null : normalizeDateRange(bounds);
+}
+
+function timeframeBounds(timeframe: DashboardTimeframe): DateRange | null {
+  if ('preset' in timeframe) return presetToRange(timeframe.preset);
+  if ('from' in timeframe) return { from: timeframe.from, to: timeframe.to };
+  return null;
 }
 
 export function rangeToIso(range: DateRange): { from: string; to: string } {
@@ -74,14 +74,10 @@ export function timeframeToQuery(timeframe: DashboardTimeframe): {
 }
 
 export function getTimeframeLabel(timeframe: DashboardTimeframe): string {
-  switch (timeframe.kind) {
-    case 'preset':
-      return PRESET_LABELS[timeframe.preset];
-    case 'lifetime':
-      return 'Lifetime';
-    case 'custom':
-      return `${formatRangeDisplay(timeframe.from)} - ${formatRangeDisplay(timeframe.to)}`;
-  }
+  const label = timeframe.kind === 'custom'
+    ? [timeframe.from, timeframe.to].map(formatRangeDisplay)
+    : [PRESET_LABELS[timeframe.kind === 'preset' ? timeframe.preset : 'lifetime']];
+  return label.join(' - ');
 }
 
 export function normalizeDateRange(range: DateRange): DateRange {
@@ -120,31 +116,19 @@ export function loadDashboardTimeframe(): DashboardTimeframe | null {
 }
 
 export function saveDashboardTimeframe(timeframe: DashboardTimeframe) {
-  if (typeof window === 'undefined') return;
-
   try {
-    const payload = serializeDashboardTimeframe(timeframe);
-    window.sessionStorage.setItem(DASHBOARD_TIMEFRAME_STORAGE_KEY, JSON.stringify(payload));
+    const storage = typeof window === 'undefined' ? null : window.sessionStorage;
+    storage?.setItem(DASHBOARD_TIMEFRAME_STORAGE_KEY, JSON.stringify(serializeDashboardTimeframe(timeframe)));
   } catch {
     // Storage may be unavailable or full; the picker still works in-memory.
   }
 }
 
 export function serializeDashboardTimeframe(timeframe: DashboardTimeframe): StoredDashboardTimeframe {
-  switch (timeframe.kind) {
-    case 'preset':
-      return { kind: 'preset', preset: timeframe.preset };
-    case 'lifetime':
-      return { kind: 'lifetime' };
-    case 'custom': {
-      const normalized = normalizeDateRange(timeframe);
-      return {
-        kind: 'custom',
-        from: formatISO(normalized.from),
-        to: formatISO(normalized.to),
-      };
-    }
-  }
+  const record: StoredDashboardTimeframe = { kind: timeframe.kind } as StoredDashboardTimeframe;
+  if (timeframe.kind === 'preset') Object.assign(record, { preset: timeframe.preset });
+  if (timeframe.kind === 'custom') Object.assign(record, rangeToIso(getTimeframeRange(timeframe)!));
+  return record;
 }
 
 function parseNumericTimeframe(value: string, fallback: Date): Date | null {
@@ -187,10 +171,10 @@ export const PRESET_LABELS: Record<PresetKey, string> = {
 };
 
 function parseStoredCustomRange(fromRaw: string, toRaw: string): DateRange | null {
-  const from = new Date(fromRaw);
-  const to = new Date(toRaw);
-  if (!isValid(from) || !isValid(to)) return null;
-  return normalizeDateRange({ from, to });
+  const timestamps = [Date.parse(fromRaw), Date.parse(toRaw)];
+  if (!timestamps.every(Number.isFinite)) return null;
+  const [start, end] = timestamps.sort((left, right) => left - right);
+  return { from: new Date(start!), to: new Date(end!) };
 }
 
 function formatRangeDisplay(value: Date) {
