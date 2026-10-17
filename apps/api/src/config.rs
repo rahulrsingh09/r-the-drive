@@ -300,43 +300,37 @@ pub struct OriginBindConfig {
     pub allow_public_origin_bind: bool,
 }
 
+struct ConfigurationText;
+
+impl<'de> de::Visitor<'de> for ConfigurationText {
+    type Value = std::borrow::Cow<'de, str>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a string containing a value")
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(std::borrow::Cow::Owned(value.to_owned()))
+    }
+
+    fn visit_borrowed_str<E: de::Error>(self, value: &'de str) -> Result<Self::Value, E> {
+        Ok(std::borrow::Cow::Borrowed(value))
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(std::borrow::Cow::Owned(value))
+    }
+}
+
 fn deserialize_from_str<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: FromStr,
     T::Err: fmt::Display,
 {
-    struct FromStrVisitor<T>(std::marker::PhantomData<T>);
-
-    impl<'de, T> de::Visitor<'de> for FromStrVisitor<T>
-    where
-        T: FromStr,
-        T::Err: fmt::Display,
-    {
-        type Value = T;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("a string containing a value")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<T, E>
-        where
-            E: de::Error,
-        {
-            value
-                .parse()
-                .map_err(|error: T::Err| E::custom(format!("invalid value {value:?}: {error}")))
-        }
-
-        fn visit_string<E>(self, value: String) -> Result<T, E>
-        where
-            E: de::Error,
-        {
-            self.visit_str(&value)
-        }
-    }
-
-    deserializer.deserialize_any(FromStrVisitor(std::marker::PhantomData))
+    let value = deserializer.deserialize_any(ConfigurationText)?;
+    T::from_str(&value)
+        .map_err(|error| de::Error::custom(format!("invalid value {value:?}: {error}")))
 }
 
 fn default_port() -> u16 {
@@ -789,39 +783,32 @@ pub struct OidcEnvOverrides {
 
 impl OidcEnvOverrides {
     pub fn from_env() -> anyhow::Result<Self> {
-        let secret = optional_env("PANDA_OIDC_CLIENT_SECRET")?;
-        let secret_file = optional_env("PANDA_OIDC_CLIENT_SECRET_FILE")?;
-        if secret.is_some() && secret_file.is_some() {
-            anyhow::bail!(
-                "PANDA_OIDC_CLIENT_SECRET and PANDA_OIDC_CLIENT_SECRET_FILE are mutually exclusive"
-            );
-        }
-        let client_secret = match secret_file {
-            Some(path) => Some(std::fs::read_to_string(path)?.trim_end().to_owned()),
-            None => secret,
-        };
+        let mut input = OidcEnvironment::capture()?;
+        let client_secret = input.credential()?;
         Ok(Self {
-            oidc_enabled: optional_bool_env("PANDA_OIDC_ENABLED")?,
-            password_login_enabled: optional_bool_env("PANDA_PASSWORD_LOGIN_ENABLED")?,
-            issuer_url: optional_env("PANDA_OIDC_ISSUER_URL")?,
-            public_base_url: optional_env("PANDA_OIDC_PUBLIC_BASE_URL")?,
-            client_id: optional_env("PANDA_OIDC_CLIENT_ID")?,
+            oidc_enabled: input.boolean("PANDA_OIDC_ENABLED")?,
+            password_login_enabled: input.boolean("PANDA_PASSWORD_LOGIN_ENABLED")?,
+            issuer_url: input.text("PANDA_OIDC_ISSUER_URL"),
+            public_base_url: input.text("PANDA_OIDC_PUBLIC_BASE_URL"),
+            client_id: input.text("PANDA_OIDC_CLIENT_ID"),
             client_secret,
-            button_label: optional_env("PANDA_OIDC_BUTTON_LABEL")?,
-            scopes: optional_env("PANDA_OIDC_SCOPES")?,
-            token_auth_method: optional_env("PANDA_OIDC_TOKEN_AUTH_METHOD")?,
-            auto_signup: optional_bool_env("PANDA_OIDC_AUTO_SIGNUP")?,
-            auto_link_verified_email: optional_bool_env("PANDA_OIDC_AUTO_LINK_VERIFIED_EMAIL")?,
-            oidc_auto_login: optional_bool_env("PANDA_OIDC_AUTO_LOGIN")?,
-            allowed_email_domains: optional_env("PANDA_OIDC_ALLOWED_EMAIL_DOMAINS")?.map(|value| {
+            button_label: input.text("PANDA_OIDC_BUTTON_LABEL"),
+            scopes: input.text("PANDA_OIDC_SCOPES"),
+            token_auth_method: input.text("PANDA_OIDC_TOKEN_AUTH_METHOD"),
+            auto_signup: input.boolean("PANDA_OIDC_AUTO_SIGNUP")?,
+            auto_link_verified_email: input.boolean("PANDA_OIDC_AUTO_LINK_VERIFIED_EMAIL")?,
+            oidc_auto_login: input.boolean("PANDA_OIDC_AUTO_LOGIN")?,
+            allowed_email_domains: input.text("PANDA_OIDC_ALLOWED_EMAIL_DOMAINS").map(|value| {
                 value
                     .split(',')
-                    .map(|v| v.trim().to_ascii_lowercase())
-                    .filter(|v| !v.is_empty())
+                    .filter_map(|part| {
+                        let domain = part.trim();
+                        (!domain.is_empty()).then(|| domain.to_ascii_lowercase())
+                    })
                     .collect()
             }),
-            required_claim_name: optional_env("PANDA_OIDC_REQUIRED_CLAIM_NAME")?,
-            required_claim_value: optional_env("PANDA_OIDC_REQUIRED_CLAIM_VALUE")?,
+            required_claim_name: input.text("PANDA_OIDC_REQUIRED_CLAIM_NAME"),
+            required_claim_value: input.text("PANDA_OIDC_REQUIRED_CLAIM_VALUE"),
         })
     }
 
@@ -856,6 +843,64 @@ impl OidcEnvOverrides {
                 );
                 Ok(())
             })
+    }
+}
+
+struct OidcEnvironment(std::collections::BTreeMap<&'static str, Option<String>>);
+
+impl OidcEnvironment {
+    fn capture() -> anyhow::Result<Self> {
+        const NAMES: [&str; 16] = [
+            "PANDA_OIDC_CLIENT_SECRET",
+            "PANDA_OIDC_CLIENT_SECRET_FILE",
+            "PANDA_OIDC_ENABLED",
+            "PANDA_PASSWORD_LOGIN_ENABLED",
+            "PANDA_OIDC_ISSUER_URL",
+            "PANDA_OIDC_PUBLIC_BASE_URL",
+            "PANDA_OIDC_CLIENT_ID",
+            "PANDA_OIDC_BUTTON_LABEL",
+            "PANDA_OIDC_SCOPES",
+            "PANDA_OIDC_TOKEN_AUTH_METHOD",
+            "PANDA_OIDC_AUTO_SIGNUP",
+            "PANDA_OIDC_AUTO_LINK_VERIFIED_EMAIL",
+            "PANDA_OIDC_AUTO_LOGIN",
+            "PANDA_OIDC_ALLOWED_EMAIL_DOMAINS",
+            "PANDA_OIDC_REQUIRED_CLAIM_NAME",
+            "PANDA_OIDC_REQUIRED_CLAIM_VALUE",
+        ];
+        let values = NAMES
+            .into_iter()
+            .map(|name| optional_env(name).map(|value| (name, value)))
+            .collect::<anyhow::Result<_>>()?;
+        Ok(Self(values))
+    }
+
+    fn text(&mut self, name: &str) -> Option<String> {
+        self.0.remove(name).flatten()
+    }
+
+    fn boolean(&mut self, name: &str) -> anyhow::Result<Option<bool>> {
+        self.text(name)
+            .map(|value| match value.as_str() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(anyhow::anyhow!("{name} must be true or false")),
+            })
+            .transpose()
+    }
+
+    fn credential(&mut self) -> anyhow::Result<Option<String>> {
+        let source = KeyMaterialInput::select(
+            "PANDA_OIDC_CLIENT_SECRET",
+            self.text("PANDA_OIDC_CLIENT_SECRET"),
+            self.text("PANDA_OIDC_CLIENT_SECRET_FILE"),
+        )?;
+        let material = match source {
+            KeyMaterialInput::Missing => return Ok(None),
+            KeyMaterialInput::Inline(value) => value,
+            KeyMaterialInput::File(path) => std::fs::read_to_string(path)?.trim_end().to_owned(),
+        };
+        Ok(Some(material))
     }
 }
 
@@ -920,16 +965,6 @@ fn optional_env(name: &str) -> anyhow::Result<Option<String>> {
     };
     let value = value.trim();
     Ok((!value.is_empty()).then(|| value.to_owned()))
-}
-
-fn optional_bool_env(name: &str) -> anyhow::Result<Option<bool>> {
-    optional_env(name)?
-        .map(|value| match value.as_str() {
-            "true" => Ok(true),
-            "false" => Ok(false),
-            _ => Err(anyhow::anyhow!("{name} must be true or false")),
-        })
-        .transpose()
 }
 
 #[derive(Clone, Copy)]

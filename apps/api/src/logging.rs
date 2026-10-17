@@ -3,9 +3,7 @@ use std::fmt;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{
     fmt::{format::FormatEvent, FmtContext, FormatFields},
-    layer::SubscriberExt,
     registry::LookupSpan,
-    util::SubscriberInitExt,
     EnvFilter,
 };
 
@@ -22,26 +20,29 @@ where
         mut writer: tracing_subscriber::fmt::format::Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        write!(writer, "[panda][{}] ", event.metadata().level())?;
-        ctx.format_fields(writer.by_ref(), event)?;
-        writeln!(writer)
+        let mut record = format!("[panda][{}] ", event.metadata().level());
+        ctx.format_fields(
+            tracing_subscriber::fmt::format::Writer::new(&mut record),
+            event,
+        )?;
+        record.push('\n');
+        writer.write_str(&record)
     }
 }
 
 pub fn init() {
-    tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "panda_api=debug,tower_http=info".into()),
-        )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .event_format(PandaLogFormat)
-                .with_ansi(false)
-                .with_writer(std::io::stdout),
-        )
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("panda_api=debug,tower_http=info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .event_format(PandaLogFormat)
+        .with_writer(std::io::stdout)
         .init();
 }
+
+#[cfg(test)]
+use tracing_subscriber::layer::SubscriberExt;
 
 #[cfg(test)]
 #[path = "logging_full_replacement_tests.rs"]
