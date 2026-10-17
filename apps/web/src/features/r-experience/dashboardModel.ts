@@ -26,35 +26,3 @@ function rebaseSection(config: DashboardConfig, widgets: Widget[]): DashboardCon
   }));
   return { ...config, widgets: positions };
 }
-
-export function dashboardDestination(config: Pick<DashboardConfig, 'id' | 'slug'>) {
-  return { to: '/d/$slug' as const, params: { slug: config.slug }, search: { edit: 1 as const, dashboardId: config.id } };
-}
-
-export type DashboardOutcome<T> = { ok: true; value: T } | { ok: false; reason: unknown };
-
-export function attemptDashboard<T>(operation: () => T | Promise<T>): Promise<DashboardOutcome<T>> {
-  return Promise.resolve().then(operation).then(
-    value => ({ ok: true as const, value }),
-    (reason: unknown) => ({ ok: false as const, reason }),
-  );
-}
-
-export type ImportState = { draft: DashboardConfig | null; error: string | null };
-export type ImportEvent =
-  | { type: 'begin' }
-  | { type: 'dismiss' }
-  | { type: 'loaded'; draft: DashboardConfig }
-  | { type: 'failed'; message: string };
-
-export function importState(state: ImportState, event: ImportEvent): ImportState {
-  switch (event.type) {
-    case 'begin': return { ...state, error: null };
-    case 'dismiss': return { ...state, draft: null };
-    case 'failed': return { ...state, error: event.message };
-    case 'loaded': {
-      const { draft } = event;
-      return { ...state, draft: { ...draft, slug: `${draft.slug}-import-${draft.id.slice(0, 8)}` } };
-    }
-  }
-}

@@ -7,7 +7,7 @@ import { useThemePreferenceController } from '../../hooks/useThemePreferenceCont
 import { RMark } from './RMark';
 import { useRConnection } from './useRConnection';
 import { mediaStore } from './browserBindings';
-import { activeDestination } from './navigationModel';
+import { primaryNavigation } from './navigationModel';
 
 const navigation = [
   { key: 'dashboard', label: 'Home', to: '/', icon: CarFront },
@@ -20,6 +20,10 @@ const navigation = [
 
 const navigationViewport = mediaStore('(max-width: 900px)');
 const compactDestinations = navigation.filter(({ key }) => key !== 'efficiency');
+const themeControls = new Map([
+  [false, { mode: 'dark' as const, icon: Moon }],
+  [true, { mode: 'light' as const, icon: Sun }],
+]);
 
 export function RAppLayout({ children, activeKey }: { children: React.ReactNode; activeKey: string }) {
   const { pathname } = useLocation();
@@ -29,9 +33,9 @@ export function RAppLayout({ children, activeKey }: { children: React.ReactNode;
   const dark = useDocumentTheme();
   const connection = useRConnection();
   const compact = React.useSyncExternalStore(navigationViewport.subscribe, navigationViewport.snapshot, navigationViewport.serverSnapshot);
-  const destinations = compact ? compactDestinations : navigation;
-  const active = activeDestination(activeKey, destinations.map(item => item.key));
-  const switchTheme = () => theme.onModeChange(dark ? 'light' : 'dark');
+  const destinations = primaryNavigation(activeKey, compact ? compactDestinations : navigation);
+  const { mode: nextMode, icon: ThemeIcon } = themeControls.get(dark)!;
+  const switchTheme = () => theme.onModeChange(nextMode);
   const signOut = () => logout().then(() => navigate({ to: '/login' }));
   return (
     <div className="r-app" data-area={activeKey}>
@@ -39,16 +43,16 @@ export function RAppLayout({ children, activeKey }: { children: React.ReactNode;
       <header className="r-header">
         <Link to="/" aria-label="R:The Drive overview" className="r-brand"><RMark /></Link>
         <nav className="r-navigation" aria-label="Primary navigation">
-          {destinations.map(({ key, label, to, icon: Icon }) => (
-            <Link key={key} to={to} aria-label={label} aria-current={active === key ? 'page' : undefined}>
+          {destinations.map(({ key, label, to, current, icon: Icon }) => (
+            <Link key={key} to={to} aria-label={label} aria-current={current}>
               <Icon aria-hidden="true" /><span>{label}</span>
             </Link>
           ))}
         </nav>
         <div className="r-header-actions">
-          <button type="button" aria-label={`Switch to ${dark ? 'light' : 'dark'} mode`}
+          <button type="button" aria-label={`Switch to ${nextMode} mode`}
             disabled={theme.isPending} onClick={switchTheme}>
-            {dark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+            <ThemeIcon aria-hidden="true" />
           </button>
           <Link to="/settings" aria-label="Settings"><Settings2 aria-hidden="true" /></Link>
           <button type="button" aria-label="Sign out" onClick={signOut}><LogOut aria-hidden="true" /></button>

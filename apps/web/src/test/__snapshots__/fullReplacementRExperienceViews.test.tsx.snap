@@ -910,62 +910,11 @@ exports[`characterizes workspace partitioning and rebases section rows without m
                           "children": [
                             {
                               "node": "#text",
-                              "value": "Duplicate dashboard",
-                            },
-                          ],
-                          "namespace": "http://www.w3.org/1999/xhtml",
-                          "tag": "button",
-                        },
-                        {
-                          "attributes": {
-                            "type": "button",
-                          },
-                          "children": [
-                            {
-                              "node": "#text",
                               "value": "Export dashboard",
                             },
                           ],
                           "namespace": "http://www.w3.org/1999/xhtml",
                           "tag": "button",
-                        },
-                        {
-                          "attributes": {
-                            "accept": ".yaml,.yml",
-                            "aria-label": "Import dashboard file",
-                            "class": "sr-only",
-                            "type": "file",
-                          },
-                          "children": [],
-                          "namespace": "http://www.w3.org/1999/xhtml",
-                          "tag": "input",
-                        },
-                        {
-                          "attributes": {
-                            "type": "button",
-                          },
-                          "children": [
-                            {
-                              "node": "#text",
-                              "value": "Import dashboard",
-                            },
-                          ],
-                          "namespace": "http://www.w3.org/1999/xhtml",
-                          "tag": "button",
-                        },
-                        {
-                          "attributes": {
-                            "data-search": "{"section":"dashboards"}",
-                            "href": "/settings",
-                          },
-                          "children": [
-                            {
-                              "node": "#text",
-                              "value": "Dashboard library",
-                            },
-                          ],
-                          "namespace": "http://www.w3.org/1999/xhtml",
-                          "tag": "a",
                         },
                       ],
                       "namespace": "http://www.w3.org/1999/xhtml",
@@ -6238,80 +6187,6 @@ exports[`shows people access only for the two privileged roles 1`] = `
                         {
                           "node": "#text",
                           "value": "Parked energy, sleep and battery loss",
-                        },
-                      ],
-                      "namespace": "http://www.w3.org/1999/xhtml",
-                      "tag": "small",
-                    },
-                  ],
-                  "namespace": "http://www.w3.org/1999/xhtml",
-                  "tag": "span",
-                },
-                {
-                  "attributes": {
-                    "aria-hidden": "true",
-                    "class": "lucide lucide-arrow-right",
-                    "fill": "none",
-                    "height": "24",
-                    "stroke": "currentColor",
-                    "stroke-linecap": "round",
-                    "stroke-linejoin": "round",
-                    "stroke-width": "2",
-                    "viewBox": "0 0 24 24",
-                    "width": "24",
-                    "xmlns": "http://www.w3.org/2000/svg",
-                  },
-                  "children": [
-                    {
-                      "attributes": {
-                        "d": "M5 12h14",
-                      },
-                      "children": [],
-                      "namespace": "http://www.w3.org/2000/svg",
-                      "tag": "path",
-                    },
-                    {
-                      "attributes": {
-                        "d": "m12 5 7 7-7 7",
-                      },
-                      "children": [],
-                      "namespace": "http://www.w3.org/2000/svg",
-                      "tag": "path",
-                    },
-                  ],
-                  "namespace": "http://www.w3.org/2000/svg",
-                  "tag": "svg",
-                },
-              ],
-              "namespace": "http://www.w3.org/1999/xhtml",
-              "tag": "a",
-            },
-            {
-              "attributes": {
-                "data-search": "{"section":"dashboards"}",
-                "href": "/settings",
-              },
-              "children": [
-                {
-                  "attributes": {},
-                  "children": [
-                    {
-                      "attributes": {},
-                      "children": [
-                        {
-                          "node": "#text",
-                          "value": "Dashboard library",
-                        },
-                      ],
-                      "namespace": "http://www.w3.org/1999/xhtml",
-                      "tag": "strong",
-                    },
-                    {
-                      "attributes": {},
-                      "children": [
-                        {
-                          "node": "#text",
-                          "value": "Your views and saved layouts",
                         },
                       ],
                       "namespace": "http://www.w3.org/1999/xhtml",

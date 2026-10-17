@@ -9,11 +9,10 @@ export function RDashboardSurface({ state, actions, ready, children }: {
   state: DashboardPageShellRenderState; actions: React.ReactNode; ready: boolean; children: React.ReactNode;
 }) {
   const { pathname } = useLocation();
-  return pathname === '/' && ready && !state.isEditMode
-    ? <ROverview state={state} actions={actions} />
-    : <div className="r-dashboard-surface" data-dashboard-slug={state.ctx.dashboardSlug}
-        data-r-default-layout={(!state.isEditMode && usesBundledLayout(state.activeConfig)) || undefined}>
-        <RBatteryNavigation pathname={pathname} />
-        {children}
-      </div>;
+  if (ready && pathname === '/') return <ROverview state={state} actions={actions} />;
+  return <div className="r-dashboard-surface" data-dashboard-slug={state.ctx.dashboardSlug}
+    data-r-default-layout={usesBundledLayout(state.activeConfig) || undefined}>
+    <RBatteryNavigation pathname={pathname} />
+    {children}
+  </div>;
 }

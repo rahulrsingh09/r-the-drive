@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { installGraphFixture } from './r-default-graphs.fixture';
+import { installSavedRDashboard, savedRDashboard } from './fullReplacementRExperienceFixedLayout.fixture';
 
 for (const width of [393, 1280]) for (const mode of ['dark', 'light'] as const) {
   test(`default graphs and battery navigation ${width} ${mode}`, async ({ page }, testInfo) => {
@@ -73,19 +74,17 @@ test('mobile efficiency remains reachable and desktop restores its primary tab',
   await expect(navigation.getByRole('link', { name: 'Efficiency', exact: true })).toHaveAttribute('aria-current', 'page');
 });
 
-test('removing a pinned graph stays removed after saving the system layout', async ({ page }) => {
+test('fullReplacementRExperience saved layout keeps an absent pinned graph absent', async ({ page }) => {
   const fixture = await installGraphFixture(page, { role: 'super_user' });
-  await page.goto('/d/dashboard?edit=1');
-  const widget = page.locator('[data-widget-frame="edit"]').filter({ has: page.locator('[data-chart-id="charge-level"]') });
-  await widget.getByRole('button', { name: 'Edit widget settings' }).click();
-  await page.getByRole('button', { name: 'Remove component' }).click();
-  await page.getByRole('button', { name: 'Delete Widget', exact: true }).click();
-  await page.getByRole('button', { name: 'Save dashboard changes' }).click();
-  await expect(page.locator('.rgl-editor')).toHaveCount(0);
+  const config = savedRDashboard();
+  config.widgets = config.widgets.filter(widget => widget.id !== 'd1000001-0000-0000-0000-000000000101');
+  const saved = await installSavedRDashboard(page, config);
   await page.goto('/');
+  await expect(page.getByRole('region', { name: 'Dashboard analysis' })).toBeVisible();
+  await expect(page.locator('.rgl-editor')).toHaveCount(0);
   await expect(page.locator('[data-dashboard-grid] > [data-widget-id="d1000001-0000-0000-0000-000000000101"]')).toHaveCount(0);
   await expect(page.locator('[data-dashboard-grid] > [data-widget-id="d1000001-0000-0000-0000-000000000102"]')).toHaveCount(1);
-  expect(fixture.writes.filter(w => w.includes('/dashboards/'))).toHaveLength(1);
+  expect([...fixture.writes, ...saved.writes].filter(w => w.includes('/dashboards/'))).toEqual([]);
 });
 
 test('charging, vehicle lock and software states stay explicit', async ({ page }, testInfo) => {

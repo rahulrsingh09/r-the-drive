@@ -13,9 +13,14 @@ export function vehicleReading(status: VehicleStatus | null | undefined, field: 
 }
 
 export function isConfiguredR2(vehicle: Pick<Vehicle, 'model' | 'trim' | 'color'> | undefined) {
+  return configuredVehicleIdentity(vehicle) !== null;
+}
+
+export function configuredVehicleIdentity(vehicle: Pick<Vehicle, 'model' | 'trim' | 'color'> | undefined) {
   const identity = [vehicle?.model, vehicle?.trim].map(value =>
     value?.match(/[a-z0-9]+/gi)?.join('').toLowerCase() ?? '');
-  return identity[0] === 'r2' && identity[1]!.includes('performance');
+  if (identity[0] !== 'r2' || !identity[1]!.includes('performance')) return null;
+  return { model: 'R2', trim: 'Performance', color: 'Catalina Cove', wheels: '21-inch' } as const;
 }
 
 export function vehicleState(status: VehicleStatus | null | undefined) {

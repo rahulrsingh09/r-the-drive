@@ -1,7 +1,7 @@
 import React from 'react';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DashboardPageShellRenderState } from '../components/dashboard/dashboardShellTypes';
 import type { Vehicle, VehicleStatus } from '@panda/types';
@@ -64,7 +64,6 @@ import { getDefaultBySlug } from '@panda/dashboards';
 import { RSettingsNavigation } from '../features/r-experience/RSettingsNavigation';
 import { RHomeWorkspace } from '../features/r-experience/RHomeWorkspace';
 import { RDashboardVehicle, HomeVehicleHeadingContext } from '../features/r-experience/RDashboardVehicle';
-import { RDashboardImport } from '../features/r-experience/RDashboardImport';
 import { RDashboardTools } from '../features/r-experience/RDashboardTools';
 import { RDashboardSurface } from '../features/r-experience/RDashboardSurface';
 import { RVehicleDetails } from '../features/r-experience/RVehicleDetails';
@@ -76,6 +75,7 @@ import { RConfiguredVehicleArtwork } from '../features/r-experience/RConfiguredV
 import { RExplore } from '../features/r-experience/RExplore';
 import { RBatteryNavigation } from '../features/r-experience/RBatteryNavigation';
 import { RMapPreferences } from '../features/r-experience/RMapPreferences';
+import { RLockIcon } from '../features/r-experience/RLockIcon';
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 beforeEach(() => {
@@ -208,51 +208,22 @@ it('gates dashboard stage, totals and snapshot values by identity and placeholde
   expect(fixture.snapshot.refetch).toHaveBeenCalledOnce();
 });
 
-it('imports a personal copy, clears file input, reports errors and locks dialog while pending', async () => {
-  const draft = { ...getDefaultBySlug('dashboard')!, id: '12345678-id' };
-  fixture.parse.mockReturnValue(draft);
-  fixture.create.mutateAsync.mockResolvedValue({ slug: 'saved', id: 'saved-id' });
-  render(<RDashboardImport />);
-  const input = screen.getByLabelText('Import dashboard file');
-  await act(async () => fireEvent.change(input, { target: { files: [{ text: async () => 'yaml' }] } }));
-  expect((input as HTMLInputElement).value).toBe('');
-  expect(screen.getByRole('dialog')).toBeInTheDocument();
-  fixture.create.isPending = true;
-  fireEvent.click(screen.getByText('Close dialog'));
-  expect(screen.getByRole('dialog')).toBeInTheDocument();
-  fixture.create.isPending = false;
-  fireEvent.click(screen.getByText('Import copy'));
-  await waitFor(() => expect(fixture.navigate).toHaveBeenCalledWith({ to: '/d/$slug', params: { slug: 'saved' }, search: { edit: 1, dashboardId: 'saved-id' } }));
-  expect(fixture.create.mutateAsync.mock.calls[0]?.[0].slug).toBe(`${draft.slug}-import-12345678`);
-  expect(screen.queryByRole('dialog')).toBeNull();
-  fixture.parse.mockImplementation(() => { throw new Error('invalid'); });
-  await act(async () => fireEvent.change(input, { target: { files: [{ text: async () => 'bad' }] } }));
-  expect(screen.getByRole('alert')).toHaveTextContent('This file is not a valid dashboard YAML export.');
-});
 
-it('duplicates and exports active dashboards, keeping mutation/navigation errors visible', async () => {
-  fixture.clone.mutateAsync.mockResolvedValue({ slug: 'copy', id: 'copy-id' });
+it('exports active dashboards', () => {
   const current = state();
   render(<RDashboardTools state={current} />);
   fireEvent.click(screen.getByText('Export dashboard'));
   expect(fixture.download).toHaveBeenCalledWith(current.activeConfig);
-  fireEvent.click(screen.getByText('Duplicate dashboard'));
-  await waitFor(() => expect(fixture.navigate).toHaveBeenCalledWith({ to: '/d/$slug', params: { slug: 'copy' }, search: { edit: 1, dashboardId: 'copy-id' } }));
-  fixture.clone.mutateAsync.mockRejectedValue(new Error('Synthetic denial'));
-  fireEvent.click(screen.getByText('Duplicate dashboard'));
-  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Synthetic denial'));
+
 });
 
-it('keeps the exact home readiness/edit admission and bundled surface flag', () => {
+it('keeps home readiness and the bundled surface flag', () => {
   const current = state();
   const view = render(<RDashboardSurface state={current} actions={null} ready={false}>Grid</RDashboardSurface>);
   expect(screen.getByText('Grid')).toBeInTheDocument();
   expect(view.container.querySelector('[data-r-default-layout]')).toHaveAttribute('data-r-default-layout', 'true');
   view.rerender(<RDashboardSurface state={current} actions={null} ready>Grid</RDashboardSurface>);
   expect(screen.queryByText('Grid')).toBeNull();
-  view.rerender(<RDashboardSurface state={{ ...current, isEditMode: true }} actions={null} ready>Grid</RDashboardSurface>);
-  expect(screen.getByText('Grid')).toBeInTheDocument();
-  expect(view.container.querySelector('[data-r-default-layout]')).toBeNull();
   fixture.pathname = '/battery';
   view.rerender(<RDashboardSurface state={current} actions={null} ready>Grid</RDashboardSurface>);
   expect(screen.getByRole('navigation', { name: 'Battery sections' })).toBeInTheDocument();
@@ -279,17 +250,40 @@ it('keeps software fallback scoped to the vehicle and tire warnings independent 
   expect(screen.getByText('Version unknown')).toBeInTheDocument();
 });
 
-it('preserves the imported draft on create failure and closes it before navigation failure', async () => {
-  fixture.parse.mockReturnValue({ ...getDefaultBySlug('dashboard')!, id: '12345678-id' });
-  fixture.create.mutateAsync.mockRejectedValueOnce(new Error('create failed'));
-  render(<RDashboardImport />);
-  await act(async () => fireEvent.change(screen.getByLabelText('Import dashboard file'), { target: { files: [{ text: async () => 'yaml' }] } }));
-  fireEvent.click(screen.getByText('Import copy'));
-  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The dashboard could not be opened.'));
-  expect(screen.getByRole('dialog')).toBeInTheDocument();
-  fixture.create.mutateAsync.mockResolvedValue({ slug: 'saved', id: 'saved-id' });
-  fixture.navigate.mockRejectedValueOnce(new Error('navigation failed'));
-  fireEvent.click(screen.getByText('Import copy'));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The dashboard could not be opened.'));
+it('keeps lock glyphs aligned with the three accessible lock states', () => {
+  const view = render(<RLockIcon locked={null} />);
+  expect(view.container.querySelector('.lucide-circle-question-mark')).toBeInTheDocument();
+  expect(view.container.querySelector('[data-locked]')).toBeNull();
+  for (const locked of [true, false]) {
+    view.rerender(<RLockIcon locked={locked} />);
+    expect(view.container.querySelector('svg')).toHaveAttribute('data-locked', String(locked));
+    expect(view.container.querySelector('.r-lock-shackle')).toHaveAttribute('d', 'M8 10V6a4 4 0 0 1 8 0v4');
+    expect(view.container.querySelector('.lucide-circle-question-mark')).toBeNull();
+  }
+});
+
+it('keeps optional health identity fields and artwork fallbacks exact', () => {
+  const view = render(<RHealthHero vehicle={undefined} name="Test" model="" vin={null} source={null} fallback="/fallback.webp">Summary</RHealthHero>);
+  expect(screen.getByText('Vehicle identity pending telemetry')).toBeInTheDocument();
+  expect(view.container.querySelector('small')).toBeNull();
+  expect(screen.getByAltText('Vehicle three-quarter view')).toHaveAttribute('data-fallback', '/fallback.webp');
+  view.rerender(<RHealthHero vehicle={vehicle} name="Test" model="R1T" vin="" source="/art.webp" fallback={null}>Summary</RHealthHero>);
+  expect(screen.getByText('R1T')).toBeInTheDocument();
+  expect(view.container.querySelector('small')).toBeNull();
+  expect(screen.getByText('Summary')).toBeInTheDocument();
+});
+
+it('admits only exact battery routes and the configured map provider', () => {
+  const view = render(<RBatteryNavigation pathname="/battery/phantom-drain" />);
+  expect(screen.getAllByRole('link').map(link => link.getAttribute('href'))).toEqual(['/battery', '/battery/phantom-drain']);
+  for (const pathname of ['/battery/', '/battery/phantom-drain/', '/battery/unrelated', '/']) {
+    view.rerender(<RBatteryNavigation pathname={pathname} />);
+    expect(view.container).toBeEmptyDOMElement();
+  }
+  for (const provider of ['', 'none', 'mapbox', 'openfreemap']) {
+    fixture.basemap = provider;
+    view.rerender(<RMapPreferences preferences={undefined} />);
+    expect(view.container.querySelector('[data-map-style]') !== null).toBe(provider === 'openfreemap');
+  }
+  expect(view.container.firstChild).toHaveAttribute('data-map-style', 'follow-theme');
 });
