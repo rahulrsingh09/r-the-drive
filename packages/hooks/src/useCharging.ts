@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useApiQuery, queryPolicies } from './queryRuntime';
+import type { QueryClient } from '@tanstack/react-query';
+import { cacheInvalidations, invalidateKeys, useCacheMutation } from './cacheRuntime';
 import { api } from './api';
 import type { DepartureScheduleInput, ChargingScheduleInput } from './api';
-import type { ChargeSession, ChargeSessionUpdate, ChargingNetworkPreference, Place } from '@panda/types';
-import { useAuthReady } from './useAuthState';
+import type { ChargeSession, ChargeSessionUpdate, ChargingNetworkPreference } from '@panda/types';
 
 type PlaceQueryKey = readonly ['places'];
 
@@ -20,20 +21,10 @@ type UpdateChargeSessionLocationResponse = {
   };
 };
 
-type UpdateChargeSessionLocationContext = {
-  previousSession: ChargeSession | undefined;
-  queryKey: readonly ['charging', 'detail', string, string | null];
-};
+const chargingInvalidationKeys = [['charging'], ['metrics', 'batch'], ['trips']] as const;
 
-/**
- * Invalidate all data that can change when a saved place or charge-session
- * location changes. Keep this seam shared by charging mutations and the
- * Settings > Places mutations so stale derived data cannot survive a save.
- */
 export function invalidateChargingData(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({ queryKey: ['charging'] });
-  void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch'] });
-  void queryClient.invalidateQueries({ queryKey: ['trips'] });
+  invalidateKeys(queryClient, chargingInvalidationKeys);
 }
 
 export function useChargeSessions(
@@ -46,259 +37,142 @@ export function useChargeSessions(
   chargeSessionDayLocal: string | null = null,
 ) {
   const normalizedSearch = search.trim();
-  const authReady = useAuthReady();
   const lifetime = !from && !to;
-  return useQuery({
-    queryKey: ['charging', 'list', vehicleId, from, to, lifetime, page, perPage, normalizedSearch, chargeSessionDayLocal],
-    queryFn: () => api.listChargeSessions(
-      vehicleId!,
-      from,
-      to,
-      page,
-      perPage,
-      normalizedSearch,
-      lifetime,
-      chargeSessionDayLocal,
-    ),
-    enabled: authReady && !!vehicleId,
+  return useApiQuery(['charging', 'list', vehicleId, from, to, lifetime, page, perPage, normalizedSearch, chargeSessionDayLocal], 'listChargeSessions', [vehicleId!, from, to, page, perPage, normalizedSearch, lifetime, chargeSessionDayLocal], [vehicleId], {
+    ...queryPolicies.detail,
     staleTime: 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
-    refetchInterval: (query) => {
-      const items = query.state.data?.items ?? [];
-      return items.some((session) => session.ended_at == null) ? 30 * 1000 : false;
-    },
-    placeholderData: (previous) => previous,
+    refetchInterval: (query) => activeChargePoll(query.state.data?.items ?? [])
   });
 }
 
 export function useChargeSession(sessionId: string | null, vehicleId: string | null) {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['charging', 'detail', sessionId, vehicleId],
-    queryFn: () => api.getChargeSession(sessionId!, vehicleId!),
-    enabled: authReady && !!sessionId && !!vehicleId,
+  return useApiQuery(['charging', 'detail', sessionId, vehicleId], 'getChargeSession', [sessionId!, vehicleId!], [sessionId, vehicleId], {
+    ...queryPolicies.detail,
     staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
-    refetchInterval: (query) => query.state.data != null && query.state.data.ended_at == null ? 30 * 1000 : false,
-    placeholderData: (previous) => previous,
+    refetchInterval: (query) => activeChargePoll(query.state.data ? [query.state.data] : [])
   });
 }
 
 export function useSavedPlaces() {
-  const authReady = useAuthReady();
-  return useQuery<Place[]>({
-    queryKey: ['places'] as PlaceQueryKey,
-    queryFn: () => api.listPlaces(),
-    enabled: authReady,
+  return useApiQuery(['places'] as PlaceQueryKey, 'listPlaces', [], [], {
+    ...queryPolicies.detail,
     staleTime: 60 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
+    previous: false
   });
 }
 
 export function useUpdateChargeSessionLocation(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation<UpdateChargeSessionLocationResponse, Error, UpdateChargeSessionLocationPayload, UpdateChargeSessionLocationContext>({
-    mutationFn: async ({ sessionId, placeId }) => {
-      if (!vehicleId) throw new Error('vehicle_id is required');
-      const session = await api.updateChargeSession(vehicleId, sessionId, { place_id: placeId });
-      return { session };
+  return useCacheMutation<UpdateChargeSessionLocationResponse, UpdateChargeSessionLocationPayload>(
+    async ({ sessionId, placeId }) => {
+      const vehicle = requireVehicle(vehicleId);
+      return { session: await api.updateChargeSession(vehicle, sessionId, { place_id: placeId }) };
     },
-    onMutate: async ({ sessionId, placeName }) => {
-      const queryKey: UpdateChargeSessionLocationContext['queryKey'] = ['charging', 'detail', sessionId, vehicleId];
-      await queryClient.cancelQueries({ queryKey });
-      const previousSession = queryClient.getQueryData<ChargeSession>(queryKey);
-      queryClient.setQueryData<ChargeSession>(queryKey, (current) => current ? { ...current, location_name: placeName } : current);
-      return { previousSession, queryKey };
-    },
-    onError: (_error, _variables, context) => {
-      if (context) queryClient.setQueryData(context.queryKey, context.previousSession);
-    },
-    onSuccess: (_data, variables) => {
-      const updatedLocationName = _data.session?.location_name ?? null;
-      queryClient.setQueryData(
-        ['charging', 'detail', variables.sessionId, vehicleId],
-        (current: ChargeSession | undefined) => current ? { ...current, location_name: updatedLocationName } : current,
-      );
-      invalidateChargingData(queryClient);
-    },
-  });
+    (result, { sessionId }) => [
+      { key: ['charging', 'detail', sessionId, vehicleId], patch: { location_name: result.session?.location_name ?? null } },
+      ...cacheInvalidations(chargingInvalidationKeys),
+    ],
+    ({ sessionId, placeName }) => ({ key: ['charging', 'detail', sessionId, vehicleId], patch: { location_name: placeName }, restoreMissing: true }),
+  );
+}
+
+function requireVehicle(vehicleId: string | null): string {
+  if (vehicleId) return vehicleId;
+  throw new Error('vehicle_id is required');
 }
 
 export function useUpdateChargeSession(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation<ChargeSession, Error, UpdateChargeSessionPayload>({
-    mutationFn: ({ sessionId, ...body }) => {
-      if (!vehicleId) throw new Error('vehicle_id is required');
-      return api.updateChargeSession(vehicleId, sessionId, body);
-    },
-    onSuccess: (session, variables) => {
-      queryClient.setQueryData(['charging', 'detail', variables.sessionId, vehicleId], session);
-      invalidateChargingData(queryClient);
-    },
-  });
+  return useCacheMutation<ChargeSession, UpdateChargeSessionPayload>(
+    ({ sessionId, ...body }) => api.updateChargeSession(requireVehicle(vehicleId), sessionId, body),
+    (session, variables) => [
+      { key: ['charging', 'detail', variables.sessionId, vehicleId], value: session },
+      ...cacheInvalidations(chargingInvalidationKeys),
+    ],
+  );
 }
 
 export function useChargingNetworkPreferences(vehicleId: string | null) {
-  const authReady = useAuthReady();
-  return useQuery<ChargingNetworkPreference[]>({
-    queryKey: ['charging', 'network-preferences', vehicleId],
-    queryFn: () => api.listChargingNetworkPreferences(vehicleId!),
-    enabled: authReady && !!vehicleId,
+  return useApiQuery(['charging', 'network-preferences', vehicleId], 'listChargingNetworkPreferences', [vehicleId!], [vehicleId], {
+    ...queryPolicies.detail,
     staleTime: 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
+    previous: false
   });
 }
 
 export function useUpdateChargingNetworkPreference(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation<Pick<ChargingNetworkPreference, 'network_vendor' | 'cost_mode'>, Error, { networkVendor: string; costMode: ChargingNetworkPreference['cost_mode'] }>({
-    mutationFn: ({ networkVendor, costMode }) => {
-      if (!vehicleId) throw new Error('vehicle_id is required');
-      return api.updateChargingNetworkPreference(vehicleId, networkVendor, costMode);
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'network-preferences', vehicleId] });
-      invalidateChargingData(queryClient);
-    },
-  });
+  return useCacheMutation(
+    ({ networkVendor, costMode }: { networkVendor: string; costMode: ChargingNetworkPreference['cost_mode'] }) =>
+      api.updateChargingNetworkPreference(requireVehicle(vehicleId), networkVendor, costMode),
+    () => cacheInvalidations([['charging', 'network-preferences', vehicleId], ...chargingInvalidationKeys]),
+  );
 }
 
 export function useChargeCurve(sessionId: string | null, vehicleId: string | null, active = false) {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['charging', 'curve', sessionId, vehicleId],
-    queryFn: () => api.getChargeCurve(sessionId!, vehicleId!),
-    enabled: authReady && !!sessionId && !!vehicleId,
+  return useApiQuery(['charging', 'curve', sessionId, vehicleId], 'getChargeCurve', [sessionId!, vehicleId!], [sessionId, vehicleId], {
+    ...queryPolicies.detail,
     staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
-    refetchInterval: active ? 30 * 1000 : false,
-    placeholderData: (previous) => previous,
+    refetchInterval: active ? 30 * 1000 : false
   });
 }
 
 export function useChargeCurveAnalysis(vehicleId: string | null, from: string | null, to: string | null) {
-  const authReady = useAuthReady();
   const lifetime = !from && !to;
-  return useQuery({
-    queryKey: ['charging', 'curve-analysis', vehicleId, from, to, lifetime],
-    queryFn: () => api.getChargeCurveAnalysis(vehicleId!, from, to, lifetime),
-    enabled: authReady && !!vehicleId,
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
-    placeholderData: (previous) => previous,
+  return useApiQuery(['charging', 'curve-analysis', vehicleId, from, to, lifetime], 'getChargeCurveAnalysis', [vehicleId!, from, to, lifetime], [vehicleId], {
+    ...queryPolicies.detail,
+    staleTime: 5 * 60 * 1000
   });
 }
 
 export function useChargingSummary(vehicleId: string | null, from: string | null, to: string | null) {
-  const authReady = useAuthReady();
   const lifetime = !from && !to;
-  return useQuery({
-    queryKey: ['charging', 'summary', vehicleId, from, to, lifetime],
-    queryFn: () => api.getChargingSummary(vehicleId!, from, to, lifetime),
-    enabled: authReady && !!vehicleId,
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
-    placeholderData: (previous) => previous,
+  return useApiQuery(['charging', 'summary', vehicleId, from, to, lifetime], 'getChargingSummary', [vehicleId!, from, to, lifetime], [vehicleId], {
+    ...queryPolicies.detail,
+    staleTime: 5 * 60 * 1000
   });
 }
 
 export function useChargingChartSeries(vehicleId: string | null, from: string | null, to: string | null) {
-  const authReady = useAuthReady();
   const lifetime = !from && !to;
-  return useQuery({
-    queryKey: ['charging', 'chart-series', vehicleId, from, to, lifetime],
-    queryFn: () => api.getChargingChartSeries(vehicleId!, from, to, lifetime),
-    enabled: authReady && !!vehicleId,
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: 'always',
-    placeholderData: (previous) => previous,
+  return useApiQuery(['charging', 'chart-series', vehicleId, from, to, lifetime], 'getChargingChartSeries', [vehicleId!, from, to, lifetime], [vehicleId], {
+    ...queryPolicies.detail,
+    staleTime: 5 * 60 * 1000
   });
 }
 
 export function useChargingSchedule(vehicleId: string | null) {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['schedules', 'charging', vehicleId],
-    queryFn: () => api.getChargingSchedule(vehicleId!),
-    enabled: authReady && !!vehicleId,
-    staleTime: 5 * 60 * 1000,
+  return useApiQuery(['schedules', 'charging', vehicleId], 'getChargingSchedule', [vehicleId!], [vehicleId], {
+    staleTime: 5 * 60 * 1000
   });
 }
 
 export function useUpdateChargingSchedule(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: ChargingScheduleInput) => api.putChargingSchedule(vehicleId!, body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['schedules', 'charging', vehicleId] });
-    },
-  });
+  return useCacheMutation((body: ChargingScheduleInput) => api.putChargingSchedule(vehicleId!, body), () => cacheInvalidations([['schedules', 'charging', vehicleId]]));
 }
 
 export function useDepartureSchedules(vehicleId: string | null) {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['schedules', 'departure', vehicleId],
-    queryFn: () => api.listDepartureSchedules(vehicleId!),
-    enabled: authReady && !!vehicleId,
-    staleTime: 5 * 60 * 1000,
+  return useApiQuery(['schedules', 'departure', vehicleId], 'listDepartureSchedules', [vehicleId!], [vehicleId], {
+    staleTime: 5 * 60 * 1000
   });
 }
 
 export function useCreateDepartureSchedule(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: DepartureScheduleInput) => api.createDepartureSchedule(vehicleId!, body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['schedules', 'departure', vehicleId] });
-    },
-  });
+  return useCacheMutation((body: DepartureScheduleInput) => api.createDepartureSchedule(vehicleId!, body), () => cacheInvalidations([['schedules', 'departure', vehicleId]]));
 }
 
 export function useUpdateDepartureSchedule(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ scheduleId, body }: { scheduleId: string; body: DepartureScheduleInput }) =>
-      api.updateDepartureSchedule(vehicleId!, scheduleId, body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['schedules', 'departure', vehicleId] });
-    },
-  });
+  return useCacheMutation(({ scheduleId, body }: { scheduleId: string; body: DepartureScheduleInput }) => api.updateDepartureSchedule(vehicleId!, scheduleId, body), () => cacheInvalidations([['schedules', 'departure', vehicleId]]));
 }
 
 export function useDeleteDepartureSchedule(vehicleId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (scheduleId: string) => api.deleteDepartureSchedule(vehicleId!, scheduleId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['schedules', 'departure', vehicleId] });
-    },
-  });
+  return useCacheMutation((scheduleId: string) => api.deleteDepartureSchedule(vehicleId!, scheduleId), () => cacheInvalidations([['schedules', 'departure', vehicleId]]));
 }
 
 export function useLiveSession(vehicleId: string | null, active = true) {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['live-session', vehicleId],
-    queryFn: () => api.getLiveSession(vehicleId!),
-    enabled: authReady && !!vehicleId && active,
+  return useApiQuery(['live-session', vehicleId], 'getLiveSession', [vehicleId!], [vehicleId, active], {
     refetchInterval: active ? 30 * 1000 : false,
-    staleTime: 0,
+    staleTime: 0
   });
+}
+
+function activeChargePoll(sessions: readonly Pick<ChargeSession, 'ended_at'>[]): number | false {
+  return sessions.findIndex((session) => session.ended_at == null) < 0 ? false : 30_000;
 }

@@ -1,51 +1,43 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { AuthTokens } from '@panda/types';
 import { api } from './api';
 
 const EXPLICIT_LOGOUT_INTENT_KEY = 'rm-explicit-logout-intent';
-let fallbackExplicitLogoutIntent = false;
+let pendingLogout = false;
+let sessionRevision = 0;
 
 export function recordExplicitLogoutIntent(): void {
-  if (typeof window === 'undefined') {
-    fallbackExplicitLogoutIntent = true;
-    return;
-  }
-
+  pendingLogout = true;
   try {
-    window.sessionStorage.setItem(EXPLICIT_LOGOUT_INTENT_KEY, '1');
-    fallbackExplicitLogoutIntent = false;
-  } catch {
-    fallbackExplicitLogoutIntent = true;
-  }
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem(EXPLICIT_LOGOUT_INTENT_KEY, '1');
+      pendingLogout = false;
+    }
+  } catch { /* The in-memory intent survives blocked browser storage. */ }
 }
 
 export function consumeExplicitLogoutIntent(): boolean {
-  if (fallbackExplicitLogoutIntent) {
-    fallbackExplicitLogoutIntent = false;
-    return true;
-  }
-  if (typeof window === 'undefined') return false;
-
+  const memoryIntent = pendingLogout;
+  pendingLogout = false;
+  if (memoryIntent) return true;
   try {
-    if (window.sessionStorage.getItem(EXPLICIT_LOGOUT_INTENT_KEY) !== '1') return false;
-    window.sessionStorage.removeItem(EXPLICIT_LOGOUT_INTENT_KEY);
-    return true;
-  } catch {
-    return false;
-  }
+    const storage = typeof window === 'undefined' ? null : window.sessionStorage;
+    const recorded = storage?.getItem(EXPLICIT_LOGOUT_INTENT_KEY) === '1';
+    if (recorded) storage!.removeItem(EXPLICIT_LOGOUT_INTENT_KEY);
+    return recorded;
+  } catch { return false; }
 }
 
 function userIdFromToken(token: string): string | null {
   try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = `${normalized}${'='.repeat((4 - (normalized.length % 4)) % 4)}`;
-    const payload = JSON.parse(atob(padded)) as { sub?: string };
+    const encoded = token.split('.')[1];
+    if (!encoded) return null;
+    const base64 = encoded.replace(/[-_]/g, (character) => character === '-' ? '+' : '/');
+    const payload: unknown = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')));
+    if (payload === null || typeof payload !== 'object' || !('sub' in payload)) return null;
     return typeof payload.sub === 'string' ? payload.sub : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 interface AuthState {
@@ -70,164 +62,76 @@ interface AuthState {
   clearSession: () => void;
 }
 
-export const useAuth = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      accessToken: null,
-      userId: null,
-      defaultVehicleId: null,
-      activeVehicleId: null,
-      isAuthenticated: false,
-      isBootstrapping: true,
+const emptySession = {
+  accessToken: null,
+  userId: null,
+  defaultVehicleId: null,
+  activeVehicleId: null,
+  isAuthenticated: false,
+  isBootstrapping: false,
+} as const;
 
-      setTokens: (accessToken, defaultVehicleId) => {
-        const userId = userIdFromToken(accessToken);
-        api.setToken(accessToken);
-        set({
-          accessToken,
-          userId,
-          defaultVehicleId,
-          activeVehicleId: null,
-          isAuthenticated: true,
-          isBootstrapping: false,
-        });
-      },
-
-      setDefaultVehicleId: (vehicleId) => {
-        set({ defaultVehicleId: vehicleId });
-      },
-      setActiveVehicleId: (vehicleId) => {
-        set({ activeVehicleId: vehicleId });
-      },
-
-      clearSession: () => {
-        api.setToken(null);
-        set({
-          accessToken: null,
-          userId: null,
-          defaultVehicleId: null,
-          activeVehicleId: null,
-          isAuthenticated: false,
-          isBootstrapping: false,
-        });
-        // Notify any listeners (e.g. queryClient) that the session has ended.
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('panda:session-cleared'));
-        }
-      },
-
-      login: async (email, password) => {
-        const tokens = await api.login(email, password);
-        const userId = userIdFromToken(tokens.access_token);
-        api.setToken(tokens.access_token);
-        set({
-          accessToken: tokens.access_token,
-          userId,
-          defaultVehicleId: tokens.default_vehicle_id ?? null,
-          activeVehicleId: null,
-          isAuthenticated: true,
-          isBootstrapping: false,
-        });
-      },
-
-      register: async (email, password, setupToken) => {
-        const tokens = await api.register(email, password, setupToken);
-        const userId = userIdFromToken(tokens.access_token);
-        api.setToken(tokens.access_token);
-        set({
-          accessToken: tokens.access_token,
-          userId,
-          defaultVehicleId: tokens.default_vehicle_id ?? null,
-          activeVehicleId: null,
-          isAuthenticated: true,
-          isBootstrapping: false,
-        });
-      },
-
-      acceptAccountInvitation: async (token, password) => {
-        const tokens = await api.acceptAccountInvitation(token, password);
-        const userId = userIdFromToken(tokens.access_token);
-        api.setToken(tokens.access_token);
-        set({
-          accessToken: tokens.access_token,
-          userId,
-          defaultVehicleId: tokens.default_vehicle_id ?? null,
-          activeVehicleId: null,
-          isAuthenticated: true,
-          isBootstrapping: false,
-        });
-      },
-
-      logout: async () => {
-        recordExplicitLogoutIntent();
-        get().clearSession();
-        try { await api.logout(); } catch { /* session state is already cleared */ }
-      },
-
-      resumeSession: async () => {
-        try {
-          const tokens = await api.resumeSession();
-          if (!tokens) {
-            set({ isBootstrapping: false });
-            return false;
-          }
-          const userId = userIdFromToken(tokens.access_token);
-          api.setToken(tokens.access_token);
-          set({
-            accessToken: tokens.access_token,
-            userId,
-            defaultVehicleId: tokens.default_vehicle_id ?? null,
-            // Bootstrap resumes the existing browser session. Keep the user's
-            // active session vehicle choice across a page refresh; the resolved
-            // selection hook still validates it against the vehicles returned
-            // for the authenticated user.
-            activeVehicleId: get().activeVehicleId,
-            isAuthenticated: true,
-            isBootstrapping: false,
-          });
-          return true;
-        } catch {
-          // A failed bootstrap must finish the loading state so AuthGuard can
-          // report the real session outcome rather than leaving a hard refresh
-          // in a brittle half-authenticated state.
-          set({ isBootstrapping: false });
-          return false;
-        }
-      },
-    }),
-    {
-      name: 'rm-auth',
-      // Only persist non-sensitive preferences. accessToken stays in memory.
-      partialize: (s) => ({
-        defaultVehicleId: s.defaultVehicleId,
-        activeVehicleId: s.activeVehicleId,
-        userId: s.userId,
-      }),
-    }
-  )
-);
-
-api.onAuthChange((tokens) => {
-  if (!tokens) {
-    useAuth.setState({
-      accessToken: null,
-      userId: null,
-      defaultVehicleId: null,
-      activeVehicleId: null,
-      isAuthenticated: false,
-      isBootstrapping: false,
-    });
-    return;
-  }
-
-  useAuth.setState({
+function sessionState(tokens: AuthTokens, activeVehicleId: string | null) {
+  return {
     accessToken: tokens.access_token,
     userId: userIdFromToken(tokens.access_token),
     defaultVehicleId: tokens.default_vehicle_id ?? null,
-    // Token refresh is still the same authenticated session, so do not
-    // replace the user's current vehicle with the account default.
-    activeVehicleId: useAuth.getState().activeVehicleId,
+    activeVehicleId,
     isAuthenticated: true,
     isBootstrapping: false,
-  });
+  };
+}
+
+export const useAuth = create<AuthState>()(persist((set, get) => {
+  const adopt = (tokens: AuthTokens, preserveSelection: boolean) => {
+    api.setToken(tokens.access_token);
+    set(sessionState(tokens, preserveSelection ? get().activeVehicleId : null));
+  };
+  const authenticate = async (request: () => Promise<AuthTokens>) => {
+    const revision = ++sessionRevision;
+    const tokens = await request();
+    if (revision !== sessionRevision) throw Object.assign(new Error('The session changed before the request completed.'), { code: 'SESSION_CHANGED' });
+    adopt(tokens, false);
+  };
+  return {
+    ...emptySession,
+    isBootstrapping: true,
+    setTokens(accessToken, defaultVehicleId) {
+      sessionRevision++;
+      adopt({ access_token: accessToken, default_vehicle_id: defaultVehicleId, expires_in: 0 }, false);
+    },
+    setDefaultVehicleId: (defaultVehicleId) => set({ defaultVehicleId }),
+    setActiveVehicleId: (activeVehicleId) => set({ activeVehicleId }),
+    clearSession() {
+      sessionRevision++;
+      api.setToken(null);
+      set(emptySession);
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('panda:session-cleared'));
+    },
+    login: (email, password) => authenticate(() => api.login(email, password)),
+    register: (email, password, setupToken) => authenticate(() => api.register(email, password, setupToken)),
+    acceptAccountInvitation: (token, password) => authenticate(() => api.acceptAccountInvitation(token, password)),
+    async logout() {
+      recordExplicitLogoutIntent();
+      get().clearSession();
+      await api.logout().catch(() => undefined);
+    },
+    async resumeSession() {
+      const revision = sessionRevision;
+      try {
+        const tokens = await api.resumeSession();
+        if (revision !== sessionRevision) return false;
+        if (tokens) adopt(tokens, true);
+        return Boolean(tokens);
+      } catch { return false; }
+      finally { if (revision === sessionRevision) set({ isBootstrapping: false }); }
+    },
+  };
+}, {
+  name: 'rm-auth',
+  partialize: ({ defaultVehicleId, activeVehicleId, userId }) => ({ defaultVehicleId, activeVehicleId, userId }),
+}));
+
+api.onAuthChange((tokens) => {
+  useAuth.setState(tokens ? sessionState(tokens, useAuth.getState().activeVehicleId) : emptySession);
 });

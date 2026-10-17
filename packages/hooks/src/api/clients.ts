@@ -1,3 +1,4 @@
+import { pageParams, presentParams, telemetryParams, tripSelection } from './queryShapes';
 import type {
   Vehicle,
   VehicleStatus,
@@ -146,7 +147,7 @@ export class AuthenticatedTransport extends RequestTransport {
     return this.execute({
       method: 'POST',
       path: '/v1/auth/register',
-      body: { email, password, ...(setupToken ? { setup_token: setupToken } : {}) },
+      body: { email, password, ...presentParams({ setup_token: setupToken }) },
       retryOnUnauthorized: true,
       reportErrors: false,
     });
@@ -315,7 +316,7 @@ export class AuthenticatedTransport extends RequestTransport {
     return this.execute({
       method: 'PUT',
       path: '/v1/auth/preferences',
-      body: { units, ...(theme ? { theme } : {}) },
+      body: { units, ...presentParams({ theme }) },
     });
   }
 
@@ -843,8 +844,7 @@ export class AuthenticatedTransport extends RequestTransport {
       path: '/v1/admin/backups',
       params: options
         ? {
-            ...(options.page !== undefined ? { page: options.page } : {}),
-            ...(options.perPage !== undefined ? { per_page: options.perPage } : {}),
+            ...presentParams({ page: options.page, per_page: options.perPage }, 'defined'),
           }
         : undefined,
     });
@@ -1044,8 +1044,7 @@ export class AuthenticatedTransport extends RequestTransport {
       method: 'GET',
       path: `/v1/vehicles/${vehicleId}/parked-energy`,
       params: {
-        ...(from ? { from } : {}),
-        ...(to ? { to } : {}),
+        ...presentParams({ from, to }),
       },
     });
   }
@@ -1109,24 +1108,15 @@ export class AuthenticatedTransport extends RequestTransport {
     lifetime = false,
     filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean }
   ) {
-    const offset = (page - 1) * perPage;
-    const trimmedSearch = search.trim();
-    const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
     return this.execute({
       method: 'GET',
       path: '/v1/trips',
       params: {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),
-        page,
-        per_page: perPage,
-        limit: perPage,
-        offset,
-        ...(trimmedSearch ? { search: trimmedSearch } : {}),
-        ...(tagIds.length
-          ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' }
-          : {}),
-        ...(filters?.untagged ? { untagged: 1 } : {}),
+        ...pageParams(page, perPage),
+        ...presentParams({ search: search.trim() }),
+        ...tripSelection(filters),
       },
       decode: (response: Parameters<typeof decodeListTrips>[0]) =>
         decodeListTrips(response, page, perPage),
@@ -1141,18 +1131,14 @@ export class AuthenticatedTransport extends RequestTransport {
     lifetime = false,
     filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean }
   ) {
-    const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
     return this.execute<TripMapResponse>({
       method: 'GET',
       path: '/v1/trips/map',
       params: {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),
-        ...(search.trim() ? { search: search.trim() } : {}),
-        ...(tagIds.length
-          ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' }
-          : {}),
-        ...(filters?.untagged ? { untagged: 1 } : {}),
+        ...presentParams({ search: search.trim() }),
+        ...tripSelection(filters),
       },
     });
   }
@@ -1164,17 +1150,13 @@ export class AuthenticatedTransport extends RequestTransport {
     lifetime = false,
     filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean }
   ) {
-    const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
     return this.execute<TirePressureTimelineResponse>({
       method: 'GET',
       path: '/v1/trips/tire-pressure-timeline',
       params: {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),
-        ...(tagIds.length
-          ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' }
-          : {}),
-        ...(filters?.untagged ? { untagged: 1 } : {}),
+        ...tripSelection(filters),
       },
     });
   }
@@ -1298,20 +1280,15 @@ export class AuthenticatedTransport extends RequestTransport {
     lifetime = false,
     sessionDayLocal: string | null = null
   ) {
-    const offset = (page - 1) * perPage;
-    const trimmedSearch = search.trim();
     return this.execute({
       method: 'GET',
       path: '/v1/charging',
       params: {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),
-        page,
-        per_page: perPage,
-        limit: perPage,
-        offset,
-        ...(trimmedSearch ? { search: trimmedSearch } : {}),
-        ...(sessionDayLocal ? { session_day_local: sessionDayLocal } : {}),
+        ...pageParams(page, perPage),
+        ...presentParams({ search: search.trim() }),
+        ...presentParams({ session_day_local: sessionDayLocal }),
       },
       decode: (response: Parameters<typeof decodeListChargeSessions>[0]) =>
         decodeListChargeSessions(response, page, perPage),
@@ -1668,25 +1645,8 @@ export class AuthenticatedTransport extends RequestTransport {
   }
 
   async getRawTelemetry(vehicleId: string, options: RawTelemetryQuery | number = {}) {
-    const legacyLimit = typeof options === 'number' ? options : undefined;
-    const query = typeof options === 'number' ? {} : options;
-    const fields = query.fields?.filter(Boolean).join(',');
     return this.execute<RawTelemetryResponse>({
-      method: 'GET',
-      path: `/v1/vehicles/${vehicleId}/raw-data`,
-      params: {
-        ...(query.from ? { from: query.from } : {}),
-        ...(query.to ? { to: query.to } : {}),
-        ...(query.page ? { page: query.page } : {}),
-        ...(legacyLimit
-          ? { limit: legacyLimit }
-          : query.per_page
-            ? { per_page: query.per_page }
-            : {}),
-        ...(query.search?.trim() ? { search: query.search.trim() } : {}),
-        ...(fields ? { fields } : {}),
-        ...(query.populated_only ? { populated_only: 'true' } : {}),
-      },
+      method: 'GET', path: `/v1/vehicles/${vehicleId}/raw-data`, params: telemetryParams(options),
     });
   }
 
@@ -1694,13 +1654,7 @@ export class AuthenticatedTransport extends RequestTransport {
     return this.execute<TelemetryLaneFrame>({
       method: 'GET',
       path: `/v1/vehicles/${vehicleId}/telemetry/lanes`,
-      params: {
-        ...(query.from ? { from: query.from } : {}),
-        ...(query.to ? { to: query.to } : {}),
-        ...(query.lanes?.length ? { lanes: query.lanes.join(',') } : {}),
-        ...(query.resolution ? { resolution: query.resolution } : {}),
-        ...(query.max_points ? { max_points: query.max_points } : {}),
-      },
+      params: presentParams({ from: query.from, to: query.to, lanes: query.lanes?.length ? query.lanes.join(',') : undefined, resolution: query.resolution, max_points: query.max_points }),
     });
   }
 
@@ -1708,14 +1662,7 @@ export class AuthenticatedTransport extends RequestTransport {
     return this.execute<RawEventListResponse>({
       method: 'GET',
       path: `/v1/vehicles/${vehicleId}/raw-events`,
-      params: {
-        ...(query.from ? { from: query.from } : {}),
-        ...(query.to ? { to: query.to } : {}),
-        ...(query.page ? { page: query.page } : {}),
-        ...(query.per_page ? { per_page: query.per_page } : {}),
-        ...(query.event_type ? { event_type: query.event_type } : {}),
-        ...(query.message_type ? { message_type: query.message_type } : {}),
-      },
+      params: presentParams({ from: query.from, to: query.to, page: query.page, per_page: query.per_page, event_type: query.event_type, message_type: query.message_type }),
     });
   }
 

@@ -1,4 +1,4 @@
-import type { VehicleImage, VehicleImages } from '@panda/types';
+import type { VehicleImages } from '@panda/types';
 
 export type VehicleArtworkUsage = 'overview' | 'charging' | 'health' | 'vehicle-card';
 export type VehicleArtworkFallbackModel = 'r1s' | 'r1t' | 'r2';
@@ -28,152 +28,63 @@ const VEHICLE_ARTWORK_FALLBACKS: Record<
   },
 };
 
-export function normalizeVehicleArtworkModel(
-  model: string | null | undefined,
-): VehicleArtworkFallbackModel | null {
-  const normalized = (model ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (normalized.includes('r1t')) return 'r1t';
-  if (normalized.includes('r1s')) return 'r1s';
-  if (normalized.includes('r2s') || normalized.includes('r2')) return 'r2';
-  return null;
+export function normalizeVehicleArtworkModel(model: string | null | undefined): VehicleArtworkFallbackModel | null {
+  const compact = (model ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return (['r1t', 'r1s', 'r2'] as const).find((key) => compact.includes(key)) ?? null;
 }
 
-export function getVehicleArtworkFallback(
-  model: string | null | undefined,
-  usage: VehicleArtworkUsage,
-): string | null {
-  const normalizedModel = normalizeVehicleArtworkModel(model);
-  return normalizedModel ? VEHICLE_ARTWORK_FALLBACKS[normalizedModel][usage] : null;
+export function getVehicleArtworkFallback(model: string | null | undefined, usage: VehicleArtworkUsage): string | null {
+  const family = normalizeVehicleArtworkModel(model);
+  return family === null ? null : VEHICLE_ARTWORK_FALLBACKS[family][usage];
 }
 
-export interface ResolvedVehicleArtwork {
-  light: string | null;
-  dark: string | null;
-  fallback: string | null;
-}
+export interface ResolvedVehicleArtwork { light: string | null; dark: string | null; fallback: string | null; }
+type Mode = 'light' | 'dark';
+type Role = 'charging' | 'hero' | 'three-quarter' | 'plain-side' | 'tagged-fallback' | 'front';
 
-function normalizedPlacement(image: VehicleImage) {
-  return image.placement.trim().toLowerCase().replace(/[_\s]+/g, '-');
-}
-
-function imageSearchText(image: VehicleImage) {
-  return `${image.placement} ${image.design ?? ''} ${image.url} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
-}
-
-function findSemanticImage(
-  images: VehicleImages | null | undefined,
-  predicate: (image: VehicleImage, text: string) => boolean,
-  design: 'light' | 'dark',
-) {
-  return images?.all?.find((image) => (
-    predicate(image, imageSearchText(image))
-    && (image.design?.toLowerCase().includes(design) || image.design == null)
-  ))?.url ?? null;
-}
-
-function findChargingImage(images: VehicleImages | null | undefined, design: 'light' | 'dark') {
-  return findSemanticImage(images, (image, text) => {
-    const placement = normalizedPlacement(image);
-    return (placement.includes('side') && placement.includes('charg'))
-      || text.includes('side-charging')
-      || text.includes('side_charging')
-      || (placement === 'side' && (text.includes('charge port') || text.includes('port open')));
-  }, design);
-}
-
-function findHealthImage(
-  images: VehicleImages | null | undefined,
-  kind: 'hero' | 'three-quarter' | 'plain-side' | 'tagged-fallback' | 'front',
-  design: 'light' | 'dark',
-) {
-  return findSemanticImage(images, (image, text) => {
-    const placement = normalizedPlacement(image);
-    if (kind === 'hero') return text.includes('health-hero') && !text.includes('health-hero-fallback');
-    if (kind === 'three-quarter') {
-      return placement.includes('three-quarter')
-        || text.includes('three-quarter')
-        || text.includes('three_quarter')
-        || text.includes('3-quarter');
+function imageIndex(images: VehicleImages | null | undefined) {
+  const semantic = new Map<string, string>();
+  const placements = new Map<string, string>();
+  for (const image of images?.all ?? []) {
+    const placement = image.placement.trim().toLowerCase().replace(/[_\s]+/g, '-');
+    const text = `${image.placement} ${image.design ?? ''} ${image.url} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
+    const design = image.design?.toLowerCase();
+    const roles: Record<Role, boolean> = {
+      charging: (placement.includes('side') && placement.includes('charg')) || text.includes('side-charging') || text.includes('side_charging') || (placement === 'side' && (text.includes('charge port') || text.includes('port open'))),
+      hero: text.includes('health-hero') && !text.includes('health-hero-fallback'),
+      'three-quarter': placement.includes('three-quarter') || text.includes('three-quarter') || text.includes('three_quarter') || text.includes('3-quarter'),
+      'plain-side': placement === 'side' && !text.includes('charg'),
+      'tagged-fallback': text.includes('health-hero-fallback'),
+      front: placement === 'front',
+    };
+    for (const mode of ['light', 'dark'] as const) {
+      const key = `${mode}:${placement}`;
+      if ((design === mode || design == null) && !placements.has(key)) placements.set(key, image.url);
+      if (design != null && !design.includes(mode)) continue;
+      for (const [role, matches] of Object.entries(roles)) {
+        const key = `${mode}:${role}`;
+        if (matches && !semantic.has(key)) semantic.set(key, image.url);
+      }
     }
-    if (kind === 'plain-side') return placement === 'side' && !text.includes('charg');
-    if (kind === 'tagged-fallback') return text.includes('health-hero-fallback');
-    return placement === 'front';
-  }, design);
-}
-
-function findPlacement(images: VehicleImages | null | undefined, placements: string[], design: 'light' | 'dark') {
-  for (const placement of placements) {
-    const match = images?.all?.find((image) => (
-      normalizedPlacement(image) === placement
-      && (image.design?.toLowerCase() === design || image.design == null)
-    ));
-    if (match) return match.url;
   }
-  return null;
+  return { semantic, placements };
 }
 
-export function resolveVehicleArtwork(
-  images: VehicleImages | null | undefined,
-  model: string | null | undefined,
-  usage: VehicleArtworkUsage,
-): ResolvedVehicleArtwork {
-  const typedPair = usage === 'overview'
-    ? images?.overhead
-    : usage === 'vehicle-card'
-      ? images?.side
-      : null;
-  const placements = usage === 'overview'
-    ? ['overhead']
-    : usage === 'charging'
-      ? ['side-charging', 'charging-side']
-      : usage === 'health'
-        ? ['health-hero', 'three-quarter']
-        : ['side'];
-  const healthLight = usage === 'health'
-    ? findHealthImage(images, 'hero', 'light')
-      ?? findHealthImage(images, 'hero', 'dark')
-      ?? findHealthImage(images, 'three-quarter', 'light')
-      ?? findHealthImage(images, 'three-quarter', 'dark')
-      ?? images?.side?.light
-      ?? images?.side?.dark
-      ?? findHealthImage(images, 'plain-side', 'light')
-      ?? findHealthImage(images, 'plain-side', 'dark')
-      ?? findHealthImage(images, 'tagged-fallback', 'light')
-      ?? findHealthImage(images, 'tagged-fallback', 'dark')
-      ?? findHealthImage(images, 'front', 'light')
-      ?? findHealthImage(images, 'front', 'dark')
-    : null;
-  const healthDark = usage === 'health'
-    ? findHealthImage(images, 'hero', 'dark')
-      ?? findHealthImage(images, 'hero', 'light')
-      ?? findHealthImage(images, 'three-quarter', 'dark')
-      ?? findHealthImage(images, 'three-quarter', 'light')
-      ?? images?.side?.dark
-      ?? images?.side?.light
-      ?? findHealthImage(images, 'plain-side', 'dark')
-      ?? findHealthImage(images, 'plain-side', 'light')
-      ?? findHealthImage(images, 'tagged-fallback', 'dark')
-      ?? findHealthImage(images, 'tagged-fallback', 'light')
-      ?? findHealthImage(images, 'front', 'dark')
-      ?? findHealthImage(images, 'front', 'light')
-    : null;
-  const chargingLight = usage === 'charging' ? findChargingImage(images, 'light') ?? findChargingImage(images, 'dark') : null;
-  const chargingDark = usage === 'charging' ? findChargingImage(images, 'dark') ?? findChargingImage(images, 'light') : null;
-  const light = healthLight
-    ?? chargingLight
-    ?? typedPair?.light
-    ?? typedPair?.dark
-    ?? findPlacement(images, placements, 'light')
-    ?? findPlacement(images, placements, 'dark');
-  const dark = healthDark
-    ?? chargingDark
-    ?? typedPair?.dark
-    ?? typedPair?.light
-    ?? findPlacement(images, placements, 'dark')
-    ?? light;
-  return {
-    light: light ?? null,
-    dark: dark ?? null,
-    fallback: getVehicleArtworkFallback(model, usage),
+export function resolveVehicleArtwork(images: VehicleImages | null | undefined, model: string | null | undefined, usage: VehicleArtworkUsage): ResolvedVehicleArtwork {
+  const index = imageIndex(images);
+  const placementOrder = { overview: ['overhead'], charging: ['side-charging', 'charging-side'], health: ['health-hero', 'three-quarter'], 'vehicle-card': ['side'] }[usage];
+  const typed = usage === 'overview' ? images?.overhead : usage === 'vehicle-card' ? images?.side : null;
+  const first = (values: Array<string | null | undefined>) => values.find((value) => value != null) ?? null;
+  const preferred = (mode: Mode) => {
+    const other = mode === 'light' ? 'dark' : 'light';
+    const role = (name: Role) => [index.semantic.get(`${mode}:${name}`), index.semantic.get(`${other}:${name}`)];
+    const ranked = usage === 'health'
+      ? [...role('hero'), ...role('three-quarter'), images?.side?.[mode], images?.side?.[other], ...role('plain-side'), ...role('tagged-fallback'), ...role('front')]
+      : usage === 'charging' ? role('charging') : [];
+    return first([...ranked, typed?.[mode], typed?.[other]]);
   };
+  const placement = (mode: Mode) => first(placementOrder.map((name) => index.placements.get(`${mode}:${name}`)));
+  const light = preferred('light') ?? placement('light') ?? placement('dark');
+  const dark = preferred('dark') ?? placement('dark') ?? light;
+  return { light, dark, fallback: getVehicleArtworkFallback(model, usage) };
 }

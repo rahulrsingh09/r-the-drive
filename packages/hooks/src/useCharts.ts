@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { cacheInvalidations, useCacheMutation } from './cacheRuntime';
+import { queryPolicies, useResourceQuery } from './queryRuntime';
 import type {
   ChartDefinitionV1,
   ChartManagerEntry,
@@ -6,7 +7,6 @@ import type {
   ChartSourceManifest,
 } from '@panda/types';
 import { api } from './api';
-import { useAuthReady } from './useAuthState';
 import { useAuth } from './useAuth';
 
 const CHARTS_BASE = '/v1/charts';
@@ -37,228 +37,113 @@ export interface ChartEnabledUpdate {
 
 type JsonRecord = Record<string, unknown>;
 
-function isRecord(value: unknown): value is JsonRecord {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function readString(record: JsonRecord, camel: string, snake: string): string | null {
-  const value = record[camel] ?? record[snake];
-  return typeof value === 'string' ? value : null;
-}
-
-function readBoolean(record: JsonRecord, camel: string, snake: string, fallback: boolean): boolean {
-  const value = record[camel] ?? record[snake];
-  return typeof value === 'boolean' ? value : fallback;
-}
-
-function readNullableString(record: JsonRecord, camel: string, snake: string): string | null {
-  const value = record[camel] ?? record[snake];
-  return value == null ? null : typeof value === 'string' ? value : null;
+function recordOf(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
 function normalizeChartRecord(raw: unknown): ChartRecord {
-  const record = isRecord(raw) ? raw : {};
-  const config = isRecord(record.config) ? record.config : {};
-
-  const normalized: ChartRecord = {
-    id: readString(record, 'id', 'id') || '',
-    ownerId: readNullableString(record, 'ownerId', 'owner_id'),
-    slug: readString(record, 'slug', 'slug') ?? '',
-    name: readString(record, 'name', 'name') ?? '',
-    isDefault: readBoolean(record, 'isDefault', 'is_default', false),
-    isLocked: readBoolean(record, 'isLocked', 'is_locked', false),
-    isEnabled: readBoolean(record, 'isEnabled', 'is_enabled', true),
-    baselineRevision: typeof (record.baselineRevision ?? record.baseline_revision) === 'number'
-      ? (record.baselineRevision ?? record.baseline_revision) as number
-      : null,
-    config: config as unknown as ChartDefinitionV1,
-  };
-  const description = readNullableString(record, 'description', 'description');
-  if (description !== null) normalized.description = description;
-  return normalized;
-}
-
-function normalizePermissions(raw: unknown): ChartManagerEntry['permissions'] {
-  const record = isRecord(raw) ? raw : {};
-  return {
-    read: readBoolean(record, 'read', 'read', true),
-    edit: readBoolean(record, 'edit', 'edit', false),
-    duplicate: readBoolean(record, 'duplicate', 'duplicate', true),
-    reset: readBoolean(record, 'reset', 'reset', false),
-    restore: readBoolean(record, 'restore', 'restore', false),
-    delete: readBoolean(record, 'delete', 'delete', false),
-    lock: readBoolean(record, 'lock', 'lock', false),
-  };
+  const row = recordOf(raw);
+  const fields = {
+    id: ['id', 'id', ''], ownerId: ['ownerId', 'owner_id', null], slug: ['slug', 'slug', ''], name: ['name', 'name', ''],
+    isDefault: ['isDefault', 'is_default', false], isLocked: ['isLocked', 'is_locked', false], isEnabled: ['isEnabled', 'is_enabled', true],
+    baselineRevision: ['baselineRevision', 'baseline_revision', null],
+  } as const;
+  const values: Record<string, unknown> = {};
+  for (const [key, [camel, snake, fallback]] of Object.entries(fields)) {
+    const value = row[camel] ?? row[snake];
+    const kind = key === 'baselineRevision' ? 'number' : key.startsWith('is') ? 'boolean' : 'string';
+    values[key] = typeof value === kind ? value : fallback;
+  }
+  if (typeof row.description === 'string') values.description = row.description;
+  return { ...values, config: recordOf(row.config) } as unknown as ChartRecord;
 }
 
 function normalizeManagerEntry(raw: unknown): ChartManagerEntry {
-  const record = isRecord(raw) ? raw : {};
-  const effective = normalizeChartRecord(record.effective ?? record);
-  const systemBase = record.systemBase ?? record.system_base;
-  const personalOverride = record.personalOverride ?? record.personal_override;
-  const rawOrigin = record.origin;
-  const origin = rawOrigin === 'override' || rawOrigin === 'personal' ? rawOrigin : 'system';
-
+  const row = recordOf(raw), permissions = recordOf(row.permissions);
+  const defaults = { read: true, edit: false, duplicate: true, reset: false, restore: false, delete: false, lock: false };
+  const normalizedPermissions = Object.assign({}, defaults, Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, typeof permissions[key] === 'boolean' ? permissions[key] : fallback])));
   const entry: ChartManagerEntry = {
-    effective,
-    origin,
-    permissions: normalizePermissions(record.permissions),
+    effective: normalizeChartRecord(row.effective ?? row),
+    origin: row.origin === 'override' || row.origin === 'personal' ? row.origin : 'system',
+    permissions: normalizedPermissions as ChartManagerEntry['permissions'],
   };
-  if (systemBase) entry.systemBase = normalizeChartRecord(systemBase);
-  if (personalOverride) entry.personalOverride = normalizeChartRecord(personalOverride);
+  for (const [property, snake] of [['systemBase', 'system_base'], ['personalOverride', 'personal_override']] as const) {
+    const source = row[property] ?? row[snake];
+    if (source) entry[property] = normalizeChartRecord(source);
+  }
   return entry;
 }
 
-function normalizeList<T>(raw: unknown, normalize: (value: unknown) => T): T[] {
-  if (Array.isArray(raw)) return raw.map(normalize);
-  if (isRecord(raw) && Array.isArray(raw.items)) return raw.items.map(normalize);
-  if (isRecord(raw) && Array.isArray(raw.data)) return raw.data.map(normalize);
-  return [];
-}
-
-function normalizeEffectiveRecord(raw: unknown): ChartRecord {
-  if (isRecord(raw) && raw.effective) return normalizeChartRecord(raw.effective);
-  return normalizeChartRecord(raw);
+function normalizeList<T>(raw: unknown, decode: (value: unknown) => T): T[] {
+  const envelope = recordOf(raw);
+  const values = [raw, envelope.items, envelope.data].find(Array.isArray) as unknown[] | undefined;
+  return values?.map(decode) ?? [];
 }
 
 function chartPayload(input: ChartRecordInput) {
-  return {
-    slug: input.slug,
-    name: input.name,
-    description: input.description ?? null,
-    isEnabled: input.isEnabled ?? true,
-    config: input.config,
-  };
+  const { slug, name, description = null, isEnabled = true, config } = input;
+  return { slug, name, description: description ?? null, isEnabled: isEnabled ?? true, config };
 }
 
-function invalidateChartCatalogs(queryClient: ReturnType<typeof useQueryClient>) {
-  void queryClient.invalidateQueries({ queryKey: ['charts', 'manager'] });
-  void queryClient.invalidateQueries({ queryKey: ['charts', 'effective'] });
-  void queryClient.invalidateQueries({ queryKey: ['dashboards'] });
-}
+const chartCacheKeys = [['charts', 'manager'], ['charts', 'effective'], ['dashboards']] as const;
 
 export function useChartManager() {
-  const authReady = useAuthReady();
   const userId = useAuth((state) => state.userId);
-
-  return useQuery<ChartManagerEntry[]>({
-    queryKey: ['charts', 'manager', userId],
-    queryFn: async () => normalizeList(await api.apiFetch('GET', CHARTS_BASE), normalizeManagerEntry),
-    enabled: authReady,
-    staleTime: CHART_QUERY_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
-    placeholderData: (previous) => previous,
-  });
+  return useResourceQuery(['charts', 'manager', userId], async () => {
+    const response = await api.apiFetch('GET', CHARTS_BASE);
+    return normalizeList(response, normalizeManagerEntry);
+  }, [], { ...queryPolicies.history, staleTime: CHART_QUERY_STALE_TIME_MS, refetchOnWindowFocus: false });
 }
 
 export function useEffectiveCharts(dashboardSlug: string | null) {
-  const authReady = useAuthReady();
   const userId = useAuth((state) => state.userId);
-
-  return useQuery<ChartRecord[]>({
-    queryKey: ['charts', 'effective', dashboardSlug, userId],
-    queryFn: async () => normalizeList(
-      await api.apiFetch('GET', `${CHARTS_BASE}/effective?dashboard_slug=${encodeURIComponent(dashboardSlug ?? '')}`),
-      normalizeEffectiveRecord,
-    ),
-    enabled: authReady && !!dashboardSlug,
-    staleTime: CHART_QUERY_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
-    placeholderData: (previous) => previous,
-  });
+  return useResourceQuery(['charts', 'effective', dashboardSlug, userId], async () => {
+    const response = await api.apiFetch('GET', `${CHARTS_BASE}/effective?dashboard_slug=${encodeURIComponent(dashboardSlug ?? '')}`);
+    return normalizeList(response, (raw) => normalizeChartRecord(recordOf(raw).effective || raw));
+  }, [dashboardSlug], { ...queryPolicies.history, staleTime: CHART_QUERY_STALE_TIME_MS, refetchOnWindowFocus: false });
 }
 
 export function useChartSources() {
-  const authReady = useAuthReady();
-  return useQuery<ChartSourceManifest[]>({
-    queryKey: ['chart-sources'],
-    queryFn: async () => normalizeList(await api.apiFetch('GET', CHART_SOURCES_BASE), (value) => value as ChartSourceManifest),
-    enabled: authReady,
-    staleTime: 60 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  });
+  return useResourceQuery(['chart-sources'], async () => {
+    const response = await api.apiFetch('GET', CHART_SOURCES_BASE);
+    return normalizeList(response, (value) => value as ChartSourceManifest);
+  }, [], { staleTime: 60 * 60 * 1000, refetchOnWindowFocus: false });
+}
+
+function useChartMutation<V>(request: (variables: V) => { method: string; path: string; body?: unknown }) {
+  return useCacheMutation((variables: V) => {
+    const { method, path, body } = request(variables);
+    return api.apiFetch(method, path, body);
+  }, () => cacheInvalidations(chartCacheKeys));
 }
 
 export function useCreateChart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: ChartRecordInput) => api.apiFetch('POST', CHARTS_BASE, chartPayload(input)),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation((input: ChartRecordInput) => ({ method: 'POST', path: CHARTS_BASE, body: chartPayload(input) }));
 }
-
 export function useUpdateChart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: ChartUpdateInput) => api.apiFetch('PUT', `${CHARTS_BASE}/${input.id}`, chartPayload(input)),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation((input: ChartUpdateInput) => ({ method: 'PUT', path: `${CHARTS_BASE}/${input.id}`, body: chartPayload(input) }));
 }
-
 export function useCloneChart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, slug, name }: { id: string; slug?: string; name?: string }) =>
-      api.apiFetch('POST', `${CHARTS_BASE}/${id}/clone`, { slug, name }),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation(({ id, slug, name }: { id: string; slug?: string; name?: string }) => ({ method: 'POST', path: `${CHARTS_BASE}/${id}/clone`, body: { slug, name } }));
 }
-
 export function useDeleteChart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.apiFetch('DELETE', `${CHARTS_BASE}/${id}`),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation((id: string) => ({ method: 'DELETE', path: `${CHARTS_BASE}/${id}` }));
 }
-
 export function useResetChart(id?: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (overrideId: string = id ?? '') => api.apiFetch('DELETE', `${CHARTS_BASE}/${overrideId}`),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation((overrideId: string = id ?? '') => ({ method: 'DELETE', path: `${CHARTS_BASE}/${overrideId}` }));
 }
-
 export function useSetChartEnabled() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, isEnabled }: ChartEnabledUpdate) =>
-      api.apiFetch('PATCH', `${CHARTS_BASE}/${id}`, { isEnabled }),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation(({ id, isEnabled }: ChartEnabledUpdate) => ({ method: 'PATCH', path: `${CHARTS_BASE}/${id}`, body: { isEnabled } }));
 }
-
 export function useSetChartPlacements() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, placements }: ChartPlacementUpdate) =>
-      api.apiFetch('PATCH', `${CHARTS_BASE}/${id}/placements`, { placements }),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation(({ id, placements }: ChartPlacementUpdate) => ({ method: 'PATCH', path: `${CHARTS_BASE}/${id}/placements`, body: { placements } }));
 }
-
 export function useAdminUpdateChart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: ChartUpdateInput) => api.apiFetch('PATCH', `/v1/admin/charts/${input.id}`, chartPayload(input)),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation((input: ChartUpdateInput) => ({ method: 'PATCH', path: `/v1/admin/charts/${input.id}`, body: chartPayload(input) }));
 }
-
 export function useAdminSetChartLock() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, locked }: { id: string; locked: boolean }) =>
-      api.apiFetch('PATCH', `/v1/admin/charts/${id}/lock`, { locked }),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation(({ id, locked }: { id: string; locked: boolean }) => ({ method: 'PATCH', path: `/v1/admin/charts/${id}/lock`, body: { locked } }));
 }
-
 export function useAdminRestoreChart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.apiFetch('POST', `/v1/admin/charts/${id}/restore`),
-    onSuccess: () => invalidateChartCatalogs(queryClient),
-  });
+  return useChartMutation((id: string) => ({ method: 'POST', path: `/v1/admin/charts/${id}/restore` }));
 }

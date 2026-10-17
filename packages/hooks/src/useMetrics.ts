@@ -1,32 +1,20 @@
-import { useQuery } from '@tanstack/react-query';
-import { api } from './api';
+import { canonicalTagFilter, useApiQuery, queryPolicies } from './queryRuntime';
 import type { MetricBatchMetricRequest } from '@panda/types';
-import { useAuthReady } from './useAuthState';
 import type { TripTagFilters } from './useTrips';
 
 export type MetricSeriesBucket = 'auto' | 'raw' | 'minute' | '5min' | '15min' | 'hour' | 'day';
 
 export function chooseMetricSeriesBucket(from: string | null, to: string | null): MetricSeriesBucket {
-  if (!from || !to) return 'day';
-  const fromMs = Date.parse(from);
-  const toMs = Date.parse(to);
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return 'day';
-  const minutes = (toMs - fromMs) / 60000;
-  if (minutes <= 60) return 'minute';
-  if (minutes <= 6 * 60) return '5min';
-  if (minutes <= 24 * 60) return '15min';
-  if (minutes <= 7 * 24 * 60) return 'hour';
-  return 'day';
+  const duration = from && to ? Date.parse(to) - Date.parse(from) : NaN;
+  const thresholds: Array<[number, MetricSeriesBucket]> = [[60, 'minute'], [360, '5min'], [1440, '15min'], [10080, 'hour']];
+  if (!(duration > 0)) return 'day';
+  return thresholds.find(([minutes]) => duration <= minutes * 60_000)?.[1] ?? 'day';
 }
 
 export function useMetricCatalog() {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['metrics', 'catalog'],
-    queryFn: () => api.getMetricCatalog(),
-    enabled: authReady,
-    staleTime: 60 * 60 * 1000,
-    placeholderData: (previous) => previous,
+  return useApiQuery(['metrics', 'catalog'], 'getMetricCatalog', [], [], {
+    ...queryPolicies.history,
+    staleTime: 60 * 60 * 1000
   });
 }
 
@@ -36,14 +24,10 @@ export function useMetricValue(
   from: string | null = null,
   to: string | null = null,
 ) {
-  const authReady = useAuthReady();
   const lifetime = !from && !to;
-  return useQuery({
-    queryKey: ['metrics', 'value', vehicleId, metric, from, to, lifetime],
-    queryFn: () => api.getMetricValue(vehicleId!, metric!, from, to, lifetime),
-    enabled: authReady && !!vehicleId && !!metric,
-    staleTime: 2 * 60 * 1000,
-    placeholderData: (previous) => previous,
+  return useApiQuery(['metrics', 'value', vehicleId, metric, from, to, lifetime], 'getMetricValue', [vehicleId!, metric!, from, to, lifetime], [vehicleId, metric], {
+    ...queryPolicies.history,
+    staleTime: 2 * 60 * 1000
   });
 }
 
@@ -56,13 +40,9 @@ export function useMetricSeries(
 ) {
   const lifetime = !from && !to;
   const resolvedBucket = bucket === 'auto' ? chooseMetricSeriesBucket(from, to) : bucket;
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['metrics', 'series', vehicleId, metric, from, to, lifetime, resolvedBucket],
-    queryFn: () => api.getMetricSeries(vehicleId!, metric!, from, to, resolvedBucket, lifetime),
-    enabled: authReady && !!vehicleId && !!metric,
-    staleTime: 2 * 60 * 1000,
-    placeholderData: (previous) => previous,
+  return useApiQuery(['metrics', 'series', vehicleId, metric, from, to, lifetime, resolvedBucket], 'getMetricSeries', [vehicleId!, metric!, from, to, resolvedBucket, lifetime], [vehicleId, metric], {
+    ...queryPolicies.history,
+    staleTime: 2 * 60 * 1000
   });
 }
 
@@ -79,22 +59,16 @@ export function useMetricBatch(
   lifetime = false,
   filters?: TripTagFilters,
 ) {
-  const authReady = useAuthReady();
-  const stableMetrics = metrics.map((metric) => ({
-    metric: metric.metric,
-    include_latest: metric.include_latest !== false,
-    include_series: metric.include_series !== false,
-  }));
-  const metricKey = stableMetrics.map((metric) => `${metric.metric}:${Number(metric.include_latest)}:${Number(metric.include_series)}`).join('|');
-  const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
-  const tagFilters = {
-    tagIds,
-    tagMatch: filters?.tagMatch === 'any' ? 'any' as const : 'all' as const,
-    untagged: Boolean(filters?.untagged) && tagIds.length === 0,
-  };
-  return useQuery({
-    queryKey: ['metrics', 'batch', vehicleId, from, to, lifetime, metricKey, tagFilters],
-    queryFn: () => api.getMetricBatch({
+  const stableMetrics: Array<{ metric: string; include_latest: boolean; include_series: boolean }> = [];
+  const keyParts: string[] = [];
+  for (const item of metrics) {
+    const flags = { include_latest: item.include_latest !== false, include_series: item.include_series !== false };
+    stableMetrics.push({ metric: item.metric, ...flags });
+    keyParts.push([item.metric, +flags.include_latest, +flags.include_series].join(':'));
+  }
+  const metricKey = keyParts.join('|');
+  const tagFilters = canonicalTagFilter(filters);
+  return useApiQuery(['metrics', 'batch', vehicleId, from, to, lifetime, metricKey, tagFilters], 'getMetricBatch', [{
       vehicle_id: vehicleId!,
       metrics: stableMetrics,
       from,
@@ -104,10 +78,9 @@ export function useMetricBatch(
       bucket: 'raw',
       ...(tagFilters.tagIds.length ? { tag_ids: tagFilters.tagIds.join(','), tag_match: tagFilters.tagMatch } : {}),
       ...(tagFilters.untagged ? { untagged: true } : {}),
-    }),
-    enabled: authReady && !!vehicleId && stableMetrics.length > 0,
+    }], [vehicleId, stableMetrics.length > 0], {
+    ...queryPolicies.history,
     staleTime: 2 * 60 * 1000,
-    placeholderData: (previous) => previous,
-    meta: { persist: false },
+    meta: { persist: false }
   });
 }

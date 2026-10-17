@@ -1,61 +1,33 @@
-import React from 'react';
+import { useEffect } from 'react';
+import type { Vehicle } from '@panda/types';
 import { useAuth } from './useAuth';
 import { useVehicles } from './useVehicles';
 
-export function useAuthReady() {
-  const accessToken = useAuth((state) => state.accessToken);
-  const isAuthenticated = useAuth((state) => state.isAuthenticated);
-  const isBootstrapping = useAuth((state) => state.isBootstrapping);
+const noVehicles: Vehicle[] = [];
 
-  return !isBootstrapping && isAuthenticated && !!accessToken;
+export function useAuthReady() {
+  return useAuth(({ accessToken, isAuthenticated, isBootstrapping }) => Boolean(accessToken) && isAuthenticated && !isBootstrapping);
 }
 
 export function useResolvedVehicleSelection() {
   const authReady = useAuthReady();
-  const defaultVehicleId = useAuth((state) => state.defaultVehicleId);
   const activeVehicleId = useAuth((state) => state.activeVehicleId);
-  const setDefaultVehicleId = useAuth((state) => state.setDefaultVehicleId);
-  const setActiveVehicleId = useAuth((state) => state.setActiveVehicleId);
+  const defaultVehicleId = useAuth((state) => state.defaultVehicleId);
   const vehiclesQuery = useVehicles();
-  const vehicles = React.useMemo(() => vehiclesQuery.data ?? [], [vehiclesQuery.data]);
-
-  const ownedVehicleIds = React.useMemo(
-    () => new Set(vehicles.map((vehicle) => vehicle.id)),
-    [vehicles],
-  );
-
-  const validatedActiveVehicleId = activeVehicleId && ownedVehicleIds.has(activeVehicleId)
-    ? activeVehicleId
-    : null;
-  const validatedDefaultVehicleId = defaultVehicleId && ownedVehicleIds.has(defaultVehicleId)
-    ? defaultVehicleId
-    : null;
-  const effectiveVehicleId = validatedActiveVehicleId ?? validatedDefaultVehicleId ?? vehicles[0]?.id ?? null;
-
-  React.useEffect(() => {
+  const vehicles = vehiclesQuery.data ?? noVehicles;
+  const validate = (id: string | null) => id && vehicles.some((vehicle) => vehicle.id === id) ? id : null;
+  const validatedActiveVehicleId = validate(activeVehicleId);
+  const validatedDefaultVehicleId = validate(defaultVehicleId);
+  const fallbackId = vehicles[0]?.id ?? null;
+  useEffect(() => {
     if (!authReady || !vehiclesQuery.isFetched) return;
-
-    if (activeVehicleId && !ownedVehicleIds.has(activeVehicleId)) {
-      setActiveVehicleId(null);
-    }
-
-    if (defaultVehicleId && !ownedVehicleIds.has(defaultVehicleId)) {
-      setDefaultVehicleId(vehicles[0]?.id ?? null);
-    }
-  }, [
-    activeVehicleId,
-    authReady,
-    defaultVehicleId,
-    ownedVehicleIds,
-    setActiveVehicleId,
-    setDefaultVehicleId,
-    vehicles,
-    vehiclesQuery.isFetched,
-  ]);
-
+    const auth = useAuth.getState();
+    if (activeVehicleId && !validatedActiveVehicleId) auth.setActiveVehicleId(null);
+    if (defaultVehicleId && !validatedDefaultVehicleId) auth.setDefaultVehicleId(fallbackId);
+  }, [authReady, vehiclesQuery.isFetched, activeVehicleId, defaultVehicleId, validatedActiveVehicleId, validatedDefaultVehicleId, fallbackId]);
   return {
     authReady,
-    effectiveVehicleId,
+    effectiveVehicleId: validatedActiveVehicleId ?? validatedDefaultVehicleId ?? fallbackId,
     validatedActiveVehicleId,
     validatedDefaultVehicleId,
     vehicles,

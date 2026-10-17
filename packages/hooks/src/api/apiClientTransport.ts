@@ -2,14 +2,13 @@
 
 import type { AuthTokens, RestoreJob, UploadBackupResponse } from '@panda/types';
 import { isRecord } from './normalization';
+import { restoreJobStatus, uploadBackup } from './fileTransfers';
 import { withSessionLock } from './sessionLock';
+import { configuredTarget } from '../urlPolicy';
+import { RequestCooldowns, apiFailureDetailFrom, classifyClientRequestSource, formatApiError, friendlyApiError, inferClientRateLimitClass, isPublicAuthPath, parsePositiveNumberHeader, type ApiFailureDetail } from './requestPolicy';
 import { reportClientError } from '@panda/ui/lib/clientDiagnostics';
 
 export type * from './apiTypes';
-
-function isLoopbackHostname(hostname: string) {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
-}
 
 export function resolveApiBaseUrl(
   configuredBaseUrl = (() => {
@@ -23,24 +22,8 @@ export function resolveApiBaseUrl(
     ? undefined
     : window.location
 ) {
-  if (!configuredBaseUrl || !location) {
-    return configuredBaseUrl;
-  }
-
-  try {
-    const url = new URL(configuredBaseUrl, location.origin);
-    // Route loopback targets through the app origin so dev traffic uses the
-    // Vite proxy (`/v1`) rather than direct cross-origin calls to :3001.
-    // This avoids CORS preflight amplification and keeps WS/HTTP behavior
-    // consistent for both localhost and LAN clients.
-    if (isLoopbackHostname(url.hostname)) {
-      return '';
-    }
-  } catch {
-    return configuredBaseUrl;
-  }
-
-  return configuredBaseUrl;
+  const target = configuredBaseUrl && location ? configuredTarget(configuredBaseUrl, location.origin) : null;
+  return target?.loopback ? '' : configuredBaseUrl;
 }
 
 let _base: string | undefined;
@@ -55,21 +38,6 @@ export function setApiBaseUrl(url: string | undefined): void {
   _base = url;
 }
 
-interface ApiFailureDetail {
-  status?: number;
-  code: string;
-  message: string;
-  method: string;
-  path: string;
-  requestId?: string | undefined;
-  rateLimitSource?: string;
-  rateLimitClass?: string;
-  rateLimitLimit?: number;
-  rateLimitRemaining?: number;
-  rateLimitResetSeconds?: number;
-  retryAfterSeconds?: number;
-}
-
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/login',
   '/v1/auth/config',
@@ -82,9 +50,6 @@ const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/refresh',
 ]);
 
-const CLIENT_RATE_LIMIT_SOURCE = 'client-cooldown';
-const DEFAULT_CLIENT_BACKOFF_SECONDS = 5;
-
 type AuthChangeHandler = (tokens: AuthTokens | null) => void;
 
 export class RequestTransport {
@@ -93,7 +58,7 @@ export class RequestTransport {
   private refreshPromise: Promise<AuthTokens | null> | null = null;
   private sessionGeneration = 0;
   private authExpiredReported = false;
-  private rateLimitCooldowns = new Map<string, number>();
+  private rateLimitCooldowns = new RequestCooldowns();
 
   setToken(token: string | null) {
     // Explicit clearing also invalidates a bootstrap that began without a token.
@@ -182,11 +147,7 @@ export class RequestTransport {
   }
 
   private headers(path: string): Record<string, string> {
-    const h: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.accessToken && !isPublicAuthPath(path)) {
-      h['Authorization'] = `Bearer ${this.accessToken}`;
-    }
-    return h;
+    return Object.assign({ 'Content-Type': 'application/json' }, !isPublicAuthPath(path) && this.accessToken ? { Authorization: `Bearer ${this.accessToken}` } : {});
   }
 
   /**
@@ -195,61 +156,26 @@ export class RequestTransport {
    * the normal typed request method directly.
    */
   proxyFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-    const rawUrl =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const origin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
-    let firstPartyProxy = false;
-    let proxyUrl: URL | undefined;
-    try {
-      const url = new URL(rawUrl, origin);
-      proxyUrl = url;
-      firstPartyProxy =
-        url.origin === origin && /^\/v1\/external\/(basemap|iconify)(?:\/|$)/.test(url.pathname);
-    } catch {
-      // Let fetch report an invalid URL; it is not a connection proxy request.
+    const raw = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
+    const target = configuredTarget(raw, origin).url;
+    const proxy = target?.origin === origin && /^\/v1\/external\/(basemap|iconify)(?:\/|$)/.test(target.pathname);
+    let options = init;
+    if (proxy && this.accessToken) {
+      const headers = new Headers(init.headers);
+      headers.set('Authorization', `Bearer ${this.accessToken}`);
+      options = { ...init, credentials: 'same-origin', headers };
     }
-
-    const requestInit =
-      firstPartyProxy && this.accessToken
-        ? (() => {
-            const headers = new Headers(init.headers);
-            headers.set('Authorization', `Bearer ${this.accessToken}`);
-            return { ...init, credentials: 'same-origin' as const, headers };
-          })()
-        : init;
-
-    const request = fetch(input, requestInit);
-    if (!firstPartyProxy) return request;
-
-    const method = init.method ?? 'GET';
-    return request
-      .then((response) => {
-        if (!response.ok) {
-          reportClientError(new Error(`First-party proxy returned HTTP ${response.status}`), {
-            event: 'proxy.response_failed',
-            area: 'api',
-            operation: 'first-party-proxy',
-            method,
-            path: proxyUrl?.pathname,
-            status: response.status,
-            code: `HTTP_${response.status}`,
-            requestId: response.headers.get('x-request-id') ?? undefined,
-            severity: 'warn',
-          });
-        }
-        return response;
-      })
-      .catch((error: unknown) => {
-        reportClientError(error, {
-          event: 'proxy.request_failed',
-          area: 'api',
-          operation: 'first-party-proxy',
-          method,
-          path: proxyUrl?.pathname,
-          severity: 'warn',
-        });
-        throw error;
-      });
+    const pending = fetch(input, options);
+    if (!proxy) return pending;
+    const report = (error: unknown, response?: Response) => reportClientError(error, {
+      event: response ? 'proxy.response_failed' : 'proxy.request_failed', area: 'api', operation: 'first-party-proxy', method: init.method ?? 'GET', path: target?.pathname,
+      ...(response ? { status: response.status, code: `HTTP_${response.status}`, requestId: response.headers.get('x-request-id') ?? undefined } : {}), severity: 'warn',
+    });
+    return pending.then((response) => {
+      if (!response.ok) report(new Error(`First-party proxy returned HTTP ${response.status}`), response);
+      return response;
+    }).catch((error: unknown) => { report(error); throw error; });
   }
 
   /**
@@ -264,46 +190,12 @@ export class RequestTransport {
   }
 
   private assertRateLimitCooldown(method: string, path: string) {
-    const limiterClass = inferClientRateLimitClass(method, path);
-    const cooldownUntil = this.rateLimitCooldowns.get(limiterClass);
-    if (cooldownUntil == null) return;
-
-    const remainingMs = cooldownUntil - Date.now();
-    if (remainingMs <= 0) {
-      this.rateLimitCooldowns.delete(limiterClass);
-      return;
-    }
-
-    const retryAfterSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
-    const detail: ApiFailureDetail = {
-      status: 429,
-      code: 'RATE_LIMITED',
-      message: `Local backoff active for ${limiterClass}.`,
-      method,
-      path,
-      rateLimitSource: CLIENT_RATE_LIMIT_SOURCE,
-      rateLimitClass: limiterClass,
-      retryAfterSeconds,
-      rateLimitResetSeconds: retryAfterSeconds,
-    };
-    throw Object.assign(new Error(formatApiError(detail)), {
-      status: 429,
-      code: detail.code,
-      detail,
-    });
+    const pending = this.rateLimitCooldowns.pending(method, path);
+    if (pending) throw apiFailure(pending);
   }
 
-  private rememberRateLimitCooldown(
-    detail: Pick<
-      ApiFailureDetail,
-      'method' | 'path' | 'rateLimitClass' | 'retryAfterSeconds' | 'rateLimitResetSeconds'
-    >
-  ) {
-    const limiterClass =
-      detail.rateLimitClass ?? inferClientRateLimitClass(detail.method, detail.path);
-    const waitSeconds =
-      detail.retryAfterSeconds ?? detail.rateLimitResetSeconds ?? DEFAULT_CLIENT_BACKOFF_SECONDS;
-    this.rateLimitCooldowns.set(limiterClass, Date.now() + waitSeconds * 1000);
+  private rememberRateLimitCooldown(detail: Pick<ApiFailureDetail, 'method' | 'path' | 'rateLimitClass' | 'retryAfterSeconds' | 'rateLimitResetSeconds'>) {
+    this.rateLimitCooldowns.remember(detail);
   }
 
   protected execute<T>(
@@ -540,238 +432,48 @@ export class RequestTransport {
     return this.execute<T>({ method, path, body });
   }
 
-  protected async uploadFile(
-    file: File,
-    onProgress?: (loaded: number, total: number) => void
-  ): Promise<UploadBackupResponse> {
-    return new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open('POST', `${getBase()}/v1/admin/backups/imports`);
-      request.withCredentials = true;
-      request.setRequestHeader('Content-Type', file.type || 'application/gzip');
-      request.setRequestHeader('X-Panda-File-Name', file.name.replace(/[^a-zA-Z0-9._-]/g, '_'));
-      if (this.accessToken) request.setRequestHeader('Authorization', `Bearer ${this.accessToken}`);
-      request.upload.onprogress = (event) =>
-        onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size);
-      request.onerror = request.onabort = () => reject(new Error('Backup upload was interrupted.'));
-      request.onload = () => {
-        let payload: unknown;
-        try {
-          payload = request.responseText ? JSON.parse(request.responseText) : null;
-        } catch {
-          payload = null;
-        }
-        if (request.status >= 200 && request.status < 300) {
-          if (!isRecord(payload) || !isRecord(payload.artifact)) {
-            reject(
-              Object.assign(new Error('Backup upload returned an invalid response.'), {
-                code: 'INVALID_RESPONSE',
-                status: request.status,
-              })
-            );
-          } else {
-            resolve(payload as unknown as UploadBackupResponse);
-          }
-          return;
-        }
-        const message =
-          isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string'
-            ? payload.error.message
-            : undefined;
-        reject(
-          Object.assign(new Error(message || `Backup upload failed (${request.status}).`), {
-            status: request.status,
-          })
-        );
-      };
-      request.send(file);
-    });
+  protected async uploadFile(file: File, onProgress?: (loaded: number, total: number) => void): Promise<UploadBackupResponse> {
+    return uploadBackup(getBase(), this.accessToken, file, onProgress);
   }
 
   protected async restoreStatus(jobId: string, capabilityToken: string): Promise<RestoreJob> {
-    const response = await fetch(`${getBase()}/v1/restore-runtime/jobs/${jobId}`, {
-      headers: { 'X-Panda-Restore-Token': capabilityToken },
-      credentials: 'same-origin',
-    });
-    if (!response.ok) throw new Error(`Restore status is unavailable (${response.status}).`);
-    return response.json() as Promise<RestoreJob>;
+    return restoreJobStatus(getBase(), jobId, capabilityToken);
   }
 
   private reportFailure(detail: ApiFailureDetail, error: Error = new Error(detail.message)) {
-    if (detail.path === '/v1/auth/refresh' && detail.status === 401) return;
-
-    if (detail.code === 'AUTH_EXPIRED') {
-      if (this.authExpiredReported) return;
-      this.authExpiredReported = true;
-    }
-
+    const expired = detail.code === 'AUTH_EXPIRED';
+    const silentRefresh = detail.path === '/v1/auth/refresh' && detail.status === 401;
+    if (silentRefresh || expired && this.authExpiredReported) return;
+    this.authExpiredReported ||= expired;
     reportClientError(error, {
-      event: 'api.request_failed',
-      area: 'api',
-      operation: classifyClientRequestSource(detail.path),
-      method: detail.method,
-      path: detail.path,
-      status: detail.status,
-      code: detail.code,
-      requestId: detail.requestId,
-      severity: 'warn',
+      event: 'api.request_failed', area: 'api', operation: classifyClientRequestSource(detail.path),
+      method: detail.method, path: detail.path, status: detail.status, code: detail.code, requestId: detail.requestId, severity: 'warn',
     });
-
-    if (typeof window !== 'undefined') {
-      const onLoginRoute = window.location.pathname === '/login';
-      if (onLoginRoute && !isPublicAuthPath(detail.path)) {
-        return;
-      }
-
-      const { title, message } = friendlyApiError(detail);
-      window.dispatchEvent(
-        new CustomEvent('panda:toast', {
-          detail: {
-            title,
-            message,
-            variant: 'error',
-            code: detail.code,
-          },
-        })
-      );
-
-      if (detail.code === 'AUTH_EXPIRED') {
-        window.dispatchEvent(new CustomEvent('panda:auth-expired', { detail }));
-      }
-    }
+    if (typeof window === 'undefined' || window.location.pathname === '/login' && !isPublicAuthPath(detail.path)) return;
+    const events: Array<[string, unknown]> = [
+      ['panda:toast', { ...friendlyApiError(detail), variant: 'error', code: detail.code }],
+    ];
+    if (expired) events.push(['panda:auth-expired', detail]);
+    events.forEach(([type, payload]) => window.dispatchEvent(new CustomEvent(type, { detail: payload })));
   }
 }
 
 function parseRateLimitHeaders(headers: Headers, method: string, path: string) {
-  const rateLimitSource = headers.get('x-panda-ratelimit-source') ?? undefined;
-  const rateLimitClass =
-    headers.get('x-panda-ratelimit-class') ?? inferClientRateLimitClass(method, path);
-  const rateLimitLimit = parsePositiveNumberHeader(headers.get('x-ratelimit-limit'));
-  const rateLimitRemaining = parsePositiveNumberHeader(headers.get('x-ratelimit-remaining'));
-  const rateLimitResetSeconds = parsePositiveNumberHeader(
-    headers.get('x-panda-ratelimit-reset') ?? headers.get('x-ratelimit-after')
-  );
-  const retryAfterSeconds =
-    parsePositiveNumberHeader(headers.get('retry-after')) ?? rateLimitResetSeconds;
-
-  return {
-    ...(rateLimitSource ? { rateLimitSource } : {}),
-    ...(rateLimitClass ? { rateLimitClass } : {}),
-    ...(rateLimitLimit !== undefined ? { rateLimitLimit } : {}),
-    ...(rateLimitRemaining !== undefined ? { rateLimitRemaining } : {}),
-    ...(rateLimitResetSeconds !== undefined ? { rateLimitResetSeconds } : {}),
-    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+  const numericHeaders = {
+    rateLimitLimit: ['x-ratelimit-limit'], rateLimitRemaining: ['x-ratelimit-remaining'],
+    rateLimitResetSeconds: ['x-panda-ratelimit-reset', 'x-ratelimit-after'],
   };
-}
-
-function parsePositiveNumberHeader(value: string | null) {
-  if (!value) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-function inferClientRateLimitClass(method: string, path: string) {
-  if (isPublicAuthPath(path)) {
-    return 'auth_public';
+  const parsed: { rateLimitLimit?: number; rateLimitRemaining?: number; rateLimitResetSeconds?: number; retryAfterSeconds?: number } = {};
+  for (const [field, names] of Object.entries(numericHeaders)) {
+    const raw = names.map((name) => headers.get(name)).find((value) => value !== null) ?? null;
+    const value = parsePositiveNumberHeader(raw);
+    if (value !== undefined) Object.assign(parsed, { [field]: value });
   }
-
-  if (
-    path.startsWith('/v1/auth/me') ||
-    path.startsWith('/v1/auth/preferences') ||
-    path.startsWith('/v2/auth/preferences') ||
-    path.startsWith('/v2/themes') ||
-    path.startsWith('/v1/dashboards/by-slug/')
-  ) {
-    return 'auth_metadata';
-  }
-
-  if (path === '/v1/vehicles/live' || path.includes('/live-session')) {
-    return 'heavy_read';
-  }
-
-  if (['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
-    return 'auth_read';
-  }
-
-  return 'auth_write';
-}
-
-function isPublicAuthPath(path: string) {
-  return (
-    path.startsWith('/v1/auth/login') ||
-    path.startsWith('/v1/auth/config') ||
-    path.startsWith('/v1/auth/oidc/start') ||
-    path.startsWith('/v1/auth/register') ||
-    path.startsWith('/v1/auth/setup') ||
-    path.startsWith('/v1/auth/account-invitations/') ||
-    path.startsWith('/v1/auth/bootstrap') ||
-    path.startsWith('/v1/auth/refresh')
-  );
-}
-
-function classifyClientRequestSource(path: string) {
-  if (path === '/v1/auth/bootstrap') return 'bootstrap';
-  if (path === '/v1/auth/refresh') return 'refresh';
-  if (path === '/v1/auth/me' || path === '/v1/auth/preferences') return 'metadata';
-  if (path === '/v1/vehicles/live') return 'live_websocket';
-  if (path.startsWith('/v1/dashboards/by-slug/')) return 'dashboard_metadata';
-  return 'protected_api';
-}
-
-function formatApiError(detail: ApiFailureDetail) {
-  if (detail.status == null) return detail.message;
-  return `${detail.status} ${detail.code}: ${truncate(detail.message, 160)}`;
-}
-
-function friendlyApiError(detail: ApiFailureDetail): { title: string; message: string } {
-  const { status, code } = detail;
-  if (code === 'NETWORK_ERROR') {
-    return {
-      title: 'Connection lost',
-      message: 'Unable to reach the server. Check your connection and try again.',
-    };
-  }
-
-  if (code === 'AUTH_EXPIRED')
-    return { title: 'Session expired', message: 'Please sign in again to continue.' };
-  if (status === 401)
-    return { title: 'Session expired', message: 'Please sign in again to continue.' };
-  if (status === 403)
-    return { title: 'Access denied', message: "You don't have permission to do that." };
-  if (status === 404)
-    return { title: 'Not found', message: 'The requested resource could not be found.' };
-  if (status === 429) {
-    const source = detail.rateLimitSource;
-    const waitHint =
-      detail.retryAfterSeconds != null
-        ? ` Try again in about ${Math.max(1, Math.ceil(detail.retryAfterSeconds))}s.`
-        : '';
-    if (source === 'nginx') {
-      return { title: 'Too many requests', message: `Edge proxy rate limit reached.${waitHint}` };
-    }
-    if (source === 'api') {
-      return { title: 'Too many requests', message: `API rate limit reached.${waitHint}` };
-    }
-    return {
-      title: 'Too many requests',
-      message: `Please wait a moment and try again.${waitHint}`,
-    };
-  }
-  if (status != null && [502, 503, 504].includes(status)) {
-    return {
-      title: 'Server unavailable',
-      message: 'The server is currently unavailable. Please try again in a moment.',
-    };
-  }
-  if (status != null && status >= 500)
-    return {
-      title: 'Server error',
-      message: 'Something went wrong on our end. Please try again later.',
-    };
-  return {
-    title: 'Something went wrong',
-    message: truncate(detail.message, 120) || 'An unexpected error occurred.',
-  };
+  const retry = parsePositiveNumberHeader(headers.get('retry-after')) ?? parsed.rateLimitResetSeconds;
+  if (retry !== undefined) parsed.retryAfterSeconds = retry;
+  const source = headers.get('x-panda-ratelimit-source');
+  const limiter = headers.get('x-panda-ratelimit-class') ?? inferClientRateLimitClass(method, path);
+  return { ...(source ? { rateLimitSource: source } : {}), ...(limiter ? { rateLimitClass: limiter } : {}), ...parsed };
 }
 
 function isFetchConnectionError(error: unknown): boolean {
@@ -781,18 +483,6 @@ function isFetchConnectionError(error: unknown): boolean {
       typeof error.name === 'string' &&
       ['NetworkError', 'AbortError'].includes(error.name))
   );
-}
-
-function apiFailureDetailFrom(error: unknown): ApiFailureDetail | undefined {
-  if (!(error instanceof Error) || !('detail' in error)) return undefined;
-  const detail = (error as Error & { detail?: ApiFailureDetail }).detail;
-  if (typeof detail?.code !== 'string' || typeof detail.message !== 'string') return undefined;
-  return detail;
-}
-
-function truncate(value: string, maxLength: number) {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength - 1)}…`;
 }
 
 interface ApiRequest {

@@ -1,6 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useResourceQuery } from './queryRuntime';
 import { api } from './api';
-import { useAuthReady } from './useAuthState';
 import type { BasemapConfigPayload } from '@panda/types';
 
 export type { BasemapConfigPayload } from '@panda/types';
@@ -12,13 +11,9 @@ export const BASEMAP_CONFIG_QUERY_KEY = ['external', 'basemap', 'config', 'v2'] 
  * map surfaces. Rendering packages receive only this data, never transport.
  */
 export function useBasemapConfig() {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: BASEMAP_CONFIG_QUERY_KEY,
-    queryFn: () => api.apiFetch<BasemapConfigPayload>('GET', '/v1/external/basemap/config'),
-    enabled: authReady,
+  return useResourceQuery(BASEMAP_CONFIG_QUERY_KEY, () => api.apiFetch<BasemapConfigPayload>('GET', '/v1/external/basemap/config'), [], {
     staleTime: 5 * 60 * 1000,
     retry: 1,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: false
   });
 }

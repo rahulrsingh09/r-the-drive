@@ -1,18 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
+import { useApiQuery, queryPolicies } from './queryRuntime';
 import type { TelemetryLaneQuery } from '@panda/types';
-import { api } from './api';
-import { useAuthReady } from './useAuthState';
 
 export function useTelemetryLanes(
   vehicleId: string | null,
   query: TelemetryLaneQuery = {},
 ) {
-  const authReady = useAuthReady();
-  return useQuery({
-    queryKey: ['vehicles', 'telemetry-lanes', vehicleId, query],
-    queryFn: () => api.getTelemetryLanes(vehicleId!, query),
-    enabled: authReady && !!vehicleId,
-    staleTime: 2 * 60 * 1000,
-    placeholderData: (previous) => previous,
+  return useApiQuery(['vehicles', 'telemetry-lanes', vehicleId, query], 'getTelemetryLanes', [vehicleId!, query], [vehicleId], {
+    ...queryPolicies.history,
+    staleTime: 2 * 60 * 1000
   });
 }

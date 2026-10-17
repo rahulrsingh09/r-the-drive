@@ -2,7 +2,6 @@ import type {
   Vehicle,
   Trip,
   TripPowerPoint,
-  TripPowerSource,
   TripDetailSeriesPoint,
   TripDetailResponse,
   ChargeSession,
@@ -27,6 +26,7 @@ import type {
 } from '@panda/types';
 import type { LiveSession } from './apiTypes';
 import { liveFields } from './chargingSessionFields';
+import { finiteValue, numeric, optionalText, project, textual } from './rowProjection';
 
 export function normalizeTrip(raw: unknown): Trip {
   const row = isRecord(raw) ? raw : {};
@@ -197,45 +197,34 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeCoordinateValue(latRaw: unknown, lngRaw: unknown) {
-  const lat = finiteNumber(latRaw);
-  const lng = finiteNumber(lngRaw);
-  if (lat === undefined || lng === undefined) return null;
-  if (lat === 0 && lng === 0) return null;
-  return { lat, lng };
+  const values = [finiteValue(latRaw), finiteValue(lngRaw)];
+  if (values.some((value) => value === undefined) || values.every((value) => value === 0)) return null;
+  return { lat: values[0]!, lng: values[1]! };
 }
 
 function formatCoordinateLabel(value: { lat: number; lng: number } | null) {
-  return value ? `${value.lat.toFixed(4)}, ${value.lng.toFixed(4)}` : null;
+  return value && [value.lat, value.lng].map((coordinate) => coordinate.toFixed(4)).join(', ');
 }
 
 function normalizeCoordinateLabel(value: unknown) {
-  if (typeof value !== 'string') return null;
-  const label = value.trim();
-  if (!label) return null;
-  if (/^0+(?:\.0+)?\s*,\s*0+(?:\.0+)?$/.test(label)) return null;
-  return label;
+  const label = typeof value === 'string' ? value.trim() : '';
+  return label.length && !/^0+(?:\.0+)?\s*,\s*0+(?:\.0+)?$/.test(label) ? label : null;
 }
 
-export function finiteNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() !== '') {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
+export function finiteNumber(value: unknown): number | undefined { return finiteValue(value); }
 
 export function decodeListVehicles(res: { vehicles: Vehicle[] }) {
   return listEnvelope(res, 'vehicles');
 }
 
+async function downloadBody(response: Response, fallbackName: string) {
+  const attachment = /filename="([^"]+)"/i.exec(response.headers.get('content-disposition') || '');
+  const fileName = attachment === null ? fallbackName : attachment[1]!;
+  return { blob: await response.blob(), fileName };
+}
+
 export async function decodeDownloadVehicleIngestionCapture(res: Response) {
-  const disposition = res.headers.get('content-disposition') ?? '';
-  const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
-  return {
-    blob: await res.blob(),
-    fileName: fileNameMatch?.[1] ?? 'panda-capture.jsonl',
-  };
+  return downloadBody(res, 'panda-capture.jsonl');
 }
 
 export function decodeListVehicleMembers(res: { members: VehicleMember[] }) {
@@ -271,22 +260,15 @@ export function decodeListPlaces(response: { places: Place[] }) {
 }
 
 export async function decodeDownloadBackupArtifact(res: Response, artifactId: string) {
-  const disposition = res.headers.get('content-disposition') ?? '';
-  const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
-  return {
-    blob: await res.blob(),
-    fileName: fileNameMatch?.[1] ?? `backup-${artifactId}`,
-  };
+  return downloadBody(res, `backup-${artifactId}`);
 }
 
 export function decodeGetBatteryMileage(rows: Array<Record<string, unknown>>) {
-  return requireRows(rows).map((row) => ({
-    ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
-    odometer_mi: finiteNumber(row.odometer_mi) ?? null,
-    usable_kwh: finiteNumber(row.usable_kwh) ?? null,
-    range_mi: finiteNumber(row.range_mi) ?? null,
-    projected_max_range_mi: finiteNumber(row.projected_max_range_mi) ?? null,
-    degradation_pct: finiteNumber(row.degradation_pct) ?? null,
+  return requireRows(rows).map(project({
+    ts: textual(() => new Date().toISOString(), 'ts'),
+    odometer_mi: numeric(null, 'odometer_mi'), usable_kwh: numeric(null, 'usable_kwh'),
+    range_mi: numeric(null, 'range_mi'), projected_max_range_mi: numeric(null, 'projected_max_range_mi'),
+    degradation_pct: numeric(null, 'degradation_pct'),
   })) satisfies BatteryMileagePoint[];
 }
 
@@ -313,57 +295,29 @@ export function decodeGetTripDetailData(response: TripDetailResponse) {
   } satisfies TripDetailResponse;
 }
 
-export function decodeGetSpeedProfile(
-  rows: Array<{ elapsed_s?: number; speed_mph?: number; ts?: string; value?: number | null }>
-) {
-  return requireRows(rows)
-    .map((row, index) => ({
-      elapsed_s: finiteNumber(row.elapsed_s) ?? index * 60,
-      speed_mph: finiteNumber(row.speed_mph) ?? finiteNumber(row.value) ?? 0,
-    }))
-    .filter((row) => Number.isFinite(row.elapsed_s) && Number.isFinite(row.speed_mph));
+export function decodeGetSpeedProfile(rows: Array<{ elapsed_s?: number; speed_mph?: number; ts?: string; value?: number | null }>) {
+  const decode = project({ elapsed_s: (row, index) => finiteValue(row.elapsed_s) ?? index * 60, speed_mph: numeric(0, 'speed_mph', 'value') });
+  return requireRows(rows).map(decode);
 }
 
 export function decodeGetTripPowerProfile(rows: Array<Record<string, unknown>>) {
-  return requireRows(rows)
-    .map((row) => {
-      const powerSource = tripPowerSource(row.power_source);
-      return {
-        ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
-        power_kw: finiteNumber(row.power_kw) ?? null,
-        regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
-        speed_mph: finiteNumber(row.speed_mph) ?? null,
-        battery_level: finiteNumber(row.battery_level) ?? null,
-        estimated_net_power_kw: finiteNumber(row.estimated_net_power_kw) ?? null,
-        ...(powerSource ? { power_source: powerSource } : {}),
-      };
-    })
-    .filter((row) => typeof row.ts === 'string') satisfies TripPowerPoint[];
+  return requireRows(rows).map(project({
+    ts: textual(() => new Date().toISOString(), 'ts'), power_kw: numeric(null, 'power_kw'),
+    regen_power_kw: numeric(null, 'regen_power_kw'), speed_mph: numeric(null, 'speed_mph'),
+    battery_level: numeric(null, 'battery_level'), estimated_net_power_kw: numeric(null, 'estimated_net_power_kw'),
+    power_source: optionalText('power_source', ['direct', 'estimated_soc', 'unavailable']),
+  })) as TripPowerPoint[];
 }
 
 export function decodeGetTripDetailSeries(rows: Array<Record<string, unknown>>) {
-  return requireRows(rows)
-    .map((row) => {
-      const powerSource = tripPowerSource(row.power_source);
-      return {
-        ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
-        speed_mph: finiteNumber(row.speed_mph) ?? null,
-        power_kw: finiteNumber(row.power_kw) ?? null,
-        regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
-        battery_level: finiteNumber(row.battery_level) ?? null,
-        outside_temp_c: finiteNumber(row.outside_temp_c) ?? null,
-        cabin_temp_c: finiteNumber(row.cabin_temp_c) ?? null,
-        driver_temp_c: finiteNumber(row.driver_temp_c) ?? null,
-        hvac_active: typeof row.hvac_active === 'boolean' ? row.hvac_active : null,
-        tire_fl_psi: finiteNumber(row.tire_fl_psi) ?? null,
-        tire_fr_psi: finiteNumber(row.tire_fr_psi) ?? null,
-        tire_rl_psi: finiteNumber(row.tire_rl_psi) ?? null,
-        tire_rr_psi: finiteNumber(row.tire_rr_psi) ?? null,
-        estimated_net_power_kw: finiteNumber(row.estimated_net_power_kw) ?? null,
-        ...(powerSource ? { power_source: powerSource } : {}),
-      };
-    })
-    .filter((row) => typeof row.ts === 'string') satisfies TripDetailSeriesPoint[];
+  return requireRows(rows).map(project({
+    ts: textual(() => new Date().toISOString(), 'ts'), speed_mph: numeric(null, 'speed_mph'),
+    power_kw: numeric(null, 'power_kw'), regen_power_kw: numeric(null, 'regen_power_kw'), battery_level: numeric(null, 'battery_level'),
+    outside_temp_c: numeric(null, 'outside_temp_c'), cabin_temp_c: numeric(null, 'cabin_temp_c'), driver_temp_c: numeric(null, 'driver_temp_c'),
+    hvac_active: (row) => typeof row.hvac_active === 'boolean' ? row.hvac_active : null,
+    tire_fl_psi: numeric(null, 'tire_fl_psi'), tire_fr_psi: numeric(null, 'tire_fr_psi'), tire_rl_psi: numeric(null, 'tire_rl_psi'), tire_rr_psi: numeric(null, 'tire_rr_psi'),
+    estimated_net_power_kw: numeric(null, 'estimated_net_power_kw'), power_source: optionalText('power_source', ['direct', 'estimated_soc', 'unavailable']),
+  })) as TripDetailSeriesPoint[];
 }
 
 export function decodeListChargeSessions(
@@ -391,28 +345,18 @@ export function decodeUpdateChargeSession(response: unknown) {
 }
 
 export function decodeGetChargeCurve(rows: Array<Record<string, unknown>>) {
-  return requireRows(rows).map((row) => ({
-    minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
-    soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
-    power_kw: finiteNumber(row.power_kw) ?? finiteNumber(row.charge_rate_kw) ?? 0,
-    ...(typeof row.sample_source === 'string' ? { sample_source: row.sample_source } : {}),
-    ...(typeof row.power_method === 'string' ? { power_method: row.power_method } : {}),
+  return requireRows(rows).map(project({
+    minutes_elapsed: numeric(null, 'minutes_elapsed'), soc_pct: numeric(0, 'soc_pct', 'soc'), power_kw: numeric(0, 'power_kw', 'charge_rate_kw'),
+    sample_source: optionalText('sample_source'), power_method: optionalText('power_method'),
   })) satisfies ChargeCurvePoint[];
 }
 
 export function decodeGetChargeCurveAnalysis(rows: Array<Record<string, unknown>>) {
-  return requireRows(rows).map((row) => ({
-    session_id: typeof row.session_id === 'string' ? row.session_id : '',
-    minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
-    soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? null,
-    charge_rate_kw: finiteNumber(row.charge_rate_kw) ?? finiteNumber(row.power_kw) ?? 0,
-    charger_type:
-      typeof row.charger_type === 'string'
-        ? (row.charger_type as ChargeCurveAnalysisPoint['charger_type'])
-        : null,
-    sample_source: typeof row.sample_source === 'string' ? row.sample_source : 'telemetry',
-    ...(typeof row.power_method === 'string' ? { power_method: row.power_method } : {}),
-  })) satisfies ChargeCurveAnalysisPoint[];
+  return requireRows(rows).map(project({
+    session_id: textual('', 'session_id'), minutes_elapsed: numeric(null, 'minutes_elapsed'), soc_pct: numeric(null, 'soc_pct', 'soc'),
+    charge_rate_kw: numeric(0, 'charge_rate_kw', 'power_kw'), charger_type: textual(null, 'charger_type'),
+    sample_source: textual('telemetry', 'sample_source'), power_method: optionalText('power_method'),
+  })) as ChargeCurveAnalysisPoint[];
 }
 
 export function decodeGetChargingSummary(summary: {
@@ -447,69 +391,34 @@ export function decodeGetChargingSummary(summary: {
   }>;
   weekly?: Array<{ week_start: string; kwh?: number; energy_kwh?: number; sessions: number }>;
 }) {
-  const acKwh =
-    (summary.ac_kwh ?? summary.by_type?.ac_kwh ?? 0) +
-    (summary.ac_l2_kwh ?? summary.by_type?.ac_l2_kwh ?? 0);
-  const dcKwh = summary.dc_kwh ?? summary.by_type?.dc_kwh ?? 0;
+  const defaults = {
+    total_cost_usd: null, session_count: 0, home_kwh: 0, away_kwh: 0, unknown_location_kwh: 0,
+    charging_cycles: null, charging_efficiency_pct: null, total_energy_used_kwh: null, max_charge_limit_pct: null,
+    max_charge_rate_kw: null, typed_session_count: 0, known_cost_session_count: 0, unknown_cost_session_count: 0,
+    free_session_count: 0, total_range_added_km: null, rivian_paid_total_usd: null, network_breakdown: [],
+  };
+  const direct = Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, summary[key as keyof typeof defaults] ?? fallback]));
+  const energy = (name: 'ac_kwh' | 'ac_l2_kwh' | 'dc_kwh') => summary[name] ?? summary.by_type?.[name] ?? 0;
   return {
+    ...direct,
     total_energy_kwh: summary.total_energy_kwh ?? summary.total_kwh ?? 0,
-    total_cost_usd: summary.total_cost_usd ?? null,
-    session_count: summary.session_count ?? 0,
-    home_kwh: summary.home_kwh ?? 0,
-    away_kwh: summary.away_kwh ?? 0,
-    unknown_location_kwh: summary.unknown_location_kwh ?? 0,
-    ac_kwh: acKwh,
-    dc_kwh: dcKwh,
-    charging_cycles: summary.charging_cycles ?? null,
-    charging_efficiency_pct: summary.charging_efficiency_pct ?? null,
-    total_energy_used_kwh: summary.total_energy_used_kwh ?? null,
-    max_charge_limit_pct: summary.max_charge_limit_pct ?? null,
-    max_charge_rate_kw: summary.max_charge_rate_kw ?? null,
-    typed_session_count: summary.typed_session_count ?? 0,
-    known_cost_session_count: summary.known_cost_session_count ?? 0,
-    unknown_cost_session_count: summary.unknown_cost_session_count ?? 0,
-    free_session_count: summary.free_session_count ?? 0,
-    total_range_added_km: summary.total_range_added_km ?? null,
-    rivian_paid_total_usd: summary.rivian_paid_total_usd ?? null,
-    network_breakdown: summary.network_breakdown ?? [],
-    weekly: (summary.weekly ?? []).map((week) => ({
-      week_start: week.week_start,
-      energy_kwh: week.energy_kwh ?? week.kwh ?? 0,
-      sessions: week.sessions,
-    })),
-  } satisfies ChargingSummary;
+    ac_kwh: energy('ac_kwh') + energy('ac_l2_kwh'), dc_kwh: energy('dc_kwh'),
+    weekly: (summary.weekly ?? []).map(project({ week_start: (row) => row.week_start as string, energy_kwh: (row) => (row.energy_kwh ?? row.kwh ?? 0) as number, sessions: (row) => row.sessions as number })),
+  } as ChargingSummary;
 }
 
 export function decodeGetChargingChartSeries(response: {
-  daily?: Array<{
-    day_local?: string;
-    day_start?: string;
-    total_energy_kwh?: number | null;
-    session_count?: number | null;
-  }>;
+  daily?: Array<{ day_local?: string; day_start?: string; total_energy_kwh?: number | null; session_count?: number | null }>;
   daily_sessions?: Array<Record<string, unknown>>;
 }) {
+  const timestamp = () => new Date().toISOString();
   return {
-    daily: (response.daily ?? []).map((point) => ({
-      day_local: typeof point.day_local === 'string' ? point.day_local : '',
-      day_start: typeof point.day_start === 'string' ? point.day_start : new Date().toISOString(),
-      total_energy_kwh: finiteNumber(point.total_energy_kwh) ?? 0,
-      session_count: finiteNumber(point.session_count) ?? 0,
+    daily: (response.daily ?? []).map(project({ day_local: textual('', 'day_local'), day_start: textual(timestamp, 'day_start'), total_energy_kwh: numeric(0, 'total_energy_kwh'), session_count: numeric(0, 'session_count') })),
+    daily_sessions: (response.daily_sessions ?? []).map(project({
+      session_id: textual('', 'session_id'), day_local: textual('', 'day_local'), day_start: textual(timestamp, 'day_start'), started_at: textual(timestamp, 'started_at'),
+      energy_added_kwh: numeric(null, 'energy_added_kwh'), cost_usd: numeric(null, 'cost_usd'), charger_type: textual(null, 'charger_type'), location_name: textual(null, 'location_name'),
     })),
-    daily_sessions: (response.daily_sessions ?? []).map((row) => ({
-      session_id: typeof row.session_id === 'string' ? row.session_id : '',
-      day_local: typeof row.day_local === 'string' ? row.day_local : '',
-      day_start: typeof row.day_start === 'string' ? row.day_start : new Date().toISOString(),
-      started_at: typeof row.started_at === 'string' ? row.started_at : new Date().toISOString(),
-      energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? null,
-      cost_usd: finiteNumber(row.cost_usd) ?? null,
-      charger_type:
-        typeof row.charger_type === 'string'
-          ? (row.charger_type as ChargingChartSeries['daily_sessions'][number]['charger_type'])
-          : null,
-      location_name: typeof row.location_name === 'string' ? row.location_name : null,
-    })),
-  } satisfies ChargingChartSeries;
+  } as ChargingChartSeries;
 }
 
 export function decodeGetLiveSession(result: LiveSession | undefined) {
@@ -534,19 +443,10 @@ export function decodeGetEfficiencySummary(summary: {
   } satisfies EfficiencySummary;
 }
 
-export function decodeGetEfficiencyByMode(
-  rows: Array<{
-    drive_mode: string;
-    avg_wh_per_mi: number;
-    trip_count: number;
-  }>
-) {
-  return requireRows(rows).map((row) => ({
-    drive_mode: row.drive_mode,
-    avg_efficiency: row.avg_wh_per_mi,
-    p10_efficiency: 0,
-    p90_efficiency: 0,
-    trip_count: row.trip_count,
+export function decodeGetEfficiencyByMode(rows: Array<{ drive_mode: string; avg_wh_per_mi: number; trip_count: number }>) {
+  return requireRows(rows).map(project({
+    drive_mode: (row) => row.drive_mode as string, avg_efficiency: (row) => row.avg_wh_per_mi as number,
+    trip_count: (row) => row.trip_count as number, p10_efficiency: () => 0, p90_efficiency: () => 0,
   })) satisfies EfficiencyByMode[];
 }
 
@@ -556,50 +456,24 @@ export function decodeGetMetricCatalog(response: { metrics: MetricCatalogEntry[]
 function normalizePaginated<T>(
   response: PaginatedResponse<T> & { data?: T[]; limit?: number; offset?: number },
   requestedPage: number,
-  requestedPerPage: number
+  requestedPerPage: number,
 ): PaginatedResponse<T> {
-  const perPage = response.per_page ?? response.limit ?? requestedPerPage;
-  const page =
-    response.page ??
-    (response.offset !== undefined ? Math.floor(response.offset / perPage) + 1 : requestedPage);
-  return {
-    items: response.items ?? response.data ?? [],
-    total: response.total ?? 0,
-    page,
-    per_page: perPage,
-  };
+  const { items, data, total = 0, page, offset } = response;
+  const perPage = [response.per_page, response.limit, requestedPerPage].find((value) => value != null)!;
+  const resolvedPage = page ?? (offset === undefined ? requestedPage : 1 + Math.floor(offset / perPage));
+  return { items: items ?? data ?? [], total: total ?? 0, page: resolvedPage, per_page: perPage };
 }
 
-export function buildTimeframeParams(from: string | null, to: string | null, lifetime = false) {
-  if (lifetime || (!from && !to)) {
-    return { lifetime: 'true' };
-  }
-
-  return {
-    ...(from ? { from } : {}),
-    ...(to ? { to } : {}),
-  };
+export function buildTimeframeParams(from: string | null, to: string | null, lifetime = false): Record<string, string> {
+  const range = Object.fromEntries(Object.entries({ from, to }).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  return lifetime || Object.keys(range).length === 0 ? { lifetime: 'true' } : range;
 }
 
-export function buildTripTagFilterParams(filters?: {
-  tagIds?: string[];
-  tagMatch?: 'all' | 'any';
-  untagged?: boolean;
-}) {
-  const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
-  if (tagIds.length > 0) {
-    return {
-      tag_ids: tagIds.join(','),
-      tag_match: filters?.tagMatch === 'any' ? 'any' : 'all',
-    };
-  }
-  return filters?.untagged ? { untagged: 1 } : {};
-}
-
-function tripPowerSource(value: unknown): TripPowerSource | undefined {
-  return value === 'direct' || value === 'estimated_soc' || value === 'unavailable'
-    ? value
-    : undefined;
+export function buildTripTagFilterParams(filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean }): Record<string, string | number> {
+  const ordered = (filters?.tagIds ?? []).slice().sort();
+  const ids = ordered.filter((id, index) => index === 0 || id !== ordered[index - 1]);
+  const tagged = ids.length ? { tag_ids: ids.join(','), tag_match: filters?.tagMatch === 'any' ? 'any' : 'all' } : null;
+  return tagged ?? (filters?.untagged ? { untagged: 1 } : {});
 }
 
 function listEnvelope<T, Key extends string>(response: Record<Key, T[]>, key: Key): T[] {
