@@ -74,10 +74,11 @@ export function timeframeToQuery(timeframe: DashboardTimeframe): {
 }
 
 export function getTimeframeLabel(timeframe: DashboardTimeframe): string {
-  const label = timeframe.kind === 'custom'
-    ? [timeframe.from, timeframe.to].map(formatRangeDisplay)
-    : [PRESET_LABELS[timeframe.kind === 'preset' ? timeframe.preset : 'lifetime']];
-  return label.join(' - ');
+  if (timeframe.kind === 'custom') {
+    return [timeframe.from, timeframe.to].map(formatRangeDisplay).join(' - ');
+  }
+  const preset = timeframe.kind === 'lifetime' ? 'lifetime' : timeframe.preset;
+  return PRESET_LABELS[preset];
 }
 
 export function normalizeDateRange(range: DateRange): DateRange {
