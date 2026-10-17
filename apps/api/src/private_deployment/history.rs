@@ -46,6 +46,10 @@ pub fn require_vehicle_deletion_allowed(config: &Config) -> Result<(), AppError>
 }
 
 #[cfg(test)]
+#[path = "__tests__/history_policy_differential.rs"]
+mod history_policy_differential;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::{postgres::PgPoolOptions, Executor};

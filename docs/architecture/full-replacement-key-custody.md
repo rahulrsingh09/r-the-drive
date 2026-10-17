@@ -75,3 +75,50 @@ caller is dropped. The local archive remains untouched on failure.
 Linux is the validated platform. The unchanged non-Unix denial is listed
 for inspection; no non-Unix toolchain build is claimed. Integrated release,
 deployment, and live-provider validation belong to the parent workflow.
+
+## History runtime policy differential proof
+
+`private_deployment/history.sql` is executable startup policy: it revokes
+privileges and changes retention-job scheduling. Its replacement is not a
+byte-preserved schema declaration or a schema exemption. Historical migrations
+remain unchanged. The differential tests in
+`private_deployment/__tests__/history_policy_differential.rs` run the actual
+`protect_history` entry point and SQL policy.
+
+The baseline uses the original `history.rs` and `history.sql` from
+`5651fdfeed91924af623cf7eb919c417e33628bb`, overlaid with only the new test-module
+registration. Both versions use identical test assertions and fixed remaining
+sources and dependencies. Validation uses the repository's TimescaleDB
+2.28.3/PostgreSQL 18 fixture with a separate restricted login per database,
+no superuser or role-management privileges, and no published ports.
+
+The eight additional cases compare effective table privileges, ACLs, job
+configuration, and stored rows before and after execution:
+
+- All six protected tables reject actual DELETE and TRUNCATE statements with
+  SQLSTATE `42501`. Charge sessions reject TRUNCATE while retaining repair
+  DELETE. Recording and updates remain available on all seven tables.
+- Exactly four retention jobs are disabled: `timeseries.telemetry`,
+  `panda.trips`, `panda.charge_sessions`, and `panda.rivian_charge_payloads`.
+  Nine unrelated retention jobs, four compression jobs on the target tables,
+  and a custom same-named procedure job keep their configuration. Payload
+  table privileges are unchanged by this policy; its retention job is targeted.
+- Repeated installation is idempotent. A database without retention jobs is
+  valid, and development mode leaves all observed state unchanged.
+- PUBLIC and inherited DELETE grants survive a direct CURRENT_USER revoke.
+  The final effective-privilege audit rejects these installations and rolls
+  back all revocations and job changes. Removing the fixture's extra grant
+  permits a successful retry.
+- A missing later relation (`42P01`), denied `alter_job` execution (`42501`),
+  server cancellation (`57014`), and dropping the policy future all preserve
+  the pre-installation state. Cancellation is synchronized with a real lock
+  wait on a target job catalog row after the privilege-revocation phase.
+  Another connection sees no uncommitted effects; after cancellation there is
+  no open runtime transaction, and retry succeeds.
+
+Baseline and candidate produced identical privilege, ACL, job, and row
+snapshots. The missing-relation diagnostic differs only in PostgreSQL's
+internal source-line number; its SQLSTATE, relation name, and application
+error context match. The two original focused history tests also pass without
+assertion changes. The broader original HTTP authorization case remains part
+of combined validation, outside this focused differential run.
