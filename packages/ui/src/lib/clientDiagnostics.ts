@@ -50,18 +50,33 @@ function claimReport(error: unknown, record: object): boolean {
 
 export function reportClientError(error: unknown, context: ClientErrorContext): void {
   if (isAbortError(error) || (isRecord(error) && reportedErrors.has(error))) return;
-  const tokens = Object.fromEntries(TOKEN_FIELDS.map(field => [field, sanitizeToken(context[field])]));
+  const sensitive = authenticationFailure(context);
+  const tokens = Object.fromEntries(TOKEN_FIELDS.map(field => [
+    field,
+    sensitive
+      ? field === 'code' && /^[A-Z0-9_]{1,64}$/.test(context.code ?? '') ? context.code : undefined
+      : sanitizeToken(context[field]),
+  ]));
   const record = {
-    event: context.event, area: context.area, operation: context.operation,
-    method: context.method, path: sanitizePath(context.path),
+    event: sanitizeText(context.event), area: sanitizeText(context.area), operation: sanitizeText(context.operation),
+    method: sanitizeToken(context.method), path: sanitizePath(context.path),
     status: typeof context.status === 'number' && Number.isFinite(context.status) ? context.status : undefined,
-    ...tokens, url: sanitizePath(context.url), error: normalizeError(error),
+    ...tokens, url: sanitizePath(context.url),
+    error: sensitive ? { name: 'Error', message: 'Authentication request failed' } : normalizeError(error),
   };
   if (!claimReport(error, record)) return;
   const severity = context.severity ?? (WARNING_AREAS.has(context.area) ? 'warn' : 'error');
   const summary = `[Panda client] ${record.event}: ${record.error.name}: ${record.error.message}`;
   if (severity === 'error') console.error(summary, record);
   else console.warn(summary, record);
+}
+
+function authenticationFailure(context: ClientErrorContext): boolean {
+  if (context.status === 401 || context.status === 403) return true;
+  const route = sanitizePath(context.path ?? context.url) ?? '';
+  if (/^\/v\d+\/(?:auth(?:\/|$)|vehicles\/connect(?:\/|$))/i.test(route)) return true;
+  return /(?:^|[./:_-])(?:auth|login|signin|credentials?|password|token)(?:[./:_-]|$)/i
+    .test(`${context.area}.${context.operation}`);
 }
 
 export function installGlobalClientErrorHandlers(): () => void {
@@ -130,7 +145,10 @@ function sanitizePath(value: string | undefined): string | undefined {
 }
 function sanitizeText(value: string | undefined): string {
   const bearerRemoved = (value ?? '').replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer <redacted>');
-  return bearerRemoved.replace(/https?:\/\/[^\s)]+/gi, url => sanitizePath(url) ?? '<url>').slice(0, MAX_TEXT_LENGTH);
+  const credentialsRemoved = bearerRemoved
+    .replace(/(^|\n)((?:set-cookie|cookie|authorization)\s*:)[^\r\n]*/gi, '$1$2 <redacted>')
+    .replace(/(["']?(?:password|passwd|secret|(?:access_|refresh_|id_)?token|api[_-]?key|authorization_code|email|account)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)/gi, '$1<redacted>');
+  return credentialsRemoved.replace(/https?:\/\/[^\s)]+/gi, url => sanitizePath(url) ?? '<url>').slice(0, MAX_TEXT_LENGTH);
 }
 function sanitizeToken(value: string | undefined): string | undefined {
   return value ? sanitizeText(value).replace(/^Bearer\s+.+$/i, 'Bearer <redacted>') : undefined;
