@@ -838,7 +838,7 @@ async fn charge_migration_appends_to_existing_ledger_without_changing_data_or_id
     let result = crate::db::migrations::run_current_migrations(&db.pool)
         .await
         .unwrap();
-    assert_eq!(result.latest_version, 1_000_031);
+    assert_eq!(result.latest_version, 1_000_032);
     let after: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
         "SELECT version,description,checksum FROM public._sqlx_migrations ORDER BY version",
     )
@@ -846,7 +846,14 @@ async fn charge_migration_appends_to_existing_ledger_without_changing_data_or_id
     .await
     .unwrap();
     assert_eq!(&after[..before.len()], before.as_slice());
-    assert_eq!(after.len(), before.len() + 1);
+    assert_eq!(after.len(), before.len() + 2);
+    assert_eq!(
+        after[before.len()..]
+            .iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>(),
+        vec![1_000_031, 1_000_032]
+    );
     let vehicle: Uuid = sqlx::query_scalar("SELECT id FROM panda.vehicles WHERE id=$1")
         .bind(db.vehicle_id)
         .fetch_one(&db.pool)
