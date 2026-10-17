@@ -103,7 +103,6 @@ vi.mock('@panda/hooks', async (importOriginal) => {
 
 import { DashboardRenderer } from '@panda/dashboards';
 import type { DashboardConfig } from '@panda/dashboards';
-import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
 
 const baseConfig: DashboardConfig = {
   schemaVersion: 2,
@@ -355,37 +354,41 @@ describe('charging connection custom widget', () => {
     expect(screen.queryByTestId('sensor-chip')).toBeNull();
   });
 
-  it('previews both conditional layouts in edit mode without changing live vehicle state', async () => {
-    render(
+  it('uses live conditional visibility even when edit mode is requested', () => {
+    const onConfigChange = vi.fn();
+    const before = structuredClone(swappedConfig);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = rtlRender(
       <DashboardRenderer
         config={swappedConfig}
         ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
         mode="edit"
-        onConfigChange={() => undefined}
-      />
+        onConfigChange={onConfigChange}
+      />,
+      { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
     );
 
-    expect(await screen.findByRole('button', { name: 'Unplugged' }, { timeout: 5_000 })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
-    expect(screen.getByRole('complementary').querySelector('[data-dashboard-preview-state]')).toHaveAttribute(
-      'data-dashboard-preview-state',
-      'Unplugged',
-    );
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Plugged in' })).toBeNull();
     expect(screen.getByTestId('sensor-chip')).toBeInTheDocument();
     expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Plugged in' }));
+    chargingMocks.forcePluggedState = 'Connected';
+    rerender(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={onConfigChange}
+      />
+    );
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('sensor-chip')).toBeNull();
+    expect(onConfigChange).not.toHaveBeenCalled();
+    expect(swappedConfig).toEqual(before);
+  });
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Plugged in' })).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByText('Previewing: Plugged in')).toBeInTheDocument();
-      expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-      expect(screen.queryByTestId('sensor-chip')).toBeNull();
-      expect(screen.getByTestId('charging-connection-chip').closest('[data-fixed-size="true"]')).not.toBeNull();
-    });
-  }, 15_000);
-
-  it('resets the transient scenario to live state when edit mode is reopened', async () => {
+  it('keeps the same live view when legacy edit mode is reopened', () => {
     const firstRender = render(
       <DashboardRenderer
         config={swappedConfig}
@@ -394,12 +397,11 @@ describe('charging connection custom widget', () => {
         onConfigChange={() => undefined}
       />
     );
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Plugged in' }));
-    expect(screen.getByText('Previewing: Plugged in')).toBeInTheDocument();
+    const firstView = firstRender.container.innerHTML;
+    expect(screen.queryByLabelText('Dashboard scenario preview')).toBeNull();
     firstRender.unmount();
 
-    render(
+    const nextRender = render(
       <DashboardRenderer
         config={swappedConfig}
         ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
@@ -407,26 +409,32 @@ describe('charging connection custom widget', () => {
         onConfigChange={() => undefined}
       />
     );
-
-    expect(await screen.findByRole('button', { name: 'Unplugged' }, { timeout: 5_000 })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
+    expect(nextRender.container.innerHTML).toBe(firstView);
+    expect(screen.queryByLabelText('Dashboard scenario preview')).toBeNull();
   });
 
-
-  it('requests data only for widgets visible in the selected preview', async () => {
-    render(
+  it('requests data only for live visible widgets even in legacy edit mode', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = rtlRender(
       <DashboardRenderer
         config={metricPreviewConfig}
         ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
         mode="edit"
         onConfigChange={() => undefined}
-      />
+      />,
+      { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
     );
 
     expect(chargingMocks.metricRequests.at(-1)?.map((request) => request.metric)).toEqual(['battery_level']);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Plugged in' }));
-
+    expect(screen.queryByLabelText('Dashboard scenario preview')).toBeNull();
+    chargingMocks.forcePluggedState = 'Connected';
+    rerender(
+      <DashboardRenderer
+        config={metricPreviewConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+      />
+    );
     await waitFor(() => {
       expect(chargingMocks.metricRequests.at(-1)?.map((request) => request.metric)).toEqual(['total_miles']);
     });
@@ -665,15 +673,16 @@ describe('charging connection custom widget', () => {
     }
   });
 
-  it('does not expose a force-show switch in the custom widget editor', () => {
+  it('does not expose a widget editor or a force-show switch through legacy edit mode', () => {
     render(
-      <WidgetEditForm
-        widget={baseConfig.widgets[0]!}
-        onChange={() => undefined}
-        onClose={() => undefined}
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
       />
     );
 
     expect(screen.queryByRole('switch', { name: 'Force show charging connection' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit widget settings' })).toBeNull();
   });
 });

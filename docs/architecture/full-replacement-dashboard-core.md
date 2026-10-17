@@ -1,8 +1,11 @@
 # Dashboard core implementation
 
-Dashboard rendering separates committed data, temporary editor state, and saved
-configuration. The component markup, bundled chart definitions, query routes,
-and permission rules remain compatibility contracts.
+Dashboard rendering uses committed data and the supplied saved configuration.
+Layouts are fixed in the UI: legacy `mode="edit"`, `onConfigChange`, and
+`editActions` inputs remain accepted during caller migration but have no effect.
+The shared renderer never replaces a custom dashboard with a bundled default.
+The view markup, bundled chart definitions, query routes, and permission rules
+remain compatibility contracts.
 
 The widget registry stores each definition with its resolved editor metadata in
 one entry. Registration replaces both together. Fixed-size metadata disables
@@ -13,13 +16,14 @@ releases its observation after first intersection or unmount; the observer close
 when no boundaries remain. The 320px preload margin and mobile heights remain
 unchanged.
 
-The grid editor applies add, remove, replace, and layout commands through one
-configuration boundary. Every emitted widget passes the registry layout
-constraints. A selection belongs to a dashboard identity and clears when that
-identity changes or the selected widget disappears from the preview. Preview
-state uses explicit synchronization and selection actions: live status updates
-an untouched preview, while user selection persists until the dashboard or mode
-changes.
+`DashboardRenderer` derives visibility and data requirements only from live
+vehicle state. Hidden widgets remain in the supplied configuration; the existing
+view projection and responsive grid determine what is displayed. `WidgetChrome`
+always renders its view frame and ignores its former editor callbacks. There is
+no lazy grid editor, drag or resize overlay, palette, widget form, editor drawer,
+or scenario preview. Chart definition editing and favorites remain separate
+features. `IconPicker`, daily sensor aggregation, and icon migration remain in
+use outside the removed editor chain.
 
 Dashboard API writes share cache reconciliation. A system row cannot replace a
 personal row in the slug cache. List entries are reconciled by identity and by
@@ -33,6 +37,26 @@ renderer validation resolves bindings once and applies ordered contract checks.
 The bundled legacy renderer remains the production route; the generic renderer
 registry continues to serve independent chart definitions.
 
+Catalog compilation validates each bundled configuration before deriving its
+primary-series mode, axis, range, and recognized placements. The sorted catalog
+and ID index share the resulting descriptors. Fixed renderer routing and
+capability vocabularies remain explicit; the established chart renderer output
+is unchanged. Settings capabilities compose three independent policies: source
+filter support, X-domain ownership, and ordered axis descriptors. Axis units
+either come from a fixed renderer contract or the definition's primary unit.
+
+`WidgetHost` resolves the registry component, composes its optional keyed
+presentation, then assembles title/content slots and frame attributes. Title
+ownership is separate from those fixed DOM slots. Unknown widgets retain their
+fallback frame and do not invoke a presentation. The generic renderer registry
+contains one universally supported definition renderer, so resolution returns
+that adapter directly; bundled legacy chart dispatch remains separate.
+
+Placement reconciliation preserves unaffected placement objects, checks ordering
+while removing the target, and inserts a replacement after locale-equivalent
+keys. Portable chart import counts UTF-8 bytes incrementally and rejects
+an oversized prefix before allocating a parsed document or a full encoded copy.
+
 Chart validation visits nested parameter objects with an explicit stack and
 preserves diagnostic paths and order. Executable, remote, SQL, HTML, and CSS keys
 remain prohibited. Source validation checks filter operators, field roles, and
@@ -43,13 +67,14 @@ deltas select the last lexical timestamp within each UTC day and floor resets
 at zero. Padding retains the last observed day as the end of the requested
 window. Input arrays are never sorted or mutated.
 
-The widget form resolves sensor text options from saved values, definition
-values, and explicit defaults. Its raw JSON editor tracks synchronization, text,
-and error transitions separately from saved widget options. Icon search uses
+Icon search uses
 abort-scoped requests through the existing proxy and ignores canceled results.
 Iconify's direct fetch path remains disabled.
 
 Existing shared query planning, vehicle placeholder isolation, metric projection,
 layout bounds, and bounded expression evaluation remain in place. Local
-replacement tests supplement the original assertions; integration validation
-must still exercise the assembled dashboard and canonical chart renderers.
+replacement tests supplement the retained assertions. Tests of removed layout
+editing capabilities are retired with complete originals and SHA256 hashes in
+the external review record; unrelated view and security assertions remain.
+Integration validation must still exercise the assembled dashboard and canonical
+chart renderers after the app owner removes route and settings entry points.

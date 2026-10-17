@@ -30,10 +30,19 @@ export function exportChartJson(record: ChartRecord): string {
   return JSON.stringify(portableChartDocument(record), null, 2);
 }
 
-export function parseChartJson(text: string): PortableChartDocument {
-  if (new TextEncoder().encode(text).byteLength > MAX_CHART_EXPORT_BYTES) {
-    throw new Error('Chart export exceeds the 256 KiB portable file limit');
+function assertPortableSize(text: string) {
+  let bytes = 0;
+  for (const character of text) {
+    const code = character.codePointAt(0)!;
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (bytes > MAX_CHART_EXPORT_BYTES) {
+      throw new Error('Chart export exceeds the 256 KiB portable file limit');
+    }
   }
+}
+
+export function parseChartJson(text: string): PortableChartDocument {
+  assertPortableSize(text);
   const parsed = PortableChartDocumentSchema.parse(JSON.parse(text));
   const chart: PortableChartDocument['chart'] = {
     slug: parsed.chart.slug,

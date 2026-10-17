@@ -2,11 +2,22 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DashboardGrid } from '../../../../packages/dashboards/src/DashboardGrid';
+import { DashboardRenderer } from '../../../../packages/dashboards/src/DashboardRenderer';
+import { WidgetChrome } from '../../../../packages/dashboards/src/WidgetChrome';
 import { IconPicker } from '../../../../packages/dashboards/src/editor/IconPicker';
-import type { WidgetInstance } from '../../../../packages/dashboards/src/schema';
+import type { DashboardConfig, WidgetInstance } from '../../../../packages/dashboards/src/schema';
 
 const proxy = vi.hoisted(() => vi.fn());
-vi.mock('@panda/hooks', async (original) => ({ ...(await original<typeof import('@panda/hooks')>()), api: { proxyFetch: proxy } }));
+vi.mock('@panda/hooks', async (original) => ({
+  ...(await original<typeof import('@panda/hooks')>()),
+  api: { proxyFetch: proxy },
+  useAuth: () => ({ defaultVehicleId: null, isAdmin: true }),
+  useCurrentVehicleStatus: () => ({ data: undefined }),
+}));
+vi.mock('../../../../packages/dashboards/src/dashboardData', () => ({
+  DashboardDataProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  collectDashboardDataRequirements: () => ({ latest: [], series: [] }),
+}));
 vi.mock('@iconify/react', () => ({ Icon: ({ icon }: { icon: string }) => <i data-icon={icon} />, _api: { setFetch: vi.fn() } }));
 vi.mock('../../../../packages/dashboards/src/WidgetHost', () => ({ WidgetHost: ({ instance }: { instance: WidgetInstance }) => <span data-testid={`content-${instance.id}`} /> }));
 const widget = (id: string, type: WidgetInstance['componentType'], definitionId = 'test'): WidgetInstance => ({ id, componentType: type, definitionId, layout: { x: 3, y: 2, w: 6, h: 20 } });
@@ -15,6 +26,64 @@ const ctx = { vehicleId: null, from: null, to: null };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); proxy.mockReset(); localStorage.clear(); });
 
 describe('dashboard core interaction boundaries', () => {
+  it('renders a frozen custom layout identically for view and legacy edit callers', () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const config: DashboardConfig = {
+      schemaVersion: 2, id: 'custom', slug: 'personal-layout', name: 'Personal',
+      isDefault: false, isLocked: false, ownerId: 'synthetic-owner',
+      controls: { dateRange: true },
+      widgets: [widget('custom-chart', 'chart'), widget('custom-sensor', 'sensor')],
+    };
+    const before = structuredClone(config);
+    for (const instance of config.widgets) {
+      Object.freeze(instance.layout);
+      Object.freeze(instance);
+    }
+    Object.freeze(config.widgets);
+    Object.freeze(config);
+    const onConfigChange = vi.fn();
+    const view = render(<DashboardRenderer config={config} ctx={ctx} />);
+    const viewDom = view.container.innerHTML;
+    view.unmount();
+    window.history.replaceState({}, '', '/dashboard?edit=1');
+    const edit = render(<DashboardRenderer
+      config={config} ctx={ctx} mode="edit" onConfigChange={onConfigChange}
+      editActions={<button onClick={() => onConfigChange(config)}>Save layout</button>}
+    />);
+    expect(edit.container.innerHTML).toBe(viewDom);
+    const frame = edit.container.querySelector('[data-widget-id="custom-chart"]')!;
+    expect(frame).toHaveStyle({ gridColumn: '4 / span 6', gridRow: '3 / span 20' });
+    for (const event of ['pointerDown', 'pointerMove', 'pointerUp', 'dragStart', 'dragEnd', 'click'] as const) {
+      fireEvent[event](frame);
+    }
+    fireEvent.keyDown(frame, { key: 'Delete' });
+    expect(edit.container.querySelector('.react-grid-layout, .react-resizable-handle, .drag-handle, [data-widget-edit-control], [data-dashboard-preview-state]')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(document.querySelector('[role="complementary"]')).toBeNull();
+    expect(document.body).not.toHaveClass('rgl-drawer-open');
+    expect(onConfigChange).not.toHaveBeenCalled();
+    expect(config).toEqual(before);
+    window.history.replaceState({}, '', '/');
+  });
+  it('ignores legacy chrome editor callbacks while preserving view children and frame props', () => {
+    const onToggleEdit = vi.fn();
+    const updateWidgetOptions = vi.fn();
+    const instance = widget('standalone', 'sensor');
+    const { container } = render(<WidgetChrome
+      instance={instance} ctx={ctx} mode="edit" isEditing
+      editor={{ movable: true, resizable: true, fixedSize: false, deprecated: false }}
+      onToggleEdit={onToggleEdit} updateWidgetOptions={updateWidgetOptions}
+      className="existing-class" aria-label="Saved widget"
+    ><span>View child</span></WidgetChrome>);
+    const frame = screen.getByLabelText('Saved widget');
+    expect(frame).toHaveAttribute('data-widget-frame', 'view');
+    expect(frame).toHaveClass('dashboard-widget-frame', 'existing-class');
+    expect(screen.getByText('View child')).toBeInTheDocument();
+    expect(container.querySelector('[data-editing], [data-widget-movable], [data-widget-resizable]')).toBeNull();
+    fireEvent.click(frame);
+    expect(onToggleEdit).not.toHaveBeenCalled();
+    expect(updateWidgetOptions).not.toHaveBeenCalled();
+  });
   it('uses the exact 639/640 breakpoint and caps mobile chart height', () => {
     let update: ((event: { matches: boolean }) => void) | undefined;
     const remove = vi.fn();

@@ -19,11 +19,14 @@ export interface ChartRendererPlugin {
   render: (props: ChartRendererProps) => React.ReactNode;
 }
 
-export const CHART_RENDERER_PLUGINS: ReadonlyArray<ChartRendererPlugin> = [
-  { id: 'rich-time-series', supports: () => true, render: (props) => React.createElement(ChartDefinitionRenderer, props) },
-];
+const definitionRenderer: ChartRendererPlugin = {
+  id: 'rich-time-series',
+  supports: () => true,
+  render: (props) => React.createElement(ChartDefinitionRenderer, props),
+};
 
-export function getChartRenderer(definition: ChartDefinitionV1) {
-  const declared = definition.rendererId ? CHART_RENDERER_PLUGINS.find((plugin) => plugin.id === definition.rendererId) : undefined;
-  return declared ?? CHART_RENDERER_PLUGINS.find((plugin) => plugin.supports(definition));
+export const CHART_RENDERER_PLUGINS: ReadonlyArray<ChartRendererPlugin> = [definitionRenderer];
+
+export function getChartRenderer(_definition: ChartDefinitionV1) {
+  return definitionRenderer;
 }

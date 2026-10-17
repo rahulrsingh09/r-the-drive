@@ -77,8 +77,24 @@ export function chartHasPlacement(record: ChartRecord, dashboardSlug: string) {
 }
 
 export function withChartPlacement(record: ChartRecord, dashboardSlug: string, assigned: boolean): ChartRecord {
-  const placements = record.config.placements.filter((placement) => placement.dashboardSlug !== dashboardSlug);
-  if (assigned) placements.push({ dashboardSlug });
-  placements.sort((left, right) => left.dashboardSlug.localeCompare(right.dashboardSlug));
+  const placements: ChartRecord['config']['placements'] = [];
+  let ordered = true;
+  for (const placement of record.config.placements) {
+    if (placement.dashboardSlug === dashboardSlug) continue;
+    const previous = placements.at(-1);
+    if (previous && previous.dashboardSlug.localeCompare(placement.dashboardSlug) > 0) ordered = false;
+    placements.push(placement);
+  }
+  if (!ordered) placements.sort((left, right) => left.dashboardSlug.localeCompare(right.dashboardSlug));
+  if (assigned) {
+    let start = 0;
+    let end = placements.length;
+    while (start < end) {
+      const middle = Math.floor((start + end) / 2);
+      if (placements[middle]!.dashboardSlug.localeCompare(dashboardSlug) <= 0) start = middle + 1;
+      else end = middle;
+    }
+    placements.splice(start, 0, { dashboardSlug });
+  }
   return { ...record, config: { ...record.config, placements } };
 }

@@ -243,11 +243,7 @@ export function validateBundledRendererDefinition(
   return errors;
 }
 
-const definitions = BUNDLED_CHART_DEFINITIONS.map((chart) => normalizeChartDefinition(chart)).sort(
-  (a, b) => a.title.localeCompare(b.title)
-);
-
-const definitionById = new Map(definitions.map((definition) => [definition.id, definition]));
+const { definitions, definitionById } = compileChartCatalog(BUNDLED_CHART_DEFINITIONS);
 
 export function getChartDefinitions(page?: DashboardChartPage): DashboardChartDefinition[] {
   if (!page) return definitions;
@@ -267,134 +263,82 @@ export function getChartOptions(page?: DashboardChartPage) {
   }));
 }
 
+const DEFINITION_UNIT = Symbol('definition-unit');
+type SettingsAxisPolicy = readonly [DashboardChartAxisId, string, (string | typeof DEFINITION_UNIT)?];
+
+const SETTINGS_AXES: Partial<Record<DashboardChartSource, readonly SettingsAxisPolicy[]>> = {
+  soc_history: [['y', 'State of Charge', DEFINITION_UNIT]],
+  charging_weekly_energy: [['y', 'Energy charged', DEFINITION_UNIT]],
+  charge_session_curve: [['y', 'Charge rate', 'kW'], ['y2', 'Energy added', 'kWh']],
+  charging_curve_analysis: [['x', 'Charge level', '%'], ['y', 'Charge rate', 'kW']],
+  efficiency_trend: [['y', 'Efficiency']],
+  phantom_drain: [['y', 'Drain rate', DEFINITION_UNIT]],
+  battery_degradation: [['y', 'Battery health', DEFINITION_UNIT]],
+  battery_capacity_mileage: [['y', 'Usable capacity', DEFINITION_UNIT], ['y2', 'Mileage', 'mi']],
+  projected_range_mileage: [['y', 'Projected max range', DEFINITION_UNIT], ['y2', 'Mileage', 'mi']],
+  tire_pressure_trips: [['y', 'Tire pressure', DEFINITION_UNIT], ['y2', 'Trips', 'Trips']],
+};
+const FILTERABLE_SOURCES = new Set<DashboardChartSource>([
+  'soc_history', 'charge_session_curve', 'efficiency_trend', 'battery_degradation',
+  'battery_capacity_mileage', 'projected_range_mileage',
+]);
+const LOCAL_DOMAIN_SOURCES = new Set<DashboardChartSource>([
+  'charge_session_curve', 'charging_curve_analysis',
+]);
+
 export function getChartSettingsCapabilities(
   definition: DashboardChartDefinition
 ): DashboardChartSettingsCapabilities {
-  switch (definition.source) {
-    case 'soc_history':
-      return {
-        timeFilter: true,
-        axes: {
-          y: axisCapability('State of Charge', definition.yUnit),
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'charging_weekly_energy':
-      return {
-        timeFilter: false,
-        axes: {
-          y: axisCapability('Energy charged', definition.yUnit),
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'charge_session_curve':
-      return {
-        timeFilter: true,
-        axes: {
-          y: { label: 'Charge rate', unit: 'kW' },
-          y2: { label: 'Energy added', unit: 'kWh' },
-        },
-        xDomainSource: 'chart-local',
-      };
-    case 'charging_curve_analysis':
-      return {
-        timeFilter: false,
-        axes: {
-          x: { label: 'Charge level', unit: '%' },
-          y: { label: 'Charge rate', unit: 'kW' },
-        },
-        xDomainSource: 'chart-local',
-      };
-    case 'efficiency_trend':
-      return {
-        timeFilter: true,
-        axes: {
-          y: { label: 'Efficiency' },
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'phantom_drain':
-      return {
-        timeFilter: false,
-        axes: {
-          y: axisCapability('Drain rate', definition.yUnit),
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'battery_degradation':
-      return {
-        timeFilter: true,
-        axes: {
-          y: axisCapability('Battery health', definition.yUnit),
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'battery_capacity_mileage':
-      return {
-        timeFilter: true,
-        axes: {
-          y: axisCapability('Usable capacity', definition.yUnit),
-          y2: { label: 'Mileage', unit: 'mi' },
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'projected_range_mileage':
-      return {
-        timeFilter: true,
-        axes: {
-          y: axisCapability('Projected max range', definition.yUnit),
-          y2: { label: 'Mileage', unit: 'mi' },
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'tire_pressure_trips':
-      return {
-        timeFilter: false,
-        axes: {
-          y: axisCapability('Tire pressure', definition.yUnit),
-          y2: { label: 'Trips', unit: 'Trips' },
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    default:
-      return {
-        timeFilter: false,
-        axes: {},
-        xDomainSource: 'dashboard-timeframe',
-      };
+  const axes: DashboardChartSettingsCapabilities['axes'] = {};
+  const policy = Object.hasOwn(SETTINGS_AXES, definition.source) ? SETTINGS_AXES[definition.source] : undefined;
+  for (const [id, label, unit] of policy ?? []) {
+    axes[id] = axisCapability(label, unit === DEFINITION_UNIT ? definition.yUnit : unit);
   }
+  return {
+    timeFilter: FILTERABLE_SOURCES.has(definition.source),
+    axes,
+    xDomainSource: LOCAL_DOMAIN_SOURCES.has(definition.source) ? 'chart-local' : 'dashboard-timeframe',
+  };
 }
 
 function axisCapability(label: string, unit?: string): DashboardChartAxisCapability {
   return unit ? { label, unit } : { label };
 }
 
-function normalizeChartDefinition(
-  chart: (typeof BUNDLED_CHART_DEFINITIONS)[number]
-): DashboardChartDefinition {
-  const routing = CHART_ROUTING[chart.slug];
-  if (!routing) throw new Error(`Missing renderer routing for bundled chart: ${chart.slug}`);
-  const primarySeries = chart.series[0];
-  const primaryAxis = primarySeries?.yAxis === 'y2' ? chart.axes.y2 : chart.axes.y;
-  const yRange = fixedRange(primaryAxis);
-  const config = ChartDefinitionV1Schema.parse(chart) as unknown as ChartDefinitionV1;
-  return {
-    id: chart.slug,
-    title: chart.title,
-    description: chart.description,
-    pages: chart.placements
-      .map((placement) => placement.dashboardSlug)
-      .filter(isDashboardChartPage),
-    source: routing.source,
-    config,
-    mode: seriesMode(primarySeries),
-    ...(primaryAxis?.unit ? { yUnit: primaryAxis.unit } : {}),
-    ...(yRange ? { yRange } : {}),
-    stepInterpolation: primarySeries?.mark === 'step',
-    defaultSize: routing.defaultSize ?? { w: 12, h: 8 },
-    minSize: routing.minSize ?? { w: 4, h: 6 },
-    ...(chart.display.emptyTitle ? { emptyTitle: chart.display.emptyTitle } : {}),
-  };
+function compileChartCatalog(charts: typeof BUNDLED_CHART_DEFINITIONS) {
+  const definitions: DashboardChartDefinition[] = [];
+  for (const chart of charts) {
+    const routing = CHART_ROUTING[chart.slug];
+    if (!routing) throw new Error(`Missing renderer routing for bundled chart: ${chart.slug}`);
+    const config = ChartDefinitionV1Schema.parse(chart) as ChartDefinitionV1;
+    const primary = config.series[0];
+    const axis = config.axes[primary?.yAxis ?? 'y'];
+    const pages: DashboardChartPage[] = [];
+    for (const { dashboardSlug } of config.placements) {
+      if (isDashboardChartPage(dashboardSlug)) pages.push(dashboardSlug);
+    }
+    const definition: DashboardChartDefinition = {
+      id: chart.slug,
+      title: chart.title,
+      description: chart.description,
+      pages,
+      source: routing.source,
+      config,
+      mode: seriesMode(primary),
+      stepInterpolation: primary?.mark === 'step',
+      defaultSize: routing.defaultSize ?? { w: 12, h: 8 },
+      minSize: routing.minSize ?? { w: 4, h: 6 },
+    };
+    if (axis?.unit) definition.yUnit = axis.unit;
+    const range = fixedRange(axis);
+    if (range) definition.yRange = range;
+    if (config.display.emptyTitle) definition.emptyTitle = config.display.emptyTitle;
+    definitions.push(definition);
+  }
+  definitions.sort((left, right) => left.title.localeCompare(right.title));
+  const definitionById = new Map<string, DashboardChartDefinition>();
+  for (const definition of definitions) definitionById.set(definition.id, definition);
+  return { definitions, definitionById };
 }
 
 function isDashboardChartPage(value: string): value is DashboardChartPage {

@@ -19,40 +19,47 @@ interface WidgetHostProps {
   ctx: WidgetCtx;
 }
 
-export function WidgetHost({ instance, ctx }: WidgetHostProps) {
-  const presentations = React.useContext(WidgetPresentationContext);
-  const def = getWidgetForInstance(instance);
+const SELF_TITLED_TYPES = new Set<WidgetInstance['componentType']>(['sensor', 'battery', 'charging']);
+const SELF_TITLED_DEFINITIONS = new Set(['custom:charging.connection', 'custom:trips.stat']);
 
-  if (!def) {
-    return (
-      <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary">
-        Unknown widget: {instance.componentType}/{instance.definitionId}
-      </div>
-    );
-  }
-
-  const Component = def.component;
-  const Presentation = presentations[`${instance.componentType}:${instance.definitionId}`];
-  const content = <Component instance={instance} ctx={ctx} />;
-  return (
-    <div className="flex h-full min-h-0 flex-col" data-widget-type={instance.componentType} data-widget-definition={instance.definitionId}
-      data-chart-id={instance.componentType === 'chart' && typeof instance.options?.chartId === 'string' ? instance.options.chartId : undefined}>
-      {instance.title && shouldShowWidgetTitle(instance) ? (
-        <p className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-          {instance.title}
-        </p>
-      ) : null}
-      <div className="min-h-0 flex-1 [&>*]:h-full">
-        {Presentation ? <Presentation instance={instance} ctx={ctx}>{content}</Presentation> : content}
-      </div>
-    </div>
-  );
+function widgetTitle(instance: WidgetInstance, key: string) {
+  const ownsTitle = SELF_TITLED_TYPES.has(instance.componentType) || SELF_TITLED_DEFINITIONS.has(key);
+  const pickerHidden = instance.componentType === 'chart' && instance.options?.showPicker === false;
+  return ownsTitle || pickerHidden ? undefined : instance.title;
 }
 
-function shouldShowWidgetTitle(instance: WidgetInstance) {
-  if (instance.componentType === 'chart' && instance.options?.showPicker === false) return false;
-  if (instance.componentType === 'sensor' || instance.componentType === 'battery' || instance.componentType === 'charging') return false;
-  if (instance.componentType === 'custom' && instance.definitionId === 'charging.connection') return false;
-  if (instance.componentType === 'custom' && instance.definitionId === 'trips.stat') return false;
-  return true;
+export function WidgetHost({ instance, ctx }: WidgetHostProps) {
+  const presentations = React.useContext(WidgetPresentationContext);
+  const definition = getWidgetForInstance(instance);
+  const key = `${instance.componentType}:${instance.definitionId}`;
+  const layers: Array<(children: React.ReactNode) => React.ReactNode> = [];
+  if (definition) {
+    layers.push(() => React.createElement(definition.component, { instance, ctx }));
+    const presentation = presentations[key];
+    if (presentation) layers.push(children => React.createElement(presentation, { instance, ctx, children }));
+  }
+  const content = layers.reduce<React.ReactNode>(
+    (children, render) => render(children),
+    undefined,
+  );
+  const children: React.ReactNode[] = [];
+  const attributes: Record<string, string | undefined> = {};
+  let className = 'flex h-full items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary';
+  if (layers.length) {
+    className = 'flex h-full min-h-0 flex-col';
+    attributes['data-widget-type'] = instance.componentType;
+    attributes['data-widget-definition'] = instance.definitionId;
+    const chartId = instance.options?.chartId;
+    if (instance.componentType === 'chart' && typeof chartId === 'string') attributes['data-chart-id'] = chartId;
+    const title = widgetTitle(instance, key);
+    if (title) children.push(
+      <p key="title" className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+        {title}
+      </p>,
+    );
+    children.push(<div key="content" className="min-h-0 flex-1 [&>*]:h-full">{content}</div>);
+  } else {
+    children.push('Unknown widget: ', instance.componentType, '/', instance.definitionId);
+  }
+  return <div className={className} {...attributes}>{children}</div>;
 }

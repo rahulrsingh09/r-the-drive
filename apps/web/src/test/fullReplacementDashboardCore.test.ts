@@ -4,6 +4,7 @@ import { BUNDLED_CHART_DEFINITIONS, ChartDefinitionV1Schema, buildChartManagerEn
 import { defaultChartPermissions, withChartPlacement } from '../../../../packages/dashboards/src/charts/model';
 import { removeCurveAndUnusedSources } from '../../../../packages/dashboards/src/charts/curveCatalog';
 import { seriesToDailyDeltas, seriesToDailyTotals } from '../../../../packages/dashboards/src/editor/dailyDelta';
+import { CHART_RENDERER_PLUGINS, getChartRenderer } from '../../../../packages/dashboards/src/charts/rendererRegistry';
 
 const config = () => ChartDefinitionV1Schema.parse(BUNDLED_CHART_DEFINITIONS[0]) as ChartDefinitionV1;
 const record = (overrides: Partial<ChartRecord> = {}): ChartRecord => ({ id: 'system', ownerId: null, slug: 'test', name: 'Test', isDefault: true, isLocked: false, isEnabled: true, config: config(), ...overrides });
@@ -29,6 +30,24 @@ describe('dashboard core replacement characterization', () => {
     const result = withChartPlacement(source, 'z', true);
     expect(result.config.placements).toEqual([{ dashboardSlug: 'a' }, { dashboardSlug: 'z' }]);
     expect(source.config.placements).toHaveLength(3);
+  });
+  it('orders unsorted placements and inserts after equivalent locale keys without copying other entries', () => {
+    const source = record();
+    source.config.placements = [{ dashboardSlug: 'z' }, { dashboardSlug: 'e\u0301' }, { dashboardSlug: 'a' }];
+    const result = withChartPlacement(source, 'é', true);
+    expect(result.config.placements.map(placement => placement.dashboardSlug)).toEqual(['a', 'e\u0301', 'é', 'z']);
+    expect(result.config.placements[1]).toBe(source.config.placements[1]);
+    expect(withChartPlacement(result, 'é', false).config.placements.map(placement => placement.dashboardSlug)).toEqual(['a', 'e\u0301', 'z']);
+    expect(source.config.placements.map(placement => placement.dashboardSlug)).toEqual(['z', 'e\u0301', 'a']);
+  });
+  it('routes every independent definition through the sole generic plugin', () => {
+    expect(CHART_RENDERER_PLUGINS).toHaveLength(1);
+    for (const rendererId of [undefined, 'rich-time-series', 'unregistered-plugin']) {
+      const definition = config();
+      if (rendererId === undefined) delete definition.rendererId;
+      else definition.rendererId = rendererId;
+      expect(getChartRenderer(definition)).toBe(CHART_RENDERER_PLUGINS[0]);
+    }
   });
   it('uses lexical timestamps to select daily counters and floors resets', () => {
     const data = [{ ts: '2026-07-03T10:00:00Z', value: 4 }, { ts: '2026-07-01T08:00:00Z', value: 10 }, { ts: '2026-07-01T09:00:00Z', value: 12 }, { ts: 'invalid', value: 100 }, { ts: '2026-07-04T00:00:00Z', value: NaN }];
