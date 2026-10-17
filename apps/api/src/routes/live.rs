@@ -116,28 +116,15 @@ async fn live_session_handler(
 ) -> Result<impl IntoResponse, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
-
-    let key = format!("vehicle:{vehicle_id}:live_session");
-    let mut conn = state.redis.get_multiplexed_async_connection().await?;
-    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
-    let active = sqlx::query_as::<_, ActiveLiveSession>(
-        r#"SELECT parallax_live_power_kw,parallax_total_charged_kwh,
-                  parallax_pack_energy_kwh,parallax_thermal_energy_kwh,
-                  parallax_time_remaining_minutes,parallax_power_observed_at,
-                  parallax_total_energy_observed_at,parallax_pack_energy_observed_at,
-                  parallax_thermal_energy_observed_at,parallax_time_observed_at
-           FROM panda.charge_sessions
-           WHERE vehicle_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1"#,
+    let mut connection = state.redis.get_multiplexed_async_connection().await?;
+    let legacy: Option<String> = redis::AsyncCommands::get(
+        &mut connection,
+        format!("vehicle:{vehicle_id}:live_session"),
     )
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
     .await?;
-
-    Ok(live_session_response(merge_live_session(
-        raw,
-        active,
-        Utc::now(),
-    )))
+    let active = ActiveLiveSession::read(&state.pool, vehicle_id).await?;
+    let merged = merge_live_session(legacy, active, Utc::now());
+    Ok(live_session_response(merged))
 }
 
 #[derive(sqlx::FromRow)]
@@ -170,23 +157,11 @@ fn merge_live_session(
 }
 
 fn live_session_response(raw: Option<String>) -> axum::response::Response {
-    match raw {
-        Some(json) => {
-            let value: serde_json::Value =
-                serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
-            axum::response::Response::builder()
-                .status(200)
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(
-                    serde_json::to_string(&value).unwrap_or_default(),
-                ))
-                .unwrap()
-        }
-        None => axum::response::Response::builder()
-            .status(204)
-            .body(axum::body::Body::empty())
-            .unwrap(),
-    }
+    let Some(raw) = raw else {
+        return axum::http::StatusCode::NO_CONTENT.into_response();
+    };
+    let value = serde_json::from_str::<serde_json::Value>(&raw).unwrap_or_default();
+    axum::Json(value).into_response()
 }
 
 async fn authorize_live(
@@ -194,36 +169,37 @@ async fn authorize_live(
     claims: &Claims,
     vehicle_id: Uuid,
 ) -> Result<(), (u16, &'static str)> {
-    tokio::time::timeout(LIVE_AUTH_TIMEOUT, async {
-        crate::services::sessions::require_enabled_session(pool, claims)
-            .await
-            .map_err(|error| match error {
+    let check = async {
+        if let Err(error) = crate::services::sessions::require_enabled_session(pool, claims).await {
+            return Err(match error {
                 AppError::Forbidden | AppError::Unauthorized => (4401, "Session ended"),
                 _ => (1011, "Authorization unavailable"),
-            })?;
-        // Legacy memberships can survive vehicle deletion.
-        let allowed: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM panda.vehicle_memberships m
-                JOIN panda.vehicles v ON v.id = m.vehicle_id
-                WHERE m.vehicle_id = $1 AND m.user_id = $2
-            )",
-        )
-        .bind(vehicle_id)
-        .bind(claims.sub)
-        .fetch_one(pool)
-        .await
-        .map_err(|_| (1011, "Authorization unavailable"))?;
-        if !allowed {
-            return Err((4403, "Vehicle access removed"));
+            });
         }
-        if claims.exp <= Utc::now().timestamp() {
-            return Err((4401, "Session expired"));
+        let membership = sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM panda.vehicle_memberships m JOIN panda.vehicles v ON v.id=m.vehicle_id WHERE m.vehicle_id=$1 AND m.user_id=$2 LIMIT 1")
+            .bind(vehicle_id).bind(claims.sub).fetch_optional(pool).await;
+        match membership {
+            Err(_) => Err((1011, "Authorization unavailable")),
+            Ok(None) => Err((4403, "Vehicle access removed")),
+            Ok(Some(_)) if claims.exp <= Utc::now().timestamp() => Err((4401, "Session expired")),
+            Ok(Some(_)) => Ok(()),
         }
-        Ok(())
-    })
-    .await
-    .unwrap_or(Err((1011, "Authorization unavailable")))
+    };
+    match tokio::time::timeout(LIVE_AUTH_TIMEOUT, check).await {
+        Ok(result) => result,
+        Err(_) => Err((1011, "Authorization unavailable")),
+    }
+}
+
+enum SocketAction {
+    Stop,
+    Ignore,
+    Close(u16, &'static str),
+    Send {
+        authorize: bool,
+        messages: Vec<Message>,
+    },
 }
 
 async fn handle_socket(
@@ -233,81 +209,75 @@ async fn handle_socket(
     claims: Claims,
     _permit: crate::services::resource_limits::ResourcePermit,
 ) {
-    let (mut sink, mut stream) = socket.split();
-    let topic = format!("vehicle:{vehicle_id}:status");
-    let remaining = chrono::DateTime::from_timestamp(claims.exp, 0)
-        .map(|expires| (expires - Utc::now()).to_std().unwrap_or_default())
+    let (mut sink, mut incoming) = socket.split();
+    let lifetime = chrono::DateTime::from_timestamp(claims.exp, 0)
+        .and_then(|expiry| (expiry - Utc::now()).to_std().ok())
         .unwrap_or_default();
-    let expiry = tokio::time::Instant::now() + remaining;
-
-    let mut pubsub = match tokio::time::timeout_at(
-        expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
-        state.redis.get_async_pubsub(),
-    )
-    .await
-    {
-        Ok(Ok(c)) => c,
+    let expiry = tokio::time::Instant::now() + lifetime;
+    let setup_deadline =
+        || expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5));
+    let mut subscription =
+        match tokio::time::timeout_at(setup_deadline(), state.redis.get_async_pubsub()).await {
+            Ok(Ok(subscription)) => subscription,
+            _ => {
+                tracing::error!("redis pubsub connect failed or timed out");
+                return;
+            }
+        };
+    let channel = format!("vehicle:{vehicle_id}:status");
+    match tokio::time::timeout_at(setup_deadline(), subscription.subscribe(channel)).await {
+        Ok(Ok(())) => {}
         _ => {
-            tracing::error!("redis pubsub connect failed or timed out");
+            tracing::error!("redis subscribe failed");
             return;
         }
-    };
-    if !matches!(
-        tokio::time::timeout_at(
-            expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
-            pubsub.subscribe(&topic)
-        )
-        .await,
-        Ok(Ok(()))
-    ) {
-        tracing::error!("redis subscribe failed");
-        return;
     }
-
-    let mut keepalive_interval = tokio::time::interval(LIVE_AUTH_INTERVAL);
-    keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut msg_stream = pubsub.into_on_message();
-
+    let mut telemetry = subscription.into_on_message();
+    let mut authorization_clock = tokio::time::interval(LIVE_AUTH_INTERVAL);
+    authorization_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        tokio::select! {
+        let action = tokio::select! {
             biased;
-            _ = tokio::time::sleep_until(expiry) => {
-                close_live(&mut sink, 4401, "Session expired").await;
-                break;
-            }
-            msg = msg_stream.next() => {
-                match msg {
-                    Some(m) => {
-                        let payload: String = match m.get_payload() {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        };
-                        // Queued telemetry must not outlive the recipient's authorization.
-                        if let Err((code, reason)) = authorize_live(&state.pool, &claims, vehicle_id).await {
-                            close_live(&mut sink, code, reason).await;
-                            break;
-                        }
-                        if !send_live(&mut sink, Message::Text(payload.into()), expiry).await { break; }
-                    }
-                    None => break,
+            _ = tokio::time::sleep_until(expiry) => SocketAction::Close(4401, "Session expired"),
+            message = telemetry.next() => match message {
+                None => SocketAction::Stop,
+                Some(message) => match message.get_payload::<String>() {
+                    Ok(text) => SocketAction::Send { authorize: true, messages: vec![Message::Text(text.into())] },
+                    Err(_) => SocketAction::Ignore,
                 }
+            },
+            _ = authorization_clock.tick() => SocketAction::Send { authorize: true,
+                messages: vec![Message::Text(LIVE_KEEPALIVE_MESSAGE.into()), Message::Ping(Vec::new().into())] },
+            message = incoming.next() => match message {
+                Some(Ok(Message::Text(text))) if is_live_probe(&text) => SocketAction::Send {
+                    authorize: false, messages: vec![Message::Text(LIVE_KEEPALIVE_MESSAGE.into())] },
+                None | Some(Ok(Message::Close(_))) => SocketAction::Stop,
+                _ => SocketAction::Ignore,
+            },
+        };
+        match action {
+            SocketAction::Stop => return,
+            SocketAction::Ignore => {}
+            SocketAction::Close(code, reason) => {
+                close_live(&mut sink, code, reason).await;
+                return;
             }
-            _ = keepalive_interval.tick() => {
-                if let Err((code, reason)) = authorize_live(&state.pool, &claims, vehicle_id).await {
-                    close_live(&mut sink, code, reason).await;
-                    break;
-                }
-                if !send_live(&mut sink, Message::Text(LIVE_KEEPALIVE_MESSAGE.into()), expiry).await { break; }
-                if !send_live(&mut sink, Message::Ping(Vec::new().into()), expiry).await { break; }
-            }
-            msg = stream.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) if is_live_probe(text.as_str()) => {
-                        if !send_live(&mut sink, Message::Text(LIVE_KEEPALIVE_MESSAGE.into()), expiry).await { break; }
+            SocketAction::Send {
+                authorize,
+                messages,
+            } => {
+                if authorize {
+                    if let Err((code, reason)) =
+                        authorize_live(&state.pool, &claims, vehicle_id).await
+                    {
+                        close_live(&mut sink, code, reason).await;
+                        return;
                     }
-                    Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | None => break,
-                    _ => {}
+                }
+                for message in messages {
+                    if !send_live(&mut sink, message, expiry).await {
+                        return;
+                    }
                 }
             }
         }
@@ -319,14 +289,12 @@ async fn send_live(
     message: Message,
     expiry: tokio::time::Instant,
 ) -> bool {
-    matches!(
-        tokio::time::timeout_at(
-            expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
-            sink.send(message)
-        )
-        .await,
-        Ok(Ok(()))
-    )
+    let deadline = expiry.min(tokio::time::Instant::now() + std::time::Duration::from_secs(5));
+    tokio::select! {
+        biased;
+        result = sink.send(message) => result.is_ok(),
+        _ = tokio::time::sleep_until(deadline) => false,
+    }
 }
 
 async fn close_live(
@@ -334,14 +302,12 @@ async fn close_live(
     code: u16,
     reason: &'static str,
 ) {
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        sink.send(Message::Close(Some(CloseFrame {
-            code,
-            reason: reason.into(),
-        }))),
-    )
-    .await;
+    let frame = Message::Close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    send_live(sink, frame, deadline).await;
 }
 
 #[cfg(test)]
@@ -354,3 +320,21 @@ mod live_projection_contract;
 #[cfg(test)]
 #[path = "__tests__/live_projection_http.rs"]
 mod live_projection_http;
+
+impl ActiveLiveSession {
+    async fn read(pool: &sqlx::PgPool, vehicle_id: Uuid) -> Result<Option<Self>, AppError> {
+        sqlx::query_as(
+            r#"SELECT parallax_live_power_kw,parallax_total_charged_kwh,
+                  parallax_pack_energy_kwh,parallax_thermal_energy_kwh,
+                  parallax_time_remaining_minutes,parallax_power_observed_at,
+                  parallax_total_energy_observed_at,parallax_pack_energy_observed_at,
+                  parallax_thermal_energy_observed_at,parallax_time_observed_at
+           FROM panda.charge_sessions
+           WHERE vehicle_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1"#,
+        )
+        .bind(vehicle_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(AppError::from)
+    }
+}

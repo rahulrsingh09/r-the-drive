@@ -731,3 +731,34 @@ async fn external_workflow_preference_and_validation_contract() {
     }
     freeze("pure", &json!(rows), include_str!("pure.json"));
 }
+
+#[tokio::test]
+async fn openfreemap_body_limit_uses_real_http_framing() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for (wire, expected) in [
+        ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd", Ok(b"abcd".as_slice())),
+        ("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nabcde", Err("response_size")),
+        ("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n3\r\ncde\r\n0\r\n\r\n", Err("response_size")),
+        ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nab", Err("response_read")),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 8192);
+            }
+            socket.write_all(wire.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let response = reqwest::Client::builder().no_proxy().build().unwrap()
+            .get(format!("http://{address}/synthetic")).send().await.unwrap();
+        let result = read_openfreemap_response_limited(response, 4).await;
+        assert_eq!(result.as_deref(), expected.as_deref());
+        server.await.unwrap();
+    }
+}

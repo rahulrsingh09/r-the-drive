@@ -170,3 +170,100 @@ pub(super) async fn initialize_runtime(
     ).bind(vehicle_id).execute(&mut **tx).await?;
     Ok(())
 }
+
+pub(super) struct DemoSpecification {
+    model: &'static str,
+    remote_keys: Vec<String>,
+    display_name: String,
+    battery_config: &'static str,
+    capacity_wh: f64,
+}
+pub(super) struct DemoCreation {
+    vehicle: Uuid,
+    created: bool,
+    seeded: Option<crate::services::demo_seed::DemoSeedSummary>,
+}
+impl DemoSpecification {
+    pub(super) fn parse(requested: &str) -> Result<Self, AppError> {
+        let requested = requested.trim().to_uppercase();
+        let (model, battery_config, capacity_wh) = match canonical_vehicle_model(&requested) {
+            "R1T" => ("R1T", "r1_large_g1", 135_000.0),
+            "R1S" => ("R1S", "r1_large_g1", 135_000.0),
+            "R2" => ("R2", "r2", 82_000.0),
+            _ => {
+                return Err(AppError::Validation(
+                    "model must be one of R1T, R1S, R2".into(),
+                ))
+            }
+        };
+        let mut remote_keys = vec![format!("demo-{}-local", model.to_lowercase())];
+        if model == "R2" {
+            remote_keys.push("demo-r2s-local".into());
+        }
+        Ok(Self {
+            model,
+            remote_keys,
+            display_name: format!("Demo {model}"),
+            battery_config,
+            capacity_wh,
+        })
+    }
+    pub(super) async fn ensure(
+        self,
+        tx: &mut Transaction<'_, Postgres>,
+        user: Uuid,
+    ) -> Result<DemoCreation, AppError> {
+        let existing = sqlx::query_scalar::<_, Uuid>("SELECT v.id FROM panda.vehicles v JOIN panda.vehicle_memberships vm ON vm.vehicle_id=v.id WHERE vm.user_id=$1 AND v.rivian_vehicle_id=ANY($2::text[]) LIMIT 1")
+            .bind(user).bind(&self.remote_keys).fetch_optional(&mut **tx).await?;
+        if let Some(vehicle) = existing {
+            return Ok(DemoCreation {
+                vehicle,
+                created: false,
+                seeded: None,
+            });
+        }
+        let vehicle = sqlx::query_scalar::<_, Uuid>("INSERT INTO panda.vehicles (user_id,rivian_vehicle_id,model,trim,color,battery_config,battery_capacity_wh,name) VALUES ($1,$2,$3,'Adventure','Limestone',$4,$5,$6) RETURNING id")
+            .bind(user).bind(&self.remote_keys[0]).bind(self.model).bind(self.battery_config).bind(self.capacity_wh).bind(&self.display_name).fetch_one(&mut **tx).await?;
+        sqlx::query("INSERT INTO panda.vehicle_memberships (vehicle_id,user_id,role,is_default) VALUES ($1,$2,'owner',FALSE) ON CONFLICT (vehicle_id,user_id) DO UPDATE SET role='owner',updated_at=now()")
+            .bind(vehicle).bind(user).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO panda.vehicle_user_settings (vehicle_id,user_id,display_name) VALUES ($1,$2,$3) ON CONFLICT (vehicle_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,updated_at=now()")
+            .bind(vehicle).bind(user).bind(self.display_name).execute(&mut **tx).await?;
+        let seeded = seed_new_demo_vehicle(tx, vehicle, self.model, Utc::now()).await?;
+        Ok(DemoCreation {
+            vehicle,
+            created: true,
+            seeded: Some(seeded),
+        })
+    }
+}
+impl DemoCreation {
+    pub(super) fn refreshed(
+        vehicle: Uuid,
+        summary: crate::services::demo_seed::DemoSeedSummary,
+    ) -> Self {
+        Self {
+            vehicle,
+            created: false,
+            seeded: Some(summary),
+        }
+    }
+    pub(super) fn response(self) -> serde_json::Value {
+        let seeded = self.seeded.is_some();
+        let mut response = self.seeded.map(|summary| serde_json::to_value(summary).expect("demo summary serializes"))
+            .unwrap_or_else(|| serde_json::json!({"seeded_at":null,"window_start":null,"window_end":null,"counts":null}));
+        response
+            .as_object_mut()
+            .expect("demo summary object")
+            .extend([
+                ("ok".into(), serde_json::json!(true)),
+                ("vehicle_id".into(), serde_json::json!(self.vehicle)),
+                ("created".into(), serde_json::json!(self.created)),
+                ("seeded".into(), serde_json::json!(seeded)),
+                (
+                    "refreshed".into(),
+                    serde_json::json!(seeded && !self.created),
+                ),
+            ]);
+        response
+    }
+}

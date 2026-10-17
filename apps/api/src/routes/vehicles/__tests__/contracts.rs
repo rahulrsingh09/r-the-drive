@@ -596,3 +596,109 @@ async fn full_status_response_characterization() {
     }
     f.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "requires unique disposable restricted-role DB and Redis"]
+async fn capture_dispatch_and_paged_export_boundaries() {
+    let f = Fixture::new().await;
+    f.seed().await;
+    let vehicle = id(101);
+    assert!(matches!(
+        export_ingestion_capture(State(f.state.clone()), f.auth(1), Path(vehicle)).await,
+        Err(AppError::NotFound)
+    ));
+    for user in [3, 4, 5] {
+        assert!(matches!(
+            get_ingestion_diagnostics(State(f.state.clone()), f.auth(user), Path(vehicle)).await,
+            Err(AppError::Forbidden)
+        ));
+        assert!(matches!(
+            start_ingestion_capture(State(f.state.clone()), f.auth(user), Path(vehicle)).await,
+            Err(AppError::Forbidden)
+        ));
+    }
+    let mut api = f.auth(1);
+    api.api_access_level = Some("read".into());
+    api.api_vehicle_id = Some(vehicle);
+    assert!(matches!(
+        get_ingestion_diagnostics(State(f.state.clone()), api, Path(vehicle)).await,
+        Err(AppError::Forbidden)
+    ));
+    assert!(
+        start_ingestion_capture(State(f.state.clone()), f.auth(1), Path(vehicle))
+            .await
+            .is_err()
+    );
+    sqlx::query(
+        "UPDATE panda.vehicles SET rivian_vehicle_id='synthetic-capture-remote' WHERE id=$1",
+    )
+    .bind(vehicle)
+    .execute(&f.state.pool)
+    .await
+    .unwrap();
+    let Json(started) = start_ingestion_capture(State(f.state.clone()), f.auth(1), Path(vehicle))
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(started).unwrap()["state"], "capturing");
+    let capture: Uuid = sqlx::query_scalar(
+        "SELECT capture_id FROM panda.vehicle_ingestion_diagnostics WHERE vehicle_id=$1",
+    )
+    .bind(vehicle)
+    .fetch_one(&f.state.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO panda.vehicle_ingestion_capture_events(vehicle_id,capture_id,recorded_at,kind,fields) SELECT $1,$2,'2026-01-01Z','fixture',jsonb_build_object('sequence',n) FROM generate_series(1,1005) n").bind(vehicle).bind(capture).execute(&f.state.pool).await.unwrap();
+    let exported = export_ingestion_capture(State(f.state.clone()), f.auth(2), Path(vehicle))
+        .await
+        .unwrap();
+    assert_eq!(
+        exported.headers()[header::CONTENT_TYPE],
+        "application/x-ndjson"
+    );
+    assert_eq!(exported.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(exported.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment; filename="));
+    let bytes = axum::body::to_bytes(exported.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let lines: Vec<Value> = std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let sequence: Vec<_> = lines
+        .iter()
+        .filter_map(|line| line["fields"]["sequence"].as_i64())
+        .collect();
+    assert_eq!(sequence, (1..=1005).collect::<Vec<_>>());
+    assert!(!String::from_utf8(bytes.to_vec())
+        .unwrap()
+        .contains(&vehicle.to_string()));
+    let Json(stopped) = stop_ingestion_capture(State(f.state.clone()), f.auth(2), Path(vehicle))
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(stopped).unwrap()["state"], "stopped");
+    let failed_stream = export_ingestion_capture(State(f.state.clone()), f.auth(1), Path(vehicle))
+        .await
+        .unwrap();
+    sqlx::query(
+        "ALTER TABLE panda.vehicle_ingestion_capture_events RENAME TO capture_events_fault",
+    )
+    .execute(&f.state.pool)
+    .await
+    .unwrap();
+    assert!(
+        axum::body::to_bytes(failed_stream.into_body(), 4 * 1024 * 1024)
+            .await
+            .is_err()
+    );
+    sqlx::query(
+        "ALTER TABLE panda.capture_events_fault RENAME TO vehicle_ingestion_capture_events",
+    )
+    .execute(&f.state.pool)
+    .await
+    .unwrap();
+    f.cleanup().await;
+}

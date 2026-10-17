@@ -108,3 +108,72 @@ fn response(value: ConnectResponse) -> Result<Json<serde_json::Value>, AppError>
         .map(Json)
         .map_err(|error| AppError::Internal(error.into()))
 }
+
+pub(super) struct VerifiedRefresh {
+    vehicle: Uuid,
+    ciphertext: Vec<u8>,
+}
+pub(super) struct SavedRefresh {
+    vehicle: Uuid,
+}
+impl VerifiedRefresh {
+    pub(super) async fn verify(
+        state: &AppState,
+        vehicle: Uuid,
+        remote: &str,
+        tokens: crate::ingestion::session_store::RivianTokenBundle,
+    ) -> Result<Self, AppError> {
+        let account = lookup_rivian_vehicles(&tokens).await?;
+        require_account_vehicle(&account, remote)?;
+        let identity = age_identity(state)?;
+        let ciphertext = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
+            .map_err(AppError::Internal)?;
+        Ok(Self {
+            vehicle,
+            ciphertext,
+        })
+    }
+    pub(super) async fn persist(
+        self,
+        pool: &sqlx::PgPool,
+        user: Uuid,
+    ) -> Result<SavedRefresh, AppError> {
+        let mut tx = pool.begin().await?;
+        lock_active_enrollment_user(&mut tx, user).await?;
+        lock_credential_membership(&mut tx, user, self.vehicle).await?;
+        sqlx::query("INSERT INTO panda.vehicle_credentials (vehicle_id,encrypted_tokens,token_created_at,last_refreshed_at) VALUES ($1,$2,now(),now()) ON CONFLICT (vehicle_id) DO UPDATE SET encrypted_tokens=EXCLUDED.encrypted_tokens,token_created_at=EXCLUDED.token_created_at,last_refreshed_at=now()")
+            .bind(self.vehicle).bind(self.ciphertext).execute(&mut *tx).await?;
+        enrollment::initialize_runtime(&mut tx, self.vehicle).await?;
+        tx.commit().await?;
+        Ok(SavedRefresh {
+            vehicle: self.vehicle,
+        })
+    }
+}
+impl SavedRefresh {
+    pub(super) async fn notify(self, state: &AppState) -> serde_json::Value {
+        let queued = state
+            .supervisor
+            .send(SupervisorCommand::StartWorker {
+                vehicle_id: self.vehicle,
+            })
+            .await;
+        let ready = queued && wait_for_vehicle_data(&state.pool, self.vehicle).await;
+        let (telemetry_status, telemetry_error) = match (queued, ready) {
+            (_, true) => ("connected", None),
+            (true, false) => (
+                "waiting_for_vehicle_data",
+                Some("Rivian credentials saved; vehicle data is still loading"),
+            ),
+            (false, false) => (
+                "delayed",
+                Some("worker supervisor unavailable; retry telemetry start"),
+            ),
+        };
+        serde_json::json!({
+            "ok":true,"vehicle_id":self.vehicle,"vehicle_saved":true,
+            "connection_status":if ready { "connected" } else { "connected_waiting_for_vehicle_data" },
+            "telemetry_status":telemetry_status,"telemetry_error":telemetry_error,
+        })
+    }
+}

@@ -13,7 +13,7 @@ use crate::services::outbound::{
 use axum::{
     body::Body,
     extract::{OriginalUri, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Response},
     routing::{get, post, put},
     Json, Router,
 };
@@ -257,36 +257,29 @@ async fn build_response(
 }
 
 async fn cache_summary(state: &AppState, id: &str) -> Option<ConnectionCacheResponse> {
-    match id {
-        connections::BASEMAP => {
-            let (entries, bytes) = redis_cache_metrics(state, "external:basemap:*").await;
-            Some(ConnectionCacheResponse {
-                entries,
-                bytes,
-                persistent: false,
-                purgeable: true,
-                description: "Map tiles expire after seven days and share a bounded least-recently-used cache.",
-            })
-        }
-        connections::NOMINATIM => {
-            let (search_entries, search_bytes) =
-                redis_cache_metrics(state, "external:nominatim:search:*").await;
-            let (address_entries, address_bytes) = sqlx::query_as::<_, (i64, i64)>(
-                "SELECT COUNT(*), pg_total_relation_size('panda.addresses')",
-            )
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or((0, 0));
-            Some(ConnectionCacheResponse {
-                entries: search_entries.saturating_add(address_entries.max(0) as u64),
-                bytes: search_bytes.saturating_add(address_bytes.max(0) as u64),
-                persistent: true,
-                purgeable: true,
-                description: "Persistent address search results and reverse-geocoded addresses. Purging keeps addresses used by trips, charging sessions, or saved places.",
-            })
-        }
-        _ => None,
+    let (pattern, persistent, description) = match id {
+        connections::BASEMAP => ("external:basemap:*", false, "Map tiles expire after seven days and share a bounded least-recently-used cache."),
+        connections::NOMINATIM => ("external:nominatim:search:*", true, "Persistent address search results and reverse-geocoded addresses. Purging keeps addresses used by trips, charging sessions, or saved places."),
+        _ => return None,
+    };
+    let (mut entries, mut bytes) = redis_cache_metrics(state, pattern).await;
+    if persistent {
+        let (rows, storage) = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT COUNT(*), pg_total_relation_size('panda.addresses')",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or((0, 0));
+        entries = entries.saturating_add(rows.max(0) as u64);
+        bytes = bytes.saturating_add(storage.max(0) as u64);
     }
+    Some(ConnectionCacheResponse {
+        entries,
+        bytes,
+        persistent,
+        purgeable: true,
+        description,
+    })
 }
 
 async fn redis_cache_metrics(state: &AppState, pattern: &str) -> (u64, u64) {
@@ -306,31 +299,27 @@ async fn purge_connection_cache(
     Path(id): Path<String>,
 ) -> Result<Json<PurgeConnectionCacheResponse>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    let purged_entries = match id.as_str() {
-        connections::BASEMAP => purge_redis_cache(&state, "external:basemap:*").await,
-        connections::NOMINATIM => {
-            let search_entries = purge_redis_cache(&state, "external:nominatim:search:*").await;
-            state.nominatim_cache.write().await.clear();
-            let address_entries: i64 = sqlx::query_scalar::<_, i64>(
-                r#"DELETE FROM panda.addresses a
+    let (pattern, persistent) = match id.as_str() {
+        connections::BASEMAP => ("external:basemap:*", false),
+        connections::NOMINATIM => ("external:nominatim:search:*", true),
+        _ => {
+            return Err(AppError::Validation(
+                "this connection does not have a purgeable persistent cache".into(),
+            ))
+        }
+    };
+    let mut purged_entries = purge_redis_cache(&state, pattern).await;
+    if persistent {
+        state.nominatim_cache.write().await.clear();
+        let removed = sqlx::query_scalar::<_, i64>(r#"DELETE FROM panda.addresses a
                    WHERE NOT EXISTS (SELECT 1 FROM panda.geofences g WHERE g.address_id = a.id)
                      AND NOT EXISTS (SELECT 1 FROM panda.trips t WHERE t.start_address_id = a.id OR t.end_address_id = a.id)
                      AND NOT EXISTS (SELECT 1 FROM panda.trip_user_annotations tua WHERE tua.start_address_id = a.id OR tua.end_address_id = a.id)
                      AND NOT EXISTS (SELECT 1 FROM panda.charge_sessions cs WHERE cs.address_id = a.id)
                      AND NOT EXISTS (SELECT 1 FROM panda.charge_session_user_annotations csua WHERE csua.address_id = a.id)
-                   RETURNING 1"#,
-            )
-            .fetch_all(&state.pool)
-            .await?
-            .len() as i64;
-            search_entries.saturating_add(address_entries.max(0) as u64)
-        }
-        _ => {
-            return Err(AppError::Validation(
-                "this connection does not have a purgeable persistent cache".into(),
-            ));
-        }
-    };
+                   RETURNING 1"#).fetch_all(&state.pool).await?.len() as u64;
+        purged_entries = purged_entries.saturating_add(removed);
+    }
     Ok(Json(PurgeConnectionCacheResponse {
         purged_entries,
         message: "Persistent cache purged. Existing trip labels and saved places were retained.",
@@ -541,18 +530,7 @@ async fn basemap_config(
     _auth: AuthUser,
 ) -> Result<Json<BasemapConfigResponse>, AppError> {
     let settings = connections::load(&state.pool, connections::BASEMAP).await?;
-    let revision = settings.updated_at.timestamp_millis().to_string();
-    let resolved_provider = resolve_basemap_provider(&settings);
-    let styles = basemap_styles(resolved_provider, &revision);
-    let attributions = basemap_attributions(&settings, resolved_provider);
-    Ok(Json(BasemapConfigResponse {
-        enabled: settings.is_active(),
-        provider_preference: settings.basemap_provider,
-        resolved_provider: resolved_provider.to_string(),
-        revision,
-        styles,
-        attributions,
-    }))
+    Ok(Json(BasemapConfigResponse::from_settings(settings)))
 }
 
 fn basemap_proxy_url(style: &str, revision: &str) -> String {
@@ -570,99 +548,81 @@ fn resolve_basemap_provider(settings: &ConnectionSettingsRow) -> &'static str {
 }
 
 fn basemap_styles(provider: &str, revision: &str) -> Vec<BasemapStyleDescriptor> {
-    match provider {
-        "disabled" => Vec::new(),
-        "carto" | "custom" => vec![BasemapStyleDescriptor {
-            id: "follow-theme",
-            label: "Follow appearance",
-            kind: "raster",
-            light_url: basemap_proxy_url("light", revision),
-            dark_url: basemap_proxy_url("dark", revision),
-            perspective_3d: false,
-        }],
-        "openfreemap" => {
-            const STYLES: [(&str, &str); 5] = [
-                ("positron", "Positron"),
-                ("bright", "Bright"),
-                ("liberty", "Liberty"),
-                ("dark", "Dark"),
-                ("fiord", "Fiord"),
-            ];
-            let mut descriptors = vec![BasemapStyleDescriptor {
-                id: "follow-theme",
-                label: "Follow appearance",
-                kind: "style",
-                light_url: openfreemap_style_proxy_url("positron", revision),
-                dark_url: openfreemap_style_proxy_url("dark", revision),
-                perspective_3d: false,
-            }];
-            descriptors.extend(STYLES.into_iter().map(|(id, label)| {
-                let url = openfreemap_style_proxy_url(id, revision);
-                BasemapStyleDescriptor {
-                    id,
-                    label,
-                    kind: "style",
-                    light_url: url.clone(),
-                    dark_url: url,
-                    perspective_3d: false,
-                }
-            }));
-            let liberty = openfreemap_style_proxy_url("liberty", revision);
-            descriptors.push(BasemapStyleDescriptor {
-                id: "3d",
-                label: "3D",
-                kind: "style",
-                light_url: liberty.clone(),
-                dark_url: liberty,
-                perspective_3d: true,
-            });
-            descriptors
-        }
-        _ => Vec::new(),
-    }
+    let specs: &[(&str, &str, &str, &str, bool)] = match provider {
+        "carto" | "custom" => &[("follow-theme", "Follow appearance", "light", "dark", false)],
+        "openfreemap" => &[
+            (
+                "follow-theme",
+                "Follow appearance",
+                "positron",
+                "dark",
+                false,
+            ),
+            ("positron", "Positron", "positron", "positron", false),
+            ("bright", "Bright", "bright", "bright", false),
+            ("liberty", "Liberty", "liberty", "liberty", false),
+            ("dark", "Dark", "dark", "dark", false),
+            ("fiord", "Fiord", "fiord", "fiord", false),
+            ("3d", "3D", "liberty", "liberty", true),
+        ],
+        _ => &[],
+    };
+    let vector = provider == "openfreemap";
+    let url = if vector {
+        openfreemap_style_proxy_url
+    } else {
+        basemap_proxy_url
+    };
+    specs
+        .iter()
+        .map(
+            |&(id, label, light, dark, perspective_3d)| BasemapStyleDescriptor {
+                id,
+                label,
+                kind: if vector { "style" } else { "raster" },
+                light_url: url(light, revision),
+                dark_url: url(dark, revision),
+                perspective_3d,
+            },
+        )
+        .collect()
 }
 
 fn basemap_attributions(
     settings: &ConnectionSettingsRow,
     provider: &str,
 ) -> Vec<BasemapAttributionLink> {
-    match provider {
+    let links = match provider {
         "openfreemap" => vec![
-            BasemapAttributionLink {
-                label: "OpenFreeMap".into(),
-                url: Some("https://openfreemap.org/".into()),
-            },
-            BasemapAttributionLink {
-                label: "© OpenMapTiles".into(),
-                url: Some("https://openmaptiles.org/".into()),
-            },
-            BasemapAttributionLink {
-                label: "Data from OpenStreetMap".into(),
-                url: Some("https://www.openstreetmap.org/copyright".into()),
-            },
+            ("OpenFreeMap", Some("https://openfreemap.org/")),
+            ("© OpenMapTiles", Some("https://openmaptiles.org/")),
+            (
+                "Data from OpenStreetMap",
+                Some("https://www.openstreetmap.org/copyright"),
+            ),
         ],
         "carto" => vec![
-            BasemapAttributionLink {
-                label: "© OpenStreetMap contributors".into(),
-                url: Some("https://www.openstreetmap.org/copyright".into()),
-            },
-            BasemapAttributionLink {
-                label: "© CARTO".into(),
-                url: Some("https://carto.com/attributions".into()),
-            },
+            (
+                "© OpenStreetMap contributors",
+                Some("https://www.openstreetmap.org/copyright"),
+            ),
+            ("© CARTO", Some("https://carto.com/attributions")),
         ],
         "custom" => settings
             .attribution
-            .as_ref()
-            .map(|label| {
-                vec![BasemapAttributionLink {
-                    label: label.clone(),
-                    url: settings.attribution_url.clone(),
-                }]
-            })
-            .unwrap_or_default(),
+            .as_deref()
+            .into_iter()
+            .map(|label| (label, settings.attribution_url.as_deref()))
+            .collect(),
         _ => Vec::new(),
-    }
+    };
+    links
+        .into_iter()
+        .map(|(label, url)| BasemapAttributionLink {
+            label: label.to_owned(),
+            url: url.map(str::to_owned),
+        })
+        .collect()
 }
 
 async fn test_connection(
@@ -705,167 +665,75 @@ async fn test_connection(
     }
     let settings = connections::load(&state.pool, &id).await?;
     connections::record_attempt(&state.pool, &id).await;
-    let result = match id.as_str() {
-        connections::NOMINATIM => {
-            let base = if body.mode == "custom" {
-                body.base_url.as_deref()
-            } else {
-                Some("https://nominatim.openstreetmap.org")
-            };
-            let endpoint = endpoint_join(base, "search")?;
-            let user_agent = body
-                .request_identifier
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("R (self-hosted Rivian telemetry)");
-            outbound_client_for_url(&endpoint, &private_network_allowlist)
-                .await?
-                .get(endpoint)
-                .header(header::USER_AGENT, user_agent)
-                .query(&[("format", "jsonv2"), ("q", "Kansas"), ("limit", "1")])
-                .send()
-                .await
-        }
-        connections::BASEMAP => {
-            let provider = resolve_effective_basemap_provider_update(&id, &body, &settings)?;
-            let template = if provider == "openfreemap" {
-                Some("https://tiles.openfreemap.org/styles/positron")
-            } else if body.mode == "custom" {
-                body.light_url_template.as_deref()
-            } else {
-                Some("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png")
-            }
-            .ok_or_else(|| AppError::Validation("light tile template required".into()))?;
-            // z6/14/24 is a generic central-US tile and never uses trip data.
-            let endpoint = Url::parse(&expand_tile_template(template, 6, 14, 24))
-                .map_err(|_| AppError::Validation("light tile template required".into()))?;
-            let forward_carto_api_key =
-                provider == "carto" && should_forward_carto_api_key(&body.mode, &endpoint);
-            let mut request = outbound_client_for_url(&endpoint, &private_network_allowlist)
-                .await?
-                .get(endpoint);
-            let api_key = body
-                .api_key
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .or(decrypt_secret(
-                    &state.age_key,
-                    settings.api_key_encrypted.as_deref(),
-                )?);
-            if forward_carto_api_key {
-                if let Some(api_key) = api_key {
-                    request = request.query(&[carto_basemap_key_query(&api_key)]);
-                }
-            }
-            if should_forward_basemap_bearer_token(&provider) {
-                let bearer_token = body
-                    .bearer_token
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-                    .or(decrypt_secret(
-                        &state.age_key,
-                        settings.bearer_token_encrypted.as_deref(),
-                    )?);
-                if let Some(token) = bearer_token {
-                    request = request.bearer_auth(token);
-                }
-            }
-            request.send().await
-        }
-        connections::ICONIFY => {
-            let endpoint = endpoint_join(Some("https://api.iconify.design"), "search")?;
-            outbound_client_for_url(&endpoint, &private_network_allowlist)
-                .await?
-                .get(endpoint)
-                .query(&[("query", "thermometer"), ("limit", "1")])
-                .send()
-                .await
-        }
-        _ => {
-            let checks = vec![TestConnectionCheck {
+    let Some(probe) = ConnectionProbe::compile(&id, &body, &settings)? else {
+        connections::record_test(&state.pool, &id, true, None).await;
+        return Ok(Json(TestConnectionResponse {
+            ok: true,
+            tested_at: Utc::now(),
+            checks: vec![TestConnectionCheck {
                 label: "Configuration".into(),
                 ok: true,
                 message: "This connection is managed by its owning settings surface.".into(),
-            }];
-            connections::record_test(&state.pool, &id, true, None).await;
-            return Ok(Json(TestConnectionResponse {
-                ok: true,
-                tested_at: Utc::now(),
-                checks,
-                preview_data_url: None,
-            }));
-        }
+            }],
+            preview_data_url: None,
+        }));
     };
-
-    match result {
-        Ok(response) if response.status().is_success() => {
-            let preview_data_url = if id == connections::BASEMAP
+    let request = probe
+        .request(&state, &body, &settings, &private_network_allowlist)
+        .await?;
+    let (ok, message, stored_error, preview_data_url) = match request.send().await {
+        Err(error) => (
+            false,
+            "Connection failed; no trip data was sent.".to_owned(),
+            Some(error.to_string()),
+            None,
+        ),
+        Ok(response) if !response.status().is_success() => {
+            let message = format!("Provider returned HTTP {}", response.status());
+            (false, message.clone(), Some(message), None)
+        }
+        Ok(response) => {
+            let image = id == connections::BASEMAP
                 && response
                     .headers()
                     .get(header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
-                    .is_some_and(|value| value.starts_with("image/"))
-            {
-                let content_type = response
+                    .and_then(|header| header.to_str().ok())
+                    .is_some_and(|mime| mime.starts_with("image/"));
+            let preview = if image {
+                let mime = response
                     .headers()
                     .get(header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
+                    .and_then(|header| header.to_str().ok())
                     .unwrap_or("image/png")
-                    .to_string();
+                    .to_owned();
                 let bytes =
                     read_response_limited(response, 5 * 1024 * 1024, "Basemap preview").await?;
                 Some(format!(
-                    "data:{content_type};base64,{}",
+                    "data:{mime};base64,{}",
                     base64::engine::general_purpose::STANDARD.encode(bytes)
                 ))
             } else {
                 None
             };
-            connections::record_test(&state.pool, &id, true, None).await;
-            Ok(Json(TestConnectionResponse {
-                ok: true,
-                tested_at: Utc::now(),
-                checks: vec![TestConnectionCheck {
-                    label: "Synthetic request".into(),
-                    ok: true,
-                    message: "Connection succeeded with synthetic test data.".into(),
-                }],
-                preview_data_url,
-            }))
+            (
+                true,
+                "Connection succeeded with synthetic test data.".to_owned(),
+                None,
+                preview,
+            )
         }
-        Ok(response) => {
-            let message = format!("Provider returned HTTP {}", response.status());
-            connections::record_test(&state.pool, &id, false, Some(&message)).await;
-            Ok(Json(TestConnectionResponse {
-                ok: false,
-                tested_at: Utc::now(),
-                checks: vec![TestConnectionCheck {
-                    label: "Synthetic request".into(),
-                    ok: false,
-                    message,
-                }],
-                preview_data_url: None,
-            }))
-        }
-        Err(error) => {
-            connections::record_test(&state.pool, &id, false, Some(&error.to_string())).await;
-            Ok(Json(TestConnectionResponse {
-                ok: false,
-                tested_at: Utc::now(),
-                checks: vec![TestConnectionCheck {
-                    label: "Synthetic request".into(),
-                    ok: false,
-                    message: "Connection failed; no trip data was sent.".into(),
-                }],
-                preview_data_url: None,
-            }))
-        }
-    }
+    };
+    connections::record_test(&state.pool, &id, ok, stored_error.as_deref()).await;
+    Ok(Json(TestConnectionResponse {
+        ok,
+        tested_at: Utc::now(),
+        checks: vec![TestConnectionCheck {
+            label: "Synthetic request".into(),
+            ok,
+            message,
+        }],
+        preview_data_url,
+    }))
 }
 
 async fn proxy_basemap_tile(
@@ -874,82 +742,35 @@ async fn proxy_basemap_tile(
     Path((style, z, x, y)): Path<(String, u8, u32, String)>,
 ) -> Result<Response<Body>, AppError> {
     let settings = connections::require_enabled(&state.pool, connections::BASEMAP).await?;
-    let provider = resolve_basemap_provider(&settings);
-    if !matches!(provider, "carto" | "custom") {
-        return Err(AppError::Validation(
-            "raster tiles are not active for this basemap provider".into(),
-        ));
+    let tile = RasterRequest::compile(&settings, style, z, x, &y)?;
+    if let Some(cached) = CachedBasemap::read(&state, &tile.cache_key, "image/png").await {
+        return cached.respond();
     }
-    let y = y
-        .trim_end_matches(".png")
-        .parse::<u32>()
-        .map_err(|_| AppError::Validation("invalid tile coordinate".into()))?;
-    if z > 22 {
-        return Err(AppError::Validation("invalid tile zoom".into()));
-    }
-    let tile_limit = 1_u32.checked_shl(u32::from(z)).unwrap_or(0);
-    if x >= tile_limit || y >= tile_limit {
-        return Err(AppError::Validation("invalid tile coordinate".into()));
-    }
-    if !matches!(style.as_str(), "light" | "dark") {
-        return Err(AppError::Validation("invalid tile style".into()));
-    }
-    let template = if style == "dark" {
-        settings
-            .dark_url_template
-            .as_deref()
-            .or(settings.light_url_template.as_deref())
-    } else {
-        settings.light_url_template.as_deref()
-    }
-    .ok_or_else(|| AppError::Validation("tile template missing".into()))?;
-    let cache_key = format!(
-        "external:basemap:{}:{style}:{z}:{x}:{y}",
-        settings.updated_at.timestamp()
-    );
-    let content_type_key = format!("{cache_key}:content-type");
-    let max_age_key = format!("{cache_key}:max-age");
-    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-        if let Ok(Some(bytes)) = redis.get::<_, Option<Vec<u8>>>(&cache_key).await {
-            crate::services::basemap_cache::touch(&mut redis, &cache_key).await;
-            let content_type = redis
-                .get::<_, Option<String>>(&content_type_key)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "image/png".into());
-            let max_age = redis
-                .get::<_, Option<u64>>(&max_age_key)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(86_400);
-            return tile_response(bytes, &content_type, max_age);
-        }
-    }
-    let url = expand_tile_template(template, z, x, y);
+    let endpoint_text = expand_tile_template(tile.template, z, x, tile.y);
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
-    let url = Url::parse(&url).map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
+    let endpoint = Url::parse(&endpoint_text)
+        .map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
     let allowlist = configured_private_network_allowlist(&settings)?;
-    let forward_carto_api_key =
-        provider == "carto" && should_forward_carto_api_key(&settings.mode, &url);
-    let mut request = outbound_client_for_url(&url, &allowlist).await?.get(url);
-    if forward_carto_api_key {
-        if let Some(api_key) =
-            decrypt_secret(&state.age_key, settings.api_key_encrypted.as_deref())?
-        {
-            request = request.query(&[carto_basemap_key_query(&api_key)]);
+    let credentials = (
+        tile.provider == "carto" && should_forward_carto_api_key(&settings.mode, &endpoint),
+        should_forward_basemap_bearer_token(tile.provider),
+    );
+    let mut request = outbound_client_for_url(&endpoint, &allowlist)
+        .await?
+        .get(endpoint);
+    if credentials.0 {
+        if let Some(key) = decrypt_secret(&state.age_key, settings.api_key_encrypted.as_deref())? {
+            request = request.query(&[carto_basemap_key_query(&key)]);
         }
     }
-    if should_forward_basemap_bearer_token(provider) {
+    if credentials.1 {
         if let Some(token) =
             decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
         {
             request = request.bearer_auth(token);
         }
     }
-    let response = match request.send().await {
-        Ok(response) => response,
+    let upstream = match request.send().await {
         Err(_) => {
             connections::record_failure(
                 &state.pool,
@@ -961,43 +782,24 @@ async fn proxy_basemap_tile(
                 "Basemap request failed".into(),
             ));
         }
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            connections::record_failure(
+                &state.pool,
+                connections::BASEMAP,
+                &format!("HTTP {}", response.status()),
+            )
+            .await;
+            return Err(AppError::DependencyUnavailable(
+                "Basemap provider returned an error".into(),
+            ));
+        }
     };
-    if !response.status().is_success() {
-        connections::record_failure(
-            &state.pool,
-            connections::BASEMAP,
-            &format!("HTTP {}", response.status()),
-        )
-        .await;
-        return Err(AppError::DependencyUnavailable(
-            "Basemap provider returned an error".into(),
-        ));
-    }
-    if response.content_length().unwrap_or(0) > 5 * 1024 * 1024 {
-        return Err(AppError::DependencyUnavailable(
-            "Basemap tile exceeded the response limit".into(),
-        ));
-    }
-    let cache_ttl = upstream_cache_ttl(response.headers());
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("image/png")
-        .to_string();
-    let bytes = read_response_limited(response, 5 * 1024 * 1024, "Basemap tile").await?;
-    // Server cache TTL and shared byte budget are independent of browser reuse.
-    crate::services::basemap_cache::store(
-        &state.redis,
-        &cache_key,
-        &bytes,
-        &content_type,
-        cache_ttl,
-        &state.config.security,
-    )
-    .await;
+    let cache_key = tile.cache_key;
+    let tile = CachedBasemap::from_raster(upstream).await?;
+    tile.store(&state, &cache_key).await;
     connections::record_success(&state.pool, connections::BASEMAP).await;
-    tile_response(bytes, &content_type, cache_ttl)
+    tile.respond()
 }
 
 fn should_forward_carto_api_key(_mode: &str, endpoint: &Url) -> bool {
@@ -1024,7 +826,7 @@ async fn proxy_openfreemap_resource(
 ) -> Result<Response<Body>, AppError> {
     let request_id = headers
         .get("x-request-id")
-        .and_then(|value| value.to_str().ok());
+        .and_then(|header| header.to_str().ok());
     let resource_class = openfreemap_resource_class(&resource);
     let started_at = std::time::Instant::now();
     if !openfreemap_resource_is_allowed(&resource) {
@@ -1043,150 +845,47 @@ async fn proxy_openfreemap_resource(
             connections::BASEMAP.into(),
         ));
     }
-    let revision = settings.updated_at.timestamp_millis();
-    let cache_key = openfreemap_cache_key(revision, &resource);
-    let content_type_key = format!("{cache_key}:content-type");
-    let max_age_key = format!("{cache_key}:max-age");
-    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-        if let Ok(Some(bytes)) = redis.get::<_, Option<Vec<u8>>>(&cache_key).await {
-            crate::services::basemap_cache::touch(&mut redis, &cache_key).await;
-            let content_type = redis
-                .get::<_, Option<String>>(&content_type_key)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "application/octet-stream".into());
-            let max_age = redis
-                .get::<_, Option<u64>>(&max_age_key)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(86_400);
-            return tile_response(bytes, &content_type, max_age);
-        }
+    let cache_key = openfreemap_cache_key(settings.updated_at.timestamp_millis(), &resource);
+    if let Some(cached) = CachedBasemap::read(&state, &cache_key, "application/octet-stream").await
+    {
+        return cached.respond();
     }
-
-    let endpoint = match Url::parse(&format!("https://tiles.openfreemap.org/{resource}")) {
-        Ok(endpoint) => endpoint,
-        Err(_) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                "endpoint_parse",
-                started_at,
-            )
-            .await;
-            return Err(AppError::Validation("invalid OpenFreeMap resource".into()));
+    match fetch_openfreemap(&state, &resource).await {
+        Ok(reply) => {
+            reply.store(&state, &cache_key).await;
+            connections::record_success(&state.pool, connections::BASEMAP).await;
+            reply.respond()
         }
-    };
-    connections::record_attempt(&state.pool, connections::BASEMAP).await;
-    let client = match outbound_client_for_url(&endpoint, &[]).await {
-        Ok(client) => client,
-        Err(error) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                "client_setup",
-                started_at,
-            )
-            .await;
-            return Err(error);
-        }
-    };
-    let response = match client.get(endpoint).send().await {
-        Ok(response) => response,
-        Err(_) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                "transport",
-                started_at,
-            )
-            .await;
-            return Err(AppError::DependencyUnavailable(
-                "OpenFreeMap request failed".into(),
-            ));
-        }
-    };
-    if !response.status().is_success() {
-        let status = response.status();
-        connections::record_failure(&state.pool, connections::BASEMAP, &format!("HTTP {status}"))
-            .await;
-        log_openfreemap_failure(
-            request_id,
-            resource_class,
-            Some(status.as_u16()),
-            "upstream_status",
-            started_at,
-        );
-        return Err(AppError::DependencyUnavailable(
-            "OpenFreeMap provider returned an error".into(),
-        ));
-    }
-    let cache_ttl = upstream_cache_ttl(response.headers());
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
-    let bytes = match read_openfreemap_response_limited(response, 10 * 1024 * 1024).await {
-        Ok(bytes) => bytes,
-        Err(error_class) => {
-            record_openfreemap_failure(
-                &state,
-                request_id,
-                resource_class,
-                None,
-                error_class,
-                started_at,
-            )
-            .await;
-            let message = match error_class {
-                "response_size" => "OpenFreeMap resource response exceeded the limit",
-                _ => "OpenFreeMap resource response failed",
-            };
-            return Err(AppError::DependencyUnavailable(message.into()));
-        }
-    };
-    let bytes = if is_json_content_type(&content_type) {
-        match rewrite_openfreemap_json(&bytes) {
-            Ok(bytes) => bytes,
-            Err(error) => {
+        Err(failure) => {
+            let (error, class, status) = failure.parts();
+            if let Some(status) = status {
+                connections::record_failure(
+                    &state.pool,
+                    connections::BASEMAP,
+                    &format!("HTTP {status}"),
+                )
+                .await;
+                log_openfreemap_failure(
+                    request_id,
+                    resource_class,
+                    Some(status.as_u16()),
+                    class,
+                    started_at,
+                );
+            } else {
                 record_openfreemap_failure(
                     &state,
                     request_id,
                     resource_class,
                     None,
-                    "invalid_json",
+                    class,
                     started_at,
                 )
                 .await;
-                return Err(error);
             }
+            Err(error)
         }
-    } else {
-        bytes
-    };
-    crate::services::basemap_cache::store(
-        &state.redis,
-        &cache_key,
-        &bytes,
-        &content_type,
-        cache_ttl,
-        &state.config.security,
-    )
-    .await;
-    connections::record_success(&state.pool, connections::BASEMAP).await;
-    // reqwest may transparently decode an upstream response. Do not copy its
-    // Content-Encoding header unless the body is known to retain that encoding.
-    tile_response(bytes, &content_type, cache_ttl)
+    }
 }
 
 async fn record_openfreemap_failure(
@@ -1253,60 +952,61 @@ async fn read_openfreemap_response_limited(
 ) -> Result<Vec<u8>, &'static str> {
     if response
         .content_length()
-        .is_some_and(|length| length > limit as u64)
+        .is_some_and(|bytes| bytes > limit as u64)
     {
         return Err("response_size");
     }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "response_read")? {
-        if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err("response_size");
+    let mut remaining = limit;
+    let mut output = Vec::new();
+    loop {
+        let chunk = response.chunk().await.map_err(|_| "response_read")?;
+        match chunk {
+            None => return Ok(output),
+            Some(chunk) => {
+                remaining = remaining.checked_sub(chunk.len()).ok_or("response_size")?;
+                output.extend_from_slice(&chunk);
+            }
         }
-        bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes)
 }
 
 fn openfreemap_resource_is_allowed(resource: &str) -> bool {
-    if resource.is_empty()
-        || resource.len() > 1024
-        || resource.contains("..")
-        || resource.contains('\\')
-        || resource.contains('?')
-        || resource.contains('#')
-        || resource.contains("//")
-        || resource.chars().any(char::is_control)
+    let invalid_character = resource
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '\\' | '?' | '#'));
+    if resource.is_empty() || resource.len() > 1024 || invalid_character || resource.contains("..")
     {
         return false;
     }
-    let parts = resource.split('/').collect::<Vec<_>>();
-    if parts.iter().any(|part| part.is_empty()) {
+    let parts: Vec<_> = resource.split('/').collect();
+    if parts.contains(&"") {
         return false;
     }
-    match parts.as_slice() {
-        ["styles", style] => openfreemap_style_name(style),
-        ["planet"] => true,
-        ["planet", snapshot, z, x, y] => {
+    let Some((family, rest)) = parts.split_first() else {
+        return false;
+    };
+    match (*family, rest) {
+        ("styles", [style]) => openfreemap_style_name(style),
+        ("planet", []) => true,
+        ("planet", [snapshot, z, x, y]) => {
             openfreemap_planet_snapshot(snapshot)
-                && is_ascii_decimal(z)
-                && is_ascii_decimal(x)
+                && [z, x].into_iter().all(|value| is_ascii_decimal(value))
                 && numeric_resource_with_suffix(y, ".pbf")
         }
-        ["natural_earth", "ne2sr", z, x, y] => {
-            is_ascii_decimal(z) && is_ascii_decimal(x) && numeric_resource_with_suffix(y, ".png")
+        ("natural_earth", ["ne2sr", z, x, y]) => {
+            [z, x].into_iter().all(|value| is_ascii_decimal(value))
+                && numeric_resource_with_suffix(y, ".png")
         }
-        ["sprites", version, asset] => {
+        ("sprites", [version, asset]) => {
             openfreemap_sprite_version(version) && openfreemap_sprite_asset(asset)
         }
-        ["fonts", font_stack, range] => {
-            !font_stack.is_empty()
-                && font_stack.len() <= 512
-                && range.strip_suffix(".pbf").is_some_and(|value| {
-                    !value.is_empty()
-                        && value
-                            .bytes()
-                            .all(|byte| byte.is_ascii_digit() || byte == b'-')
-                })
+        ("fonts", [font, range]) if font.len() <= 512 => {
+            range.strip_suffix(".pbf").is_some_and(|stem| {
+                !stem.is_empty()
+                    && stem
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || byte == b'-')
+            })
         }
         _ => false,
     }
@@ -1358,31 +1058,24 @@ fn rewrite_openfreemap_json(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
 }
 
 fn rewrite_openfreemap_value(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::String(value) => {
-            for prefix in [
-                "https://tiles.openfreemap.org/",
-                "https://__TILEJSON_DOMAIN__/",
-            ] {
-                if let Some(resource) = value.strip_prefix(prefix) {
-                    *value = format!(
-                        "{OPENFREEMAP_PROXY_ORIGIN}/v1/external/basemap/openfreemap/{resource}?cf={OPENFREEMAP_CACHE_FORMAT}"
-                    );
-                    break;
+    let mut pending = vec![value];
+    while let Some(node) = pending.pop() {
+        match node {
+            serde_json::Value::String(text) => {
+                let resource = [
+                    "https://tiles.openfreemap.org/",
+                    "https://__TILEJSON_DOMAIN__/",
+                ]
+                .into_iter()
+                .find_map(|prefix| text.strip_prefix(prefix));
+                if let Some(resource) = resource {
+                    *text = format!("{OPENFREEMAP_PROXY_ORIGIN}/v1/external/basemap/openfreemap/{resource}?cf={OPENFREEMAP_CACHE_FORMAT}");
                 }
             }
+            serde_json::Value::Array(items) => pending.extend(items.iter_mut()),
+            serde_json::Value::Object(properties) => pending.extend(properties.values_mut()),
+            _ => {}
         }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                rewrite_openfreemap_value(value);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for value in values.values_mut() {
-                rewrite_openfreemap_value(value);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1400,16 +1093,15 @@ async fn proxy_iconify_search(
 ) -> Result<Response<Body>, AppError> {
     let settings = connections::require_enabled(&state.pool, connections::ICONIFY).await?;
     let mut endpoint = endpoint_join(settings.base_url.as_deref(), "search")?;
-    if let Some(prefix) = params.prefix.as_deref().filter(|value| !value.is_empty()) {
-        endpoint.query_pairs_mut().append_pair("prefix", prefix);
-    }
-    endpoint
-        .query_pairs_mut()
-        .append_pair("query", &params.query)
-        .append_pair(
-            "limit",
-            &params.limit.unwrap_or(40).clamp(1, 40).to_string(),
-        );
+    let limit = params.limit.unwrap_or(40).clamp(1, 40).to_string();
+    let arguments = params
+        .prefix
+        .as_deref()
+        .filter(|prefix| !prefix.is_empty())
+        .map(|prefix| ("prefix", prefix))
+        .into_iter()
+        .chain([("query", params.query.as_str()), ("limit", limit.as_str())]);
+    endpoint.query_pairs_mut().extend_pairs(arguments);
     let allowlist = configured_private_network_allowlist(&settings)?;
     proxy_json(&state, connections::ICONIFY, endpoint, &allowlist).await
 }
@@ -1420,16 +1112,27 @@ async fn proxy_iconify_resource(
     Path(resource): Path<String>,
     OriginalUri(uri): OriginalUri,
 ) -> Result<Response<Body>, AppError> {
-    if !resource.ends_with(".json") || resource.contains('/') || resource.contains("..") {
+    let valid =
+        resource.ends_with(".json") && !["/", ".."].into_iter().any(|part| resource.contains(part));
+    if !valid {
         return Err(AppError::Validation("invalid icon resource".into()));
     }
     let settings = connections::require_enabled(&state.pool, connections::ICONIFY).await?;
-    let mut endpoint = endpoint_join(settings.base_url.as_deref(), &resource)?;
-    if let Some(query) = uri.query() {
-        endpoint.set_query(Some(query));
-    }
-    let allowlist = configured_private_network_allowlist(&settings)?;
-    proxy_json(&state, connections::ICONIFY, endpoint, &allowlist).await
+    let endpoint = match uri.query() {
+        None => endpoint_join(settings.base_url.as_deref(), &resource)?,
+        Some(query) => {
+            let mut endpoint = endpoint_join(settings.base_url.as_deref(), &resource)?;
+            endpoint.set_query(Some(query));
+            endpoint
+        }
+    };
+    proxy_json(
+        &state,
+        connections::ICONIFY,
+        endpoint,
+        &configured_private_network_allowlist(&settings)?,
+    )
+    .await
 }
 
 async fn proxy_json(
@@ -1439,27 +1142,26 @@ async fn proxy_json(
     allowlist: &[IpNet],
 ) -> Result<Response<Body>, AppError> {
     connections::record_attempt(&state.pool, id).await;
-    let upstream = outbound_client_for_url(&endpoint, allowlist)
-        .await?
-        .get(endpoint)
-        .send()
-        .await
-        .map_err(|_| AppError::DependencyUnavailable(format!("{id} request failed")))?;
-    let status = upstream.status();
-    if !status.is_success() {
-        connections::record_failure(&state.pool, id, &format!("HTTP {status}")).await;
-        return Err(AppError::DependencyUnavailable(format!(
-            "{id} provider returned an error"
-        )));
-    }
-    let bytes = read_response_limited(upstream, 10 * 1024 * 1024, id).await?;
+    let client = outbound_client_for_url(&endpoint, allowlist).await?;
+    let response = client.get(endpoint).send().await;
+    let response = match response {
+        Err(_) => {
+            return Err(AppError::DependencyUnavailable(format!(
+                "{id} request failed"
+            )))
+        }
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => {
+            connections::record_failure(&state.pool, id, &format!("HTTP {}", response.status()))
+                .await;
+            return Err(AppError::DependencyUnavailable(format!(
+                "{id} provider returned an error"
+            )));
+        }
+    };
+    let body = read_response_limited(response, 10 * 1024 * 1024, id).await?;
     connections::record_success(&state.pool, id).await;
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "private, max-age=3600")
-        .body(Body::from(bytes))
-        .map_err(|error| AppError::Internal(error.into()))
+    tile_response(body, "application/json", 3600)
 }
 
 fn tile_response(
@@ -1467,34 +1169,39 @@ fn tile_response(
     content_type: &str,
     max_age: u64,
 ) -> Result<Response<Body>, AppError> {
-    let content_type = HeaderValue::from_str(content_type)
+    let mime = HeaderValue::from_str(content_type)
         .unwrap_or_else(|_| HeaderValue::from_static("image/png"));
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, format!("private, max-age={max_age}"))
-        .body(Body::from(bytes))
-        .map_err(|error| AppError::Internal(error.into()))
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().extend([
+        (header::CONTENT_TYPE, mime),
+        (
+            header::CACHE_CONTROL,
+            HeaderValue::from_str(&format!("private, max-age={max_age}"))
+                .map_err(|error| AppError::Internal(error.into()))?,
+        ),
+    ]);
+    Ok(response)
 }
 
 fn upstream_cache_ttl(headers: &axum::http::HeaderMap) -> u64 {
     let Some(value) = headers
         .get(header::CACHE_CONTROL)
-        .and_then(|value| value.to_str().ok())
+        .and_then(|header| header.to_str().ok())
     else {
         return 86_400;
     };
-    if value
-        .split(',')
-        .any(|part| part.trim().eq_ignore_ascii_case("no-store"))
-    {
-        return 0;
+    let mut selected = None;
+    for directive in value.split(',').map(str::trim) {
+        if directive.eq_ignore_ascii_case("no-store") {
+            return 0;
+        }
+        if selected.is_none() {
+            selected = directive
+                .strip_prefix("max-age=")
+                .and_then(|number| number.parse::<u64>().ok());
+        }
     }
-    value
-        .split(',')
-        .find_map(|part| part.trim().strip_prefix("max-age=")?.parse::<u64>().ok())
-        .unwrap_or(86_400)
-        .min(86_400)
+    selected.unwrap_or(86_400).min(86_400)
 }
 
 async fn validate_update(
@@ -1549,46 +1256,52 @@ async fn validate_update(
             ));
         }
     }
-    let parsed_allowlist = body
+    let parsed = body
         .private_network_allowlist
         .as_ref()
         .map(|allowlist| parse_private_network_allowlist(allowlist))
         .transpose()?;
-    if body.mode != "custom" || !body.enabled {
-        return Ok(parsed_allowlist.map(canonical_allowlist));
-    }
-    let allowlist = parsed_allowlist.as_deref().unwrap_or_default();
-    match id {
-        connections::OPEN_METEO => {
-            validate_endpoint(body.forecast_url.as_deref(), allowlist).await?;
-            validate_endpoint(body.archive_url.as_deref(), allowlist).await?;
-        }
-        connections::NOMINATIM => {
-            validate_endpoint(body.base_url.as_deref(), allowlist).await?;
-        }
-        connections::BASEMAP => {
-            let light = body.light_url_template.as_deref().ok_or_else(|| {
-                AppError::Validation("custom basemap requires a light URL template".into())
-            })?;
-            validate_tile_template(light, allowlist).await?;
-            if let Some(dark) = body.dark_url_template.as_deref() {
-                validate_tile_template(dark, allowlist).await?;
+    if body.enabled && body.mode == "custom" {
+        let allowlist = parsed.as_deref().unwrap_or_default();
+        let checks: Vec<(Option<&str>, bool)> = match id {
+            connections::OPEN_METEO => vec![
+                (body.forecast_url.as_deref(), false),
+                (body.archive_url.as_deref(), false),
+            ],
+            connections::NOMINATIM => vec![(body.base_url.as_deref(), false)],
+            connections::BASEMAP => {
+                let light = body.light_url_template.as_deref().ok_or_else(|| {
+                    AppError::Validation("custom basemap requires a light URL template".into())
+                })?;
+                std::iter::once((Some(light), true))
+                    .chain(
+                        body.dark_url_template
+                            .as_deref()
+                            .map(|url| (Some(url), true)),
+                    )
+                    .collect()
             }
-            if body
+            _ => Vec::new(),
+        };
+        for (endpoint, tile) in checks {
+            if tile {
+                validate_tile_template(endpoint.expect("tile endpoint exists"), allowlist).await?;
+            } else {
+                validate_endpoint(endpoint, allowlist).await?;
+            }
+        }
+        if id == connections::BASEMAP
+            && body
                 .attribution
                 .as_deref()
-                .map(str::trim)
-                .unwrap_or("")
-                .is_empty()
-            {
-                return Err(AppError::Validation(
-                    "custom basemap attribution is required".into(),
-                ));
-            }
+                .is_none_or(|text| text.trim().is_empty())
+        {
+            return Err(AppError::Validation(
+                "custom basemap attribution is required".into(),
+            ));
         }
-        _ => {}
     }
-    Ok(parsed_allowlist.map(canonical_allowlist))
+    Ok(parsed.map(canonical_allowlist))
 }
 
 fn resolve_basemap_provider_update(
@@ -1608,23 +1321,14 @@ fn resolve_effective_basemap_provider_update(
 }
 
 async fn validate_tile_template(value: &str, allowlist: &[IpNet]) -> Result<(), AppError> {
-    for token in ["{z}", "{x}", "{y}"] {
-        if !value.contains(token) {
-            return Err(AppError::Validation(format!(
-                "tile template must contain {token}"
-            )));
-        }
+    let required = ["{z}", "{x}", "{y}"];
+    if let Some(token) = required.into_iter().find(|token| !value.contains(token)) {
+        return Err(AppError::Validation(format!(
+            "tile template must contain {token}"
+        )));
     }
-    validate_endpoint(
-        Some(
-            &value
-                .replace("{z}", "0")
-                .replace("{x}", "0")
-                .replace("{y}", "0"),
-        ),
-        allowlist,
-    )
-    .await
+    let endpoint = expand_tile_template(value, 0, 0, 0);
+    validate_endpoint(Some(&endpoint), allowlist).await
 }
 
 async fn validate_endpoint(value: Option<&str>, allowlist: &[IpNet]) -> Result<(), AppError> {
@@ -1632,21 +1336,19 @@ async fn validate_endpoint(value: Option<&str>, allowlist: &[IpNet]) -> Result<(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::Validation("endpoint is required".into()))?;
-    let url = Url::parse(value)
+    let endpoint = Url::parse(value)
         .map_err(|_| AppError::Validation("endpoint must be a valid URL".into()))?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(AppError::Validation(
-            "endpoint must use HTTP or HTTPS".into(),
-        ));
+    let restrictions = [
+        (!["http", "https"].contains(&endpoint.scheme()), "endpoint must use HTTP or HTTPS"),
+        (!endpoint.username().is_empty() || endpoint.password().is_some() || endpoint.query().is_some() || endpoint.fragment().is_some(),
+            "endpoint credentials, query strings, and fragments are not allowed; use the encrypted secret field"),
+    ];
+    for (rejected, message) in restrictions {
+        if rejected {
+            return Err(AppError::Validation(message.into()));
+        }
     }
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(AppError::Validation("endpoint credentials, query strings, and fragments are not allowed; use the encrypted secret field".into()));
-    }
-    let host = url
+    let host = endpoint
         .host_str()
         .ok_or_else(|| AppError::Validation("endpoint host is required".into()))?;
     if is_link_local_or_metadata(host) {
@@ -1654,47 +1356,50 @@ async fn validate_endpoint(value: Option<&str>, allowlist: &[IpNet]) -> Result<(
             "link-local and cloud metadata endpoints are not allowed".into(),
         ));
     }
-    let port = url
+    let port = endpoint
         .port_or_known_default()
         .ok_or_else(|| AppError::Validation("endpoint port is required".into()))?;
     let addresses = tokio::net::lookup_host((host, port))
         .await
         .map_err(|_| AppError::Validation("endpoint host could not be resolved".into()))?;
-    let mut private = endpoint_is_private(value);
-    let mut public = false;
-    for address in addresses {
-        let ip = address.ip();
-        if is_forbidden_ip(ip) {
-            return Err(AppError::Validation(
-                "link-local and cloud metadata endpoints are not allowed".into(),
-            ));
-        }
-        if is_private_ip(ip) {
-            private = true;
+    let (private, public) = addresses.into_iter().try_fold(
+        (endpoint_is_private(value), false),
+        |(private, public), address| {
+            let ip = address.ip();
+            if is_forbidden_ip(ip) {
+                return Err(AppError::Validation(
+                    "link-local and cloud metadata endpoints are not allowed".into(),
+                ));
+            }
+            if !is_private_ip(ip) {
+                return Ok((private, true));
+            }
             if !allowlist.iter().any(|network| network.contains(&ip)) {
                 return Err(AppError::Validation(
                     "endpoint resolved to a private address outside its configured CIDR allowlist"
                         .into(),
                 ));
             }
-        } else {
-            public = true;
+            Ok((true, public))
+        },
+    )?;
+    for (rejected, message) in [
+        (
+            private && public,
+            "endpoint DNS returned mixed public and private addresses",
+        ),
+        (
+            private && allowlist.is_empty(),
+            "private-network endpoints require an explicit CIDR allowlist",
+        ),
+        (
+            endpoint.scheme() == "http" && !private,
+            "HTTP is permitted only for a confirmed local/private endpoint",
+        ),
+    ] {
+        if rejected {
+            return Err(AppError::Validation(message.into()));
         }
-    }
-    if private && public {
-        return Err(AppError::Validation(
-            "endpoint DNS returned mixed public and private addresses".into(),
-        ));
-    }
-    if private && allowlist.is_empty() {
-        return Err(AppError::Validation(
-            "private-network endpoints require an explicit CIDR allowlist".into(),
-        ));
-    }
-    if url.scheme() == "http" && !private {
-        return Err(AppError::Validation(
-            "HTTP is permitted only for a confirmed local/private endpoint".into(),
-        ));
     }
     Ok(())
 }
@@ -1739,34 +1444,373 @@ fn normalize(value: Option<String>) -> Option<String> {
 }
 
 fn encrypt_secret(age_key: &str, secret: Option<&str>) -> Result<Option<Vec<u8>>, AppError> {
-    let Some(secret) = secret.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(secret) = secret.map(str::trim).filter(|secret| !secret.is_empty()) else {
         return Ok(None);
     };
-    let identity = age_key.parse::<age::x25519::Identity>().map_err(|_| {
-        AppError::Internal(anyhow::anyhow!(
-            "invalid age key for external connection secret"
-        ))
-    })?;
-    Ok(Some(encrypt_json(&secret.to_string(), &identity)?))
+    let codec = ConnectionSecret::new(age_key)?;
+    codec.encode(secret).map(Some)
 }
 
 fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<String>, AppError> {
-    let Some(encrypted) = encrypted else {
-        return Ok(None);
-    };
-    let identity = age_key.parse::<age::x25519::Identity>().map_err(|_| {
-        AppError::Internal(anyhow::anyhow!(
-            "invalid age key for external connection secret"
-        ))
-    })?;
-    Ok(Some(crate::ingestion::session_store::decrypt_json(
-        encrypted, &identity,
-    )?))
+    match encrypted {
+        None => Ok(None),
+        Some(bytes) => ConnectionSecret::new(age_key)?.decode(bytes).map(Some),
+    }
 }
 
 #[cfg(test)]
 #[path = "external_connections/__tests__/contracts.rs"]
 mod contracts;
+
+struct ConnectionSecret(age::x25519::Identity);
+impl ConnectionSecret {
+    fn new(key: &str) -> Result<Self, AppError> {
+        key.parse().map(Self).map_err(|_| {
+            AppError::Internal(anyhow::anyhow!(
+                "invalid age key for external connection secret"
+            ))
+        })
+    }
+    fn encode(&self, text: &str) -> Result<Vec<u8>, AppError> {
+        encrypt_json(&text.to_owned(), &self.0).map_err(AppError::from)
+    }
+    fn decode(&self, bytes: &[u8]) -> Result<String, AppError> {
+        crate::ingestion::session_store::decrypt_json(bytes, &self.0).map_err(AppError::from)
+    }
+}
+
+struct CachedBasemap {
+    bytes: Vec<u8>,
+    content_type: String,
+    max_age: u64,
+}
+impl CachedBasemap {
+    async fn read(state: &AppState, key: &str, fallback: &str) -> Option<Self> {
+        let mut redis = state.redis.get_multiplexed_async_connection().await.ok()?;
+        let bytes = redis.get::<_, Option<Vec<u8>>>(key).await.ok()??;
+        crate::services::basemap_cache::touch(&mut redis, key).await;
+        let mut metadata = Vec::with_capacity(2);
+        for suffix in ["content-type", "max-age"] {
+            metadata.push(
+                redis
+                    .get::<_, Option<String>>(format!("{key}:{suffix}"))
+                    .await
+                    .ok()
+                    .flatten(),
+            );
+        }
+        let max_age = metadata[1]
+            .as_deref()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(86_400);
+        let content_type = metadata.remove(0).unwrap_or_else(|| fallback.to_owned());
+        Some(Self {
+            bytes,
+            content_type,
+            max_age,
+        })
+    }
+    fn respond(self) -> Result<Response<Body>, AppError> {
+        tile_response(self.bytes, &self.content_type, self.max_age)
+    }
+}
+
+impl BasemapConfigResponse {
+    fn from_settings(settings: ConnectionSettingsRow) -> Self {
+        let provider = resolve_basemap_provider(&settings);
+        let revision = settings.updated_at.timestamp_millis().to_string();
+        let styles = basemap_styles(provider, &revision);
+        let attributions = basemap_attributions(&settings, provider);
+        Self {
+            enabled: settings.is_active(),
+            provider_preference: settings.basemap_provider,
+            resolved_provider: provider.to_owned(),
+            revision,
+            styles,
+            attributions,
+        }
+    }
+}
+
+struct RasterRequest<'a> {
+    provider: &'static str,
+    template: &'a str,
+    y: u32,
+    cache_key: String,
+}
+impl<'a> RasterRequest<'a> {
+    fn compile(
+        settings: &'a ConnectionSettingsRow,
+        style: String,
+        z: u8,
+        x: u32,
+        y: &str,
+    ) -> Result<Self, AppError> {
+        let provider = resolve_basemap_provider(settings);
+        if !["carto", "custom"].contains(&provider) {
+            return Err(AppError::Validation(
+                "raster tiles are not active for this basemap provider".into(),
+            ));
+        }
+        let y = y
+            .trim_end_matches(".png")
+            .parse::<u32>()
+            .map_err(|_| AppError::Validation("invalid tile coordinate".into()))?;
+        let bound = 1_u32.checked_shl(u32::from(z)).unwrap_or(0);
+        for (rejected, message) in [
+            (z > 22, "invalid tile zoom"),
+            (x >= bound || y >= bound, "invalid tile coordinate"),
+            (
+                !["light", "dark"].contains(&style.as_str()),
+                "invalid tile style",
+            ),
+        ] {
+            if rejected {
+                return Err(AppError::Validation(message.into()));
+            }
+        }
+        let choices = if style == "dark" {
+            [
+                settings.dark_url_template.as_deref(),
+                settings.light_url_template.as_deref(),
+            ]
+        } else {
+            [settings.light_url_template.as_deref(), None]
+        };
+        let template = choices
+            .into_iter()
+            .flatten()
+            .next()
+            .ok_or_else(|| AppError::Validation("tile template missing".into()))?;
+        Ok(Self {
+            provider,
+            template,
+            y,
+            cache_key: format!(
+                "external:basemap:{}:{style}:{z}:{x}:{y}",
+                settings.updated_at.timestamp()
+            ),
+        })
+    }
+}
+
+impl CachedBasemap {
+    async fn from_raster(response: reqwest::Response) -> Result<Self, AppError> {
+        if response.content_length().unwrap_or(0) > 5 * 1024 * 1024 {
+            return Err(AppError::DependencyUnavailable(
+                "Basemap tile exceeded the response limit".into(),
+            ));
+        }
+        let max_age = upstream_cache_ttl(response.headers());
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|header| header.to_str().ok())
+            .unwrap_or("image/png")
+            .to_owned();
+        let bytes = read_response_limited(response, 5 * 1024 * 1024, "Basemap tile").await?;
+        Ok(Self {
+            bytes,
+            content_type,
+            max_age,
+        })
+    }
+    async fn store(&self, state: &AppState, key: &str) {
+        crate::services::basemap_cache::store(
+            &state.redis,
+            key,
+            &self.bytes,
+            &self.content_type,
+            self.max_age,
+            &state.config.security,
+        )
+        .await;
+    }
+}
+
+enum OpenMapFailure {
+    Stage(&'static str, AppError),
+    Status(reqwest::StatusCode),
+}
+impl OpenMapFailure {
+    fn parts(self) -> (AppError, &'static str, Option<reqwest::StatusCode>) {
+        match self {
+            Self::Stage(class, error) => (error, class, None),
+            Self::Status(status) => (
+                AppError::DependencyUnavailable("OpenFreeMap provider returned an error".into()),
+                "upstream_status",
+                Some(status),
+            ),
+        }
+    }
+}
+
+async fn fetch_openfreemap(
+    state: &AppState,
+    resource: &str,
+) -> Result<CachedBasemap, OpenMapFailure> {
+    let endpoint =
+        Url::parse(&format!("https://tiles.openfreemap.org/{resource}")).map_err(|_| {
+            OpenMapFailure::Stage(
+                "endpoint_parse",
+                AppError::Validation("invalid OpenFreeMap resource".into()),
+            )
+        })?;
+    connections::record_attempt(&state.pool, connections::BASEMAP).await;
+    let client = outbound_client_for_url(&endpoint, &[])
+        .await
+        .map_err(|error| OpenMapFailure::Stage("client_setup", error))?;
+    let response = client.get(endpoint).send().await.map_err(|_| {
+        OpenMapFailure::Stage(
+            "transport",
+            AppError::DependencyUnavailable("OpenFreeMap request failed".into()),
+        )
+    })?;
+    if !response.status().is_success() {
+        return Err(OpenMapFailure::Status(response.status()));
+    }
+    let max_age = upstream_cache_ttl(response.headers());
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|header| header.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let bytes = read_openfreemap_response_limited(response, 10 * 1024 * 1024)
+        .await
+        .map_err(|class| {
+            let message = if class == "response_size" {
+                "OpenFreeMap resource response exceeded the limit"
+            } else {
+                "OpenFreeMap resource response failed"
+            };
+            OpenMapFailure::Stage(class, AppError::DependencyUnavailable(message.into()))
+        })?;
+    let bytes = match is_json_content_type(&content_type) {
+        true => rewrite_openfreemap_json(&bytes)
+            .map_err(|error| OpenMapFailure::Stage("invalid_json", error))?,
+        false => bytes,
+    };
+    Ok(CachedBasemap {
+        bytes,
+        content_type,
+        max_age,
+    })
+}
+
+struct ConnectionProbe {
+    endpoint: Url,
+    provider: Option<String>,
+    user_agent: Option<String>,
+    query: Vec<(&'static str, &'static str)>,
+}
+impl ConnectionProbe {
+    fn compile(
+        id: &str,
+        body: &UpdateConnectionBody,
+        settings: &ConnectionSettingsRow,
+    ) -> Result<Option<Self>, AppError> {
+        let probe = match id {
+            connections::NOMINATIM => {
+                let base = if body.mode == "custom" {
+                    body.base_url.as_deref()
+                } else {
+                    Some("https://nominatim.openstreetmap.org")
+                };
+                Self {
+                    endpoint: endpoint_join(base, "search")?,
+                    provider: None,
+                    user_agent: Some(
+                        body.request_identifier
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .unwrap_or("R (self-hosted Rivian telemetry)")
+                            .to_owned(),
+                    ),
+                    query: vec![("format", "jsonv2"), ("q", "Kansas"), ("limit", "1")],
+                }
+            }
+            connections::ICONIFY => Self {
+                endpoint: endpoint_join(Some("https://api.iconify.design"), "search")?,
+                provider: None,
+                user_agent: None,
+                query: vec![("query", "thermometer"), ("limit", "1")],
+            },
+            connections::BASEMAP => {
+                let provider = resolve_effective_basemap_provider_update(id, body, settings)?;
+                let template = match (provider.as_str(), body.mode.as_str()) {
+                    ("openfreemap", _) => Some("https://tiles.openfreemap.org/styles/positron"),
+                    (_, "custom") => body.light_url_template.as_deref(),
+                    _ => Some("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"),
+                }
+                .ok_or_else(|| AppError::Validation("light tile template required".into()))?;
+                let endpoint = Url::parse(&expand_tile_template(template, 6, 14, 24))
+                    .map_err(|_| AppError::Validation("light tile template required".into()))?;
+                Self {
+                    endpoint,
+                    provider: Some(provider),
+                    user_agent: None,
+                    query: Vec::new(),
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(probe))
+    }
+    async fn request(
+        self,
+        state: &AppState,
+        body: &UpdateConnectionBody,
+        settings: &ConnectionSettingsRow,
+        allowlist: &[IpNet],
+    ) -> Result<reqwest::RequestBuilder, AppError> {
+        let carto_key = self.provider.as_deref() == Some("carto")
+            && should_forward_carto_api_key(&body.mode, &self.endpoint);
+        let mut request = outbound_client_for_url(&self.endpoint, allowlist)
+            .await?
+            .get(self.endpoint);
+        if let Some(user_agent) = self.user_agent {
+            request = request.header(header::USER_AGENT, user_agent);
+        }
+        if !self.query.is_empty() {
+            request = request.query(&self.query);
+        }
+        if let Some(provider) = self.provider {
+            let key = body
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+                .or(decrypt_secret(
+                    &state.age_key,
+                    settings.api_key_encrypted.as_deref(),
+                )?);
+            if carto_key {
+                if let Some(key) = key {
+                    request = request.query(&[carto_basemap_key_query(&key)]);
+                }
+            }
+            if should_forward_basemap_bearer_token(&provider) {
+                let token = body
+                    .bearer_token
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+                    .or(decrypt_secret(
+                        &state.age_key,
+                        settings.bearer_token_encrypted.as_deref(),
+                    )?);
+                if let Some(token) = token {
+                    request = request.bearer_auth(token);
+                }
+            }
+        }
+        Ok(request)
+    }
+}
 
 #[cfg(test)]
 mod tests {
