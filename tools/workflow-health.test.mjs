@@ -10,7 +10,7 @@ test('original health loop reports success or stops after twenty failed probes w
   for (const status of [0, 1]) {
     const result = run(program, {rules: [
       {argv: ['cargo', 'run', '--bin', 'panda-api'], hold: true},
-      {argv: ['curl', '-sf', 'http://localhost:3001/health'], status},
+      {argv: ['curl', '-sf', 'http://localhost:3001/health'], status, after: ['cargo', 'run', '--bin', 'panda-api']},
       {argv: ['sleep', '2']},
     ]});
     assert.equal(result.status, status, result.stderr);

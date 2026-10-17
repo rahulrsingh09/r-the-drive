@@ -41,6 +41,15 @@ const rule = plan.find(({argv, prefix}) => {
     : prefix.every((value, index) => values[index] === value);
 });
 if (!rule) { console.error('UNPLANNED COMMAND: ' + JSON.stringify([command, ...args])); process.exit(97); }
+if (rule.after) {
+  const deadline = Date.now() + 2000;
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.readFileSync(process.env.FAKE_LOG, 'utf8').split('\\n').filter(Boolean)
+    .some((line) => JSON.stringify(JSON.parse(line)) === JSON.stringify(rule.after))) {
+    if (Date.now() >= deadline) { console.error('SIMULATED CHILD DID NOT START'); process.exit(98); }
+    Atomics.wait(wait, 0, 0, 5);
+  }
+}
 if (rule.metadata !== undefined && args.includes('--metadata-file')) {
   const target = args[args.indexOf('--metadata-file') + 1];
   fs.writeFileSync(target, JSON.stringify(rule.metadata));
