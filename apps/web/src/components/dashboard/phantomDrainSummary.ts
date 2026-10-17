@@ -25,59 +25,36 @@ function formatRatioPercent(value: number | null, decimals = 0) {
 }
 
 export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): PhantomDrainSummary {
-  const maxDrainPctPerHour = periods.reduce<number | null>((max, period) => {
-    const rate = finiteNumber(period.drain_pct_per_hour);
-    if (rate == null) return max;
-    return max == null ? rate : Math.max(max, rate);
-  }, null);
-
-  const weightedSleep = periods.reduce(
-    (acc, period) => {
-      const duration = finiteNumber(period.duration_hours);
-      const sleepShare = finiteNumber(period.sleep_share_pct);
-      if (duration == null || sleepShare == null) return acc;
-      acc.weightedSum += duration * sleepShare;
-      acc.durationSum += duration;
-      return acc;
-    },
-    { weightedSum: 0, durationSum: 0 }
-  );
-  const avgSleepPct = weightedSleep.durationSum > 0 ? weightedSleep.weightedSum / weightedSleep.durationSum : null;
-
-  const weightedCoverage = periods.reduce(
-    (acc, period) => {
-      const duration = finiteNumber(period.duration_hours);
-      const coverage = finiteNumber(period.state_coverage_pct);
-      if (duration == null || coverage == null) return acc;
-      acc.weightedSum += duration * coverage;
-      acc.durationSum += duration;
-      return acc;
-    },
-    { weightedSum: 0, durationSum: 0 }
-  );
-  const avgStateCoveragePct = weightedCoverage.durationSum > 0 ? weightedCoverage.weightedSum / weightedCoverage.durationSum : null;
-
-  const totalEnergyDrainedKwh = periods.reduce((sum, period) => {
-    if (period.energy_drained_kwh == null || Number.isNaN(period.energy_drained_kwh)) return sum;
-    return sum + period.energy_drained_kwh;
-  }, 0);
-
-  const totalDurationHours = periods.reduce((sum, period) => {
+  const totals = { energy: 0, hours: 0, loss: 0 };
+  const weighted = {
+    sleep: { sum: 0, hours: 0 },
+    coverage: { sum: 0, hours: 0 },
+  };
+  let maximum: number | null = null;
+  for (const period of periods) {
     const duration = finiteNumber(period.duration_hours);
-    return duration == null ? sum : sum + duration;
-  }, 0);
-  const totalSocLostPct = periods.reduce((sum, period) => {
-    const lost = finiteNumber(period.soc_lost_pct);
-    return lost == null ? sum : sum + lost;
-  }, 0);
-  const avgDrainPctPerHour = totalDurationHours > 0 ? totalSocLostPct / totalDurationHours : null;
-
+    const rate = finiteNumber(period.drain_pct_per_hour);
+    if (rate !== null) maximum = maximum === null ? rate : Math.max(maximum, rate);
+    totals.hours += duration ?? 0;
+    totals.loss += finiteNumber(period.soc_lost_pct) ?? 0;
+    const energy = period.energy_drained_kwh;
+    if (energy != null && !Number.isNaN(energy)) totals.energy += energy;
+    if (duration === null) continue;
+    const observations = { sleep: period.sleep_share_pct, coverage: period.state_coverage_pct };
+    for (const key of ['sleep', 'coverage'] as const) {
+      const value = finiteNumber(observations[key]);
+      if (value === null) continue;
+      weighted[key].sum += duration * value;
+      weighted[key].hours += duration;
+    }
+  }
+  const average = ({ sum, hours }: { sum: number; hours: number }) => hours > 0 ? sum / hours : null;
   return {
-    maxDrainPctPerHour,
-    avgSleepPct,
-    avgStateCoveragePct,
-    totalEnergyDrainedKwh,
-    avgDrainPctPerHour,
+    maxDrainPctPerHour: maximum,
+    avgSleepPct: average(weighted.sleep),
+    avgStateCoveragePct: average(weighted.coverage),
+    totalEnergyDrainedKwh: totals.energy,
+    avgDrainPctPerHour: average({ sum: totals.loss, hours: totals.hours }),
   };
 }
 

@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useReducer } from 'react';
 import type { ToastPayload } from './toast';
 
-// Use crypto.randomUUID() for toast IDs so they remain unique across HMR
-// reloads (a module-level counter resets to 0 every time the module is
-// re-evaluated, risking duplicate React keys if old toasts are still mounted).
+let fallbackToastSequence = 0;
+let fallbackToastNamespace: string | undefined;
+
 function nextToastId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  fallbackToastNamespace ??= `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  fallbackToastSequence += 1;
+  return `${fallbackToastNamespace}-${fallbackToastSequence}`;
 }
 
 interface Toast extends ToastPayload {
@@ -40,23 +41,40 @@ const TOAST_VARIANT_CLASSNAMES: Record<NonNullable<ToastPayload['variant']> | 'd
   },
 };
 
+type ToastEvent = { type: 'show'; toast: Toast } | { type: 'dismiss'; id: string };
+
+function toastQueue(current: Map<string, Toast>, event: ToastEvent) {
+  const next = new Map(current);
+  if (event.type === 'dismiss') next.delete(event.id);
+  else {
+    next.set(event.toast.id, event.toast);
+    if (next.size > 3) next.delete(next.keys().next().value!);
+  }
+  return next;
+}
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [queue, dispatch] = useReducer(toastQueue, new Map<string, Toast>());
+  const toasts = Array.from(queue.values());
 
   useEffect(() => {
-    function handleToast(event: Event) {
-      const detail = (event as CustomEvent<ToastPayload>).detail;
-      if (!detail?.message) return;
-
-      const id = nextToastId();
-      setToasts((current) => [...current.slice(-2), { ...detail, id }]);
-      window.setTimeout(() => {
-        setToasts((current) => current.filter((toast) => toast.id !== id));
+    const timers = new Set<number>();
+    const receive = (event: Event) => {
+      const payload = (event as CustomEvent<ToastPayload>).detail;
+      if (!payload?.message) return;
+      const toast = { ...payload, id: nextToastId() };
+      dispatch({ type: 'show', toast });
+      const timer = window.setTimeout(() => {
+        timers.delete(timer);
+        dispatch({ type: 'dismiss', id: toast.id });
       }, 7000);
-    }
-
-    window.addEventListener('panda:toast', handleToast);
-    return () => window.removeEventListener('panda:toast', handleToast);
+      timers.add(timer);
+    };
+    window.addEventListener('panda:toast', receive);
+    return () => {
+      window.removeEventListener('panda:toast', receive);
+      timers.forEach(timer => window.clearTimeout(timer));
+    };
   }, []);
 
   return (
@@ -86,7 +104,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 type="button"
                 aria-label="Dismiss notification"
                 className="rounded-md px-2 py-1 text-sm font-medium text-fg-secondary hover:bg-bg-elevated hover:text-fg"
-                onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}
+                onClick={() => dispatch({ type: 'dismiss', id: toast.id })}
               >
                 Close
               </button>

@@ -22,20 +22,30 @@ export function formatRivianRenewalDate(value?: string | null): string | null {
   }).format(date);
 }
 
+const RENEWAL_NOTICES = {
+  renewal_due: {
+    due: true,
+    label: 'Rivian renewal recommended',
+    message: 'The estimated 180-day Rivian connection window has passed. Refresh the Rivian login to avoid an interruption.',
+  },
+  renewal_soon: {
+    due: false,
+    label: 'Renew Rivian',
+    message: 'The Rivian connection is approaching its estimated 180-day renewal date',
+  },
+} as const;
+
 export function getRivianCredentialRenewalNotice(
   status?: RivianCredentialRenewalStatus | null,
 ): RivianCredentialRenewalNotice | null {
-  if (status?.renewal_state !== 'renewal_soon' && status?.renewal_state !== 'renewal_due') {
-    return null;
-  }
-
-  const renewalDate = formatRivianRenewalDate(status.expected_renewal_at);
-  const due = status.renewal_state === 'renewal_due';
+  const state = status?.renewal_state;
+  if (state !== 'renewal_due' && state !== 'renewal_soon') return null;
+  const notice = RENEWAL_NOTICES[state];
+  if (notice.due) return { ...notice };
+  const date = formatRivianRenewalDate(status?.expected_renewal_at);
   return {
-    due,
-    label: due ? 'Rivian renewal recommended' : `Renew Rivian${renewalDate ? ` by ${renewalDate}` : ' soon'}`,
-    message: due
-      ? 'The estimated 180-day Rivian connection window has passed. Refresh the Rivian login to avoid an interruption.'
-      : `The Rivian connection is approaching its estimated 180-day renewal date${renewalDate ? ` on ${renewalDate}` : ''}.`,
+    due: notice.due,
+    label: notice.label + (date ? ` by ${date}` : ' soon'),
+    message: notice.message + (date ? ` on ${date}.` : '.'),
   };
 }

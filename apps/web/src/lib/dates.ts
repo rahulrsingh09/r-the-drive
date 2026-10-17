@@ -23,26 +23,17 @@ type StoredDashboardTimeframe =
   | { kind: 'lifetime' }
   | { preset?: string; from?: string; to?: string };
 
+const PRESET_OFFSETS: Record<BoundedPresetKey, { hours: number } | { days: number }> = {
+  '1h': { hours: 1 }, '6h': { hours: 6 }, '12h': { hours: 12 }, '24h': { hours: 24 },
+  '7d': { days: 7 }, '30d': { days: 30 }, '90d': { days: 90 }, '1y': { days: 365 },
+};
+
 export function presetToRange(preset: BoundedPresetKey): DateRange {
-  const now = new Date();
-  switch (preset) {
-    case '1h':
-      return { from: subHours(now, 1), to: now };
-    case '6h':
-      return { from: subHours(now, 6), to: now };
-    case '12h':
-      return { from: subHours(now, 12), to: now };
-    case '24h':
-      return { from: subHours(now, 24), to: now };
-    case '7d':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -7)), to: endOfAppDay(now) };
-    case '30d':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -30)), to: endOfAppDay(now) };
-    case '90d':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -90)), to: endOfAppDay(now) };
-    case '1y':
-      return { from: startOfAppDay(shiftAppCalendarDays(now, -365)), to: endOfAppDay(now) };
-  }
+  const offset = PRESET_OFFSETS[preset];
+  const anchor = new Date();
+  if ('hours' in offset) return { from: subHours(anchor, offset.hours), to: anchor };
+  const firstDay = shiftAppCalendarDays(anchor, -offset.days);
+  return { from: startOfAppDay(firstDay), to: endOfAppDay(anchor) };
 }
 
 export function getTimeframeRange(timeframe: DashboardTimeframe): DateRange | null {
@@ -69,20 +60,17 @@ export function timeframeToQuery(timeframe: DashboardTimeframe): {
   lifetime: boolean;
   cacheKey: string;
 } {
-  if (timeframe.kind === 'lifetime') {
-    return { from: null, to: null, lifetime: true, cacheKey: 'lifetime' };
-  }
-
   const range = getTimeframeRange(timeframe);
-  if (!range) {
-    return { from: null, to: null, lifetime: true, cacheKey: 'lifetime' };
+  const result = { from: null, to: null, lifetime: true, cacheKey: 'lifetime' } as {
+    from: string | null; to: string | null; lifetime: boolean; cacheKey: string;
+  };
+  if (range) {
+    Object.assign(result, rangeToIso(range), { lifetime: false });
+    result.cacheKey = timeframe.kind === 'preset'
+      ? `preset:${timeframe.preset}`
+      : `custom:${result.from}:${result.to}`;
   }
-
-  const { from, to } = rangeToIso(range);
-  const cacheKey = timeframe.kind === 'preset'
-    ? `preset:${timeframe.preset}`
-    : `custom:${from}:${to}`;
-  return { from, to, lifetime: false, cacheKey };
+  return result;
 }
 
 export function getTimeframeLabel(timeframe: DashboardTimeframe): string {
@@ -100,58 +88,32 @@ export function normalizeDateRange(range: DateRange): DateRange {
   return range.from <= range.to ? range : { from: range.to, to: range.from };
 }
 
+function decodeStoredTimeframe(value: unknown): DashboardTimeframe | null {
+  if (!value || typeof value !== 'object') return null;
+  const fields = value as Record<string, unknown>;
+  const bounded = typeof fields.preset === 'string'
+    && BOUNDED_PRESET_KEYS.includes(fields.preset as BoundedPresetKey)
+    ? { kind: 'preset' as const, preset: fields.preset as BoundedPresetKey }
+    : null;
+  const hasDates = typeof fields.from === 'string' && typeof fields.to === 'string';
+  const custom = () => {
+    if (!hasDates) return null;
+    const range = parseStoredCustomRange(fields.from as string, fields.to as string);
+    return range ? { kind: 'custom' as const, ...range } : null;
+  };
+  switch (fields.kind) {
+    case 'lifetime': return { kind: 'lifetime' };
+    case 'preset': if (bounded) return bounded; break;
+    case 'custom': if (hasDates) return custom(); break;
+  }
+  if (fields.preset === 'lifetime') return { kind: 'lifetime' };
+  return bounded ?? custom();
+}
+
 export function loadDashboardTimeframe(): DashboardTimeframe | null {
-  if (typeof window === 'undefined') return null;
-
   try {
-    const raw = window.sessionStorage.getItem(DASHBOARD_TIMEFRAME_STORAGE_KEY);
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw) as StoredDashboardTimeframe;
-
-    if (parsed && typeof parsed === 'object' && 'kind' in parsed && parsed.kind === 'lifetime') {
-      return { kind: 'lifetime' };
-    }
-
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'kind' in parsed &&
-      parsed.kind === 'preset' &&
-      'preset' in parsed &&
-      typeof parsed.preset === 'string' &&
-      BOUNDED_PRESET_KEYS.includes(parsed.preset as BoundedPresetKey)
-    ) {
-      return { kind: 'preset', preset: parsed.preset as BoundedPresetKey };
-    }
-
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'kind' in parsed &&
-      parsed.kind === 'custom' &&
-      'from' in parsed &&
-      'to' in parsed &&
-      typeof parsed.from === 'string' &&
-      typeof parsed.to === 'string'
-    ) {
-      const custom = parseStoredCustomRange(parsed.from, parsed.to);
-      return custom ? { kind: 'custom', ...custom } : null;
-    }
-
-    if (parsed && typeof parsed === 'object' && 'preset' in parsed && typeof parsed.preset === 'string') {
-      if (parsed.preset === 'lifetime') return { kind: 'lifetime' };
-      if (BOUNDED_PRESET_KEYS.includes(parsed.preset as BoundedPresetKey)) {
-        return { kind: 'preset', preset: parsed.preset as BoundedPresetKey };
-      }
-    }
-
-    if (parsed && typeof parsed === 'object' && 'from' in parsed && 'to' in parsed && typeof parsed.from === 'string' && typeof parsed.to === 'string') {
-      const custom = parseStoredCustomRange(parsed.from, parsed.to);
-      return custom ? { kind: 'custom', ...custom } : null;
-    }
-
-    return null;
+    const raw = typeof window === 'undefined' ? null : window.sessionStorage.getItem(DASHBOARD_TIMEFRAME_STORAGE_KEY);
+    return raw ? decodeStoredTimeframe(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
@@ -185,43 +147,31 @@ export function serializeDashboardTimeframe(timeframe: DashboardTimeframe): Stor
   }
 }
 
-const TIMEFRAME_PARSE_PATTERNS = [
-  'M/d/yy',
-  'M/d/yyyy',
-  'M/d/yy h:mm a',
-  'M/d/yyyy h:mm a',
-  'M/d/yy h:mma',
-  'M/d/yyyy h:mma',
-  'M/d/yy HH:mm',
-  'M/d/yyyy HH:mm',
-  'MM/dd/yy',
-  'MM/dd/yyyy',
-  'MM/dd/yy h:mm a',
-  'MM/dd/yyyy h:mm a',
-  'MM/dd/yy HH:mm',
-  'MM/dd/yyyy HH:mm',
-];
+function parseNumericTimeframe(value: string, fallback: Date): Date | null {
+  const shape = /^\d{1,2}\/\d{1,2}\/(\d{1,4})(?: (.+))?$/.exec(value);
+  if (!shape) return null;
+  const year = shape[1]!.length <= 2 ? 'yy' : 'yyyy';
+  const clock = shape[2];
+  const clocks = !clock ? [''] : /[a-z]/i.test(clock) ? [' h:mm a', ' h:mma'] : [' HH:mm'];
+  for (const suffix of clocks) {
+    const candidate = parse(value, `M/d/${year}${suffix}`, fallback);
+    if (isValid(candidate)) return candidate;
+  }
+  return null;
+}
 
 export function parseTimeframeInput(value: string, fallback: Date): Date | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  for (const pattern of TIMEFRAME_PARSE_PATTERNS) {
-    const parsed = parse(trimmed, pattern, fallback);
-    if (isValid(parsed)) {
-      return appDatePartsToDate({
-        year: parsed.getFullYear(),
-        month: parsed.getMonth() + 1,
-        day: parsed.getDate(),
-        hour: parsed.getHours(),
-        minute: parsed.getMinutes(),
-        second: 0,
-      });
-    }
+  const text = value.trim();
+  if (text === '') return null;
+  const wallDate = parseNumericTimeframe(text, fallback);
+  if (wallDate === null) {
+    const native = new Date(text);
+    return isValid(native) ? native : null;
   }
-
-  const nativeDate = new Date(trimmed);
-  return isValid(nativeDate) ? nativeDate : null;
+  return appDatePartsToDate({
+    year: wallDate.getFullYear(), month: wallDate.getMonth() + 1, day: wallDate.getDate(),
+    hour: wallDate.getHours(), minute: wallDate.getMinutes(), second: 0,
+  });
 }
 
 export const PRESET_LABELS: Record<PresetKey, string> = {

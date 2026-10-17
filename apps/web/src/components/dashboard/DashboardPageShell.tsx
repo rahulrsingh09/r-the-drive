@@ -1,3 +1,5 @@
+import { persistDashboardDraft } from './dashboardSave';
+import { dashboardHeightEdit, resolveShellDashboard } from './dashboardShellModel';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth, useMe, useResolvedVehicleSelection } from '@panda/hooks';
@@ -5,18 +7,14 @@ import { DateRangePicker, EfficiencyDisplayToggle, PageLayout, SelectPicker } fr
 import { getUnitPreferences } from '@panda/ui/lib/utils';
 import {
   DashboardRenderer,
-  findOwnedDashboardBySlug,
   getDefaultBySlug,
-  isSystemDefaultDashboard,
-  materializeSystemDashboardDraft,
-  materializeUserDashboardDraft,
   useCreateDashboard,
   useDashboardById,
   useDashboardBySlug,
   useUpdateAdminDashboard,
   useUpdateDashboard,
 } from '@panda/dashboards';
-import type { DashboardConfig, WidgetCtx } from '@panda/dashboards';
+import type { WidgetCtx } from '@panda/dashboards';
 import { Edit2, Save, Trash2 } from 'lucide-react';
 import { AppLayout } from '../layout/AppLayout';
 import { NoVehicleState } from '../layout/NoVehicleState';
@@ -74,31 +72,7 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
       setSaveError(null);
       if (!localConfig || !savedConfig) { exitEdit(); return; }
       try {
-        const isSystemDefault = isSystemDefaultDashboard(savedConfig);
-
-        if (isSystemDefault && isAdmin) {
-          await updateAdminDashboard.mutateAsync(materializeSystemDashboardDraft(localConfig, savedConfig));
-        } else {
-          const ownedCopy = savedConfig?.ownerId != null
-            ? savedConfig
-            : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
-          if (ownedCopy) {
-            await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, ownedCopy));
-          } else {
-            try {
-              await createDashboard.mutateAsync(materializeUserDashboardDraft(localConfig));
-            } catch {
-              await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
-              const refreshedBySlug = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
-              const refreshedOwned =
-                refreshedBySlug?.ownerId != null
-                  ? refreshedBySlug
-                  : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
-              if (!refreshedOwned) throw new Error('Could not find owned dashboard after refetch');
-              await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, refreshedOwned));
-            }
-          }
-        }
+        await persistDashboardDraft(localConfig, savedConfig, { updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin });
         exitEdit();
       } catch (error) {
         setSaveError(dashboardSaveErrorMessage(error));
@@ -174,9 +148,8 @@ function DashboardPageShellContent({
   const me = useMe();
   const [showEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
   const isAdmin = canManageSystemDashboards(me.data?.role);
-  const storedTimeframe = useMemo(() => loadDashboardTimeframe(), []);
   const [timeframe, setTimeframe] = useState<DashboardTimeframe>(
-    () => storedTimeframe ?? DEFAULT_TIMEFRAME,
+    () => loadDashboardTimeframe() ?? DEFAULT_TIMEFRAME,
   );
   const [chargeSessionDayLocal, setChargeSessionDayLocal] = useState<string | null>(null);
   const [unitPreferences, setUnitPreferences] = useState(getUnitPreferences);
@@ -187,16 +160,18 @@ function DashboardPageShellContent({
   const hasVehicleChoices = availableVehicles.length > 1;
   const bySlug = useDashboardBySlug(dashboardId ? null : slug);
   const byId = useDashboardById(dashboardId ?? null);
-  const apiConfig = dashboardId ? byId.data : bySlug.data;
-  const apiConfigForSlug = apiConfig?.slug === slug ? apiConfig : undefined;
-  const localDefault = getDefaultBySlug(slug);
-  const savedConfig: DashboardConfig | undefined = dashboardId || (controlledEditMode && (!authReady || bySlug.isLoading || bySlug.isError))
-    ? apiConfigForSlug
-    : apiConfigForSlug ?? localDefault;
-  const dashboardIsLoading = dashboardId ? byId.isLoading : bySlug.isLoading;
-  const exactDashboardUnavailable = Boolean(
-    dashboardId && !dashboardIsLoading && (byId.isError || !apiConfigForSlug),
-  );
+  const selectedResponse = dashboardId ? byId : bySlug;
+  const dashboardIsLoading = selectedResponse.isLoading;
+  const { saved: savedConfig, unavailable: exactDashboardUnavailable } = resolveShellDashboard({
+    exact: Boolean(dashboardId),
+    editing: Boolean(controlledEditMode),
+    authReady,
+    slug,
+    response: selectedResponse.data,
+    fallback: getDefaultBySlug(slug),
+    loading: dashboardIsLoading,
+    failed: selectedResponse.isError,
+  });
 
   const {
     activeConfig,
@@ -215,43 +190,9 @@ function DashboardPageShellContent({
     onEditModeChange,
   });
 
-  const setChargeSessionDayFilter = React.useCallback((next: string | null) => {
-    setChargeSessionDayLocal(next);
-  }, []);
-
+  const setChargeSessionDayFilter = setChargeSessionDayLocal;
   const updateWidgetLayout = useCallback((widgetId: string, nextHeight: number) => {
-    const normalizedHeight = Number.isFinite(nextHeight)
-      ? Math.max(1, Math.min(20, Math.round(nextHeight)))
-      : null;
-
-    if (normalizedHeight == null) return;
-
-    setLocalConfig((current) => {
-      const currentConfig = current ?? savedConfig;
-      if (!currentConfig) return current;
-
-      const widgets = currentConfig.widgets;
-      const widgetIndex = widgets.findIndex((widget) => widget.id === widgetId);
-      if (widgetIndex === -1) return current;
-
-      const widget = widgets[widgetIndex];
-      if (!widget) return current;
-      if (widget.layout.h === normalizedHeight) return current;
-
-      const nextWidgets = [...widgets];
-      nextWidgets[widgetIndex] = {
-        ...widget,
-        layout: {
-          ...widget.layout,
-          h: normalizedHeight,
-        },
-      };
-
-      return {
-        ...currentConfig,
-        widgets: nextWidgets,
-      };
-    });
+    if (Number.isFinite(nextHeight)) setLocalConfig(dashboardHeightEdit(widgetId, nextHeight, savedConfig));
   }, [setLocalConfig, savedConfig]);
 
   useEffect(() => {

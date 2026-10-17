@@ -28,18 +28,21 @@ export function ParkedEnergyPanel({
 }) {
   const { data, isLoading } = useParkedEnergy(vehicleId, from, to);
   const samples = data?.samples ?? [];
+  const byWindow = new Map<ParkedEnergyWindow, ParkedEnergySample>();
+  for (const candidate of samples) {
+    if (!byWindow.has(candidate.window)) byWindow.set(candidate.window, candidate);
+  }
   const preferred = chooseDefaultWindow(samples);
-  const [window, setWindow] = React.useState<ParkedEnergyWindow>(preferred);
-
-  React.useEffect(() => {
-    if (!samples.some((sample) => sample.window === window)) setWindow(preferred);
-  }, [preferred, samples, window]);
-
-  const sample = samples.find((candidate) => candidate.window === window) ?? null;
-  const categoryTotal = CATEGORIES.reduce(
-    (sum, category) => sum + Math.max(0, sample?.[category.key] ?? 0),
-    0,
-  );
+  const [selection, setWindow] = React.useState<ParkedEnergyWindow>(preferred);
+  const window = byWindow.has(selection) ? selection : preferred;
+  if (window !== selection) setWindow(window);
+  const sample = byWindow.get(window) ?? null;
+  const categories = CATEGORIES.map(category => ({
+    ...category,
+    raw: sample?.[category.key] ?? null,
+    value: Math.max(0, sample?.[category.key] ?? 0),
+  }));
+  const categoryTotal = categories.reduce((sum, category) => sum + category.value, 0);
 
   return (
     <Card data-testid="parked-energy-panel">
@@ -59,7 +62,7 @@ export function ParkedEnergyPanel({
               key={option.value}
               type="button"
               onClick={() => setWindow(option.value)}
-              disabled={!samples.some((candidate) => candidate.window === option.value)}
+              disabled={!byWindow.has(option.value)}
               aria-pressed={window === option.value}
               className={`min-h-11 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-colors disabled:opacity-35 ${
                 window === option.value
@@ -93,27 +96,26 @@ export function ParkedEnergyPanel({
 
             <div>
               <div className="flex h-4 overflow-hidden rounded-full bg-bg-elevated" aria-label="Parked energy category breakdown">
-                {CATEGORIES.map((category) => {
-                  const value = Math.max(0, sample[category.key] ?? 0);
-                  const width = categoryTotal > 0 ? (value / categoryTotal) * 100 : 0;
+                {categories.map((category) => {
+                  const width = categoryTotal > 0 ? (category.value / categoryTotal) * 100 : 0;
                   return (
                     <div
                       key={category.key}
                       className={category.color}
                       style={{ width: `${width}%` }}
-                      title={`${category.label}: ${formatEnergy(value)}`}
+                      title={`${category.label}: ${formatEnergy(category.value)}`}
                     />
                   );
                 })}
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                {CATEGORIES.map((category) => (
+                {categories.map((category) => (
                   <div key={category.key} className="flex items-center justify-between gap-3 text-xs">
                     <span className="flex items-center gap-2 text-fg-secondary">
                       <span className={`h-2.5 w-2.5 rounded-full ${category.color}`} />
                       {category.label}
                     </span>
-                    <span className="font-medium text-fg">{formatEnergy(sample[category.key])}</span>
+                    <span className="font-medium text-fg">{formatEnergy(category.raw)}</span>
                   </div>
                 ))}
               </div>
@@ -131,15 +133,20 @@ export function ParkedEnergyPanel({
 }
 
 function chooseDefaultWindow(samples: ParkedEnergySample[]): ParkedEnergyWindow {
-  const sinceParked = samples.find((sample) => sample.window === 'since_parked');
-  if (
-    sinceParked &&
-    Date.now() - new Date(sinceParked.received_at).getTime() <= 6 * 60 * 60 * 1000
-  ) {
-    return 'since_parked';
+  let recentParked = false;
+  let hasDay = false;
+  let inspectedParked = false;
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+  for (const sample of samples) {
+    hasDay ||= sample.window === '24h';
+    if (sample.window !== 'since_parked' || inspectedParked) continue;
+    inspectedParked = true;
+    recentParked = new Date(sample.received_at).getTime() >= cutoff;
   }
-  if (samples.some((sample) => sample.window === '24h')) return '24h';
-  return samples[0]?.window ?? 'since_parked';
+  const preferred: ParkedEnergyWindow[] = [];
+  if (recentParked) preferred.push('since_parked');
+  if (hasDay) preferred.push('24h');
+  return preferred[0] ?? samples[0]?.window ?? 'since_parked';
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

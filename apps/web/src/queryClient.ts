@@ -59,14 +59,10 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: (failureCount, error) => {
-        const e = error as { status?: unknown; code?: unknown } | null;
-        if (!e) return failureCount < 2;
-        const status = Number(e.status);
-        // Never retry auth failures — the user is logged out.
-        if (status === 401 || status === 403 || e.code === 'AUTH_EXPIRED') return false;
-        // Retrying throttled requests causes request storms and more throttling.
-        if (status === 429) return false;
-        return failureCount < 2;
+        const failure = error as { status?: unknown; code?: unknown } | null;
+        const terminal = failure?.code === 'AUTH_EXPIRED'
+          || [401, 403, 429].includes(Number(failure?.status));
+        return !terminal && failureCount < 2;
       },
       staleTime: 30 * 1000,
       gcTime: 24 * 60 * 60 * 1000,
@@ -83,22 +79,21 @@ installSessionClearedHandler(queryClient);
 /** Call this after the user's identity is known (post-login or post-refresh). */
 export function hydrateQueryCacheForUser(userId: string) {
   if (typeof window === 'undefined') return;
+  const key = cacheKey(userId);
   try {
-    const raw = window.localStorage.getItem(cacheKey(userId));
-    if (!raw) return;
-    const persisted = JSON.parse(raw) as PersistedQueryCache;
-    if (
-      !persisted?.timestamp ||
-      persisted.userId !== userId ||
-      Date.now() - persisted.timestamp > QUERY_CACHE_MAX_AGE_MS
-    ) {
-      window.localStorage.removeItem(cacheKey(userId));
+    const raw = window.localStorage.getItem(key);
+    if (raw === null || raw === '') return;
+    const cached = JSON.parse(raw) as PersistedQueryCache;
+    const usable = cached?.timestamp && cached.userId === userId
+      && !(Date.now() - cached.timestamp > QUERY_CACHE_MAX_AGE_MS);
+    if (usable) {
+      hydrate(queryClient, cached!.state);
       return;
     }
-    hydrate(queryClient, persisted.state);
   } catch {
-    if (typeof window !== 'undefined') window.localStorage.removeItem(cacheKey(userId));
+    // Invalid snapshots are removed by the same path as expired snapshots.
   }
+  window.localStorage.removeItem(key);
 }
 
 /** Call this on logout to wipe the persisted cache. */
@@ -118,54 +113,48 @@ function installSessionClearedHandler(client: QueryClient) {
 
 function installQueryCachePersistence(client: QueryClient) {
   if (typeof window === 'undefined') return;
-
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  let idleHandle: number | undefined;
-
-  const save = () => {
-    saveTimer = undefined;
-    idleHandle = undefined;
-    // Determine the current user id from the auth store without creating a
-    // circular dependency — read directly from localStorage.
-    let userId: string | null = null;
-    try {
-      const authRaw = window.localStorage.getItem('rm-auth');
-      if (authRaw) userId = (JSON.parse(authRaw) as { state?: { userId?: string } })?.state?.userId ?? null;
-    } catch { /* ignore */ }
-    if (!userId) return;
-
-    try {
-      const state = dehydrate(client, { shouldDehydrateQuery });
-      const serialized = JSON.stringify({ timestamp: Date.now(), userId, state } satisfies PersistedQueryCache);
-      if (new TextEncoder().encode(serialized).byteLength > MAX_PERSISTED_CACHE_BYTES) {
-        window.localStorage.removeItem(cacheKey(userId));
-        return;
-      }
-      window.localStorage.setItem(cacheKey(userId), serialized);
-    } catch {
-      // localStorage can be unavailable or full; in-memory cache is still useful.
-    }
+  type PendingSave = { kind: 'delay'; id: ReturnType<typeof setTimeout> } | { kind: 'idle'; id: number };
+  let pending: PendingSave | null = null;
+  const browser = window as Window & {
+    requestIdleCallback?: (callback: () => void, options: { timeout: number }) => number;
+    cancelIdleCallback?: (id: number) => void;
   };
 
-  client.getQueryCache().subscribe(() => {
-    if (saveTimer) clearTimeout(saveTimer);
-    if (idleHandle !== undefined && 'cancelIdleCallback' in window) {
-      (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(idleHandle);
-      idleHandle = undefined;
-    }
-    saveTimer = setTimeout(() => {
-      const requestIdleCallback = (window as Window & {
-        requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
-      }).requestIdleCallback;
-      if (requestIdleCallback) {
-        idleHandle = requestIdleCallback(save, { timeout: 2_000 });
+  const cancelPending = () => {
+    if (pending?.kind === 'delay') clearTimeout(pending.id);
+    if (pending?.kind === 'idle') browser.cancelIdleCallback?.(pending.id);
+    pending = null;
+  };
+  const flush = () => {
+    cancelPending();
+    try {
+      const auth = JSON.parse(window.localStorage.getItem('rm-auth') ?? 'null') as { state?: { userId?: string } } | null;
+      const userId = auth?.state?.userId;
+      if (!userId) return;
+      const state = dehydrate(client, { shouldDehydrateQuery });
+      const record: PersistedQueryCache = { timestamp: Date.now(), userId, state };
+      const serialized = JSON.stringify(record);
+      const key = cacheKey(userId);
+      if (new TextEncoder().encode(serialized).byteLength <= MAX_PERSISTED_CACHE_BYTES) {
+        window.localStorage.setItem(key, serialized);
       } else {
-        save();
+        window.localStorage.removeItem(key);
       }
-    }, QUERY_CACHE_SAVE_DELAY_MS);
+    } catch {
+      // The active cache remains usable without browser storage.
+    }
+  };
+  const requestIdleSave = () => {
+    pending = null;
+    const requestIdle = browser.requestIdleCallback;
+    if (!requestIdle) { flush(); return; }
+    pending = { kind: 'idle', id: requestIdle(flush, { timeout: 2_000 }) };
+  };
+  client.getQueryCache().subscribe(() => {
+    cancelPending();
+    pending = { kind: 'delay', id: setTimeout(requestIdleSave, QUERY_CACHE_SAVE_DELAY_MS) };
   });
-
-  window.addEventListener('beforeunload', save);
+  window.addEventListener('beforeunload', flush);
 }
 
 function shouldDehydrateQuery(query: Query) {

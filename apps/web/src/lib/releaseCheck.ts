@@ -30,28 +30,22 @@ export const EMPTY_RELEASE_CHECK: ReleaseCheckSnapshot = {
   error: null,
 };
 
-let memorySnapshot = { ...EMPTY_RELEASE_CHECK };
-let snapshotNotPersisted = false;
+const localResult: { snapshot: ReleaseCheckSnapshot; durable: boolean } = {
+  snapshot: { ...EMPTY_RELEASE_CHECK }, durable: true,
+};
 
-function parseVersion(value: string): [number, number, number] | null {
-  const match = /^v?(\d{4})\.(\d{1,2})\.(\d+)(?:\+dev(?:\.\d+)?)?$/.exec(value.trim());
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const patch = Number(match[3]);
-  if (!Number.isSafeInteger(year) || !Number.isSafeInteger(month) || !Number.isSafeInteger(patch)) return null;
-  if (month < 1 || month > 12 || patch < 0) return null;
-  return [year, month, patch];
+function parseVersion(value: string): string | null {
+  const parts = /^v?(\d{4})\.(\d{1,2})\.(\d+)(?:\+dev(?:\.\d+)?)?$/.exec(value.trim());
+  if (!parts) return null;
+  const [year, month, patch] = parts.slice(1).map(Number) as [number, number, number];
+  if (![year, month, patch].every(Number.isSafeInteger) || month < 1 || month > 12) return null;
+  return `${year.toString().padStart(4, '0')}.${month.toString().padStart(2, '0')}.${patch.toString().padStart(16, '0')}`;
 }
 
 export function isNewerRelease(currentVersion: string, releaseTag: string): boolean | null {
   const current = parseVersion(currentVersion);
   const latest = parseVersion(releaseTag);
-  if (!current || !latest) return null;
-  for (let index = 0; index < current.length; index += 1) {
-    if (latest[index]! !== current[index]!) return latest[index]! > current[index]!;
-  }
-  return false;
+  return current === null || latest === null ? null : latest > current;
 }
 
 export function isReleaseCheckDue(
@@ -62,47 +56,54 @@ export function isReleaseCheckDue(
   return lastAttemptAt === null || now - lastAttemptAt >= UPDATE_CHECK_INTERVALS_MS[frequency];
 }
 
+function decodeSnapshot(value: unknown): ReleaseCheckSnapshot {
+  const result = { ...EMPTY_RELEASE_CHECK };
+  if (!value || typeof value !== 'object') return result;
+  const fields = value as Record<string, unknown>;
+  for (const key of ['lastAttemptAt', 'lastSuccessfulAt'] as const) {
+    if (typeof fields[key] === 'number' && Number.isFinite(fields[key])) result[key] = fields[key];
+  }
+  for (const key of ['latestVersion', 'error'] as const) {
+    if (typeof fields[key] === 'string') result[key] = fields[key];
+  }
+  if (typeof fields.updateAvailable === 'boolean') result.updateAvailable = fields.updateAvailable;
+  return result;
+}
+
 export function readReleaseCheckSnapshot(storage?: Storage): ReleaseCheckSnapshot {
   try {
     const raw = (storage ?? window.localStorage).getItem(RELEASE_CHECK_STORAGE_KEY);
-    const value = (raw ? JSON.parse(raw) : null) as Partial<ReleaseCheckSnapshot> | null;
-    const stored: ReleaseCheckSnapshot = value ? {
-      lastAttemptAt: typeof value.lastAttemptAt === 'number' && Number.isFinite(value.lastAttemptAt)
-        ? value.lastAttemptAt
-        : null,
-      lastSuccessfulAt: typeof value.lastSuccessfulAt === 'number' && Number.isFinite(value.lastSuccessfulAt)
-        ? value.lastSuccessfulAt
-        : null,
-      latestVersion: typeof value.latestVersion === 'string' ? value.latestVersion : null,
-      updateAvailable: typeof value.updateAvailable === 'boolean' ? value.updateAvailable : null,
-      error: typeof value.error === 'string' ? value.error : null,
-    } : { ...EMPTY_RELEASE_CHECK };
-    // A failed write must not let an older stored result erase this tab's attempt.
-    if (!snapshotNotPersisted || (stored.lastAttemptAt ?? -Infinity) > (memorySnapshot.lastAttemptAt ?? -Infinity)) {
-      memorySnapshot = stored;
-      snapshotNotPersisted = false;
+    const stored = decodeSnapshot(raw ? JSON.parse(raw) : null);
+    const storedAttempt = stored.lastAttemptAt ?? -Infinity;
+    const localAttempt = localResult.snapshot.lastAttemptAt ?? -Infinity;
+    if (localResult.durable || storedAttempt > localAttempt) {
+      Object.assign(localResult, { snapshot: stored, durable: true });
     }
   } catch {
-    // Keep the last known attempt when storage is denied or unreadable.
+    // A denied read cannot erase a result held by this tab.
   }
-  return { ...memorySnapshot };
+  return { ...localResult.snapshot };
 }
 
-export function writeReleaseCheckSnapshot(
-  snapshot: ReleaseCheckSnapshot,
-  storage?: Storage,
-): void {
-  memorySnapshot = { ...snapshot };
-  snapshotNotPersisted = true;
+export function writeReleaseCheckSnapshot(snapshot: ReleaseCheckSnapshot, storage?: Storage): void {
+  Object.assign(localResult, { snapshot: { ...snapshot }, durable: false });
   try {
     (storage ?? window.localStorage).setItem(RELEASE_CHECK_STORAGE_KEY, JSON.stringify(snapshot));
-    snapshotNotPersisted = false;
+    localResult.durable = true;
   } catch {
-    // The in-memory snapshot remains available when storage cannot be written.
+    // Keep the attempted timestamp even when persistence fails.
   }
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event(RELEASE_CHECK_STATUS_EVENT));
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(RELEASE_CHECK_STATUS_EVENT));
+}
+
+function stableReleaseTag(payload: unknown): string {
+  const fields = payload as { tag_name?: unknown; draft?: unknown; prerelease?: unknown };
+  if (fields.draft !== false || fields.prerelease !== false || typeof fields.tag_name !== 'string') {
+    throw new Error('GitHub returned an invalid stable release response.');
   }
+  const tag = fields.tag_name.trim();
+  if (tag.includes('+') || parseVersion(tag) === null) throw new Error('GitHub returned an invalid stable release version.');
+  return tag;
 }
 
 export async function fetchLatestStableRelease(fetcher: typeof fetch = fetch): Promise<string> {
@@ -116,21 +117,7 @@ export async function fetchLatestStableRelease(fetcher: typeof fetch = fetch): P
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}.`);
-    const payload = await response.json() as { tag_name?: unknown; draft?: unknown; prerelease?: unknown };
-    if (
-      typeof payload.draft !== 'boolean' ||
-      typeof payload.prerelease !== 'boolean' ||
-      payload.draft ||
-      payload.prerelease ||
-      typeof payload.tag_name !== 'string'
-    ) {
-      throw new Error('GitHub returned an invalid stable release response.');
-    }
-    const version = payload.tag_name.trim();
-    if (!parseVersion(version) || version.includes('+')) {
-      throw new Error('GitHub returned an invalid stable release version.');
-    }
-    return version;
+    return stableReleaseTag(await response.json());
   } finally {
     window.clearTimeout(timeout);
   }

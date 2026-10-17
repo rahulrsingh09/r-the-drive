@@ -11,30 +11,22 @@ interface FeedHealthStatus {
 
 const FEED_HEALTH_TOAST_COOLDOWN_MS = 15 * 60 * 1000;
 
+const UNHEALTHY_WORKERS = new Set(['error', 'stale', 'degraded']);
+
 export function getFeedHealthIssue(status?: FeedHealthStatus | null) {
-  if (status?.auth_state === 'needs_reauth') {
-    return {
-      key: `needs_reauth:${status.auth_reason_code ?? 'unknown'}`,
-      title: 'Rivian feed disconnected',
-      message:
-        status.worker_health_msg ??
-        'Rivian credentials are missing or expired. Reconnect the vehicle from Settings → Vehicles.',
-    };
-  }
-  if (
-    status?.worker_health === 'error' ||
-    status?.worker_health === 'stale' ||
-    status?.worker_health === 'degraded'
-  ) {
-    return {
-      key: `unhealthy:${status?.worker_health ?? 'unknown'}:${status?.telemetry_stale_reason ?? 'unknown'}`,
-      title: 'Vehicle feed unhealthy',
-      message:
-        status?.worker_health_msg ??
-        'Panda is not receiving fresh vehicle telemetry. Open Health for collector details.',
-    };
-  }
-  return null;
+  if (!status) return null;
+  const reconnect = status.auth_state === 'needs_reauth';
+  if (!reconnect && !UNHEALTHY_WORKERS.has(status.worker_health ?? '')) return null;
+  const notice = reconnect ? {
+    key: `needs_reauth:${status.auth_reason_code ?? 'unknown'}`,
+    title: 'Rivian feed disconnected',
+    message: 'Rivian credentials are missing or expired. Reconnect the vehicle from Settings → Vehicles.',
+  } : {
+    key: `unhealthy:${status.worker_health ?? 'unknown'}:${status.telemetry_stale_reason ?? 'unknown'}`,
+    title: 'Vehicle feed unhealthy',
+    message: 'Panda is not receiving fresh vehicle telemetry. Open Health for collector details.',
+  };
+  return { ...notice, message: status.worker_health_msg ?? notice.message };
 }
 
 export function shouldEmitFeedHealthToast(storage: Storage, key: string, now = Date.now()) {

@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
+import { createAuthSessionLifecycle } from './authSessionLifecycle';
 import { useNavigate } from '@tanstack/react-router';
 import { useAuth } from '@panda/hooks';
 import { hydrateQueryCacheForUser, clearQueryCacheForUser } from '../../queryClient';
@@ -30,59 +31,24 @@ function buildLoginUrl(redirectTarget: string | null) {
   return redirectTarget ? `/login?redirect=${encodeURIComponent(redirectTarget)}` : '/login';
 }
 
-/** Decode the `sub` claim from a JWT without verifying the signature. */
-function jwtUserId(token: string): string | null {
-  try {
-    const part = token.split('.')[1];
-    if (!part) return null;
-    const payload = JSON.parse(atob(part)) as { sub?: string };
-    return payload.sub ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export function forceLoginRedirect(
   navigate: (options: { to: '/login' }) => void,
   locationLike: LoginLocation | null = typeof window !== 'undefined' ? window.location : null,
   scheduleRedirect: LoginRedirectScheduler | null =
     typeof window !== 'undefined' ? window.setTimeout.bind(window) : null,
 ) {
-  const redirectTarget = currentProtectedTarget(
-    locationLike && typeof window !== 'undefined' && locationLike === window.location
-      ? window.location
-      : (locationLike as (LoginLocation & Pick<Location, 'search' | 'hash'>) | null)
-  );
-  const loginUrl = buildLoginUrl(redirectTarget);
-
-  try {
-    if (redirectTarget) {
-      navigate({ to: '/login', search: { redirect: redirectTarget } } as never);
-    } else {
-      navigate({ to: '/login' });
-    }
-  } catch {
-    // Fall through to the hard redirect below if the router is already in a bad state.
-  }
-
-  if (!locationLike || !scheduleRedirect) return;
-  if (
-    typeof window !== 'undefined'
-    && locationLike === window.location
-    && typeof navigator !== 'undefined'
-    && /\bjsdom\b/i.test(navigator.userAgent)
-  ) {
-    return;
-  }
-  scheduleRedirect(() => {
-    if (locationLike.pathname !== '/login') {
-      try {
-        locationLike.replace(loginUrl);
-      } catch {
-        // jsdom and other non-browser runtimes may not implement real navigation.
-      }
-    }
-  }, 0);
+  const current = locationLike as (LoginLocation & Partial<Pick<Location, 'search' | 'hash'>>) | null;
+  const redirectTarget = currentProtectedTarget(current);
+  const options = redirectTarget ? { to: '/login' as const, search: { redirect: redirectTarget } } : { to: '/login' as const };
+  try { navigate(options); } catch { /* Browser navigation remains available if routing fails. */ }
+  const isTestLocation = typeof window !== 'undefined' && current === window.location
+    && typeof navigator !== 'undefined' && /\bjsdom\b/i.test(navigator.userAgent);
+  if (!current || !scheduleRedirect || isTestLocation) return;
+  const hardRedirect = () => {
+    if (current.pathname === '/login') return;
+    try { current.replace(buildLoginUrl(redirectTarget)); } catch { /* Some runtimes do not implement navigation. */ }
+  };
+  scheduleRedirect(hardRedirect, 0);
 }
 
 /**
@@ -93,94 +59,26 @@ export function forceLoginRedirect(
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isBootstrapping, accessToken, resumeSession, clearSession } = useAuth();
   const navigate = useNavigate();
-  const hydratedForRef = useRef<string | null>(null);
-  const bootstrapStartedRef = useRef(false);
-  const loginRedirectStartedRef = useRef(false);
-  const authExpiredRecoveryRef = useRef<Promise<void> | null>(null);
-  const mountedRef = useRef(false);
-
-  const redirectToLogin = useCallback(() => {
-    if (loginRedirectStartedRef.current) return;
-    loginRedirectStartedRef.current = true;
-    forceLoginRedirect(navigate);
-  }, [navigate]);
-
-  // On mount, bootstrap the session from the HttpOnly cookie if not yet authenticated.
+  const ports = useRef({ resumeSession, clearSession, navigate });
+  useEffect(() => { ports.current = { resumeSession, clearSession, navigate }; });
+  const [session] = React.useState(() => createAuthSessionLifecycle({
+    resume: () => ports.current.resumeSession(),
+    clear: () => ports.current.clearSession(),
+    redirect: () => forceLoginRedirect(ports.current.navigate),
+    hydrate: hydrateQueryCacheForUser,
+    clearCache: clearQueryCacheForUser,
+  }));
   useEffect(() => {
-    if (isAuthenticated || bootstrapStartedRef.current) return;
-    bootstrapStartedRef.current = true;
-    let cancelled = false;
-
-    const bootstrap = async () => {
-      const ok = await resumeSession();
-      if (!ok && !cancelled) clearSession();
-    };
-
-    void bootstrap();
-
+    const unmount = session.mount(isAuthenticated);
+    window.addEventListener('panda:auth-expired', session.recover);
     return () => {
-      cancelled = true;
+      unmount();
+      window.removeEventListener('panda:auth-expired', session.recover);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run once on mount only
-
-  // Hydrate per-user query cache after auth is established.
+  }, [session]);
   useEffect(() => {
-    if (!isAuthenticated || !accessToken) return;
-    const userId = jwtUserId(accessToken);
-    if (!userId || hydratedForRef.current === userId) return;
-    hydratedForRef.current = userId;
-    hydrateQueryCacheForUser(userId);
-  }, [isAuthenticated, accessToken]);
-
-  useEffect(() => {
-    if (!isBootstrapping && !isAuthenticated && !authExpiredRecoveryRef.current) {
-      // Clear stale cache when user is no longer authenticated.
-      if (hydratedForRef.current) {
-        clearQueryCacheForUser(hydratedForRef.current);
-        hydratedForRef.current = null;
-      }
-      redirectToLogin();
-    }
-  }, [isAuthenticated, isBootstrapping, redirectToLogin]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  useEffect(() => {
-    function handleAuthExpired() {
-      if (!mountedRef.current || authExpiredRecoveryRef.current) return;
-
-      const finishExpiredSession = () => {
-        if (!mountedRef.current) return;
-        if (hydratedForRef.current) {
-          clearQueryCacheForUser(hydratedForRef.current);
-          hydratedForRef.current = null;
-        }
-        clearSession();
-        redirectToLogin();
-      };
-
-      const recovery = (async () => {
-        try {
-          const resumed = await resumeSession();
-          if (!resumed) finishExpiredSession();
-        } catch {
-          finishExpiredSession();
-        } finally {
-          authExpiredRecoveryRef.current = null;
-        }
-      })();
-      authExpiredRecoveryRef.current = recovery;
-    }
-
-    window.addEventListener('panda:auth-expired', handleAuthExpired);
-    return () => window.removeEventListener('panda:auth-expired', handleAuthExpired);
-  }, [clearSession, redirectToLogin, resumeSession]);
-
-  if (isBootstrapping) return null;
-  if (!isAuthenticated) return null;
-  return <>{children}</>;
+    session.observe({ authenticated: isAuthenticated, bootstrapping: isBootstrapping, token: accessToken });
+  }, [session, isAuthenticated, isBootstrapping, accessToken]);
+  return !isBootstrapping && isAuthenticated ? <>{children}</> : null;
 }

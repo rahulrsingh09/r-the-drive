@@ -1,3 +1,4 @@
+import { usePhantomDrainTable } from './usePhantomDrainTable';
 import React from 'react';
 import { DashboardChartWidget, SensorChipSummary, type WidgetInstance } from '@panda/dashboards';
 import { usePhantomDrainPeriods, useVehicleHealth } from '@panda/hooks';
@@ -55,31 +56,9 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
   const parallaxCollectorRunning =
     health?.vehicle_id === vehicleId && health.extended_telemetry.collector?.running === true;
   const periods = data?.periods ?? [];
-  const [search, setSearch] = React.useState('');
-  const [page, setPage] = React.useState(1);
-  const [pageSize, setPageSize] = React.useState(15);
-  const deferredSearch = React.useDeferredValue(search);
-
-  React.useEffect(() => {
-    setPage(1);
-  }, [ctx.from, ctx.to, ctx.vehicleId, pageSize, deferredSearch]);
-
-  const filteredPeriods = React.useMemo(() => {
-    const query = deferredSearch.trim().toLowerCase();
-    if (!query) return periods;
-    return periods.filter((period) => formatPeriodSearchText(period).includes(query));
-  }, [deferredSearch, periods]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredPeriods.length / pageSize));
-
-  React.useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
-
-  const pagedPeriods = React.useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filteredPeriods.slice(start, start + pageSize);
-  }, [filteredPeriods, page, pageSize]);
+  const { search, setSearch, page, pageSize, setPageSize, filteredPeriods, pagedPeriods, totalPages, previousPage, nextPage } = usePhantomDrainTable(
+    periods, JSON.stringify([ctx.from, ctx.to, ctx.vehicleId]), formatPeriodSearchText,
+  );
 
   const summary = React.useMemo(() => summarizePhantomDrainPeriods(periods), [periods]);
   const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
@@ -157,7 +136,7 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
             <button
               type="button"
               disabled={page <= 1}
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              onClick={previousPage}
               className="min-h-11 rounded-lg border border-border px-4 py-2 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               Prev
@@ -165,7 +144,7 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
             <button
               type="button"
               disabled={page >= totalPages || totalPages <= 1}
-              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              onClick={nextPage}
               className="min-h-11 rounded-lg border border-border px-4 py-2 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               Next
