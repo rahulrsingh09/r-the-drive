@@ -1,113 +1,21 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
-import { api, notifyVehicleCredentialsRefreshed, queryKeys, useAuth, useVehicles } from '@panda/hooks';
-import type { ConnectedRivianVehicle, ConnectResult } from '@panda/types';
+import type { ConnectedRivianVehicle } from '@panda/types';
 import { PageLayout, Button, Input, Card } from '@panda/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { ConnectedVehicleSuccess } from '../../components/connect/ConnectedVehicleSuccess';
-import { connectErrorMessage } from '../../components/connect/connectError';
-import { emitAuthError } from '../../components/feedback/toast';
+import { formatVehicleName, useConnectionFlow } from './useConnectionFlow';
 import { Car, Check, KeyRound, ShieldCheck } from 'lucide-react';
 
 export function ConnectOtpContent() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { challenge_id, email, mode, vehicle_id } = useSearch({ from: '/connect/otp' });
-  const setDefaultVehicleId = useAuth((state) => state.setDefaultVehicleId);
-  const { data: connectedVehicles } = useVehicles();
   const refreshVehicleId = mode === 'refresh' ? vehicle_id : undefined;
-  const refreshVehicle = connectedVehicles?.find((vehicle) => vehicle.id === refreshVehicleId);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
-  const [successVehicleName, setSuccessVehicleName] = useState('');
-  const [successVehicleId, setSuccessVehicleId] = useState('');
-  const [successWaitingMessage, setSuccessWaitingMessage] = useState<string | null>(null);
-  const reportError = (message: string) => {
-    setError(message);
-    emitAuthError('Rivian connection failed', message);
-  };
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const otp = String(new FormData(e.currentTarget).get('otp') ?? '');
-    setError('');
-    setLoading(true);
-    try {
-      const result = await api.connectRivianOtp(challenge_id, otp);
-      await finishConnectedResult(result);
-    } catch (err) {
-      reportError(connectErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function finishConnectedResult(result: ConnectResult) {
-    if (refreshVehicleId) {
-      if (!refreshVehicle) {
-        reportError('Choose an existing vehicle before refreshing Rivian credentials.');
-        return;
-      }
-      const matchingVehicle = result.vehicles.find(
-        (vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id
-      );
-      if (!matchingVehicle) {
-        reportError('That Rivian account does not include this vehicle.');
-        return;
-      }
-      const refreshed = await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
-      setDefaultVehicleId(refreshVehicleId);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(refreshVehicleId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.health(refreshVehicleId) }),
-      ]);
-      notifyVehicleCredentialsRefreshed(refreshVehicleId);
-      setSuccessVehicleId(refreshVehicleId);
-      setSuccessVehicleName(formatVehicleName(matchingVehicle));
-      setSuccessWaitingMessage(refreshed.telemetry_status !== 'connected'
-        ? refreshed.telemetry_error ?? 'Credentials were refreshed. Panda is still waiting for vehicle data and will keep retrying.'
-        : null);
-      setVehicles([]);
-      return;
-    }
-
-    if (!result.vehicles.length) {
-      reportError('Rivian verification succeeded, but no vehicles were returned for this account.');
-      return;
-    }
-    if (result.vehicles.length > 1) {
-      setVehicles(result.vehicles);
-      return;
-    }
-    const vehicle = result.vehicles[0];
-    if (!vehicle) return;
-    await persistVehicle(vehicle);
-  }
-
-  async function persistVehicle(vehicle: ConnectedRivianVehicle) {
-    setLoading(true);
-    const added = await api.addVehicle({
-      rivian_vehicle_id: vehicle.id,
-      name: vehicle.name,
-      model: vehicle.model,
-      vin: vehicle.vin,
-    });
-    setDefaultVehicleId(added.vehicle_id);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(added.vehicle_id) }),
-    ]);
-    setSuccessVehicleId(added.vehicle_id);
-    setSuccessVehicleName(formatVehicleName(vehicle));
-    setSuccessWaitingMessage(
-      added.telemetry_status === 'unchanged'
-        ? 'Your vehicle access is ready. Existing telemetry settings are unchanged.'
-        : null
-    );
-    setVehicles([]);
+  const { error, loading, vehicles, successVehicleName, successVehicleId, successWaitingMessage, refreshVehicle, submitOtp, selectVehicle } = useConnectionFlow(refreshVehicleId, `${challenge_id}:${refreshVehicleId ?? ''}`);
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = String(new FormData(event.currentTarget).get('otp') ?? '');
+    void submitOtp(challenge_id, code);
   }
 
   return (
@@ -137,13 +45,7 @@ export function ConnectOtpContent() {
                 vehicles={vehicles}
                 loading={loading}
                 error={error}
-                onSelect={(vehicle) => {
-                  setError('');
-                  persistVehicle(vehicle).catch((err) => {
-                    reportError(connectErrorMessage(err));
-                    setLoading(false);
-                  });
-                }}
+                onSelect={selectVehicle}
               />
             ) : (
               <>
@@ -278,13 +180,5 @@ function VehiclePicker({
       </div>
       {error && <p className="mt-4 text-xs text-status-danger">{error}</p>}
     </div>
-  );
-}
-
-function formatVehicleName(vehicle: ConnectedRivianVehicle) {
-  return (
-    vehicle.name ||
-    [vehicle.model_year, vehicle.model].filter(Boolean).join(' ') ||
-    'Rivian vehicle'
   );
 }

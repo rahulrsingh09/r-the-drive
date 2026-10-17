@@ -163,22 +163,7 @@ export function VehicleHealthContent() {
   );
   const heroImageUrl = resolvedHealthArtwork.light;
   const fallbackHeroImageUrl = resolvedHealthArtwork.fallback;
-  const closureStatusFallback = {
-    closure_frunk_closed:
-      status?.closure_frunk_closed ?? data?.closures?.closure_frunk_closed ?? null,
-    closure_liftgate_closed:
-      status?.closure_liftgate_closed ?? data?.closures?.closure_liftgate_closed ?? null,
-    closure_tailgate_closed:
-      status?.closure_tailgate_closed ?? data?.closures?.closure_tailgate_closed ?? null,
-    door_front_left_closed:
-      status?.door_front_left_closed ?? data?.closures?.door_front_left_closed ?? null,
-    door_front_right_closed:
-      status?.door_front_right_closed ?? data?.closures?.door_front_right_closed ?? null,
-    door_rear_left_closed:
-      status?.door_rear_left_closed ?? data?.closures?.door_rear_left_closed ?? null,
-    door_rear_right_closed:
-      status?.door_rear_right_closed ?? data?.closures?.door_rear_right_closed ?? null,
-  };
+  const closureStatusFallback = Object.fromEntries(HEALTH_CLOSURE_DEFINITIONS.map(({ field }) => [field, status?.[field] ?? data?.closures?.[field] ?? null])) as Record<HealthClosureField, boolean | null>;
   const closureRows = getHealthClosureRows(closureModel, closureStatusFallback, status);
   const closures = summarizeClosures(closureRows);
 
@@ -548,17 +533,12 @@ export function VehicleHealthContent() {
 }
 
 function formatParallaxState(status: string | undefined) {
-  switch (status) {
-    case 'connected': return 'Connected';
-    case 'reconnecting': return 'Reconnecting';
-    case 'stale': return 'Stale';
-    case 'disabled': return 'Disabled';
-    case 'duplicate_owner': return 'Duplicate owner';
-    case 'error': return 'Error';
-    case 'disconnected': return 'Disconnected';
-    case 'starting': return 'Starting';
-    default: return 'Never observed';
-  }
+  const labels = new Map([
+    ['connected', 'Connected'], ['reconnecting', 'Reconnecting'], ['stale', 'Stale'],
+    ['disabled', 'Disabled'], ['duplicate_owner', 'Duplicate owner'], ['error', 'Error'],
+    ['disconnected', 'Disconnected'], ['starting', 'Starting'],
+  ]);
+  return labels.get(status ?? '') ?? 'Never observed';
 }
 
 function formatAcquisitionState(extended: VehicleHealth['extended_telemetry'] | undefined) {
@@ -568,26 +548,18 @@ function formatAcquisitionState(extended: VehicleHealth['extended_telemetry'] | 
 }
 
 function formatWifiRadioDetail(network: VehicleHealth['extended_telemetry']['network'] | undefined) {
-  if (!network) return 'No radio reading';
-  return [
-    network.wifi_frequency_mhz == null ? null : `${(network.wifi_frequency_mhz / 1000).toFixed(1)} GHz`,
-    network.wifi_channel_width_mhz == null ? null : `${network.wifi_channel_width_mhz} MHz`,
-  ].filter(Boolean).join(' · ') || 'No radio reading';
+  const details: string[] = [];
+  if (network?.wifi_frequency_mhz != null) details.push(`${(network.wifi_frequency_mhz / 1000).toFixed(1)} GHz`);
+  if (network?.wifi_channel_width_mhz != null) details.push(`${network.wifi_channel_width_mhz} MHz`);
+  return details.join(' · ') || 'No radio reading';
 }
 
 function getWifiStrengthLabel(rssi: number) {
-  if (rssi >= -55) return 'Strong';
-  if (rssi >= -67) return 'Good';
-  if (rssi >= -75) return 'Fair';
-  return 'Weak';
+  return wifiStrength(rssi).label;
 }
 
 function getWifiStrengthLevel(connected: boolean | null | undefined, rssi: number | null | undefined) {
-  if (connected !== true || rssi == null) return 0;
-  if (rssi >= -55) return 4;
-  if (rssi >= -67) return 3;
-  if (rssi >= -75) return 2;
-  return 1;
+  return connected === true && rssi != null ? wifiStrength(rssi).level : 0;
 }
 
 function WifiStrengthGlyph({
@@ -597,17 +569,8 @@ function WifiStrengthGlyph({
   connected: boolean | null | undefined;
   rssi: number | null | undefined;
 }) {
-  const level = getWifiStrengthLevel(connected, rssi);
-  const Icon = connected !== true || rssi == null
-    ? MdSignalWifiStatusbarNull
-    : level >= 4
-      ? MdSignalWifiStatusbar4Bar
-      : level === 3
-        ? MdSignalWifiStatusbar3Bar
-        : level === 2
-          ? MdSignalWifiStatusbar2Bar
-          : MdSignalWifiStatusbar1Bar;
-
+  const icons = [MdSignalWifiStatusbarNull, MdSignalWifiStatusbar1Bar, MdSignalWifiStatusbar2Bar, MdSignalWifiStatusbar3Bar, MdSignalWifiStatusbar4Bar];
+  const Icon = icons[getWifiStrengthLevel(connected, rssi)]!;
   return <Icon className="h-7 w-7" aria-hidden="true" />;
 }
 
@@ -618,36 +581,20 @@ function ConnectivitySection({
 }) {
   const connected = network?.wifi_connected;
   const rssi = network?.wifi_rssi_dbm;
-  const status = connected === true ? 'Connected' : connected === false ? 'Disconnected' : 'Unavailable';
-  const strength = connected === true && rssi != null ? getWifiStrengthLabel(rssi) : 'Unavailable';
-
+  const connectivity = new Map<boolean | null | undefined, { status: string; variant: BadgeVariant }>([
+    [true, { status: 'Connected', variant: 'success' }], [false, { status: 'Disconnected', variant: 'warning' }],
+  ]).get(connected) ?? { status: 'Unavailable', variant: 'default' };
+  const strength = getWifiStrengthLevel(connected, rssi) ? getWifiStrengthLabel(rssi!) : 'Unavailable';
+  const metrics: Array<React.ComponentProps<typeof ConnectivityMetric>> = [
+    { icon: <WifiStrengthGlyph connected={connected} rssi={rssi} />, iconLabel: `Wi-Fi strength: ${strength}`, label: 'Wi-Fi signal', value: strength, detail: rssi == null ? 'No dBm reading' : `${rssi} dBm` },
+    { icon: <Gauge className="h-4 w-4" />, label: 'Throughput', value: network?.wifi_link_speed_mbps == null ? 'Unavailable' : `${network.wifi_link_speed_mbps} Mbps`, detail: formatWifiRadioDetail(network) },
+    { icon: <RiTaxiWifiLine className="h-4 w-4" />, label: 'Wi-Fi status', value: connectivity.status, valueVariant: connectivity.variant,
+      ...(connected === false && network?.cellular_access_technology ? { detail: `${network.cellular_access_technology} cellular` } : {}) },
+  ];
   return (
     <section aria-label="Connectivity">
       <div className="grid grid-cols-3 gap-1.5">
-        <ConnectivityMetric
-          icon={<WifiStrengthGlyph connected={connected} rssi={rssi} />}
-          iconLabel={`Wi-Fi strength: ${strength}`}
-          label="Wi-Fi signal"
-          value={strength}
-          detail={rssi == null ? 'No dBm reading' : `${rssi} dBm`}
-        />
-        <ConnectivityMetric
-          icon={<Gauge className="h-4 w-4" />}
-          label="Throughput"
-          value={network?.wifi_link_speed_mbps == null ? 'Unavailable' : `${network.wifi_link_speed_mbps} Mbps`}
-          detail={formatWifiRadioDetail(network)}
-        />
-        <ConnectivityMetric
-          icon={<RiTaxiWifiLine className="h-4 w-4" />}
-          label="Wi-Fi status"
-          value={status}
-          valueVariant={connected === true ? 'success' : connected === false ? 'warning' : 'default'}
-          detail={
-            connected === false && network?.cellular_access_technology
-              ? `${network.cellular_access_technology} cellular`
-              : undefined
-          }
-        />
+        {metrics.map((metric) => <ConnectivityMetric key={metric.label} {...metric} />)}
       </div>
     </section>
   );
@@ -847,29 +794,22 @@ function TireGauge({
   availability: StatusAvailabilitySummary | null;
 }) {
   const state = getTireState(status, valid, availability);
-  const displayValue =
-    valid === false
-      ? 'Invalid Sensor'
-      : availability?.availability === 'never_seen' && value === null
-        ? 'Unavailable'
-        : formatTireLabel(value, status);
   const tone = getTireHealthTone({ psi: value, status, targetPsi: targetPressurePsi });
-  const valueTone =
-    valid === false || availability?.availability === 'never_seen'
-      ? 'info'
-      : tone === 'danger'
-        ? 'danger'
-        : tone === 'warning'
-          ? 'warning'
-          : tone === 'success'
-            ? 'success'
-            : 'neutral';
+  const presentation: { value: string; tone: 'info' | 'danger' | 'warning' | 'success' | 'neutral' } = {
+    value: formatTireLabel(value, status),
+    tone: tone === 'danger' || tone === 'warning' || tone === 'success' ? tone : 'neutral',
+  };
+  if (availability?.availability === 'never_seen') {
+    presentation.tone = 'info';
+    if (value === null) presentation.value = 'Unavailable';
+  }
+  if (valid === false) Object.assign(presentation, { value: 'Invalid Sensor', tone: 'info' });
   const sensor = (
     <SensorChipSummary
       title={label}
-      value={displayValue}
+      value={presentation.value}
       icon="lucide:gauge"
-      valueTone={valueTone}
+      valueTone={presentation.tone}
       valueSize="lg"
     />
   );
@@ -921,26 +861,17 @@ function ClosureRow({
 }) {
   const isUnavailable = availability?.availability === 'never_seen' && value === null;
   const isGate = field.startsWith('closure_');
-  const variant = isUnavailable
-    ? 'info'
-    : motion
-      ? 'info'
-      : value === false
-        ? 'warning'
-        : value === true
-          ? 'success'
-          : 'default';
-  const badge = (
-    <Badge variant={variant}>
-      {isUnavailable
-        ? 'Unavailable'
-        : motion === 'opening'
-          ? 'Opening…'
-          : motion === 'closing'
-            ? 'Closing…'
-            : asOpenClosed(value)}
-    </Badge>
-  );
+  const states = new Map<boolean | null, { variant: BadgeVariant; label: string }>([
+    [true, { variant: 'success', label: 'Closed' }],
+    [false, { variant: 'warning', label: 'Open' }],
+    [null, { variant: 'default', label: 'Unknown' }],
+  ]);
+  const presentation = { ...(states.get(value) ?? states.get(null)!) };
+  if (motion) presentation.variant = 'info';
+  if (motion === 'opening') presentation.label = 'Opening…';
+  if (motion === 'closing') presentation.label = 'Closing…';
+  if (isUnavailable) Object.assign(presentation, { variant: 'info', label: 'Unavailable' });
+  const badge = <Badge variant={presentation.variant}>{presentation.label}</Badge>;
   const tooltip = buildAvailabilityTooltip(
     label,
     availability ?? {
@@ -1075,22 +1006,14 @@ function summarizeTires(
   targetPsi: number
 ): HealthState & { detail: string } {
   const health = summarizeTireHealth(wheels, targetPsi);
-
-  if (health.hasInvalidSensor) return { label: 'Unavailable', detail: 'Invalid sensor', variant: 'info' };
-  if (wheels.some((wheel) => wheel.availability?.availability === 'never_seen') && health.readings.length === 0) {
-    return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
+  const missing = { label: 'Unavailable', detail: health.hasInvalidSensor ? 'Invalid sensor' : 'No readings yet', variant: 'info' as const };
+  if (health.hasInvalidSensor || (!health.readings.length && wheels.some((wheel) => wheel.availability?.availability === 'never_seen'))) return missing;
+  if (health.tone === 'danger' || health.tone === 'warning') return { label: 'Check', detail: 'Attention needed', variant: health.tone };
+  switch (health.readings.length) {
+    case 0: return missing;
+    case 4: return { label: 'Normal', detail: `${Math.round(Math.min(...health.readings))}-${Math.round(Math.max(...health.readings))} psi`, variant: 'success' };
+    default: return { label: 'Partial', detail: `${health.readings.length}/4 wheels`, variant: 'info' };
   }
-  if (health.tone === 'danger' || health.tone === 'warning')
-    return { label: 'Check', detail: 'Attention needed', variant: health.tone };
-  if (health.readings.length === 4)
-    return {
-      label: 'Normal',
-      detail: `${Math.round(Math.min(...health.readings))}-${Math.round(Math.max(...health.readings))} psi`,
-      variant: 'success',
-    };
-  if (health.readings.length > 0)
-    return { label: 'Partial', detail: `${health.readings.length}/4 wheels`, variant: 'info' };
-  return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
 }
 
 type HealthClosureField =
@@ -1124,65 +1047,44 @@ function getHealthClosureRows(
   values: Record<HealthClosureField, boolean | null>,
   status: import('@panda/types').VehicleStatus | null | undefined
 ): HealthClosureRow[] {
-  const gateCapability = resolveVehicleGateCapability(model);
-  const knownModel = gateCapability !== null;
-  const supportedGate: HealthClosureField | null =
-    gateCapability === 'tailgate'
-      ? 'closure_tailgate_closed'
-      : gateCapability === 'liftgate'
-        ? 'closure_liftgate_closed'
-        : null;
-  const definitions = HEALTH_CLOSURE_DEFINITIONS.filter(({ field }) => {
-    if (field === 'closure_liftgate_closed' || field === 'closure_tailgate_closed') {
-      if (knownModel) return field === supportedGate;
-      return values[field] !== null || status?.field_availability?.[field]?.ever_seen === true;
-    }
-    if (!knownModel) {
-      return values[field] !== null || status?.field_availability?.[field]?.ever_seen === true;
-    }
-    return true;
+  const gate = resolveVehicleGateCapability(model);
+  const supported = gate === 'tailgate' ? 'closure_tailgate_closed' : gate === 'liftgate' ? 'closure_liftgate_closed' : null;
+  const observed = new Set(HEALTH_CLOSURE_DEFINITIONS.filter(({ field }) => values[field] !== null || status?.field_availability?.[field]?.ever_seen === true).map(({ field }) => field));
+  return HEALTH_CLOSURE_DEFINITIONS.flatMap(({ field, label }) => {
+    const isGate = field === 'closure_liftgate_closed' || field === 'closure_tailgate_closed';
+    const include = gate === null ? observed.has(field) : !isGate || field === supported;
+    return include ? [{ field, label, value: values[field], availability: status ? summarizeStatusAvailability(status, [field]) : null }] : [];
   });
-
-  return definitions.map(({ field, label }) => ({
-    field,
-    label,
-    value: values[field],
-    availability: status ? summarizeStatusAvailability(status, [field]) : null,
-  }));
 }
 
 function summarizeClosures(rows: HealthClosureRow[]) {
-  const values = rows.map((row) => row.value);
-  const open = values.filter((value) => value === false).length;
-  if (open > 0) return { label: `${open} open`, variant: 'warning' as const };
-  const known = values.filter((value) => value !== null).length;
-  return known > 0
-    ? { label: 'Secured', variant: 'success' as const }
-    : { label: 'Unavailable', variant: 'info' as const };
+  const counts = rows.reduce((result, row) => ({ open: result.open + Number(row.value === false), known: result.known + Number(row.value !== null) }), { open: 0, known: 0 });
+  const state = counts.open ? 'open' : counts.known ? 'secured' : 'missing';
+  return {
+    open: { label: `${counts.open} open`, variant: 'warning' as const },
+    secured: { label: 'Secured', variant: 'success' as const },
+    missing: { label: 'Unavailable', variant: 'info' as const },
+  }[state];
+}
+
+function classifyHealth(value: string | null, healthy: RegExp, failed: RegExp): HealthState {
+  if (!value) return { label: 'Unknown', variant: 'default' };
+  const evidence = [healthy.test(value), failed.test(value)];
+  return { label: titleCase(value), variant: evidence[0] ? 'success' : evidence[1] ? 'danger' : 'warning' };
 }
 
 function getCollectorState(value: string | null): HealthState {
-  if (!value) return { label: 'Unknown', variant: 'default' };
-  if (/connected|healthy|ok/i.test(value)) return { label: titleCase(value), variant: 'success' };
-  if (/auth|error|failed/i.test(value)) return { label: titleCase(value), variant: 'danger' };
-  return { label: titleCase(value), variant: 'warning' };
+  return classifyHealth(value, /connected|healthy|ok/i, /auth|error|failed/i);
 }
 
 function getHealthState(value: string | null): HealthState {
-  if (!value) return { label: 'Unknown', variant: 'default' };
-  if (/normal|good|ok/i.test(value)) return { label: titleCase(value), variant: 'success' };
-  if (/critical|fault|fail/i.test(value)) return { label: titleCase(value), variant: 'danger' };
-  return { label: titleCase(value), variant: 'warning' };
+  return classifyHealth(value, /normal|good|ok/i, /critical|fault|fail/i);
 }
 
 function getThermalState(value: string | null, count: number): HealthState {
-  if (value && /fault|fail|critical|error|overheat|warning/i.test(value))
-    return { label: titleCase(value), variant: 'warning' };
-  if (value && /^(off|none|inactive|normal|ok|good)$/i.test(value))
-    return { label: 'Nominal', variant: 'success' };
-  if (value && !/^none$/i.test(value)) return { label: titleCase(value), variant: 'warning' };
-  if (count >= 0) return { label: 'Nominal', variant: 'success' };
-  return { label: 'Nominal', variant: 'success' };
+  void count;
+  const nominal = !value || /^(off|none|inactive|normal|ok|good)$/i.test(value);
+  return nominal ? { label: 'Nominal', variant: 'success' } : { label: titleCase(value), variant: 'warning' };
 }
 
 function getTireState(
@@ -1190,53 +1092,17 @@ function getTireState(
   valid: boolean | null,
   availability: StatusAvailabilitySummary | null
 ): DiagnosticState {
+  const summary = availability ?? nullSummary();
+  const lastUpdatedLabel = formatAvailabilityLastUpdated(summary);
   if (valid === false) {
-    return {
-      label: 'Invalid Sensor',
-      variant: 'info',
-      tooltip: buildAvailabilityTooltip('Tire pressure', {
-        availability: availability?.availability ?? 'current',
-        reasonCode: 'invalid_sensor',
-        lastSeenAt: availability?.lastSeenAt ?? null,
-        latestEventAt: availability?.latestEventAt ?? null,
-        everSeen: availability?.everSeen ?? true,
-      }),
-      lastUpdatedLabel: formatAvailabilityLastUpdated(
-        availability ?? {
-          availability: 'current',
-          reasonCode: 'invalid_sensor',
-          lastSeenAt: null,
-          latestEventAt: null,
-          everSeen: true,
-        }
-      ),
-    };
+    const invalid: StatusAvailabilitySummary = { availability: availability?.availability ?? 'current' as const, reasonCode: 'invalid_sensor', lastSeenAt: availability?.lastSeenAt ?? null, latestEventAt: availability?.latestEventAt ?? null, everSeen: availability?.everSeen ?? true };
+    return { label: 'Invalid Sensor', variant: 'info', tooltip: buildAvailabilityTooltip('Tire pressure', invalid), lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? invalid) };
   }
-  if (availability?.availability === 'never_seen' && !status) {
-    return {
-      label: 'Unavailable',
-      variant: 'info',
-      tooltip: buildAvailabilityTooltip('Tire pressure', availability),
-    };
-  }
-  if (!status)
-    return {
-      label: 'No status',
-      variant: 'default',
-      lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()),
-    };
-  if (/normal|ok/i.test(status))
-    return {
-      label: titleCase(status),
-      variant: 'success',
-      lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()),
-    };
-  if (/critical|fault/i.test(status)) return { label: titleCase(status), variant: 'danger' };
-  return {
-    label: titleCase(status),
-    variant: 'warning',
-    lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()),
-  };
+  if (!status) return availability?.availability === 'never_seen'
+    ? { label: 'Unavailable', variant: 'info', tooltip: buildAvailabilityTooltip('Tire pressure', availability) }
+    : { label: 'No status', variant: 'default', lastUpdatedLabel };
+  const state = classifyHealth(status, /normal|ok/i, /critical|fault/i);
+  return state.variant === 'danger' ? state : { ...state, lastUpdatedLabel };
 }
 
 function summarizeDiagnostics(status: import('@panda/types').VehicleStatus | null | undefined) {
@@ -1288,21 +1154,11 @@ function summarizeDiagnostics(status: import('@panda/types').VehicleStatus | nul
     },
   ];
 
-  const knownRows = rows.filter((row) => !row.state.isMissing);
-  const all =
-    knownRows.length > 0 ? knownRows.map((row) => row.state) : rows.map((row) => row.state);
-  const overall: DiagnosticState =
-    knownRows.length === 0
-      ? { label: 'Unavailable', variant: 'info' }
-      : all.some((state) => state.variant === 'danger')
-        ? { label: 'Attention', variant: 'danger' }
-        : all.some((state) => state.variant === 'warning')
-          ? { label: 'Check', variant: 'warning' }
-          : all.some((state) => state.variant === 'info')
-            ? { label: 'Active', variant: 'info' }
-            : all.some((state) => state.variant === 'success')
-              ? { label: 'All clear', variant: 'success' }
-              : { label: 'Unavailable', variant: 'info' };
+  const priorities = ['danger', 'warning', 'info', 'success'] as const;
+  const observed = new Set(rows.filter((row) => !row.state.isMissing).map((row) => row.state.variant));
+  const severity = priorities.find((tone) => observed.has(tone));
+  const labels = { danger: 'Attention', warning: 'Check', info: 'Active', success: 'All clear' };
+  const overall: DiagnosticState = severity ? { label: labels[severity], variant: severity } : { label: 'Unavailable', variant: 'info' };
 
   return { rows, overall };
 }
@@ -1339,12 +1195,15 @@ function nullSummary(): StatusAvailabilitySummary {
 
 function getFreshness(ts: string | null) {
   if (!ts) return { label: 'No events', variant: 'default' as const };
-  const ageMs = Date.now() - new Date(ts).getTime();
-  if (!Number.isFinite(ageMs)) return { label: 'Unknown', variant: 'default' as const };
-  if (ageMs < 15 * 60 * 1000) return { label: 'Live', variant: 'success' as const };
-  if (ageMs < 2 * 60 * 60 * 1000) return { label: 'Recent', variant: 'info' as const };
-  if (ageMs < 24 * 60 * 60 * 1000) return { label: 'Stale', variant: 'warning' as const };
-  return { label: 'Old', variant: 'danger' as const };
+  const age = Date.now() - Date.parse(ts);
+  if (!Number.isFinite(age)) return { label: 'Unknown', variant: 'default' as const };
+  const intervals = [
+    { until: 900_000, label: 'Live', variant: 'success' as const },
+    { until: 7_200_000, label: 'Recent', variant: 'info' as const },
+    { until: 86_400_000, label: 'Stale', variant: 'warning' as const },
+  ];
+  const interval = intervals.find((candidate) => age < candidate.until);
+  return interval ? { label: interval.label, variant: interval.variant } : { label: 'Old', variant: 'danger' as const };
 }
 
 function formatDateTime(value?: string | null) {
@@ -1352,10 +1211,7 @@ function formatDateTime(value?: string | null) {
   return formatAppDateTime(value, { second: '2-digit', timeZoneName: 'short' });
 }
 
-function asOpenClosed(value: boolean | null) {
-  if (value === null) return 'Unknown';
-  return value ? 'Closed' : 'Open';
-}
+
 
 function titleCase(value: string) {
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -1371,75 +1227,51 @@ function sanitizeUpdateVersion(version: string | null, currentVersion: string) {
 }
 
 function dedupeSoftwareHistory(entries: import('@panda/types').VehicleHealthSoftwareEntry[]) {
-  const sorted = entries
-    .slice()
-    .sort((a, b) => new Date(b.installed_at).getTime() - new Date(a.installed_at).getTime());
-  if (sorted.length <= 1) return sorted;
-  const deduped: typeof sorted = [];
+  const sorted = entries.slice().sort((a, b) => Date.parse(b.installed_at) - Date.parse(a.installed_at));
+  const runs: typeof entries[] = [];
   for (const entry of sorted) {
-    const last = deduped[deduped.length - 1];
-    if (!last || last.version !== entry.version) {
-      deduped.push(entry);
-      continue;
-    }
-    deduped[deduped.length - 1] = {
-      ...last,
-      installed_at:
-        new Date(entry.installed_at).getTime() < new Date(last.installed_at).getTime()
-          ? entry.installed_at
-          : last.installed_at,
-      observed_until:
-        last.observed_until === null || entry.observed_until === null
-          ? null
-          : new Date(last.observed_until).getTime() > new Date(entry.observed_until).getTime()
-            ? last.observed_until
-            : entry.observed_until,
-    };
+    const run = runs[runs.length - 1];
+    if (run?.[0]?.version === entry.version) run.push(entry);
+    else runs.push([entry]);
   }
-  return deduped;
+  return runs.map(([first, ...rest]) => rest.reduce((aggregate, entry) => ({
+    ...aggregate,
+    installed_at: Date.parse(entry.installed_at) < Date.parse(aggregate.installed_at) ? entry.installed_at : aggregate.installed_at,
+    observed_until: aggregate.observed_until === null || entry.observed_until === null ? null : Date.parse(aggregate.observed_until) > Date.parse(entry.observed_until) ? aggregate.observed_until : entry.observed_until,
+  }), first!));
 }
 
 function getHeroStateIcon(label: string, state: HealthState) {
-  const lower = label.toLowerCase();
-  if (lower.includes('collector')) {
-    if (state.variant === 'success') return <Cable className="h-5 w-5 text-status-positive" />;
-    if (state.variant === 'danger') return <Link2Off className="h-5 w-5 text-status-critical" />;
-    return <Radio className="h-5 w-5" />;
-  }
-  if (lower.includes('12v')) {
-    if (state.variant === 'success')
-      return <CheckCircle2 className="h-5 w-5 text-status-positive" />;
-    if (state.variant === 'danger' || state.variant === 'warning')
-      return <BatteryWarning className="h-5 w-5 text-status-warning" />;
-    return <BatteryWarning className="h-5 w-5" />;
-  }
-  if (lower.includes('thermal')) {
-    if (state.variant === 'success')
-      return <CheckCircle2 className="h-5 w-5 text-status-positive" />;
-    if (state.variant === 'danger' || state.variant === 'warning')
-      return <TriangleAlert className="h-5 w-5 text-status-warning" />;
-    return <Gauge className="h-5 w-5" />;
-  }
-  if (lower.includes('tires')) {
-    if (state.variant === 'success')
-      return <CheckCircle2 className="h-5 w-5 text-status-positive" />;
-    if (state.variant === 'danger' || state.variant === 'warning')
-      return <TriangleAlert className="h-5 w-5 text-status-warning" />;
-    return <CheckCircle2 className="h-5 w-5" />;
-  }
-  return iconFallback(state);
+  type IconChoice = { Icon: React.ElementType; className: string };
+  const normal = 'h-5 w-5', positive = `${normal} text-status-positive`, warning = `${normal} text-status-warning`;
+  const choices: Array<{ keyword: string; fallback: IconChoice; states: Partial<Record<BadgeVariant, IconChoice>> }> = [
+    { keyword: 'collector', fallback: { Icon: Radio, className: normal }, states: { success: { Icon: Cable, className: positive }, danger: { Icon: Link2Off, className: `${normal} text-status-critical` } } },
+    { keyword: '12v', fallback: { Icon: BatteryWarning, className: normal }, states: { success: { Icon: CheckCircle2, className: positive }, danger: { Icon: BatteryWarning, className: warning }, warning: { Icon: BatteryWarning, className: warning } } },
+    { keyword: 'thermal', fallback: { Icon: Gauge, className: normal }, states: { success: { Icon: CheckCircle2, className: positive }, danger: { Icon: TriangleAlert, className: warning }, warning: { Icon: TriangleAlert, className: warning } } },
+    { keyword: 'tires', fallback: { Icon: CheckCircle2, className: normal }, states: { success: { Icon: CheckCircle2, className: positive }, danger: { Icon: TriangleAlert, className: warning }, warning: { Icon: TriangleAlert, className: warning } } },
+  ];
+  const match = choices.find(({ keyword }) => label.toLowerCase().includes(keyword));
+  if (!match) return iconFallback(state);
+  const { Icon, className } = match.states[state.variant] ?? match.fallback;
+  return <Icon className={className} />;
 }
 
 function iconFallback(state: HealthState) {
-  if (state.variant === 'success') return <CheckCircle2 className="h-5 w-5" />;
-  if (state.variant === 'danger' || state.variant === 'warning')
-    return <TriangleAlert className="h-5 w-5" />;
-  return <CircleAlert className="h-5 w-5" />;
+  const icons: Partial<Record<BadgeVariant, React.ElementType>> = { success: CheckCircle2, danger: TriangleAlert, warning: TriangleAlert };
+  const Icon = icons[state.variant] ?? CircleAlert;
+  return <Icon className="h-5 w-5" />;
 }
 
 function getHeroLeadingIcon(kind: 'collector' | 'battery' | 'thermal' | 'tires') {
-  if (kind === 'collector') return <Radio className="h-5 w-5" />;
-  if (kind === 'battery') return <BatteryWarning className="h-5 w-5" />;
-  if (kind === 'thermal') return <Gauge className="h-5 w-5" />;
-  return <LockKeyhole className="h-5 w-5" />;
+  const Icon = { collector: Radio, battery: BatteryWarning, thermal: Gauge, tires: LockKeyhole }[kind];
+  return <Icon className="h-5 w-5" />;
+}
+
+function wifiStrength(rssi: number) {
+  const bands = [
+    { minimum: -55, label: 'Strong', level: 4 },
+    { minimum: -67, label: 'Good', level: 3 },
+    { minimum: -75, label: 'Fair', level: 2 },
+  ];
+  return bands.find(({ minimum }) => rssi >= minimum) ?? { label: 'Weak', level: 1 };
 }

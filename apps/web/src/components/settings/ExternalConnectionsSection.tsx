@@ -1,4 +1,6 @@
+import { externalConnectionDraftTransition, initialExternalConnectionDraft } from './externalConnectionDraft';
 import React from 'react';
+import { useFeatureOperation } from '../../features/featureOperation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, BASEMAP_CONFIG_QUERY_KEY, queryKeys } from '@panda/hooks';
 import type {
@@ -45,9 +47,6 @@ export function ExternalConnectionsSection() {
   const releaseChecksEnabled = releaseCheckSettings.data?.enabled === true;
   const showReleases = selectedId === GITHUB_RELEASES_ID;
   const selected = showReleases ? undefined : (items.find((connection) => connection.id === selectedId) ?? items[0]);
-  React.useEffect(() => {
-    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
-  }, [selected, selectedId]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -144,7 +143,7 @@ export function ExternalConnectionsSection() {
             </button>
           </nav>
           {showReleases ? <GitHubReleasesCard canManage={canManage} connectionsLoaded={connections.isSuccess} /> : null}
-          {selected ? <ConnectionCard connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
+          {selected ? <ConnectionCard key={selected.id} connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
         </div>
       ) : null}
     </div>
@@ -154,6 +153,7 @@ export function ExternalConnectionsSection() {
 function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boolean; connectionsLoaded: boolean }) {
   const queryClient = useQueryClient();
   const releaseStatus = useReleaseCheckStatus();
+  const releaseUpdate = useFeatureOperation();
   const [updateCheckMessage, setUpdateCheckMessage] = React.useState<string | null>(null);
   const updateCheckSettings = useQuery({
     queryKey: queryKeys.updateCheck.current,
@@ -171,18 +171,23 @@ function GitHubReleasesCard({ canManage, connectionsLoaded }: { canManage: boole
   const updateCheckMutation = useMutation({
     mutationFn: (settings: UpdateCheckSettings) => api.updateUpdateCheckSettings(settings),
     onMutate: async (settings) => {
+      const active = releaseUpdate.begin();
       await queryClient.cancelQueries({ queryKey: queryKeys.updateCheck.current });
       const previous = queryClient.getQueryData<UpdateCheckSettings>(queryKeys.updateCheck.current);
-      queryClient.setQueryData(queryKeys.updateCheck.current, settings);
-      setUpdateCheckMessage(null);
-      return { previous };
+      if (active()) {
+        queryClient.setQueryData(queryKeys.updateCheck.current, settings);
+        setUpdateCheckMessage(null);
+      }
+      return { previous, active };
     },
-    onSuccess: (settings) => {
+    onSuccess: (settings, _input, context) => {
+      if (!context?.active()) return;
       queryClient.setQueryData(queryKeys.updateCheck.current, settings);
       setUpdateCheckMessage('GitHub release check settings saved.');
     },
     onError: (_error, _settings, context) => {
-      if (context?.previous) queryClient.setQueryData(queryKeys.updateCheck.current, context.previous);
+      if (!context?.active()) return;
+      if (context.previous) queryClient.setQueryData(queryKeys.updateCheck.current, context.previous);
       setUpdateCheckMessage('GitHub release check settings could not be saved. The previous settings remain active.');
     },
   });
@@ -304,56 +309,54 @@ function ConnectionCard({
   canManage: boolean;
   onUpdated: (data: Awaited<ReturnType<typeof api.getExternalConnections>>) => void;
 }) {
-  const [draft, setDraft] = React.useState<UpdateExternalConnectionBody>(() => toDraft(connection));
-  const [apiKey, setApiKey] = React.useState('');
-  const [isReplacingApiKey, setIsReplacingApiKey] = React.useState(false);
-  const [isClearingApiKey, setIsClearingApiKey] = React.useState(false);
-  const [bearerToken, setBearerToken] = React.useState('');
-  const [message, setMessage] = React.useState<string | null>(null);
-  const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
+  const operation = useFeatureOperation();
+  const [editor, editorEvent] = React.useReducer(externalConnectionDraftTransition, toDraft(connection), initialExternalConnectionDraft);
+  const { draft, apiKey, isReplacingApiKey, isClearingApiKey, bearerToken, message, previewDataUrl } = editor;
+  const setDraft: React.Dispatch<React.SetStateAction<UpdateExternalConnectionBody>> = (value) => editorEvent({ type: 'draft', value });
+  const setApiKey = (value: string) => editorEvent({ type: 'secret', key: 'apiKey', value });
+  const setBearerToken = (value: string) => editorEvent({ type: 'secret', key: 'bearerToken', value });
+  const setMessage = (message: string) => editorEvent({ type: 'feedback', message });
   const queryClient = useQueryClient();
 
   React.useEffect(() => {
-    setDraft(toDraft(connection));
-    setApiKey('');
-    setIsReplacingApiKey(false);
-    setIsClearingApiKey(false);
-    setBearerToken('');
-    setPreviewDataUrl(null);
+    editorEvent({ type: 'load', draft: toDraft(connection) });
   }, [connection]);
 
   const update = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: (body: UpdateExternalConnectionBody) => api.updateExternalConnection(connection.id, body),
-    onSuccess: async (data) => {
+    onSuccess: async (data, _body, active) => {
+      if (!active?.()) return;
       onUpdated(data);
       if (connection.id === 'basemap') {
         await queryClient.invalidateQueries({ queryKey: BASEMAP_CONFIG_QUERY_KEY });
       }
-      setApiKey('');
-      setIsReplacingApiKey(false);
-      setIsClearingApiKey(false);
-      setMessage('Saved.');
+      if (!active?.()) return;
+      editorEvent({ type: 'saved' });
     },
-    onError: (error) => setMessage(error instanceof Error ? error.message : 'Could not save connection.'),
+    onError: (error, _body, active) => { if (active?.()) setMessage(error instanceof Error ? error.message : 'Could not save connection.'); },
   });
   const test = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: (body: UpdateExternalConnectionBody) => api.testExternalConnection(connection.id, body),
-    onSuccess: (result) => {
-      setMessage(result.checks.map((check) => `${check.label}: ${check.message}`).join(' '));
-      setPreviewDataUrl(result.preview_data_url);
+    onSuccess: (result, _body, active) => {
+      if (!active?.()) return;
+      editorEvent({ type: 'tested', message: result.checks.map((check) => `${check.label}: ${check.message}`).join(' '), preview: result.preview_data_url });
     },
-    onError: (error) => setMessage(error instanceof Error ? error.message : 'Connection test failed.'),
+    onError: (error, _body, active) => { if (active?.()) setMessage(error instanceof Error ? error.message : 'Connection test failed.'); },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: CONNECTION_QUERY_KEY });
     },
   });
   const purgeCache = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: () => api.purgeExternalConnectionCache(connection.id),
-    onSuccess: (result) => {
+    onSuccess: (result, _body, active) => {
+      if (!active?.()) return;
       setMessage(`${result.message} ${result.purged_entries.toLocaleString()} entries removed.`);
       queryClient.invalidateQueries({ queryKey: CONNECTION_QUERY_KEY });
     },
-    onError: (error) => setMessage(error instanceof Error ? error.message : 'Could not purge cache.'),
+    onError: (error, _body, active) => { if (active?.()) setMessage(error instanceof Error ? error.message : 'Could not purge cache.'); },
   });
 
   const active = draft.enabled && draft.mode !== 'disabled';
@@ -361,21 +364,22 @@ function ConnectionCard({
   const basemapProviderChanged = connection.id === 'basemap'
     && (draft.basemap_provider ?? 'auto') !== (connection.basemap_provider ?? 'auto');
 
+  function credentialPayload() {
+    const body = { ...draft };
+    const credentials = { api_key: apiKey.trim(), bearer_token: bearerToken.trim() };
+    for (const key of ['api_key', 'bearer_token'] as const) {
+      if (credentials[key]) body[key] = credentials[key];
+    }
+    return body;
+  }
+
   function save() {
     if (!active && connection.enabled && !window.confirm(`Disable ${connection.name}? ${connection.disabled_effect}`)) return;
-    update.mutate({
-      ...draft,
-      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
-    });
+    update.mutate(credentialPayload());
   }
 
   function testDraft() {
-    test.mutate({
-      ...draft,
-      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
-    });
+    test.mutate(credentialPayload());
   }
 
   function clearStoredBasemapKey() {
@@ -513,8 +517,7 @@ function ConnectionCard({
                       aria-label="Replace stored CARTO Basemap key"
                       iconLeft={<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
                       onClick={() => {
-                        setDraft((current) => ({ ...current, clear_api_key: false }));
-                        setIsReplacingApiKey(true);
+                        editorEvent({ type: 'replace' });
                       }}
                     />
                     <Button
@@ -526,14 +529,14 @@ function ConnectionCard({
                       title="Clear stored key"
                       loading={update.isPending}
                       iconLeft={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                      onClick={() => setIsClearingApiKey(true)}
+                      onClick={() => editorEvent({ type: 'clearing', value: true })}
                     />
                   </div>
                   {isClearingApiKey ? (
                     <div className="flex flex-col gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 sm:flex-row sm:items-center">
                       <p className="text-sm text-fg sm:mr-auto">Clear the saved key? Automatic will use OpenFreeMap until a new CARTO key is saved.</p>
                       <div className="flex gap-2">
-                        <Button type="button" variant="secondary" size="sm" onClick={() => setIsClearingApiKey(false)}>Keep key</Button>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => editorEvent({ type: 'clearing', value: false })}>Keep key</Button>
                         <Button type="button" variant="danger" size="sm" loading={update.isPending} onClick={clearStoredBasemapKey}>Clear key</Button>
                       </div>
                     </div>
@@ -624,15 +627,22 @@ function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerTo
   const [preset, setPreset] = React.useState('generic');
   const usesHttp = [draft.forecast_url, draft.archive_url, draft.base_url, draft.light_url_template, draft.dark_url_template]
     .some((value) => typeof value === 'string' && value.trim().toLowerCase().startsWith('http://'));
-  const textField = (key: keyof UpdateExternalConnectionBody, label: string, placeholder = '') => (
-    <Field label={label}>
-      <input value={String(draft[key] ?? '')} placeholder={placeholder} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" />
-    </Field>
-  );
+  type ProviderFields = { fields: Array<[keyof UpdateExternalConnectionBody, string, string?]>; credential?: 'key' | 'token'; autocomplete?: boolean };
+  const providers = new Map<string, ProviderFields>([
+    ['open_meteo', { fields: [['forecast_url', 'Forecast URL'], ['archive_url', 'Archive URL']], credential: 'key' }],
+    ['nominatim', { fields: [['base_url', 'Nominatim base URL'], ['request_identifier', 'Request identifier / contact', 'Panda project identifier']], autocomplete: true }],
+    ['basemap', { fields: [['light_url_template', 'Light XYZ template', 'https://tiles/{z}/{x}/{y}.png'], ['dark_url_template', 'Dark XYZ template (optional)'], ['attribution', 'Attribution'], ['attribution_url', 'Attribution URL']], credential: 'token' }],
+  ]);
+  const provider = providers.get(connection.id);
+  const credentials = {
+    key: { label: 'API key', stored: connection.has_api_key, value: apiKey, set: setApiKey, keep: 'Leave blank to keep stored key' },
+    token: { label: 'Bearer token', stored: connection.has_bearer_token, value: bearerToken, set: setBearerToken, keep: 'Leave blank to keep stored token' },
+  };
+  const credential = provider?.credential ? credentials[provider.credential] : null;
 
   return (
     <div className="grid gap-3">
-      {connection.id === 'open_meteo' || connection.id === 'nominatim' || connection.id === 'basemap' ? (
+      {provider ? (
         <Field label="Compatible preset">
           <SelectPicker
             className="w-full"
@@ -647,23 +657,13 @@ function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerTo
           />
         </Field>
       ) : null}
-      {connection.id === 'open_meteo' ? <>
-        {textField('forecast_url', 'Forecast URL')}
-        {textField('archive_url', 'Archive URL')}
-        <Field label={`API key${connection.has_api_key ? ' (stored)' : ''}`}><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={connection.has_api_key ? 'Leave blank to keep stored key' : 'Optional'} className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></Field>
-      </> : null}
-      {connection.id === 'nominatim' ? <>
-        {textField('base_url', 'Nominatim base URL')}
-        {textField('request_identifier', 'Request identifier / contact', 'Panda project identifier')}
-        <label className="flex items-start gap-2 text-sm text-fg"><input type="checkbox" checked={draft.custom_autocomplete ?? false} onChange={(event) => setDraft((current) => ({ ...current, custom_autocomplete: event.target.checked }))} className="mt-0.5" /><span>Allow debounced autocomplete on this self-hosted provider</span></label>
-      </> : null}
-      {connection.id === 'basemap' ? <>
-        {textField('light_url_template', 'Light XYZ template', 'https://tiles/{z}/{x}/{y}.png')}
-        {textField('dark_url_template', 'Dark XYZ template (optional)')}
-        {textField('attribution', 'Attribution')}
-        {textField('attribution_url', 'Attribution URL')}
-        <Field label={`Bearer token${connection.has_bearer_token ? ' (stored)' : ''}`}><input type="password" value={bearerToken} onChange={(event) => setBearerToken(event.target.value)} placeholder={connection.has_bearer_token ? 'Leave blank to keep stored token' : 'Optional'} className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></Field>
-      </> : null}
+      {provider?.fields.map(([key, label, placeholder = '']) => (
+        <Field key={key} label={label}>
+          <input value={String(draft[key] ?? '')} placeholder={placeholder} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" />
+        </Field>
+      ))}
+      {credential ? <Field label={`${credential.label}${credential.stored ? ' (stored)' : ''}`}><input type="password" value={credential.value} onChange={(event) => credential.set(event.target.value)} placeholder={credential.stored ? credential.keep : 'Optional'} className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></Field> : null}
+      {provider?.autocomplete ? <label className="flex items-start gap-2 text-sm text-fg"><input type="checkbox" checked={draft.custom_autocomplete ?? false} onChange={(event) => setDraft((current) => ({ ...current, custom_autocomplete: event.target.checked }))} className="mt-0.5" /><span>Allow debounced autocomplete on this self-hosted provider</span></label> : null}
       {usesHttp ? (
         <p className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-fg">
           HTTP is accepted only for a local/private endpoint. Traffic to that service is not encrypted.

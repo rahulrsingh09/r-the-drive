@@ -1,14 +1,15 @@
 import React from 'react';
+import { downloadFeatureFile, useFeatureOperation } from '../../features/featureOperation';
+import { vehicleSettingsCapabilities } from '../../features/settings/settingsVehicleModel';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@panda/hooks';
 import type { Vehicle } from '@panda/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, ResponsiveDialog } from '@panda/ui/primitives';
 
 export function IngestionDiagnosticsSection({ vehicles }: { vehicles: Vehicle[] }) {
-  const manageableVehicles = vehicles.filter((vehicle) => (
-    (vehicle.membership_role === 'owner' || vehicle.membership_role === 'manager')
-    && !(vehicle.is_demo ?? vehicle.rivian_vehicle_id?.startsWith('demo-') ?? false)
-  ));
+  const manageableVehicles = vehicles.flatMap((vehicle) =>
+    vehicleSettingsCapabilities(vehicle).canCaptureIngestion ? [vehicle] : []
+  );
   if (manageableVehicles.length === 0) return null;
 
   return (
@@ -40,6 +41,7 @@ function minutesLeft(endsAt: string | null | undefined, now: number): number {
 function VehicleIngestionCaptureRow({ vehicle }: { vehicle: Vehicle }) {
   const [confirmReplace, setConfirmReplace] = React.useState(false);
   const confirmationId = React.useId();
+  const operation = useFeatureOperation();
   const queryClient = useQueryClient();
   const queryKey = ['vehicle-ingestion-capture', vehicle.id];
   const query = useQuery({
@@ -47,29 +49,28 @@ function VehicleIngestionCaptureRow({ vehicle }: { vehicle: Vehicle }) {
     queryFn: () => api.getVehicleIngestionCapture(vehicle.id),
     refetchInterval: (current) => (current.state.data?.state === 'capturing' ? 5_000 : false),
   });
-  const onChanged = (data: Awaited<ReturnType<typeof api.getVehicleIngestionCapture>>) => {
-    queryClient.setQueryData(queryKey, data);
+  const beforeChange = async () => {
+    const active = operation.begin();
+    await queryClient.cancelQueries({ queryKey });
+    return active;
+  };
+  const onChanged = (data: Awaited<ReturnType<typeof api.getVehicleIngestionCapture>>, _input: void, active: (() => boolean) | undefined) => {
+    if (active?.()) queryClient.setQueryData(queryKey, data);
   };
   const start = useMutation({
+    onMutate: beforeChange,
     mutationFn: () => api.startVehicleIngestionCapture(vehicle.id),
     onSuccess: onChanged,
   });
   const stop = useMutation({
+    onMutate: beforeChange,
     mutationFn: () => api.stopVehicleIngestionCapture(vehicle.id),
     onSuccess: onChanged,
   });
   const download = useMutation({
     mutationFn: async () => {
       const { blob, fileName } = await api.downloadVehicleIngestionCapture(vehicle.id);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = fileName;
-      anchor.rel = 'noopener';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      downloadFeatureFile(blob, fileName);
     },
   });
 

@@ -9,7 +9,12 @@ export function ChargingSection() {
   const { data: vehicles = [] } = useVehicles();
   const preferences = useChargingNetworkPreferences(effectiveVehicleId);
   const updatePreference = useUpdateChargingNetworkPreference(effectiveVehicleId);
-  const [savedNetwork, setSavedNetwork] = React.useState<string | null>(null);
+  const [receipt, setReceipt] = React.useState<{ vehicleId: string | null | undefined; network: string } | null>(null);
+  const savedNetwork = receipt?.vehicleId === effectiveVehicleId ? receipt?.network : null;
+  const changePolicy = (networkVendor: string, costMode: 'automatic' | 'free') => {
+    setReceipt(null);
+    updatePreference.mutate({ networkVendor, costMode }, { onSuccess: () => setReceipt({ vehicleId: effectiveVehicleId, network: networkVendor }) });
+  };
   const role = vehicles.find((vehicle) => vehicle.id === effectiveVehicleId)?.membership_role ?? 'viewer';
   const canManage = role === 'owner' || role === 'manager';
 
@@ -74,13 +79,7 @@ export function ChargingSection() {
                           type="button"
                           aria-pressed={preference.cost_mode === costMode}
                           disabled={pending}
-                          onClick={() => {
-                            setSavedNetwork(null);
-                            updatePreference.mutate(
-                              { networkVendor: preference.network_vendor, costMode },
-                              { onSuccess: () => setSavedNetwork(preference.network_vendor) },
-                            );
-                          }}
+                          onClick={() => changePolicy(preference.network_vendor, costMode)}
                           className={`min-h-11 rounded-lg px-3 text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-60 ${preference.cost_mode === costMode ? 'bg-bg-elevated text-fg shadow-sm' : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg'}`}
                         >
                           {pending ? 'Saving…' : costMode === 'automatic' ? 'Automatic' : 'Free'}

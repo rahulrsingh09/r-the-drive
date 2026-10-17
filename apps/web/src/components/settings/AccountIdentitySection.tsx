@@ -1,9 +1,11 @@
 import React from 'react';
+import { useFeatureOperation } from '../../features/featureOperation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys } from '@panda/hooks';
 import { Badge, Button, Input } from '@panda/ui/primitives';
 export function AccountIdentitySection() {
   const qc = useQueryClient();
+  const operation = useFeatureOperation();
   const q = useQuery({
     queryKey: queryKeys.auth.identities,
     queryFn: () => api.getOidcIdentities(),
@@ -14,22 +16,26 @@ export function AccountIdentitySection() {
   const [confirmPassword, setConfirmPassword] = React.useState('');
   const [message, setMessage] = React.useState('');
   const link = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: () => api.startOidcLink('/settings?section=account'),
-    onSuccess: (r) => window.location.assign(r.authorization_url),
+    onSuccess: (r, _body, active) => { if (active?.()) window.location.assign(r.authorization_url); },
   });
   const unlink = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: () => api.unlinkOidc(password),
-    onSuccess: () => {
+    onSuccess: (_result, _body, active) => {
+      if (!active?.()) return;
       setPassword('');
       setMessage('SSO disconnected.');
       void qc.invalidateQueries({ queryKey: queryKeys.auth.identities });
     },
-    onError: () => setMessage('Unable to disconnect SSO. Check your current password.'),
+    onError: (_error, _body, active) => { if (active?.()) setMessage('Unable to disconnect SSO. Check your current password.'); },
   });
   const setInitialPassword = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: () => api.startOidcPasswordSetup(newPassword),
-    onSuccess: (r) => window.location.assign(r.authorization_url),
-    onError: () => setMessage('Unable to start SSO verification for the recovery password.'),
+    onSuccess: (r, _body, active) => { if (active?.()) window.location.assign(r.authorization_url); },
+    onError: (_error, _body, active) => { if (active?.()) setMessage('Unable to start SSO verification for the recovery password.'); },
   });
   if (q.isLoading)
     return (

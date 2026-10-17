@@ -1,4 +1,7 @@
+import { emptyTripTagDraft, tripTagDraftTransition } from './tripTagDraft';
 import React from 'react';
+import { useTripSelection } from './tripSelection';
+import { useFeatureOperation } from '../featureOperation';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import {
   useAuth, useBasemapConfig, useResolvedVehicleSelection, useTripDetailData, useUpdateTripTagAssignments, useUserPreferences,
@@ -6,7 +9,6 @@ import {
 import { useDocumentTheme } from '@panda/ui/hooks';
 import { Button, PageLayout } from '@panda/ui/primitives';
 import { SensorChipSummary, TripTagPicker } from '@panda/dashboards';
-import type { TripDetailSamples } from '@panda/types';
 import { TripTagBadge } from '@panda/ui/tables';
 import {
   TripMapChart,
@@ -26,7 +28,7 @@ import {
 } from '@panda/ui/lib/utils';
 import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@panda/ui/lib/tripPresentation';
 import { formatAppDateTime } from '@panda/ui/lib/dateTime';
-import { parseISO } from 'date-fns';
+import { buildTripTimeline } from './tripTimeline';
 import { ArrowLeft, Eraser, Save, Tag } from 'lucide-react';
 import { nearestPointIndex } from '@panda/ui/charts';
 import { buildTripSpeedProfile } from './tripSpeedProfile';
@@ -43,44 +45,20 @@ export function TripDetailContent() {
   } = useResolvedVehicleSelection();
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
-  const [activeIndex, setActiveIndex] = React.useState<number | null>(null);
-  const pendingActiveIndexRef = React.useRef<number | null>(null);
-  const activeIndexFrameRef = React.useRef<number | null>(null);
+  const [activeIndex, setActiveIndexThrottled] = useTripSelection(tripId);
+  const tagSave = useFeatureOperation();
   const isDark = useDocumentTheme();
   const basemap = useBasemapConfig();
   const userPreferences = useUserPreferences();
-
-  const setActiveIndexThrottled = React.useCallback((value: number | null) => {
-    if (pendingActiveIndexRef.current === value) return;
-    pendingActiveIndexRef.current = value;
-    if (activeIndexFrameRef.current !== null) return;
-
-    activeIndexFrameRef.current = requestAnimationFrame(() => {
-      activeIndexFrameRef.current = null;
-      setActiveIndex((previous) => previous === pendingActiveIndexRef.current
-        ? previous
-        : pendingActiveIndexRef.current);
-    });
-  }, []);
-
-  React.useEffect(() => {
-    pendingActiveIndexRef.current = null;
-    setActiveIndex(null);
-    return () => {
-      if (activeIndexFrameRef.current !== null) {
-        cancelAnimationFrame(activeIndexFrameRef.current);
-        activeIndexFrameRef.current = null;
-      }
-    };
-  }, [tripId]);
 
   const { data: detailData, isLoading: detailLoading } = useTripDetailData(tripId, effectiveVehicleId);
   const trip = detailData?.trip;
   const canManageTripTags = ['owner', 'manager'].includes(vehicles?.find((vehicle) => vehicle.id === effectiveVehicleId)?.membership_role ?? '');
   const updateAssignments = useUpdateTripTagAssignments(effectiveVehicleId);
-  const [isEditingTags, setIsEditingTags] = React.useState(false);
-  const [draftTagIds, setDraftTagIds] = React.useState<string[]>([]);
-  const [tagSaveError, setTagSaveError] = React.useState('');
+  const [tagDraft, tagEvent] = React.useReducer(tripTagDraftTransition, emptyTripTagDraft);
+  const { editing: isEditingTags, tagIds: draftTagIds, error: tagSaveError } = tagDraft;
+  const setDraftTagIds = (tagIds: string[]) => tagEvent({ type: 'tags', tagIds });
+  React.useEffect(() => tagSave.cancel, [tripId, effectiveVehicleId, tagSave.cancel]);
   const samples = detailData?.samples;
   const hasVehicle = !!effectiveVehicleId;
   const chartLoading = detailLoading;
@@ -111,18 +89,8 @@ export function TripDetailContent() {
     return (trip.distance_mi / durationMin) * 60;
   }, [trip, durationMin]);
 
-  const timeline = React.useMemo(
-    () => buildTimeline(trip?.started_at, samples),
-    [trip?.started_at, samples],
-  );
-
-  const mapTrack = React.useMemo(
-    () => (samples?.lat ?? []).flatMap((lat, index) => {
-      const lng = samples?.lng[index] ?? null;
-      return lat != null && lng != null ? [{ lat, lng, sampleIndex: index }] : [];
-    }),
-    [samples],
-  );
+  const timelineModel = React.useMemo(() => buildTripTimeline(trip?.started_at, samples), [trip?.started_at, samples]);
+  const { timeline, mapTrack, chartPoints } = timelineModel;
 
   const speedProfile = React.useMemo(
     () => buildTripSpeedProfile(timeline, trip?.ended_at
@@ -132,10 +100,6 @@ export function TripDetailContent() {
   );
   const speedBins = speedProfile.bins;
   const hasEstimatedSpeed = speedProfile.estimatedSeconds > 0;
-  const chartPoints = React.useMemo(
-    () => timeline.map((point) => ({ ts: point.elapsed_s })),
-    [timeline],
-  );
   const [unitPreferences, setUnitPreferences] = React.useState(getUnitPreferences);
   React.useEffect(() => {
     const updateUnits = () => setUnitPreferences(getUnitPreferences());
@@ -201,28 +165,12 @@ export function TripDetailContent() {
     ],
   }), [drivePowerIsEstimated, outsideTemperatureLabel, pressureFactor, speedFactor, altitudeFactor, temperatureFactor, temperatureOffset, timeline, speedProfile, hasEstimatedSpeed]);
 
-  const metricCoverage = React.useMemo(() => {
-    let powerSamples = 0;
-    let tempSamples = 0;
-    let tireSamples = 0;
-
-    for (const point of timeline) {
-      if (drivePowerIsEstimated
-        ? point.estimated_net_power_kw != null
-        : point.power_kw != null || point.regen_kw != null) powerSamples += 1;
-      if (point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null) tempSamples += 1;
-      if (point.tire_fl_psi != null || point.tire_fr_psi != null || point.tire_rl_psi != null || point.tire_rr_psi != null) {
-        tireSamples += 1;
-      }
-    }
-
-    return {
-      powerSamples,
-      tempSamples,
-      tireSamples,
-      totalTimelineSamples: timeline.length,
-    };
-  }, [drivePowerIsEstimated, timeline]);
+  const metricCoverage = {
+    powerSamples: drivePowerIsEstimated ? timelineModel.coverage.estimatedPowerSamples : timelineModel.coverage.directPowerSamples,
+    tempSamples: timelineModel.coverage.tempSamples,
+    tireSamples: timelineModel.coverage.tireSamples,
+    totalTimelineSamples: timeline.length,
+  };
 
   const activeTimelinePoint = React.useMemo(
     () => (activeIndex == null ? null : timeline[activeIndex] ?? null),
@@ -262,16 +210,7 @@ export function TripDetailContent() {
       title={isEditingTags ? 'Close trip tag editor' : 'Show trip tags'}
       aria-expanded={isEditingTags}
       className="inline-flex h-11 w-11 items-center justify-center rounded-md text-fg-tertiary/80 transition-colors hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-page disabled:opacity-50"
-      onClick={() => {
-        if (isEditingTags) {
-          setIsEditingTags(false);
-          setTagSaveError('');
-          return;
-        }
-        setDraftTagIds(trip?.tags?.map((tag) => tag.id) ?? []);
-        setTagSaveError('');
-        setIsEditingTags(true);
-      }}
+      onClick={() => tagEvent({ type: 'toggle', tagIds: trip?.tags?.map((tag) => tag.id) ?? [] })}
       disabled={!trip || updateAssignments.isPending}
     >
       <Tag className="h-5 w-5" aria-hidden="true" />
@@ -280,12 +219,13 @@ export function TripDetailContent() {
 
   const saveTripTags = async () => {
     if (!trip) return;
-    setTagSaveError('');
+    tagEvent({ type: 'saving' });
+    const active = tagSave.begin();
     try {
       await updateAssignments.mutateAsync({ trip_ids: [trip.id], tag_ids: draftTagIds, mode: 'replace' });
-      setIsEditingTags(false);
+      if (active()) tagEvent({ type: 'saved' });
     } catch {
-      setTagSaveError('Couldn’t update trip tags. Try again.');
+      if (active()) tagEvent({ type: 'failed' });
     }
   };
 
@@ -578,58 +518,8 @@ export function TripDetailContent() {
   );
 }
 
-interface TimelinePoint {
-  elapsed_s: number;
-  ts: string;
-  speed_mph: number | null;
-  power_kw: number | null;
-  regen_kw: number | null;
-  estimated_net_power_kw: number | null;
-  battery_level: number | null;
-  outside_temp_c: number | null;
-  cabin_temp_c: number | null;
-  driver_temp_c: number | null;
-  hvac_active: boolean | null;
-  tire_fl_psi: number | null;
-  tire_fr_psi: number | null;
-  tire_rl_psi: number | null;
-  tire_rr_psi: number | null;
-  altitude_m: number | null;
-  lat: number | null;
-  lng: number | null;
-}
-
 function formatElapsed(seconds: number) {
   const min = Math.floor(seconds / 60);
   const sec = Math.max(0, Math.floor(seconds % 60));
   return `${min}:${String(sec).padStart(2, '0')}`;
-}
-
-function buildTimeline(
-  tripStartIso: string | undefined,
-  samples: TripDetailSamples | undefined,
-): TimelinePoint[] {
-  if (!tripStartIso || !samples) return [];
-  const tripStartMs = parseISO(tripStartIso).getTime();
-  if (!Number.isFinite(tripStartMs)) return [];
-  return samples.elapsed_s.map((elapsed, index) => ({
-    elapsed_s: elapsed,
-    ts: new Date(tripStartMs + elapsed * 1000).toISOString(),
-    speed_mph: samples.speed_mph[index] ?? null,
-    power_kw: samples.power_kw[index] ?? null,
-    regen_kw: samples.regen_power_kw[index] != null ? -Math.abs(samples.regen_power_kw[index]!) : null,
-    estimated_net_power_kw: samples.estimated_net_power_kw?.[index] ?? null,
-    battery_level: samples.battery_level[index] ?? null,
-    outside_temp_c: samples.outside_temp_c[index] ?? null,
-    cabin_temp_c: samples.cabin_temp_c[index] ?? null,
-    driver_temp_c: samples.driver_temp_c[index] ?? null,
-    hvac_active: samples.hvac_active[index] ?? null,
-    tire_fl_psi: samples.tire_fl_psi[index] ?? null,
-    tire_fr_psi: samples.tire_fr_psi[index] ?? null,
-    tire_rl_psi: samples.tire_rl_psi[index] ?? null,
-    tire_rr_psi: samples.tire_rr_psi[index] ?? null,
-    altitude_m: samples.altitude_m[index] ?? null,
-    lat: samples.lat[index] ?? null,
-    lng: samples.lng[index] ?? null,
-  }));
 }

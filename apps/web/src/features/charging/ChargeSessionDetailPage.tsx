@@ -1,4 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useFeatureOperation } from '../featureOperation';
+import { chargeViewTransition, initialChargeView } from './chargeSessionView';
+import { chargeCorrectionDraft, chargeCorrectionResult, chargeCorrectionTransition } from './chargeCorrectionDraft';
+import React, { useEffect, useMemo, useReducer } from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSession, useVehicles } from '@panda/hooks';
 import type { ChargeSessionUpdate, Place } from '@panda/types';
@@ -14,7 +17,9 @@ import { parseISO } from 'date-fns';
 import { ArrowLeft, Edit2, Info, MapPin, RotateCcw, Save } from 'lucide-react';
 
 export function ChargeSessionContent() {
-  return <ChargeSessionContentInner />;
+  const { sessionId } = useParams({ from: '/charging/$sessionId' });
+  const { effectiveVehicleId } = useResolvedVehicleSelection();
+  return <ChargeSessionContentInner key={`${effectiveVehicleId ?? ''}:${sessionId}`} />;
 }
 
 const SOURCE_DETAILS_ID = 'charge-session-source-details';
@@ -33,9 +38,9 @@ function ChargeSessionContentInner() {
   } = useSavedPlaces();
   const updateSession = useUpdateChargeSession(effectiveVehicleId);
   const { data: vehicles = [] } = useVehicles();
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [isEditingCorrections, setIsEditingCorrections] = useState(false);
-  const [showSourceDetails, setShowSourceDetails] = useState(false);
+  const [view, viewEvent] = useReducer(chargeViewTransition, initialChargeView);
+  const { saveMessage, editing: isEditingCorrections, sourceDetails: showSourceDetails } = view;
+  const correctionSave = useFeatureOperation();
   const hasVehicle = !!effectiveVehicleId;
   const isPlacesLoading = placesLoading || placesFetching;
 
@@ -96,7 +101,7 @@ function ChargeSessionContentInner() {
             title={isEditingCorrections ? 'Close correction editor' : 'Edit charging session'}
             aria-label={isEditingCorrections ? 'Close correction editor' : 'Edit charging session'}
             aria-expanded={isEditingCorrections}
-            onClick={() => setIsEditingCorrections((editing) => !editing)}
+            onClick={() => viewEvent('edit')}
           >
             <Edit2 className="h-5 w-5" />
           </button>
@@ -109,7 +114,7 @@ function ChargeSessionContentInner() {
             aria-expanded={showSourceDetails}
             aria-controls={SOURCE_DETAILS_ID}
             className="inline-flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent transition-colors hover:bg-accent/10 focus:outline-none focus:ring-1 focus:ring-accent"
-            onClick={() => setShowSourceDetails((visible) => !visible)}
+            onClick={() => viewEvent('source')}
           >
             <Info className="h-5 w-5" />
           </button>
@@ -137,8 +142,9 @@ function ChargeSessionContentInner() {
                 {...(updateSession.error?.message ? { error: updateSession.error.message } : {})}
                 {...(saveMessage ? { successMessage: saveMessage } : {})}
                 onSave={(body) => {
-                  setSaveMessage(null);
-                  updateSession.mutate({ sessionId, ...body }, { onSuccess: () => setSaveMessage('Corrections saved.') });
+                  const active = correctionSave.begin();
+                  viewEvent('saving');
+                  updateSession.mutate({ sessionId, ...body }, { onSuccess: () => { if (active()) viewEvent('saved'); } });
                 }}
               />
             )}
@@ -250,29 +256,16 @@ function ChargeSessionCorrectionPanel({
     () => [...places].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
     [places],
   );
-  const initialLocationMode: LocationMode = session.location_override_mode ?? 'automatic';
-  const initialCostMode: CostMode = session.cost_override_mode ?? 'automatic';
-  const [locationMode, setLocationMode] = useState<LocationMode>(initialLocationMode);
-  const [costMode, setCostMode] = useState<CostMode>(initialCostMode);
-  const [placeId, setPlaceId] = useState('');
-  const [manualCost, setManualCost] = useState(session.cost_override_usd?.toFixed(2) ?? '');
-
+  const [correction, dispatchCorrection] = useReducer(chargeCorrectionTransition, null, () => chargeCorrectionDraft(session, places));
+  const { locationMode, costMode, placeId, manualCost } = correction;
+  const setLocationMode = (value: LocationMode) => dispatchCorrection({ type: 'edit', patch: { locationMode: value } });
+  const setCostMode = (value: CostMode) => dispatchCorrection({ type: 'edit', patch: { costMode: value } });
+  const setPlaceId = (value: string) => dispatchCorrection({ type: 'edit', patch: { placeId: value } });
+  const setManualCost = (value: string) => dispatchCorrection({ type: 'edit', patch: { manualCost: value } });
   useEffect(() => {
-    setLocationMode(session.location_override_mode ?? 'automatic');
-    setCostMode(session.cost_override_mode ?? 'automatic');
-    setManualCost(session.cost_override_usd?.toFixed(2) ?? '');
-    const matchingPlace = places.find((place) => place.name.trim().toLocaleLowerCase() === session.location_name?.trim().toLocaleLowerCase());
-    setPlaceId(matchingPlace?.id ?? '');
+    dispatchCorrection({ type: 'load', session, places });
   }, [session.id, session.location_override_mode, session.cost_override_mode, session.cost_override_usd, session.location_name, places]);
-
-  const trimmedManualCost = manualCost.trim();
-  const parsedManualCost = Number(trimmedManualCost);
-  const manualCostError = costMode === 'manual' && (!trimmedManualCost || !Number.isFinite(parsedManualCost) || parsedManualCost < 0)
-    ? 'Enter a non-negative USD amount.'
-    : undefined;
-  const locationError = locationMode === 'saved_place' && !placeId
-    ? 'Choose a saved place before saving.'
-    : undefined;
+  const { manualCostError, locationError, body } = chargeCorrectionResult(correction);
   const sourceLocation = formatCoordinates(session.source_location_lat, session.source_location_lng);
   const effectiveLocation = session.location_name ?? formatCoordinates(session.location_lat, session.location_lng) ?? 'No location';
   const costDescription = costMode === 'free'
@@ -282,13 +275,7 @@ function ChargeSessionCorrectionPanel({
       : 'Calculated from charging data, network preferences, or saved-place pricing.';
 
   function save() {
-    if (manualCostError || locationError) return;
-    onSave({
-      location_mode: locationMode,
-      ...(locationMode === 'saved_place' ? { place_id: placeId } : {}),
-      cost_mode: costMode,
-      ...(costMode === 'manual' ? { cost_usd: parsedManualCost } : {}),
-    });
+    if (body) onSave(body);
   }
 
   return (
@@ -420,25 +407,28 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
   const telemetryLabel = telemetryCount > 0
     ? `${telemetryCount.toLocaleString()} samples matched`
     : 'No telemetry samples matched';
-  const networkLabel = session.network_vendor
-    ?? (session.location_name?.toLowerCase().includes('home') ? 'Home' : null)
-    ?? session.charger_id
-    ?? session.rivian_charger_type
-    ?? (session.charger_type ? session.charger_type.toUpperCase() : 'Unknown');
-  const facts = [
+  const networkCandidates = [
+    session.network_vendor,
+    session.location_name?.toLowerCase().includes('home') ? 'Home' : null,
+    session.charger_id,
+    session.rivian_charger_type,
+    session.charger_type?.toUpperCase() || 'Unknown',
+  ];
+  const networkLabel = networkCandidates.find((value): value is string => value != null)!;
+  const facts: Array<{ icon: string; label: string; value: string }> = [
     { icon: 'lucide:database', label: 'Source', value: formatSourceLabel(session.source, telemetryCount) },
     { icon: 'lucide:radio-tower', label: 'Telemetry', value: telemetryLabel },
     { icon: 'lucide:zap', label: 'Network', value: networkLabel },
-    session.rivian_paid_total != null
-      ? { icon: 'lucide:receipt', label: 'Rivian billed', value: formatCurrency(session.rivian_paid_total) }
-      : null,
-    session.is_free_session
-      ? { icon: 'lucide:receipt', label: 'Billing', value: 'Free session' }
-      : null,
-    session.rivian_city
-      ? { icon: 'lucide:map-pin', label: 'Rivian city', value: session.rivian_city }
-      : null,
-  ].filter(Boolean) as Array<{ icon: string; label: string; value: string }>;
+  ];
+  if (session.rivian_paid_total != null) {
+    facts.push({ icon: 'lucide:receipt', label: 'Rivian billed', value: formatCurrency(session.rivian_paid_total) });
+  }
+  if (session.is_free_session) {
+    facts.push({ icon: 'lucide:receipt', label: 'Billing', value: 'Free session' });
+  }
+  if (session.rivian_city) {
+    facts.push({ icon: 'lucide:map-pin', label: 'Rivian city', value: session.rivian_city });
+  }
 
   return (
     <section

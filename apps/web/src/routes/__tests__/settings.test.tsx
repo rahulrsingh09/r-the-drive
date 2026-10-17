@@ -924,11 +924,11 @@ describe('Settings page', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
+  it.each(['user', 'admin', 'super_user'] as const)('keeps dashboards read-only for %s even with a stored edit preference', (role) => {
     settingsMocks.me = {
       user_id: 'u1',
       email: 'admin@example.com',
-      role: 'admin',
+      role,
       default_vehicle_id: 'v1',
     };
     dashboardMocks.dashboards = [
@@ -953,27 +953,8 @@ describe('Settings page', () => {
         widgets: [{ id: 'w2' }, { id: 'w3' }],
       },
     ];
-    dashboardMocks.cloneMutateAsync.mockResolvedValue({
-      id: '33333333-3333-3333-3333-333333333333',
-      slug: 'dashboard-copy',
-      name: 'Overview Copy',
-      description: null,
-      isDefault: false,
-      isLocked: false,
-      ownerId: 'u1',
-      widgets: [],
-    });
-    dashboardMocks.createMutateAsync.mockResolvedValue({
-      id: '44444444-4444-4444-4444-444444444444',
-      slug: 'dashboard',
-      name: 'Overview',
-      description: null,
-      isDefault: false,
-      isLocked: false,
-      ownerId: 'u1',
-      widgets: [],
-    });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    localStorage.setItem('rm-show-dashboard-edit-button:u1', 'true');
+    const saved = structuredClone(dashboardMocks.dashboards);
 
     renderSettings();
     clickSettingsSection('Dashboards');
@@ -999,57 +980,21 @@ describe('Settings page', () => {
       search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit default' }));
-    expect(mockNavigate).toHaveBeenCalledWith({
-      to: '/d/$slug',
-      params: { slug: 'dashboard' },
-      search: { dashboardId: '00000000-0000-0000-0000-000000000001', edit: 1 },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
-    await waitFor(() => {
-      expect(dashboardMocks.createMutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'personal-draft',
-          slug: 'dashboard',
-          isDefault: false,
-        })
-      );
-    });
-    await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith({
-        to: '/d/$slug',
-        params: { slug: 'dashboard' },
-        search: { dashboardId: '44444444-4444-4444-4444-444444444444', edit: 1 },
-      });
-    });
-
     fireEvent.click(screen.getAllByRole('button', { name: 'Export' })[0]!);
     expect(dashboardMocks.downloadDashboardYaml).toHaveBeenCalledWith(dashboardMocks.dashboards[0]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
-    expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({
-      id: '00000000-0000-0000-0000-000000000001',
-      locked: false,
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
-    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
-
-    const showEditButton = screen.getByRole('switch', {
-      name: 'Show edit button on dashboard pages',
-    });
-    expect(showEditButton).toHaveAttribute('aria-checked', 'false');
-    fireEvent.click(showEditButton);
-    expect(showEditButton).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('switch', { name: 'Show edit button on dashboard pages' })).not.toBeInTheDocument();
+    for (const name of [/^Edit/, /^Customize$/, /^Duplicate$/, /^Import$/, /^Create dashboard$/, /^Unlock$/, /^Restore bundled$/, /^Delete$/]) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+    for (const mutate of [dashboardMocks.createMutateAsync, dashboardMocks.cloneMutateAsync, dashboardMocks.deleteMutate, dashboardMocks.lockMutate, dashboardMocks.restoreMutate]) {
+      expect(mutate).not.toHaveBeenCalled();
+    }
+    expect(dashboardMocks.dashboards).toEqual(saved);
     expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
-    confirmSpy.mockRestore();
   });
 
-  it('marks a same-slug personal copy active and resets it back to the system default', () => {
+  it('marks a saved same-slug personal copy active and keeps it available without reset', () => {
     dashboardMocks.dashboards = [
       {
         id: 'default-overview',
@@ -1072,7 +1017,7 @@ describe('Settings page', () => {
         widgets: [{ id: 'w2' }],
       },
     ];
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const saved = structuredClone(dashboardMocks.dashboards);
 
     renderSettings();
     clickSettingsSection('Dashboards');
@@ -1087,9 +1032,14 @@ describe('Settings page', () => {
       search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
-    confirmSpy.mockRestore();
+    expect(screen.queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Open$/ }));
+    expect(mockNavigate).toHaveBeenLastCalledWith({
+      to: '/d/$slug', params: { slug: 'dashboard' },
+      search: { dashboardId: '55555555-5555-5555-5555-555555555555' },
+    });
+    expect(dashboardMocks.deleteMutate).not.toHaveBeenCalled();
+    expect(dashboardMocks.dashboards).toEqual(saved);
   });
 
   it('navigates to /connect when Vehicle is clicked', () => {

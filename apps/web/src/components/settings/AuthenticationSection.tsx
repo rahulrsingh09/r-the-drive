@@ -1,4 +1,6 @@
 import React from 'react';
+import { authenticationDraft, authenticationFormTransition } from './authenticationDraft';
+import { useFeatureOperation } from '../../features/featureOperation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys } from '@panda/hooks';
 import type { AuthenticationSettingsUpdate } from '@panda/types';
@@ -72,52 +74,39 @@ export function AuthenticationSection() {
     queryFn: () => api.getAuthenticationSettings(),
     retry: false,
   });
-  const [form, setForm] = React.useState<AuthenticationSettingsUpdate>(defaults);
-  const [secret, setSecret] = React.useState('');
-  const [removeSecret, setRemoveSecret] = React.useState(false);
-  const [showAdvancedAccess, setShowAdvancedAccess] = React.useState(false);
-  const [message, setMessage] = React.useState('');
-  const [messageRole, setMessageRole] = React.useState<'status' | 'alert'>('status');
+  const [state, dispatch] = React.useReducer(authenticationFormTransition, { form: defaults, secret: '', removeSecret: false, showAdvancedAccess: false, message: '', messageRole: 'status' });
+  const { form, secret, removeSecret, showAdvancedAccess, message, messageRole } = state;
+  const operation = useFeatureOperation();
+  const model = React.useMemo(() => settings.data ? authenticationDraft(settings.data, fields, defaults) : null, [settings.data]);
   React.useEffect(() => {
-    if (!settings.data) return;
-    const next = { ...defaults };
-    fields.forEach((key) => {
-      const value = settings.data[key];
-      if (value && typeof value === 'object' && 'value' in value) next[key] = value.value as never;
-    });
-    setForm(next);
-    setShowAdvancedAccess(Boolean(
-      next.allowed_email_domains?.length ||
-      next.required_claim_name ||
-      next.required_claim_value
-    ));
-  }, [settings.data]);
+    if (model) dispatch({ type: 'load', form: model.form, advanced: model.advanced });
+  }, [model]);
   const save = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: (body: AuthenticationSettingsUpdate) => api.updateAuthenticationSettings(body),
-    onSuccess: (data) => {
+    onSuccess: (data, _body, active) => {
+      if (!active?.()) return;
       client.setQueryData(queryKeys.auth.authenticationSettings, data);
       void client.invalidateQueries({ queryKey: queryKeys.auth.config });
-      setSecret('');
-      setRemoveSecret(false);
-      setMessageRole('status');
-      setMessage('Authentication settings saved.');
+      dispatch({ type: 'saved' });
     },
-    onError: (error) => {
+    onError: (error, _body, active) => {
+      if (!active?.()) return;
       const detail = (error as { detail?: { message?: string } }).detail?.message;
-      setMessageRole('alert');
-      setMessage(detail ?? 'Unable to save authentication settings.');
+      dispatch({ type: 'feedback', role: 'alert', message: detail ?? 'Unable to save authentication settings.' });
     },
   });
   const test = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: () => api.testAuthenticationSettings(),
-    onSuccess: () => {
-      setMessageRole('status');
-      setMessage('Provider discovery and signing keys validated.');
+    onSuccess: (_result, _body, active) => {
+      if (!active?.()) return;
+      dispatch({ type: 'feedback', role: 'status', message: 'Provider discovery and signing keys validated.' });
       void client.invalidateQueries({ queryKey: queryKeys.auth.authenticationSettings });
     },
-    onError: () => {
-      setMessageRole('alert');
-      setMessage('Provider validation failed. Check the issuer and client settings.');
+    onError: (_error, _body, active) => {
+      if (!active?.()) return;
+      dispatch({ type: 'feedback', role: 'alert', message: 'Provider validation failed. Check the issuer and client settings.' });
     },
   });
   if (settings.isLoading)
@@ -142,35 +131,15 @@ export function AuthenticationSection() {
       </Card>
     );
   const data = settings.data;
-  const source = (key: keyof AuthenticationSettingsUpdate) => {
-    const value = data[key];
-    return value && typeof value === 'object' && 'source' in value
-      ? String(value.source)
-      : undefined;
-  };
+  const source = (key: keyof AuthenticationSettingsUpdate) => model?.source(key);
   const environmentOwned = (key: keyof AuthenticationSettingsUpdate) =>
     source(key) === 'environment';
   const update = (key: keyof AuthenticationSettingsUpdate, value: unknown) => {
-    setMessageRole('status');
-    setMessage('');
-    setForm((current) => ({ ...current, [key]: value }));
+    dispatch({ type: 'field', key, value });
   };
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    const body: AuthenticationSettingsUpdate = {};
-    fields.forEach((key) => {
-      const setting = data[key];
-      const original = setting && typeof setting === 'object' && 'value' in setting
-        ? setting.value
-        : undefined;
-      const current = form[key];
-      if (!environmentOwned(key) && JSON.stringify(current) !== JSON.stringify(original)) {
-        Object.assign(body, { [key]: current });
-      }
-    });
-    if (removeSecret) body.client_secret = null;
-    else if (secret.trim()) body.client_secret = secret;
-    save.mutate(body);
+    if (model) save.mutate(model.patch(form, secret, removeSecret));
   };
   const textField = (key: keyof AuthenticationSettingsUpdate, label: string, placeholder?: string) => (
     <label className="grid gap-1 text-sm text-fg">
@@ -228,13 +197,13 @@ export function AuthenticationSection() {
               {textField('client_id', 'Client ID')}
               <div className="grid gap-1 text-sm text-fg">
                 <span>Client secret <Source source={data.client_secret.source} /></span>
-                <Input aria-label="Client secret" type="password" placeholder={data.client_secret.configured ? 'Enter replacement secret' : 'Required'} value={secret} disabled={data.client_secret.source === 'environment'} onChange={(event) => { setMessageRole('status'); setMessage(''); setSecret(event.target.value); if (event.target.value.trim()) setRemoveSecret(false); }} />
+                <Input aria-label="Client secret" type="password" placeholder={data.client_secret.configured ? 'Enter replacement secret' : 'Required'} value={secret} disabled={data.client_secret.source === 'environment'} onChange={(event) => dispatch({ type: 'secret', value: event.target.value })} />
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="hidden md:block" />
               <label className="flex items-start gap-2 text-xs text-fg-secondary">
-                <input type="checkbox" checked={removeSecret} disabled={data.client_secret.source === 'environment'} onChange={(event) => { setMessageRole('status'); setMessage(''); setRemoveSecret(event.target.checked); setSecret(''); }} className="mt-0.5 h-4 w-4 accent-accent" />
+                <input type="checkbox" checked={removeSecret} disabled={data.client_secret.source === 'environment'} onChange={(event) => dispatch({ type: 'remove-secret', value: event.target.checked })} className="mt-0.5 h-4 w-4 accent-accent" />
                 <span>Remove stored secret when saving</span>
               </label>
             </div>
@@ -247,7 +216,7 @@ export function AuthenticationSection() {
             </div>
             <p className="text-xs text-fg-tertiary">When enabled, both options accept any verified email domain from this provider by default. Open advanced account access only if you want to restrict domains or require a provider claim.</p>
             {form.auto_link_verified_email === true && <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-fg-secondary"><strong className="text-fg">Automatic account linking is on.</strong>{' '}Anyone whose verified email from this provider matches an existing Panda account can sign in to that account. If the provider can reassign addresses or serves users outside your organization, add restrictions below or ask users to connect SSO from their signed-in account.</div>}
-            <Button type="button" size="sm" variant="secondary" aria-expanded={showAdvancedAccess} aria-controls="advanced-account-access" onClick={() => setShowAdvancedAccess((open) => !open)}>
+            <Button type="button" size="sm" variant="secondary" aria-expanded={showAdvancedAccess} aria-controls="advanced-account-access" onClick={() => dispatch({ type: 'advanced' })}>
               {showAdvancedAccess ? 'Hide advanced account access' : 'Show advanced account access'}
             </Button>
             <div id="advanced-account-access" className={showAdvancedAccess ? 'grid gap-3 md:grid-cols-2' : 'hidden'}>

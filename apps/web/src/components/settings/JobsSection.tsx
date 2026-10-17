@@ -12,13 +12,26 @@ interface JobsSectionProps {
 
 export function JobsSection({ vehicles }: JobsSectionProps) {
   const queryClient = useQueryClient();
-  const backfillQueries = useQueries({
+  const jobs = useQueries({
     queries: vehicles.map((vehicle) => ({
       queryKey: ['jobs', 'backfill-status', vehicle.id],
       queryFn: () => api.getBackfillStatus(vehicle.id),
       staleTime: 10_000,
       refetchInterval: 15_000,
     })),
+    combine: (results) => vehicles.map((vehicle, index) => {
+      const backfill = results[index]!;
+      const status = backfill.data?.status ?? vehicle.history_backfill_status ?? 'unknown';
+      return {
+        vehicle,
+        status,
+        running: status === 'running' || status === 'pending',
+        loading: backfill.isLoading,
+        lastRun: backfill.data?.history_backfilled_at ?? vehicle.history_backfilled_at,
+        rivianCount: backfill.data?.rivian_session_count ?? vehicle.history_session_count,
+        localCount: backfill.data?.local_session_count,
+      };
+    }),
   });
   const triggerBackfill = useMutation({
     mutationFn: (vehicleId: string) => api.triggerBackfill(vehicleId),
@@ -58,10 +71,7 @@ export function JobsSection({ vehicles }: JobsSectionProps) {
                 </tr>
               </thead>
               <tbody className="grid gap-4 md:table-row-group md:divide-y md:divide-border">
-                {vehicles.map((vehicle, index) => {
-                  const backfill = backfillQueries[index]!;
-                  const status = backfill.data?.status ?? vehicle.history_backfill_status ?? 'unknown';
-                  const running = status === 'running' || status === 'pending';
+                {jobs.map(({ vehicle, status, running, loading, lastRun, rivianCount, localCount }) => {
                   return (
                     <React.Fragment key={vehicle.id}>
                       <tr className="grid grid-cols-2 gap-x-3 rounded-xl border border-border p-3 md:table-row md:rounded-none md:border-0 md:p-0">
@@ -72,15 +82,15 @@ export function JobsSection({ vehicles }: JobsSectionProps) {
                         <td className="py-3 md:pr-4 align-top text-fg"><span className="mb-1 block text-xs text-fg-tertiary md:hidden">Job</span>Charging history backfill</td>
                         <td className="py-3 md:pr-4 align-top">
                           <span className="mb-1 block text-xs text-fg-tertiary md:hidden">Status</span>
-                          <StatusBadge status={status} loading={backfill.isLoading} />
+                          <StatusBadge status={status} loading={loading} />
                         </td>
                         <td className="py-3 md:pr-4 align-top text-fg-secondary">
                           <span className="mb-1 block text-xs text-fg-tertiary md:hidden">Last run</span>
-                          {formatDateTime(backfill.data?.history_backfilled_at ?? vehicle.history_backfilled_at)}
+                          {formatDateTime(lastRun)}
                         </td>
                         <td className="py-3 md:pr-4 align-top text-fg-secondary">
                           <span className="mb-1 block text-xs text-fg-tertiary md:hidden">Evidence</span>
-                          {formatBackfillEvidence(backfill.data?.rivian_session_count ?? vehicle.history_session_count, backfill.data?.local_session_count)}
+                          {formatBackfillEvidence(rivianCount, localCount)}
                         </td>
                         <td className="col-span-2 py-3 md:text-right align-top">
                           <Button

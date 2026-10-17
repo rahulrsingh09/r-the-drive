@@ -1,4 +1,6 @@
+import { useTimedAcknowledgement } from '../../features/featureOperation';
 import * as React from 'react';
+import { initialTelemetryExplorer, telemetryExplorerTransition } from './telemetryExplorerState';
 import { useQuery } from '@tanstack/react-query';
 import {
   ChevronLeft, ChevronRight, Clipboard, Database, RefreshCw, Search, SlidersHorizontal,
@@ -84,22 +86,25 @@ const TIMEFRAMES = [
 type Timeframe = typeof TIMEFRAMES[number]['value'];
 
 export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[]; isAdmin: boolean }) {
-  const [vehicleId, setVehicleId] = React.useState('');
-  const [timeframe, setTimeframe] = React.useState<Timeframe>('24h');
-  const [search, setSearch] = React.useState('');
-  const [selectedField, setSelectedField] = React.useState('');
-  const [populatedOnly, setPopulatedOnly] = React.useState(true);
-  const [page, setPage] = React.useState(1);
-  const [selectedSampleTime, setSelectedSampleTime] = React.useState<string | null>(null);
-  const [showEmptyFields, setShowEmptyFields] = React.useState(false);
-  const [eventsOpen, setEventsOpen] = React.useState(false);
-  const [selectedEventId, setSelectedEventId] = React.useState<string | null>(null);
-  const [eventType, setEventType] = React.useState('');
-  const [collectorOpen, setCollectorOpen] = React.useState(false);
+  const [explorer, dispatch] = React.useReducer(telemetryExplorerTransition, initialTelemetryExplorer);
+  const { vehicleId, timeframe, search, selectedField, populatedOnly, page, selectedSampleTime, showEmptyFields, eventsOpen, selectedEventId, eventType, collectorOpen } = explorer;
+  const setVehicleId = (value: React.SetStateAction<typeof vehicleId>) => dispatch({ key: 'vehicleId', value: typeof value === 'function' ? value(vehicleId) : value });
+  const setTimeframe = (value: React.SetStateAction<typeof timeframe>) => dispatch({ key: 'timeframe', value: typeof value === 'function' ? value(timeframe) : value });
+  const setSearch = (value: React.SetStateAction<typeof search>) => dispatch({ key: 'search', value: typeof value === 'function' ? value(search) : value });
+  const setSelectedField = (value: React.SetStateAction<typeof selectedField>) => dispatch({ key: 'selectedField', value: typeof value === 'function' ? value(selectedField) : value });
+  const setPopulatedOnly = (value: React.SetStateAction<typeof populatedOnly>) => dispatch({ key: 'populatedOnly', value: typeof value === 'function' ? value(populatedOnly) : value });
+  const setPage = (value: React.SetStateAction<typeof page>) => dispatch({ key: 'page', value: typeof value === 'function' ? value(page) : value });
+  const setSelectedSampleTime = (value: React.SetStateAction<typeof selectedSampleTime>) => dispatch({ key: 'selectedSampleTime', value: typeof value === 'function' ? value(selectedSampleTime) : value });
+  const setShowEmptyFields = (value: React.SetStateAction<typeof showEmptyFields>) => dispatch({ key: 'showEmptyFields', value: typeof value === 'function' ? value(showEmptyFields) : value });
+  const setEventsOpen = (value: React.SetStateAction<typeof eventsOpen>) => dispatch({ key: 'eventsOpen', value: typeof value === 'function' ? value(eventsOpen) : value });
+  const setSelectedEventId = (value: React.SetStateAction<typeof selectedEventId>) => dispatch({ key: 'selectedEventId', value: typeof value === 'function' ? value(selectedEventId) : value });
+  const setEventType = (value: React.SetStateAction<typeof eventType>) => dispatch({ key: 'eventType', value: typeof value === 'function' ? value(eventType) : value });
+  const setCollectorOpen = (value: React.SetStateAction<typeof collectorOpen>) => dispatch({ key: 'collectorOpen', value: typeof value === 'function' ? value(collectorOpen) : value });
 
   React.useEffect(() => {
-    if (!vehicleId && vehicles[0]) setVehicleId(vehicles[0].id);
-    if (vehicleId && !vehicles.some((vehicle) => vehicle.id === vehicleId)) setVehicleId(vehicles[0]?.id ?? '');
+    const choices = new Set(vehicles.map(({ id }) => id));
+    const next = choices.has(vehicleId) ? vehicleId : choices.values().next().value ?? '';
+    if (next !== vehicleId) dispatch({ key: 'vehicleId', value: next });
   }, [vehicleId, vehicles]);
 
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === vehicleId);
@@ -159,18 +164,19 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
   const populatedFieldCount = [...fieldCoverage.values()].filter((count) => count > 0).length;
   const lanePoints = laneQuery.data?.spine.map((ts) => ({ ts })) ?? [];
   const laneSeries = React.useMemo(() => {
-    const frame = laneQuery.data;
-    return [
-      { key: 'battery_level', label: 'State of charge', color: CHART_COLORS.emerald, values: frame?.lanes.battery?.numeric.battery_level ?? [], yScale: 'y' as const },
-      { key: 'speed_mph', label: 'Speed', color: CHART_COLORS.sky, values: frame?.lanes.drive?.numeric.speed_mph ?? [], yScale: 'y2' as const },
-      { key: 'power_kw', label: 'Power', color: CHART_COLORS.violet, values: frame?.lanes.drive?.numeric.power_kw ?? [], yScale: 'y2' as const },
-    ].filter((series) => series.values.some((value) => value !== null));
+    const definitions = [
+      { key: 'battery_level', label: 'State of charge', color: CHART_COLORS.emerald, lane: 'battery', yScale: 'y' },
+      { key: 'speed_mph', label: 'Speed', color: CHART_COLORS.sky, lane: 'drive', yScale: 'y2' },
+      { key: 'power_kw', label: 'Power', color: CHART_COLORS.violet, lane: 'drive', yScale: 'y2' },
+    ] as const;
+    const series: Array<{ key: string; label: string; color: string; values: Array<number | null>; yScale: 'y' | 'y2' }> = [];
+    for (const { lane, ...definition } of definitions) {
+      const values = laneQuery.data?.lanes[lane]?.numeric[definition.key] ?? [];
+      if (values.some((value) => value !== null)) series.push({ ...definition, values });
+    }
+    return series;
   }, [laneQuery.data]);
 
-  function resetPage() {
-    setPage(1);
-    setSelectedSampleTime(null);
-  }
 
   return (
     <div className="grid gap-5">
@@ -188,26 +194,26 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
           <div className="grid gap-3 lg:grid-cols-[minmax(10rem,0.8fr)_11rem_minmax(0,1fr)_auto] lg:items-end">
             <label className="grid gap-1">
               <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle</span>
-              <SelectPicker value={vehicleId} onChange={(value) => { setVehicleId(value); resetPage(); }} aria-label="Telemetry vehicle" options={vehicles.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name }))} />
+              <SelectPicker value={vehicleId} onChange={(value) => { setVehicleId(value); }} aria-label="Telemetry vehicle" options={vehicles.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name }))} />
             </label>
             <label className="grid gap-1">
               <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Timeframe</span>
-              <SelectPicker value={timeframe} onChange={(value) => { setTimeframe(value as Timeframe); resetPage(); }} aria-label="Telemetry timeframe" options={TIMEFRAMES.map((item) => ({ value: item.value, label: item.label }))} />
+              <SelectPicker value={timeframe} onChange={(value) => { setTimeframe(value as Timeframe); }} aria-label="Telemetry timeframe" options={TIMEFRAMES.map((item) => ({ value: item.value, label: item.label }))} />
             </label>
             <label className="relative grid gap-1">
               <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Search fields or values</span>
               <Search className="pointer-events-none absolute bottom-2.5 left-3 h-4 w-4 text-fg-tertiary" />
-              <input value={search} onChange={(event) => { setSearch(event.target.value); resetPage(); }} placeholder="e.g. tire, charging, 78" className="h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent" />
+              <input value={search} onChange={(event) => { setSearch(event.target.value); }} placeholder="e.g. tire, charging, 78" className="h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent" />
             </label>
             <label className="flex min-h-9 items-center gap-2 text-sm text-fg-secondary">
-              <input type="checkbox" checked={populatedOnly} onChange={(event) => { setPopulatedOnly(event.target.checked); resetPage(); }} className="h-4 w-4 accent-accent" />
+              <input type="checkbox" checked={populatedOnly} onChange={(event) => { setPopulatedOnly(event.target.checked); }} className="h-4 w-4 accent-accent" />
               Has a value
             </label>
           </div>
           {selectedField ? (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-fg">
               <span>Filtering records with <strong>{fieldLabel(selectedField)}</strong>.</span>
-              <button type="button" className="text-xs font-medium text-accent hover:underline" onClick={() => { setSelectedField(''); resetPage(); }}>Clear field</button>
+              <button type="button" className="text-xs font-medium text-accent hover:underline" onClick={() => { setSelectedField(''); }}>Clear field</button>
             </div>
           ) : null}
         </CardContent>
@@ -255,7 +261,7 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
                   const count = fieldCoverage.get(field.key) ?? 0;
                   const active = selectedField === field.key;
                   return (
-                    <button key={field.key} type="button" onClick={() => { setSelectedField(active ? '' : field.key); resetPage(); }} className={[
+                    <button key={field.key} type="button" onClick={() => { setSelectedField(active ? '' : field.key); }} className={[
                       'flex min-h-9 items-center justify-between gap-3 rounded-lg px-2 text-left text-sm transition-colors',
                       active ? 'bg-accent/15 text-fg ring-1 ring-inset ring-accent/35' : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg',
                     ].join(' ')}>
@@ -349,7 +355,14 @@ function TelemetryRecord({ sample, selected, onSelect }: { sample: RawTelemetryS
 
 function TelemetryDetails({ sample, showEmptyFields, onShowEmptyFields }: { sample: RawTelemetrySample | null; showEmptyFields: boolean; onShowEmptyFields: (value: boolean) => void }) {
   if (!sample) return <div className="rounded-xl border border-dashed border-border p-5 text-sm text-fg-tertiary">Select a record to inspect normalized fields.</div>;
-  return <section className="rounded-xl border border-border bg-bg-elevated/25 p-3" aria-label="Selected telemetry record"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-medium text-fg">{formatDate(sample.ts)}</p><p className="text-xs text-fg-tertiary">Normalized telemetry fields</p></div><div className="flex items-center gap-2"><label className="flex items-center gap-2 text-xs text-fg-secondary"><input type="checkbox" checked={showEmptyFields} onChange={(event) => onShowEmptyFields(event.target.checked)} className="h-4 w-4 accent-accent" />Show empty</label><CopyJson label="Copy record JSON" value={sample} /></div></div><div className="mt-4 grid gap-4 sm:grid-cols-2">{GROUPS.map((group) => { const fields = FIELD_DEFINITIONS.filter((field) => field.group === group && (showEmptyFields || hasValue(sample[field.key]))); if (fields.length === 0) return null; return <div key={group}><p className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">{group}</p><dl className="grid gap-2">{fields.map((field) => <div key={field.key} className="flex items-start justify-between gap-3 border-b border-border/60 pb-2 text-sm"><dt className="text-fg-secondary">{field.label}</dt><dd className="max-w-[58%] break-words text-right font-mono text-xs text-fg">{formatValue(sample[field.key], field.unit)}</dd></div>)}</dl></div>; })}</div></section>;
+  const groups = new Map<FieldGroup, FieldDefinition[]>();
+  for (const field of FIELD_DEFINITIONS) {
+    if (!showEmptyFields && !hasValue(sample[field.key])) continue;
+    const fields = groups.get(field.group) ?? [];
+    fields.push(field);
+    groups.set(field.group, fields);
+  }
+  return <section className="rounded-xl border border-border bg-bg-elevated/25 p-3" aria-label="Selected telemetry record"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-medium text-fg">{formatDate(sample.ts)}</p><p className="text-xs text-fg-tertiary">Normalized telemetry fields</p></div><div className="flex items-center gap-2"><label className="flex items-center gap-2 text-xs text-fg-secondary"><input type="checkbox" checked={showEmptyFields} onChange={(event) => onShowEmptyFields(event.target.checked)} className="h-4 w-4 accent-accent" />Show empty</label><CopyJson label="Copy record JSON" value={sample} /></div></div><div className="mt-4 grid gap-4 sm:grid-cols-2">{[...groups].map(([group, fields]) => { return <div key={group}><p className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">{group}</p><dl className="grid gap-2">{fields.map((field) => <div key={field.key} className="flex items-start justify-between gap-3 border-b border-border/60 pb-2 text-sm"><dt className="text-fg-secondary">{field.label}</dt><dd className="max-w-[58%] break-words text-right font-mono text-xs text-fg">{formatValue(sample[field.key], field.unit)}</dd></div>)}</dl></div>; })}</div></section>;
 }
 
 function RawEventDetails({ event, loading }: { event: RawEventDetail | undefined; loading: boolean }) {
@@ -359,8 +372,8 @@ function RawEventDetails({ event, loading }: { event: RawEventDetail | undefined
 }
 
 function CopyJson({ label, value }: { label: string; value: unknown }) {
-  const [copied, setCopied] = React.useState(false);
-  return <Button variant="secondary" size="sm" aria-label={copied ? `${label} copied` : label} iconLeft={<Clipboard className="h-3.5 w-3.5" />} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(value, null, 2)); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }}>{copied ? 'Copied' : 'Copy'}</Button>;
+  const [copied, acknowledge] = useTimedAcknowledgement(1800);
+  return <Button variant="secondary" size="sm" aria-label={copied ? `${label} copied` : label} iconLeft={<Clipboard className="h-3.5 w-3.5" />} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(value, null, 2)); acknowledge(); }}>{copied ? 'Copied' : 'Copy'}</Button>;
 }
 
 function CollectorDiagnostics({ open, onToggle, data, acquisition, loading, onRefresh }: { open: boolean; onToggle: () => void; data: Awaited<ReturnType<typeof api.getRivianStewardship>> | undefined; acquisition: Awaited<ReturnType<typeof api.getVehicleHealth>>['extended_telemetry'] | undefined; loading: boolean; onRefresh: () => void }) {

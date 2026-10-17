@@ -1,4 +1,8 @@
-import { ALL_PRESETS, R2_PRESET, RIVIAN_BATTERY_PRESETS, type BatteryGen } from './batteryPresets';
+import { settingsVehicleModel } from './settingsVehicleModel';
+import { DashboardLibrarySection } from './DashboardLibrarySection';
+import { initialVehicleSettings, vehicleSettingsPayload, vehicleSettingsTransition } from './vehicleSettingsDraft';
+import { useFeatureOperation } from '../featureOperation';
+import { R2_PRESET, RIVIAN_BATTERY_PRESETS, type BatteryGen } from './batteryPresets';
 import { IngestionDiagnosticsSection } from '../../components/settings/IngestionDiagnosticsSection';
 import { ThemeVehicleImage } from '../../components/settings/ThemeVehicleImage';
 import React from 'react';
@@ -6,17 +10,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, OPTIONAL_EXTERNAL_TRAFFIC_ENABLED, queryKeys, useAuth, useAuthReady, useMe, useVehicles } from '@panda/hooks';
 import { type UnitPreferences, type VehicleMember } from '@panda/types';
-import {
-  downloadDashboardYaml,
-  materializeUserDashboardDraft,
-  useCloneDashboard,
-  useCreateDashboard,
-  useDashboards,
-  useDeleteDashboard,
-  getDefaultBySlug,
-  useRestoreAdminDashboardDefault,
-  useSetAdminDashboardLock,
-} from '@panda/dashboards';
+import { downloadDashboardYaml, getDefaultBySlug, useDashboards } from '@panda/dashboards';
 import type { DashboardConfig } from '@panda/dashboards';
 import {
   getUnitPreferences,
@@ -31,7 +25,6 @@ import {
   getAppTimezone,
   setAppTimezone,
 } from '@panda/ui/lib/dateTime';
-import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@panda/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
   Button, Badge, Input, SelectPicker, Tooltip,
@@ -51,15 +44,9 @@ import { RMapPreferences } from '../r-experience/RMapPreferences';
 import { RConfiguredVehicleArtwork } from '../r-experience/RConfiguredVehicleArtwork';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { ChartManagerSection } from './charts/ChartManagerSection';
-import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
-import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
 import {
-  formatRivianRenewalDate,
-  getRivianCredentialRenewalNotice,
-} from '../../lib/rivianCredentialRenewal';
-import {
-  Car, ChartLine, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, Star, Trash2, Unlock, Users, X, Zap,
+  Car, ChartLine, Clipboard, Database, DatabaseBackup, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, Star, Trash2, Users, X, Zap,
 } from 'lucide-react';
 
 function dashboardActionId(dashboard: DashboardConfig) {
@@ -117,313 +104,6 @@ function membershipBadgeVariant(role: VehicleMember['role'] | undefined): 'succe
   return 'default';
 }
 
-function DashboardSettingsSection({
-  dashboards,
-  isLoading,
-  canManageDefaults,
-  cloneDashboard,
-  deleteDashboard,
-  setDashboardLock,
-  restoreDefaultDashboard,
-  createDashboard,
-  showEditButton,
-  onShowEditButtonChange,
-  onCustomize,
-  onEdit,
-}: {
-  dashboards: DashboardConfig[];
-  isLoading: boolean;
-  canManageDefaults: boolean;
-  cloneDashboard: ReturnType<typeof useCloneDashboard>;
-  deleteDashboard: ReturnType<typeof useDeleteDashboard>;
-  setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
-  restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
-  createDashboard: ReturnType<typeof useCreateDashboard>;
-  showEditButton: boolean;
-  onShowEditButtonChange: (next: boolean) => void;
-  onCustomize: (dashboard: DashboardConfig) => Promise<void>;
-  onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
-}) {
-  const defaults = dashboards.filter((dashboard) => dashboard.isDefault);
-  const userDashboards = dashboards.filter((dashboard) => !dashboard.isDefault);
-  const userBySlug = new Map(userDashboards.map((dashboard) => [dashboard.slug, dashboard]));
-  const defaultBySlug = new Map(defaults.map((dashboard) => [dashboard.slug, dashboard]));
-
-  async function duplicate(dashboard: DashboardConfig) {
-    const cloned = await cloneDashboard.mutateAsync(dashboardActionId(dashboard));
-    onEdit(cloned, true);
-  }
-
-  return (
-    <div className="flex flex-col gap-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Dashboards</CardTitle>
-          <Badge variant="info">{dashboards.length} saved</Badge>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <details className="group rounded-xl border border-border bg-bg-elevated/35">
-            <summary className="cursor-pointer list-none px-3 py-3 text-sm font-medium text-fg marker:hidden">
-              How dashboard defaults and personal copies work
-            </summary>
-            <div className="grid gap-2 border-t border-border px-3 py-3 text-sm text-fg-secondary">
-              <p><strong className="text-fg">System defaults</strong> are shared within this Panda installation. Admin edits affect users who have not customized that page.</p>
-              <p><strong className="text-fg">My dashboards</strong> are private to your account. A personal copy with the same page name is active for you and takes precedence without changing the system default.</p>
-              <p><strong className="text-fg">Customize</strong> creates that personal copy. <strong className="text-fg">Reset to default</strong> removes it, while <strong className="text-fg">Restore bundled</strong> returns a system dashboard to the version shipped with Panda.</p>
-            </div>
-          </details>
-          <DashboardEditButtonPreference
-            checked={showEditButton}
-            onChange={onShowEditButtonChange}
-          />
-          {isLoading ? (
-            <div className="rounded-xl border border-border bg-bg-elevated/35 p-4 text-sm text-fg-tertiary">
-              Loading dashboards...
-            </div>
-          ) : (
-            <>
-              <DashboardSettingsList
-                title="System Defaults"
-                dashboards={defaults}
-                canManageDefaults={canManageDefaults}
-                cloneDashboard={cloneDashboard}
-                deleteDashboard={deleteDashboard}
-                setDashboardLock={setDashboardLock}
-                restoreDefaultDashboard={restoreDefaultDashboard}
-                createDashboard={createDashboard}
-                userBySlug={userBySlug}
-                defaultBySlug={defaultBySlug}
-                onCustomize={onCustomize}
-                onDuplicate={duplicate}
-                onEdit={onEdit}
-              />
-              <DashboardSettingsList
-                title="My Dashboards"
-                dashboards={userDashboards}
-                canManageDefaults={canManageDefaults}
-                cloneDashboard={cloneDashboard}
-                deleteDashboard={deleteDashboard}
-                setDashboardLock={setDashboardLock}
-                restoreDefaultDashboard={restoreDefaultDashboard}
-                createDashboard={createDashboard}
-                userBySlug={userBySlug}
-                defaultBySlug={defaultBySlug}
-                onCustomize={onCustomize}
-                onDuplicate={duplicate}
-                onEdit={onEdit}
-              />
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function DashboardEditButtonPreference({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-bg-elevated/35 px-3 py-3">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-fg">Show edit button on dashboard pages</p>
-        <p className="mt-0.5 text-xs text-fg-tertiary">
-          Show the page-level edit shortcut on every dashboard. It is hidden by default; Settings can always open edit mode.
-        </p>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label="Show edit button on dashboard pages"
-        onClick={() => onChange(!checked)}
-        className={[
-          'relative inline-flex h-[22px] w-10 shrink-0 rounded-full border transition-all duration-200',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-          checked ? 'border-accent/60 bg-accent' : 'border-border bg-bg-elevated',
-          'cursor-pointer',
-        ].join(' ')}
-      >
-        <span
-          className={[
-            'pointer-events-none absolute top-[2px] inline-block h-4 w-4 rounded-full shadow-sm transition-transform duration-200',
-            checked ? 'translate-x-[22px] bg-fg' : 'translate-x-[2px] bg-fg-tertiary',
-          ].join(' ')}
-        />
-      </button>
-    </div>
-  );
-}
-
-function DashboardSettingsList({
-  title,
-  dashboards,
-  canManageDefaults,
-  cloneDashboard,
-  deleteDashboard,
-  setDashboardLock,
-  restoreDefaultDashboard,
-  createDashboard,
-  userBySlug,
-  defaultBySlug,
-  onCustomize,
-  onDuplicate,
-  onEdit,
-}: {
-  title: string;
-  dashboards: DashboardConfig[];
-  canManageDefaults: boolean;
-  cloneDashboard: ReturnType<typeof useCloneDashboard>;
-  deleteDashboard: ReturnType<typeof useDeleteDashboard>;
-  setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
-  restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
-  createDashboard: ReturnType<typeof useCreateDashboard>;
-  userBySlug: Map<string, DashboardConfig>;
-  defaultBySlug: Map<string, DashboardConfig>;
-  onCustomize: (dashboard: DashboardConfig) => Promise<void>;
-  onDuplicate: (dashboard: DashboardConfig) => void;
-  onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
-}) {
-  return (
-    <section className="grid gap-2">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">{title}</h3>
-        <span className="text-xs text-fg-tertiary">{dashboards.length}</span>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-border">
-        {dashboards.length === 0 ? (
-          <div className="p-4 text-sm text-fg-tertiary">No dashboards here yet.</div>
-        ) : (
-          dashboards.map((dashboard) => {
-            const isUserOwned = dashboard.ownerId != null;
-            const canEdit = isUserOwned || (dashboard.isDefault && canManageDefaults);
-            const personalCopy = userBySlug.get(dashboard.slug);
-            const systemDefault = defaultBySlug.get(dashboard.slug);
-            const isActive = isUserOwned || !personalCopy;
-            return (
-              <div
-                key={dashboard.id}
-                className="grid gap-3 border-b border-border bg-bg last:border-0 p-3 md:grid-cols-[minmax(0,1fr)_auto]"
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="truncate text-sm font-medium text-fg">{dashboard.name}</p>
-                    <Badge variant={dashboard.isDefault ? 'info' : 'default'} size="sm">
-                      {dashboard.isDefault ? 'Default' : 'User'}
-                    </Badge>
-                    {dashboard.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}
-                    {isActive ? <Badge variant="success" size="sm">Active for you</Badge> : null}
-                  </div>
-                  <p className="mt-1 text-xs text-fg-tertiary">
-                    {dashboard.slug} &middot; {dashboard.widgets.length} widgets
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 [&>button]:min-h-11 sm:[&>button]:min-h-8">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft={<ExternalLink className="h-3.5 w-3.5" />}
-                    onClick={() => onEdit(dashboard, false)}
-                  >
-                    {dashboard.isDefault ? 'Open default' : 'Open'}
-                  </Button>
-                  {canEdit ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      iconLeft={<Pencil className="h-3.5 w-3.5" />}
-                      onClick={() => onEdit(dashboard, true)}
-                    >
-                      {dashboard.isDefault ? 'Edit default' : 'Edit'}
-                    </Button>
-                  ) : null}
-                  {dashboard.isDefault ? (
-                    personalCopy ? null : (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        loading={createDashboard.isPending}
-                        onClick={() => { void onCustomize(dashboard); }}
-                      >
-                        Customize
-                      </Button>
-                    )
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      loading={cloneDashboard.isPending && cloneDashboard.variables === dashboard.id}
-                      onClick={() => { void onDuplicate(dashboard); }}
-                    >
-                      Duplicate
-                    </Button>
-                  )}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft={<Download className="h-3.5 w-3.5" />}
-                    onClick={() => downloadDashboardYaml(dashboard)}
-                  >
-                    Export
-                  </Button>
-                  {dashboard.isDefault && canManageDefaults ? (
-                    <>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        iconLeft={dashboard.isLocked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-                        loading={setDashboardLock.isPending && setDashboardLock.variables?.id === dashboardActionId(dashboard)}
-                        onClick={() => setDashboardLock.mutate({ id: dashboardActionId(dashboard), locked: !dashboard.isLocked })}
-                      >
-                        {dashboard.isLocked ? 'Unlock' : 'Lock'}
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
-                        loading={restoreDefaultDashboard.isPending && restoreDefaultDashboard.variables === dashboardActionId(dashboard)}
-                        onClick={() => {
-                          if (window.confirm(`Restore "${dashboard.name}" to the bundled default layout?`)) {
-                            restoreDefaultDashboard.mutate(dashboardActionId(dashboard));
-                          }
-                        }}
-                      >
-                        Restore bundled
-                      </Button>
-                    </>
-                  ) : null}
-                  {isUserOwned ? (
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      iconLeft={<Trash2 className="h-3.5 w-3.5" />}
-                      loading={deleteDashboard.isPending && deleteDashboard.variables === dashboard.id}
-                      onClick={() => {
-                        const message = systemDefault
-                          ? `Reset "${dashboard.name}" to the system default? This removes your personal dashboard copy.`
-                          : `Delete "${dashboard.name}"? This removes your saved dashboard.`;
-                        if (window.confirm(message)) {
-                          deleteDashboard.mutate(dashboard.id);
-                        }
-                      }}
-                    >
-                      {systemDefault ? 'Reset to default' : 'Delete'}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </section>
-  );
-}
-
 export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind }: { initialSection?: SettingsSection; oidcFeedback?: string; oidcFeedbackKind?: 'success' | 'error' } = {}) {
   const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const authReady = useAuthReady();
@@ -431,7 +111,6 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
   const me = useMe();
-  const [showEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
   const [activeSection, setActiveSection] = React.useState<SettingsSection | 'directory'>(initialSection === 'appearance' ? 'units' : initialSection ?? 'directory');
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
@@ -440,12 +119,14 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
   const [appTimezone, setAppTimezoneState] = React.useState(() => getAppTimezone());
   const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
-  const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
-  const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
-  const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
-  const [customKwh, setCustomKwh] = React.useState('');
-  const [editTargetTirePressure, setEditTargetTirePressure] = React.useState(String(DEFAULT_TARGET_TIRE_PRESSURE_PSI));
-  const [editNameValue, setEditNameValue] = React.useState('');
+  const [vehicleEditor, dispatchVehicle] = React.useReducer(vehicleSettingsTransition, initialVehicleSettings);
+  const { editingBatteryVehicleId, batteryGen, batteryPreset, customKwh, editTargetTirePressure, editNameValue } = vehicleEditor;
+  const vehicleSave = useFeatureOperation();
+  const setEditingBatteryVehicleId = (value: typeof editingBatteryVehicleId) => dispatchVehicle({ type: 'patch', patch: { editingBatteryVehicleId: value } });
+  const setBatteryPreset = (value: typeof batteryPreset) => dispatchVehicle({ type: 'patch', patch: { batteryPreset: value } });
+  const setCustomKwh = (value: typeof customKwh) => dispatchVehicle({ type: 'patch', patch: { customKwh: value } });
+  const setEditTargetTirePressure = (value: typeof editTargetTirePressure) => dispatchVehicle({ type: 'patch', patch: { editTargetTirePressure: value } });
+  const setEditNameValue = (value: typeof editNameValue) => dispatchVehicle({ type: 'patch', patch: { editNameValue: value } });
   const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
   const [demoRefreshConfirmId, setDemoRefreshConfirmId] = React.useState<string | null>(null);
@@ -457,21 +138,31 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmNewPassword, setConfirmNewPassword] = React.useState('');
-  const [passwordChangeError, setPasswordChangeError] = React.useState('');
-  const [changingPassword, setChangingPassword] = React.useState(false);
+  const passwordChange = useMutation({
+    mutationFn: (body: { current_password: string; new_password: string }) => api.changePassword(body),
+    onSuccess: () => {
+      queryClient.clear();
+      clearSession();
+      navigate({ to: '/login', search: { password_changed: '1' } });
+    },
+  });
+  const changingPassword = passwordChange.isPending;
+  const passwordChangeError = passwordChange.isError
+    ? (passwordChange.error as { detail?: { message?: string } }).detail?.message ?? 'Unable to change password. Please try again.'
+    : '';
   const canCreateDemoVehicle = me.data?.role === 'admin' || me.data?.role === 'super_user';
-  const isAdmin = canManageSystemDashboards(me.data?.role);
+  const isAdmin = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const canManageAuthentication = me.data?.role === 'super_user';
   const sections = React.useMemo(
     () => {
-      const available = canManageBackups
-        ? [...baseSections.slice(0, 6), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(6)]
-        : [...baseSections];
-      const withAuthentication = canManageAuthentication
-        ? [...available, { id: 'authentication' as const, label: 'Authentication', icon: Lock }]
-        : available;
-      return withAuthentication.sort((left, right) => left.label.localeCompare(right.label));
+      const available = baseSections.slice();
+      const optional: Array<{ enabled: boolean; section: typeof baseSections[number] }> = [
+        { enabled: canManageBackups, section: { id: 'backup', label: 'Backups', icon: DatabaseBackup } },
+        { enabled: canManageAuthentication, section: { id: 'authentication', label: 'Authentication', icon: Lock } },
+      ];
+      for (const entry of optional) if (entry.enabled) available.push(entry.section);
+      return available.sort((left, right) => left.label.localeCompare(right.label));
     },
     [canManageAuthentication, canManageBackups],
   );
@@ -541,51 +232,20 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   });
 
   const filteredApiEndpoints = React.useMemo(() => {
-    const query = apiCatalogSearch.trim().toLowerCase();
     const endpoints = apiCatalog.data?.endpoints ?? [];
-    if (!query) return endpoints;
-    return endpoints.filter((endpoint) => `${endpoint.method} ${endpoint.path}`.toLowerCase().includes(query));
+    const query = apiCatalogSearch.trim().toLowerCase();
+    const matches: typeof endpoints = [];
+    for (const endpoint of endpoints) {
+      if (`${endpoint.method} ${endpoint.path}`.toLowerCase().includes(query)) matches.push(endpoint);
+    }
+    return matches;
   }, [apiCatalog.data?.endpoints, apiCatalogSearch]);
 
   const dashboards = useDashboards();
-  const createDashboard = useCreateDashboard();
-  const cloneDashboard = useCloneDashboard();
-  const deleteDashboard = useDeleteDashboard();
-  const setDashboardLock = useSetAdminDashboardLock();
-  const restoreDefaultDashboard = useRestoreAdminDashboardDefault();
-
-  const openDashboard = React.useCallback((dashboard: DashboardConfig, edit: boolean) => {
-    navigate({
-      to: '/d/$slug',
-      params: { slug: dashboard.slug },
-      search: {
-        dashboardId: dashboardActionId(dashboard),
-        ...(edit ? { edit: 1 } : {}),
-      },
-    } as never);
-  }, [navigate]);
-
-  const customizeDashboard = React.useCallback(async (dashboard: DashboardConfig) => {
-    const existing = dashboards.data?.find((entry) => (
-      entry.ownerId != null && entry.slug === dashboard.slug
-    ));
-    if (existing) {
-      openDashboard(existing, true);
-      return;
-    }
-
-    try {
-      const created = await createDashboard.mutateAsync(materializeUserDashboardDraft(dashboard));
-      openDashboard(created, true);
-    } catch {
-      const refreshed = await dashboards.refetch();
-      const racedCopy = refreshed.data?.find((entry) => (
-        entry.ownerId != null && entry.slug === dashboard.slug
-      ));
-      if (!racedCopy) throw new Error('Could not create or find the personal dashboard copy');
-      openDashboard(racedCopy, true);
-    }
-  }, [createDashboard, dashboards, openDashboard]);
+  function openDashboard(dashboard: DashboardConfig) {
+    const destination = { to: '/d/$slug', params: { slug: dashboard.slug }, search: { dashboardId: dashboardActionId(dashboard) } };
+    navigate(destination as never);
+  }
 
   const unitPreferencesQuery = useQuery({
     queryKey: queryKeys.unitPreferences.current,
@@ -718,9 +378,11 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     mutationFn: ({ vehicleId, email, role }: { vehicleId: string; email: string; role: VehicleMember['role'] }) =>
       api.addVehicleMember(vehicleId, { email, role }),
     onSuccess: (result, variables) => {
-      setShareEmail('');
-      setShareRole('viewer');
-      setLatestInviteToken(result.invite_created ? (result.invite_token ?? null) : null);
+      if (sharingVehicleId === variables.vehicleId) {
+        setShareEmail('');
+        setShareRole('viewer');
+        setLatestInviteToken(result.invite_created ? (result.invite_token ?? null) : null);
+      }
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicleInvites.byVehicle(variables.vehicleId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
@@ -788,57 +450,21 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
   });
 
   function startEditVehicle(vehicleId: string, currentKwh: number | null | undefined) {
-    setEditingBatteryVehicleId(vehicleId);
-    const vehicle = vehicles?.find((v) => v.id === vehicleId);
-    setEditNameValue(vehicle?.display_name ?? '');
-    setEditTargetTirePressure(String(vehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI));
-
-    if (currentKwh != null) {
-      // Search all gens so a Gen 2 pack saved while gen was auto-detected as Gen 1 still resolves correctly
-      for (const g of ['gen1', 'gen2'] as BatteryGen[]) {
-        const match = RIVIAN_BATTERY_PRESETS[g].find((p) => p.kwh === currentKwh && p.key !== 'custom');
-        if (match) {
-          setBatteryGen(g);
-          setBatteryPreset(match.key);
-          setCustomKwh('');
-          return;
-        }
-      }
-      if (R2_PRESET.kwh === currentKwh) {
-        setBatteryPreset(R2_PRESET.key);
-        setCustomKwh('');
-        return;
-      }
-      setBatteryPreset('custom');
-      setCustomKwh(String(currentKwh));
-    } else {
-      const modelLower = vehicle?.model?.toLowerCase() ?? '';
-      const isGen2 = modelLower.includes('gen 2') || modelLower.includes('2nd') || (vehicle?.year && vehicle.year >= 2025);
-      const gen: BatteryGen = isGen2 ? 'gen2' : 'gen1';
-      setBatteryGen(gen);
-      setBatteryPreset(gen === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
-      setCustomKwh('');
-    }
+    vehicleSave.cancel();
+    dispatchVehicle({ type: 'open', vehicleId, vehicle: vehicles?.find((vehicle) => vehicle.id === vehicleId), capacity: currentKwh });
   }
 
   async function handleSaveVehicle(vehicleId: string) {
-    const vehicle = vehicles?.find((v) => v.id === vehicleId);
-    const trimmedName = editNameValue.trim();
-    const preset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
-    if (!preset) return;
-    const kwh = preset.key === 'custom' ? parseFloat(customKwh) : preset.kwh!;
-    if (!isFinite(kwh) || kwh <= 0) return;
-    const targetTirePressurePsi = parseFloat(editTargetTirePressure);
-    if (!isFinite(targetTirePressurePsi) || targetTirePressurePsi < 20 || targetTirePressurePsi > 80) return;
-    const config = preset.key === 'custom' ? `Custom (${kwh} kWh)` : preset.label;
-    const saves: Promise<unknown>[] = [
-      updateVehicleSettings.mutateAsync({ vehicleId, kwh, config, targetTirePressurePsi }),
-    ];
-    if (trimmedName && trimmedName !== vehicle?.display_name) {
-      saves.push(updateVehicleName.mutateAsync({ vehicleId, name: trimmedName }));
-    }
-    await Promise.all(saves);
-    setEditingBatteryVehicleId(null);
+    const settings = vehicleSettingsPayload(vehicleEditor);
+    if (!settings) return;
+    const active = vehicleSave.begin();
+    const name = editNameValue.trim();
+    const currentName = vehicles?.find((vehicle) => vehicle.id === vehicleId)?.display_name;
+    await Promise.all([
+      updateVehicleSettings.mutateAsync({ vehicleId, ...settings }),
+      ...(name && name !== currentName ? [updateVehicleName.mutateAsync({ vehicleId, name })] : []),
+    ]);
+    if (active()) dispatchVehicle({ type: 'patch', patch: { editingBatteryVehicleId: null } });
   }
 
   async function handleLogout() {
@@ -846,46 +472,29 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
     navigate({ to: '/login' });
   }
 
-  async function handlePasswordChange(event: React.FormEvent) {
+  function handlePasswordChange(event: React.FormEvent) {
     event.preventDefault();
-    if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword !== confirmNewPassword || !currentPassword) return;
-
-    setChangingPassword(true);
-    setPasswordChangeError('');
-    try {
-      await api.changePassword({ current_password: currentPassword, new_password: newPassword });
-      queryClient.clear();
-      clearSession();
-      navigate({ to: '/login', search: { password_changed: '1' } });
-    } catch (error) {
-      const message = (error as { detail?: { message?: string } }).detail?.message;
-      setPasswordChangeError(message ?? 'Unable to change password. Please try again.');
-    } finally {
-      setChangingPassword(false);
-    }
+    const valid = currentPassword && newPassword.length >= PASSWORD_MIN_LENGTH && newPassword === confirmNewPassword;
+    if (valid) passwordChange.mutate({ current_password: currentPassword, new_password: newPassword });
   }
 
   async function copyCreatedKey() {
     if (createdKey) await navigator.clipboard.writeText(createdKey);
   }
 
-  function handleUnitModeChange(nextMode: UnitMode) {
-    const next =
-      nextMode === 'imperial'
-        ? { ...IMPERIAL_UNITS }
-        : nextMode === 'metric'
-          ? { ...METRIC_UNITS }
-          : { ...unitPreferences, mode: 'custom' as const };
+  function commitUnitPreferences(next: UnitPreferences) {
     setUnitPreferencesState(next);
     setUnitPreferences(next);
     updateUnitPreferences.mutate(next);
   }
 
+  function handleUnitModeChange(nextMode: UnitMode) {
+    const presets = { imperial: IMPERIAL_UNITS, metric: METRIC_UNITS };
+    commitUnitPreferences(nextMode === 'custom' ? { ...unitPreferences, mode: 'custom' } : { ...presets[nextMode] });
+  }
+
   function handleCustomUnitChange<K extends keyof UnitPreferences>(key: K, value: UnitPreferences[K]) {
-    const next: UnitPreferences = { ...unitPreferences, mode: 'custom', [key]: value };
-    setUnitPreferencesState(next);
-    setUnitPreferences(next);
-    updateUnitPreferences.mutate(next);
+    commitUnitPreferences({ ...unitPreferences, mode: 'custom', [key]: value });
   }
 
   return (
@@ -1038,49 +647,11 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
 
                   <div className="divide-y divide-border">
                     {vehicles?.map((v) => {
-                      const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
+                      const { isActive, membershipRole, canManageVehicle, canManageMembers, isDemo, needsReauth,
+                        renewalNotice, expectedRenewalDate, healthColor, healthText, hasGlow, modelLine, batteryLabel,
+                      } = settingsVehicleModel(v, defaultVehicleId || vehicles[0]?.id);
                       const isEditingBattery = editingBatteryVehicleId === v.id;
                       const isSharingExpanded = sharingVehicleId === v.id;
-                      const membershipRole = v.membership_role ?? 'viewer';
-                      const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
-                      const canManageMembers = membershipRole === 'owner';
-                      const isDemo = v.is_demo ?? v.rivian_vehicle_id?.startsWith('demo-') ?? false;
-
-                      const needsReauth = !isDemo && v.auth_state === 'needs_reauth';
-                      const renewalNotice = !isDemo && !needsReauth
-                        ? getRivianCredentialRenewalNotice(v)
-                        : null;
-                      const expectedRenewalDate = !isDemo
-                        ? formatRivianRenewalDate(v.expected_renewal_at)
-                        : null;
-                      const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
-                      const collectorPassive = v.worker_health === 'passive';
-                      const healthColor = isDemo
-                        ? 'var(--rm-status-info)'
-                        : needsReauth
-                        ? 'var(--rm-status-warning)'
-                        : collectorHealthy
-                          ? 'var(--rm-status-positive)'
-                          : collectorPassive
-                            ? 'var(--rm-border-default)'
-                          : v.worker_health != null
-                            ? 'var(--rm-status-danger)'
-                            : 'var(--rm-border-default)';
-                      const healthText = isDemo
-                        ? 'Demo data'
-                        : needsReauth
-                        ? 'Login required'
-                        : collectorHealthy
-                          ? (isActive ? 'Active' : 'Connected')
-                          : collectorPassive
-                            ? 'Standby'
-                          : v.worker_health != null
-                            ? 'Error'
-                            : (isActive ? 'Active' : 'Offline');
-                      const hasGlow = isDemo || needsReauth || v.worker_health != null;
-
-                      const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
-                      const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';
 
                       return (
                       <div key={v.id} className="py-2">
@@ -1331,9 +902,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
                                         className="min-w-[6rem]"
                                         value={batteryGen}
                                         onChange={(value) => {
-                                          setBatteryGen(value as BatteryGen);
-                                          setBatteryPreset(value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
-                                          setCustomKwh('');
+                                          dispatchVehicle({ type: 'generation', value: value as BatteryGen });
                                         }}
                                         aria-label="Battery generation"
                                         options={[{ value: 'gen1', label: 'Gen 1' }, { value: 'gen2', label: 'Gen 2' }]}
@@ -1551,19 +1120,11 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
             )}
 
             {activeSection === 'dashboards' && (
-              <DashboardSettingsSection
+              <DashboardLibrarySection
                 dashboards={dashboards.data ?? []}
                 isLoading={dashboards.isLoading}
-                canManageDefaults={isAdmin}
-                cloneDashboard={cloneDashboard}
-                deleteDashboard={deleteDashboard}
-                setDashboardLock={setDashboardLock}
-                restoreDefaultDashboard={restoreDefaultDashboard}
-                createDashboard={createDashboard}
-                showEditButton={showEditButton}
-                onShowEditButtonChange={setShowEditButton}
-                onCustomize={customizeDashboard}
-                onEdit={openDashboard}
+                onOpen={openDashboard}
+                onExport={downloadDashboardYaml}
               />
             )}
 

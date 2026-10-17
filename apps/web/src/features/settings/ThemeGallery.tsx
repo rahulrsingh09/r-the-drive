@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useFeatureOperation } from '../featureOperation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Check, Edit3, Plus } from 'lucide-react';
@@ -9,6 +10,12 @@ import { Button, Input, Skeleton } from '@panda/ui/primitives';
 import { cn } from '@panda/ui/lib/utils';
 
 export function ThemeGallery() {
+  const owner = useAuth((state) => state.userId);
+  return <ThemeGallerySession key={owner ?? 'signed-out'} />;
+}
+
+function ThemeGallerySession() {
+  const operation = useFeatureOperation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const userId = useAuth((state) => state.userId);
@@ -21,38 +28,49 @@ export function ThemeGallery() {
   const preference = useQuery({ queryKey: preferenceKey, queryFn: () => themeClient.getPreferences(), enabled: !!userId });
 
   const selectTheme = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: async (selection: ThemePreferencesV2['selection']) => {
-      const current = preference.data;
+      const current = queryClient.getQueryData<ThemePreferencesResponse>(preferenceKey) ?? preference.data;
       if (!current?.etag) throw new Error('Appearance preferences are still loading.');
       return themeClient.updatePreferences({ schemaVersion: 2, mode: current.preferences.mode, selection }, current.etag);
     },
-    onSuccess: (response: ThemePreferencesResponse) => {
+    onSuccess: (response: ThemePreferencesResponse, _selection, active) => {
+      if (!active?.()) return;
       queryClient.setQueryData(preferenceKey, response);
       void queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
     },
   });
   const createTheme = useMutation({
+    onMutate: () => operation.begin(),
     mutationFn: () => themeClient.create(name.trim(), baseThemeId),
-    onSuccess: (result: { themeId: string }) => {
+    onSuccess: (result: { themeId: string }, _body, active) => {
+      if (!active?.()) return;
       void queryClient.invalidateQueries({ queryKey: catalogKey });
       void navigate({ to: '/settings/themes/$themeId', params: { themeId: result.themeId } });
     },
   });
 
   const selected = preference.data?.preferences.selection;
+  const choices: Array<{ theme: (typeof BUILT_IN_THEMES)[ThemePalette]; selection: ThemePreferencesV2['selection']; name: string; description: string }> = [];
+  const descriptions = { classic: 'The original Panda visual system.', rad: 'Bright gold, vivid vermilion, and adventure teal.' };
+  for (const themeId of ['classic', 'rad'] as const) {
+    const theme = BUILT_IN_THEMES[themeId];
+    choices.push({ theme, selection: { kind: 'builtin', themeId }, name: theme.name, description: descriptions[themeId] });
+  }
+  for (const resource of catalog.data?.customThemes ?? []) {
+    if (resource.publishedRevision === null) continue;
+    const theme = resolveTheme((resource.publishedDefinition ?? { theme: resource.baseThemeId }) as ThemeOverride);
+    choices.push({ theme, selection: { kind: 'custom', themeId: resource.themeId, revision: resource.publishedRevision }, name: resource.name, description: `Private custom theme · based on ${theme.name}` });
+  }
   if (catalog.isLoading || preference.isLoading) return <div className="grid gap-3 sm:grid-cols-2"><Skeleton className="h-44 rounded-xl" /><Skeleton className="h-44 rounded-xl" /></div>;
 
   return <div className="grid gap-4">
     <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Themes">
-      {(['classic', 'rad'] as const).map((themeId) => {
-        const theme = BUILT_IN_THEMES[themeId];
-        const active = selected?.kind === 'builtin' && selected.themeId === themeId;
-        return <ThemeCard key={themeId} name={theme.name} description={themeId === 'classic' ? 'The original Panda visual system.' : 'Bright gold, vivid vermilion, and adventure teal.'} colors={theme.series} surface={theme.tokens.dark['bg-page']} panel={theme.tokens.dark['bg-surface']} foreground={theme.tokens.dark['text-primary']} accent={theme.tokens.dark.accent} brandAsset={theme.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate({ kind: 'builtin', themeId })} />;
-      })}
-      {(catalog.data?.customThemes ?? []).filter((theme) => theme.publishedRevision !== null).map((theme) => {
-        const definition = resolveTheme((theme.publishedDefinition ?? { theme: theme.baseThemeId }) as ThemeOverride);
-        const active = selected?.kind === 'custom' && selected.themeId === theme.themeId && selected.revision === theme.publishedRevision;
-        return <ThemeCard key={theme.themeId} name={theme.name} description={`Private custom theme · based on ${definition.name}`} colors={definition.series} surface={definition.tokens.dark['bg-page']} panel={definition.tokens.dark['bg-surface']} foreground={definition.tokens.dark['text-primary']} accent={definition.tokens.dark.accent} brandAsset={definition.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate({ kind: 'custom', themeId: theme.themeId, revision: theme.publishedRevision! })} onEdit={() => void navigate({ to: '/settings/themes/$themeId', params: { themeId: theme.themeId } })} />;
+      {choices.map(({ theme, selection, name: themeName, description }) => {
+        const active = selected?.kind === selection.kind && selected.themeId === selection.themeId
+          && (selection.kind === 'builtin' || (selected.kind === 'custom' && selected.revision === selection.revision));
+        const edit = selection.kind === 'custom' ? { onEdit: () => { void navigate({ to: '/settings/themes/$themeId', params: { themeId: selection.themeId } }); } } : {};
+        return <ThemeCard key={selection.themeId} name={themeName} description={description} colors={theme.series} surface={theme.tokens.dark['bg-page']} panel={theme.tokens.dark['bg-surface']} foreground={theme.tokens.dark['text-primary']} accent={theme.tokens.dark.accent} brandAsset={theme.brandAssets.wordmark.dark} active={active} disabled={selectTheme.isPending} onSelect={() => selectTheme.mutate(selection)} {...edit} />;
       })}
     </div>
 

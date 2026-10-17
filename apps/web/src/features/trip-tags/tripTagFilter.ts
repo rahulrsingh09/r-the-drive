@@ -20,29 +20,32 @@ export interface TripTagFilterSelection extends TripTagFilter {
 }
 
 export function normalizeTripTagIds(tagIds: string | readonly string[] | undefined): string[] {
-  const values = typeof tagIds === 'string' ? tagIds.split(',') : tagIds ?? [];
-  return [...new Set(values.map((id) => id.trim()).filter(Boolean))].sort();
+  const unique = new Set<string>();
+  for (const part of typeof tagIds === 'string' ? tagIds.split(',') : tagIds ?? []) {
+    const id = part.trim();
+    if (id.length) unique.add(id);
+  }
+  return Array.from(unique).sort();
 }
 
 export function parseTripTagFilter(search: TripTagSearch | null | undefined): TripTagFilter {
   const tagIds = normalizeTripTagIds(search?.tag_ids);
-  return {
-    tagIds,
-    tagMatch: search?.tag_match ?? 'all',
-    untagged: search?.untagged === '1' && tagIds.length === 0,
-  };
+  const filter: TripTagFilter = { tagIds, tagMatch: 'all', untagged: false };
+  if (search?.tag_match) filter.tagMatch = search.tag_match;
+  if (!tagIds.length) filter.untagged = search?.untagged === '1';
+  return filter;
 }
 
 export function serializeTripTagFilter(filter: TripTagFilter): TripTagSearch {
   const tagIds = normalizeTripTagIds(filter.tagIds);
-  if (tagIds.length > 0) {
-    return {
-      tag_ids: tagIds.join(','),
-      ...(filter.tagMatch === 'any' ? { tag_match: 'any' as const } : {}),
-    };
+  const search: TripTagSearch = {};
+  if (!tagIds.length) {
+    if (filter.untagged) search.untagged = '1';
+    return search;
   }
-
-  return filter.untagged ? { untagged: '1' } : {};
+  search.tag_ids = tagIds.join(',');
+  if (filter.tagMatch === 'any') search.tag_match = 'any';
+  return search;
 }
 
 export function createTripTagFilterAdapter(

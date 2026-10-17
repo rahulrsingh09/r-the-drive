@@ -1,4 +1,8 @@
+import { useSearchPicker } from './useSearchPicker';
+import { editChartDefinition } from './definitionEdit';
+import { applySeriesChoice, addSeriesFromChoice } from './curveTransaction';
 import React from 'react';
+import { chartDraftInitial, chartDraftProblems, chartDraftTransition } from './chartDraft';
 import { RMark } from '../../r-experience/RMark';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -8,12 +12,9 @@ import {
   downloadChartJson,
   getBundledChartDefinition,
   resolveChartSourceCapabilities,
-  validateChartDefinitionAgainstSources,
-  validateBundledRendererDefinition,
   buildCurveCatalog,
   isMixedDomain,
   removeCurveAndUnusedSources,
-  normalizeLegacyBundledChartRecord,
   supportsBundledRendererCurve,
   supportsBundledRichEditing,
 } from '@panda/dashboards';
@@ -27,16 +28,14 @@ import {
 } from '@panda/hooks';
 import type {
   ChartAxisDefinition,
-  ChartColorToken,
   ChartDefinitionV1,
   ChartMark,
   ChartRecord,
   ChartSeriesDefinition,
-  ChartSourceBinding,
   ChartSourceManifest,
   MetricCatalogEntry,
 } from '@panda/types';
-import { ChartColorField, CHART_SERIES_TOKENS } from '@panda/ui/charts';
+import { ChartColorField } from '@panda/ui/charts';
 import {
   Badge,
   Button,
@@ -76,10 +75,6 @@ function defaultDefinition(): ChartDefinitionV1 {
   return copyDefinition(ChartDefinitionV1Schema.parse(definition) as ChartDefinitionV1);
 }
 
-function configRecord(record: ChartRecord): ChartRecord {
-  return { ...record, config: copyDefinition(record.config) };
-}
-
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Unable to save chart.';
 }
@@ -97,7 +92,11 @@ function previewRange(policy: ChartDefinitionV1['timeframe']) {
   return { from: from.toISOString(), to: to.toISOString(), lifetime: false };
 }
 
-export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chartId?: string }) {
+export function ChartEditorPage(props: { mode: 'new' | 'edit'; chartId?: string }) {
+  return <ChartEditorSession key={`${props.mode}:${props.chartId ?? ''}`} {...props} />;
+}
+
+function ChartEditorSession({ mode, chartId }: { mode: 'new' | 'edit'; chartId?: string }) {
   const navigate = useNavigate();
   const manager = useChartManager();
   const sources = useChartSources();
@@ -105,30 +104,20 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
   const createChart = useCreateChart();
   const updateChart = useUpdateChart();
   const [section, setSection] = React.useState<EditorSection>('basics');
-  const [draft, setDraft] = React.useState<ChartRecord | null>(() =>
-    mode === 'new'
-      ? {
-          id: '',
-          ownerId: null,
-          slug: 'new-chart',
-          name: 'New chart',
-          isDefault: false,
-          isLocked: false,
-          isEnabled: true,
-          config: defaultDefinition(),
-        }
-      : null
-  );
-  const [advancedText, setAdvancedText] = React.useState('');
-  const [advancedError, setAdvancedError] = React.useState<{
-    path: string;
-    message: string;
-  } | null>(null);
-  const [dirty, setDirty] = React.useState(mode === 'new');
-  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [editor, dispatch] = React.useReducer(chartDraftTransition, null, () => chartDraftInitial(mode === 'new' ? {
+    id: '', ownerId: null, slug: 'new-chart', name: 'New chart', isDefault: false,
+    isLocked: false, isEnabled: true, config: { ...defaultDefinition(), placements: [] },
+  } : null));
+  const { draft, dirty, advancedText, saveError, sourceNotice } = editor;
+  const setSaveError = (message: string | null) => dispatch({ type: 'error', message });
+  const setSourceNotice = (message: string | null) => dispatch({ type: 'notice', message });
   const [discardRequested, setDiscardRequested] = React.useState(false);
   const discardDialogRef = React.useRef<HTMLDivElement | null>(null);
-  const [sourceNotice, setSourceNotice] = React.useState<string | null>(null);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const entry = manager.data?.find((candidate) => candidate.effective.id === chartId);
   const manifests = React.useMemo(
     () =>
@@ -148,105 +137,51 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     [previewTimeframe?.mode, previewPreset]
   );
   React.useEffect(() => {
-    if (mode !== 'edit' || !entry || dirty) return;
-    const normalized = normalizeLegacyBundledChartRecord(entry.effective);
-    const upgraded = normalized !== entry.effective;
-    const next = configRecord(normalized);
-    setDraft(next);
-    setAdvancedText(JSON.stringify(next.config, null, 2));
-    setAdvancedError(null);
-    if (upgraded) {
-      setDirty(true);
-      setSourceNotice(
-        'This legacy chart draft was upgraded to the current production structure. Review it, then save to keep the repair.'
-      );
-    }
+    if (mode === 'edit' && entry) dispatch({ type: 'load', record: entry.effective });
   }, [dirty, entry, mode]);
 
   React.useEffect(() => {
-    if (!draft) return;
-    setAdvancedText(JSON.stringify(draft.config, null, 2));
-  }, [draft]);
-
-  React.useEffect(() => {
-    const handler = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
+    if (!dirty) return;
+    const controller = new AbortController();
+    window.addEventListener('beforeunload', (event) => {
       event.preventDefault();
       event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    }, { signal: controller.signal });
+    return () => controller.abort();
   }, [dirty]);
 
   React.useEffect(() => {
     if (!discardRequested) return;
-    const previousOverflow = document.body.style.overflow;
-    const previousFocus =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    document.body.style.overflow = 'hidden';
+    const controller = new AbortController();
+    const restoreOverflow = document.body.style.overflow;
+    const restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = discardDialogRef.current;
+    document.body.style.overflow = 'hidden';
     dialog?.querySelector<HTMLElement>('button')?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setDiscardRequested(false);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { setDiscardRequested(false); return; }
       if (event.key !== 'Tab' || !dialog) return;
-      const focusable = [
-        ...dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        ),
-      ];
-      if (focusable.length === 0) return;
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
+      const controls = dialog.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      const boundary = event.shiftKey ? 0 : controls.length - 1;
+      if (!controls.length || document.activeElement !== controls[boundary]) return;
+      event.preventDefault();
+      controls[event.shiftKey ? controls.length - 1 : 0]?.focus();
+    }, { signal: controller.signal });
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previousFocus?.focus();
+      controller.abort();
+      document.body.style.overflow = restoreOverflow;
+      restoreFocus?.focus();
     };
   }, [discardRequested]);
 
-  const validationErrors = React.useMemo(() => {
-    if (!draft) return [{ path: 'chart', message: 'Chart draft is not available.' }];
-    if (advancedError) return [advancedError, ...validateDraftConfig(draft.config, manifests)];
-    return validateDraftConfig(draft.config, manifests);
-  }, [advancedError, draft, manifests]);
-
-  function validateDraftConfig(config: ChartDefinitionV1, sourceManifests: typeof manifests) {
-    try {
-      const parsed = ChartDefinitionV1Schema.safeParse(config);
-      if (!parsed.success)
-        return parsed.error.issues.map((issue) => ({
-          path: issue.path.join('.'),
-          message: issue.message,
-        }));
-      return [
-        ...validateChartDefinitionAgainstSources(config, sourceManifests),
-        ...validateBundledRendererDefinition(draft?.slug ?? '', config),
-      ];
-    } catch (error) {
-      return [{ path: 'config', message: errorText(error) }];
-    }
-  }
+  const validationErrors = React.useMemo(() => chartDraftProblems(editor, manifests), [editor, manifests]);
 
   function updateDraft(patch: Partial<ChartRecord>) {
-    setDraft((current) => (current ? { ...current, ...patch } : current));
-    setDirty(true);
-    setSaveError(null);
+    dispatch({ type: 'record', patch });
   }
 
-  function updateDefinition(mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) {
-    setDraft((current) => (current ? { ...current, config: mutator(current.config) } : current));
-    setAdvancedError(null);
-    setDirty(true);
-    setSaveError(null);
+  function updateDefinition(update: (definition: ChartDefinitionV1) => ChartDefinitionV1) {
+    dispatch({ type: 'definition', update });
   }
 
   function goBack() {
@@ -259,7 +194,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
 
   function discardAndGoBack() {
     setDiscardRequested(false);
-    setDirty(false);
+    dispatch({ type: 'saved' });
     navigate({ to: '/settings', search: { section: 'charts' } });
   }
 
@@ -279,30 +214,20 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
       );
       return;
     }
+    const body = {
+      slug: draft.slug, name: draft.name,
+      ...(draft.description !== undefined ? { description: draft.description } : {}),
+      isEnabled: draft.isEnabled, config: draft.config,
+    };
     try {
-      if (mode === 'new' || entry?.origin === 'system') {
-        await createChart.mutateAsync({
-          slug: draft.slug,
-          name: draft.name,
-          ...(draft.description !== undefined ? { description: draft.description } : {}),
-          isEnabled: draft.isEnabled,
-          config: draft.config,
-        });
-      } else {
-        await updateChart.mutateAsync({
-          id: draft.id,
-          slug: draft.slug,
-          name: draft.name,
-          ...(draft.description !== undefined ? { description: draft.description } : {}),
-          isEnabled: draft.isEnabled,
-          config: draft.config,
-        });
-      }
-      setDirty(false);
-      setSaveError(null);
+      await (mode === 'new' || entry?.origin === 'system'
+        ? createChart.mutateAsync(body)
+        : updateChart.mutateAsync({ id: draft.id, ...body }));
+      if (!mounted.current) return;
+      dispatch({ type: 'saved' });
       navigate({ to: '/settings', search: { section: 'charts' } });
     } catch (error) {
-      setSaveError(errorText(error));
+      if (mounted.current) setSaveError(errorText(error));
     }
   }
 
@@ -427,30 +352,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
           {section === 'advanced' && (
             <AdvancedSection
               value={advancedText}
-              onChange={(value) => {
-                setAdvancedText(value);
-                try {
-                  const parsed = ChartDefinitionV1Schema.safeParse(JSON.parse(value));
-                  if (!parsed.success) {
-                    setAdvancedError({
-                      path: 'advanced',
-                      message: parsed.error.issues
-                        .map((issue) => `${issue.path.join('.') || 'config'}: ${issue.message}`)
-                        .join('; '),
-                    });
-                    setDirty(true);
-                    return;
-                  }
-                  setAdvancedError(null);
-                  updateDefinition(() => parsed.data as ChartDefinitionV1);
-                } catch (error) {
-                  setAdvancedError({
-                    path: 'advanced',
-                    message: error instanceof Error ? error.message : 'Invalid JSON.',
-                  });
-                  setDirty(true);
-                }
-              }}
+              onChange={(text) => dispatch({ type: 'json', text })}
             />
           )}
         </section>
@@ -561,13 +463,12 @@ function CurvesSection({
   );
   const mixed = isMixedDomain(definition, manifests);
   const normalizedQuery = query.toLowerCase();
-  const filtered = catalog.filter(
-    (option) =>
-      (!availableOnly || (option.enabled && !mixed)) &&
-      `${option.label} ${option.category} ${option.description}`
-        .toLowerCase()
-        .includes(normalizedQuery)
-  );
+  const filtered: typeof catalog = [];
+  for (const option of catalog) {
+    if (availableOnly && (mixed || !option.enabled)) continue;
+    const text = [option.label, option.category, option.description].join(' ').toLowerCase();
+    if (text.includes(normalizedQuery)) filtered.push(option);
+  }
 
   return (
     <div className="grid gap-4">
@@ -587,20 +488,10 @@ function CurvesSection({
                   ? definition.timeframe.preset
                   : definition.timeframe.mode
               }
-              onChange={(event) =>
-                onChange((current) => ({
-                  ...current,
-                  timeframe:
-                    event.target.value === 'dashboard'
-                      ? { mode: 'dashboard' }
-                      : event.target.value === 'lifetime'
-                        ? { mode: 'lifetime' }
-                        : {
-                            mode: 'relative',
-                            preset: event.target.value as '24h' | '7d' | '30d' | '90d' | '1y',
-                          },
-                }))
-              }
+              onChange={(event) => {
+                const value = event.target.value;
+                onChange((current) => editChartDefinition(current, { type: 'timeframe', value }));
+              }}
               className="editor-input"
             >
               <option value="dashboard">Dashboard range</option>
@@ -721,31 +612,22 @@ function CurvesListSection({
     chartSlug,
     buildCurveCatalog(manifests, metrics, replacementDefinition)
   );
+  const bindings = new Map(definition.sources.map((binding) => [binding.id, binding]));
+  const sourceManifests = new Map(manifests.map((manifest) => [manifest.id, manifest]));
+  const valueOptions: SearchOption[] = [];
+  for (const option of catalog) {
+    const row: SearchOption = { value: option.id, label: option.label, description: `${option.category} · ${option.description}`, disabled: mixed || !option.enabled };
+    if (option.disabledReason) row.disabledReason = option.disabledReason;
+    if (mixed) row.disabledReason = 'Mixed-domain chart; edit exact values in Advanced.';
+    valueOptions.push(row);
+  }
   return (
     <div className="grid gap-3">
       {definition.series.map((series, index) => {
-        const binding = definition.sources.find(
-          (candidate) => candidate.id === series.y.sourceBindingId
-        );
-        const manifest = manifests.find((candidate) => candidate.id === binding?.sourceId);
-        const valueOptions: SearchOption[] = catalog.map((option) => ({
-          value: option.id,
-          label: option.label,
-          description: `${option.category} · ${option.description}`,
-          disabled: mixed || !option.enabled,
-          ...(mixed || option.disabledReason
-            ? {
-                disabledReason: mixed
-                  ? 'Mixed-domain chart; edit exact values in Advanced.'
-                  : option.disabledReason!,
-              }
-            : {}),
-        }));
-        const inheritanceKeys: Array<'vehicle' | 'timeframe' | 'tripTags'> = [
-          'vehicle',
-          'timeframe',
-          ...(manifest?.supportsTripTagInheritance ? ['tripTags' as const] : []),
-        ];
+        const binding = bindings.get(series.y.sourceBindingId);
+        const manifest = sourceManifests.get(binding?.sourceId ?? '');
+        const inheritanceKeys: Array<'vehicle' | 'timeframe' | 'tripTags'> = ['vehicle', 'timeframe'];
+        if (manifest?.supportsTripTagInheritance) inheritanceKeys.push('tripTags');
         return (
           <div key={series.id} className="grid gap-3 rounded-xl border border-border p-3">
             <div className="flex items-center justify-between gap-2">
@@ -756,10 +638,7 @@ function CurvesListSection({
                   aria-label="Move curve up"
                   disabled={index === 0}
                   onClick={() =>
-                    onChange((current) => ({
-                      ...current,
-                      series: moveItem(current.series, index, index - 1),
-                    }))
+                    onChange((current) => editChartDefinition(current, { type: 'move-series', from: index, to: index - 1 }))
                   }
                   className="icon-button"
                 >
@@ -770,10 +649,7 @@ function CurvesListSection({
                   aria-label="Move curve down"
                   disabled={index === definition.series.length - 1}
                   onClick={() =>
-                    onChange((current) => ({
-                      ...current,
-                      series: moveItem(current.series, index, index + 1),
-                    }))
+                    onChange((current) => editChartDefinition(current, { type: 'move-series', from: index, to: index + 1 }))
                   }
                   className="icon-button"
                 >
@@ -814,12 +690,7 @@ function CurvesListSection({
                 <select
                   value={series.mark === 'area' ? 'line' : series.mark}
                   onChange={(event) =>
-                    patchSeries(onChange, index, {
-                      mark: event.target.value as ChartMark,
-                      ...(event.target.value === 'line' || event.target.value === 'step'
-                        ? { fill: series.mark === 'area' || series.fill === true }
-                        : {}),
-                    })
+                    onChange((current) => editChartDefinition(current, { type: 'mark', index, mark: event.target.value as ChartMark }))
                   }
                   className="editor-input"
                 >
@@ -854,10 +725,7 @@ function CurvesListSection({
                 description="Shade the area between this curve and its axis baseline."
                 checked={series.mark === 'area' || series.fill === true}
                 onCheckedChange={(checked) =>
-                  patchSeries(onChange, index, {
-                    mark: series.mark === 'area' ? 'line' : series.mark,
-                    fill: checked,
-                  })
+                  onChange((current) => editChartDefinition(current, { type: 'fill', index, enabled: checked }))
                 }
               />
             ) : null}
@@ -884,19 +752,7 @@ function CurvesListSection({
                               : 'Use selected timeframe'
                         }
                         checked={binding.inherit[key] ?? false}
-                        onCheckedChange={(checked) =>
-                          onChange((current) => ({
-                            ...current,
-                            sources: current.sources.map((candidate) =>
-                              candidate.id === binding.id
-                                ? {
-                                    ...candidate,
-                                    inherit: { ...candidate.inherit, [key]: checked },
-                                  }
-                                : candidate
-                            ),
-                          }))
-                        }
+                        onCheckedChange={(value) => onChange((current) => editChartDefinition(current, { type: 'inheritance', bindingId: binding.id, key, value }))}
                       />
                     ))}
                     {manifest?.requiredContext.includes('chargeSession') ? (
@@ -968,20 +824,7 @@ function DisplaySection({
             label="Right Y axis"
             description="Adds a separately labeled scale for series assigned to the right axis."
             checked={!!definition.axes.y2}
-            onCheckedChange={(checked) =>
-              onChange((current) => ({
-                ...current,
-                axes: checked
-                  ? {
-                      ...current.axes,
-                      y2: current.axes.y2 ?? { scale: 'linear', domain: { mode: 'auto' } },
-                    }
-                  : { x: current.axes.x, y: current.axes.y },
-                series: checked
-                  ? current.series
-                  : current.series.map((series) => ({ ...series, yAxis: 'y' as const })),
-              }))
-            }
+            onCheckedChange={(enabled) => onChange((current) => editChartDefinition(current, { type: 'right-axis', enabled }))}
           />
           {definition.axes.y2 ? (
             <EditorField label="Right Y axis label">
@@ -1014,13 +857,7 @@ function DisplaySection({
               <select
                 value={definition.display.legend}
                 onChange={(event) =>
-                  onChange((current) => ({
-                    ...current,
-                    display: {
-                      ...current.display,
-                      legend: event.target.value as ChartDefinitionV1['display']['legend'],
-                    },
-                  }))
+                  onChange((current) => editChartDefinition(current, { type: 'display', patch: { legend: event.target.value as ChartDefinitionV1['display']['legend'] } }))
                 }
                 className="editor-input"
               >
@@ -1033,14 +870,7 @@ function DisplaySection({
               <select
                 value={definition.display.curveSmoothness}
                 onChange={(event) =>
-                  onChange((current) => ({
-                    ...current,
-                    display: {
-                      ...current.display,
-                      curveSmoothness: event.target
-                        .value as ChartDefinitionV1['display']['curveSmoothness'],
-                    },
-                  }))
+                  onChange((current) => editChartDefinition(current, { type: 'display', patch: { curveSmoothness: event.target.value as ChartDefinitionV1['display']['curveSmoothness'] } }))
                 }
                 className="editor-input"
               >
@@ -1054,20 +884,14 @@ function DisplaySection({
             label="Show grid"
             checked={definition.display.grid}
             onCheckedChange={(checked) =>
-              onChange((current) => ({
-                ...current,
-                display: { ...current.display, grid: checked },
-              }))
+              onChange((current) => editChartDefinition(current, { type: 'display', patch: { grid: checked } }))
             }
           />
           <ToggleRow
             label="Enable tooltip"
             checked={definition.display.tooltip}
             onCheckedChange={(checked) =>
-              onChange((current) => ({
-                ...current,
-                display: { ...current.display, tooltip: checked },
-              }))
+              onChange((current) => editChartDefinition(current, { type: 'display', patch: { tooltip: checked } }))
             }
           />
         </div>
@@ -1240,12 +1064,7 @@ function SearchPicker({
   onChange: (value: string) => void;
   ariaLabel: string;
 }) {
-  const [query, setQuery] = React.useState('');
-  const [open, setOpen] = React.useState(false);
-  const selected = options.find((option) => option.value === value);
-  const filtered = options.filter((option) =>
-    `${option.label} ${option.description ?? ''}`.toLowerCase().includes(query.toLowerCase())
-  );
+  const { query, open, selected, filtered, dispatch, choose } = useSearchPicker(options, value, onChange);
   return (
     <div className="relative">
       <button
@@ -1253,7 +1072,7 @@ function SearchPicker({
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => dispatch({ type: 'toggle' })}
         className="editor-input flex min-h-10 items-center justify-between gap-2 text-left"
       >
         <span className="min-w-0">
@@ -1272,9 +1091,9 @@ function SearchPicker({
             <input
               autoFocus
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => dispatch({ type: 'search', query: event.target.value })}
               onKeyDown={(event) => {
-                if (event.key === 'Escape') setOpen(false);
+                if (event.key === 'Escape') dispatch({ type: 'close' });
               }}
               placeholder="Search…"
               aria-label={`Search ${ariaLabel}`}
@@ -1290,12 +1109,7 @@ function SearchPicker({
                 disabled={option.disabled}
                 title={option.disabledReason}
                 aria-selected={option.value === value}
-                onClick={() => {
-                  if (option.disabled) return;
-                  onChange(option.value);
-                  setQuery('');
-                  setOpen(false);
-                }}
+                onClick={() => choose(option)}
                 className={`block w-full rounded-md px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-45 ${option.value === value ? 'bg-accent/10 text-accent' : 'text-fg hover:bg-bg-elevated'}`}
               >
                 <span className="block text-sm font-medium">{option.label}</span>
@@ -1331,146 +1145,12 @@ function rendererCompatibleCatalog<T extends { sourceId: string; field?: string 
     (option) => supportsBundledRendererCurve(slug, option.sourceId, option.field) !== false
   );
 }
-function makeMetricBinding(metric: MetricCatalogEntry, index: number) {
-  return {
-    id: `metric-${metric.id}-${index + 1}`,
-    sourceId: 'metrics.series',
-    params: { metric: metric.id },
-    filters: [],
-    inherit: { vehicle: true, timeframe: true },
-  };
-}
-function applySeriesChoice(
-  definition: ChartDefinitionV1,
-  index: number,
-  choice: string,
-  manifests: ChartSourceManifest[],
-  metrics: MetricCatalogEntry[],
-  onNotice: (notice: string | null) => void
-): ChartDefinitionV1 {
-  const changesSharedDomain = definition.series.length === 1;
-  const compatibilityDefinition = changesSharedDomain ? { ...definition, series: [] } : definition;
-  const selected = buildCurveCatalog(manifests, metrics, compatibilityDefinition).find(
-    (option) => option.id === choice
-  );
-  if (!selected || !selected.enabled || !selected.field) {
-    onNotice(selected?.disabledReason ?? 'That curve is not available for this chart.');
-    return definition;
-  }
-
-  let binding: ChartSourceBinding | undefined =
-    selected.sourceId === 'metrics.series'
-      ? definition.sources.find(
-          (source) =>
-            source.sourceId === selected.sourceId && source.params.metric === selected.field
-        )
-      : definition.sources.find((source) => source.sourceId === selected.sourceId);
-  let sources = definition.sources;
-  if (!binding) {
-    if (sources.length >= 4) {
-      onNotice(
-        'This chart can combine up to four data groups. Remove a curve that uses another group before adding this one.'
-      );
-      return definition;
-    }
-    if (selected.sourceId === 'metrics.series') {
-      const metric = metrics.find(
-        (candidate) => candidate.id === selected.field && candidate.supports_series
-      );
-      if (!metric) return definition;
-      binding = makeMetricBinding(metric, sources.length);
-    } else {
-      const manifest = manifests.find((candidate) => candidate.id === selected.sourceId);
-      binding = {
-        id: `source-${selected.sourceId}-${sources.length + 1}`,
-        sourceId: selected.sourceId,
-        params: {},
-        filters: [],
-        inherit: {
-          vehicle: true,
-          timeframe: true,
-          ...(manifest?.supportsTripTagInheritance ? { tripTags: true } : {}),
-        },
-      };
-    }
-    sources = [...sources, binding];
-  }
-
-  const resolvedBinding = binding;
-  const series = definition.series.map((curve, seriesIndex) =>
-    seriesIndex === index
-      ? {
-          ...curve,
-          label: selected.label,
-          x: { sourceBindingId: resolvedBinding.id, field: selected.domainKey },
-          y: { sourceBindingId: resolvedBinding.id, field: selected.field! },
-        }
-      : curve
-  );
-  const xWithoutUnit = { ...definition.x };
-  delete xWithoutUnit.unit;
-  const x = changesSharedDomain
-    ? {
-        ...xWithoutUnit,
-        field: { sourceBindingId: resolvedBinding.id, field: selected.domainKey },
-        kind: selected.domainKind,
-        ...(selected.domainUnit ? { unit: selected.domainUnit } : {}),
-      }
-    : definition.x;
-  const referenced = new Set([
-    x.field.sourceBindingId,
-    ...series.flatMap((curve) => [
-      curve.y.sourceBindingId,
-      ...(curve.x ? [curve.x.sourceBindingId] : []),
-    ]),
-  ]);
-  onNotice(null);
-  return {
-    ...definition,
-    x,
-    sources: sources.filter((source) => referenced.has(source.id)),
-    series,
-  };
-}
-function addSeriesFromChoice(
-  definition: ChartDefinitionV1,
-  choice: string | undefined,
-  manifests: ChartSourceManifest[],
-  metrics: MetricCatalogEntry[],
-  onNotice: (notice: string | null) => void
-) {
-  if (!choice) return definition;
-  const selected = buildCurveCatalog(manifests, metrics, definition).find(
-    (option) => option.id === choice
-  );
-  if (!selected?.enabled) {
-    onNotice(selected?.disabledReason ?? 'That curve is not available for this chart.');
-    return definition;
-  }
-  const seed = newSeries(
-    definition,
-    definition.series[0]?.y.field ?? 'value',
-    definition.series.length
-  );
-  return applySeriesChoice(
-    { ...definition, series: [...definition.series, seed] },
-    definition.series.length,
-    choice,
-    manifests,
-    metrics,
-    onNotice
-  );
-}
 function patchAxis(
   onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void,
   axis: 'x' | 'y' | 'y2',
   patch: Partial<ChartAxisDefinition>
 ) {
-  onChange((current) => {
-    const existing = current.axes[axis];
-    if (!existing) return current;
-    return { ...current, axes: { ...current.axes, [axis]: { ...existing, ...patch } } };
-  });
+  onChange((current) => editChartDefinition(current, { type: 'axis', key: axis, patch }));
 }
 function AxisRangeEditor({
   axis,
@@ -1535,39 +1215,5 @@ function patchSeries(
   index: number,
   patch: Partial<ChartSeriesDefinition>
 ) {
-  onChange((current) => ({
-    ...current,
-    series: current.series.map((series, seriesIndex) =>
-      seriesIndex === index ? { ...series, ...patch } : series
-    ),
-  }));
-}
-function moveItem<T>(items: T[], from: number, to: number) {
-  const next = [...items];
-  const [item] = next.splice(from, 1);
-  if (item !== undefined) next.splice(to, 0, item);
-  return next;
-}
-function newSeries(
-  definition: ChartDefinitionV1,
-  field: string,
-  index: number
-): ChartSeriesDefinition {
-  return {
-    id: `series-${index + 1}`,
-    label: field,
-    y: { sourceBindingId: definition.sources[0]?.id ?? 'main', field },
-    mark: 'line',
-    fill: false,
-    yAxis: 'y',
-    color: { mode: 'token', token: nextSeriesColor(definition, index) },
-    transforms: [],
-    visibleInLegend: true,
-  };
-}
-
-function nextSeriesColor(definition: ChartDefinitionV1, index: number): ChartColorToken {
-  const used = new Set(definition.series.flatMap((series) => series.color.mode === 'token' ? [series.color.token] : []));
-  return CHART_SERIES_TOKENS.find((token) => !used.has(token))
-    ?? CHART_SERIES_TOKENS[index % CHART_SERIES_TOKENS.length]!;
+  onChange((current) => editChartDefinition(current, { type: 'series', index, patch }));
 }

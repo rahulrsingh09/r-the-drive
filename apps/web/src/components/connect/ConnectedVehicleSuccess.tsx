@@ -24,19 +24,13 @@ export function ConnectedVehicleSuccess({
 }: ConnectedVehicleSuccessProps) {
   const hillPathId = `rm-success-hills-${useId().replace(/:/g, '')}`;
   const { data: status } = useCurrentVehicleStatus(vehicleId);
-  const health = status?.worker_health?.toLowerCase();
-  const needsAttention = health === 'error' || health === 'degraded' || health === 'stale';
-  const telemetryAvailable =
-    (health === 'connected' || health === 'ok') &&
-    Boolean(status?.last_event_at || status?.last_payload_at);
-
-  const title = telemetryAvailable ? 'Vehicle connected' : 'Vehicle saved';
-  const readinessMessage = telemetryAvailable
-    ? `${vehicleName} is connected and telemetry is available.`
-    : needsAttention
-      ? `${vehicleName} was saved, but its telemetry collector needs attention. Open the dashboard to review vehicle health.`
-      : initialWaitingMessage
-        ?? `${vehicleName} was saved. Panda is starting its telemetry collector; a sleeping vehicle may take a little while to report.`;
+  const readiness = connectionReadiness(status?.worker_health, status?.last_event_at || status?.last_payload_at);
+  const { title, message: readinessMessage } = {
+    ready: { title: 'Vehicle connected', message: `${vehicleName} is connected and telemetry is available.` },
+    attention: { title: 'Vehicle saved', message: `${vehicleName} was saved, but its telemetry collector needs attention. Open the dashboard to review vehicle health.` },
+    waiting: { title: 'Vehicle saved', message: initialWaitingMessage ?? `${vehicleName} was saved. Panda is starting its telemetry collector; a sleeping vehicle may take a little while to report.` },
+  }[readiness];
+  const telemetryAvailable = readiness === 'ready';
 
   return (
     <div className="py-3 text-center">
@@ -126,4 +120,12 @@ export function ConnectedVehicleSuccess({
       </Button>
     </div>
   );
+}
+
+function connectionReadiness(health: string | null | undefined, evidence: unknown): 'ready' | 'attention' | 'waiting' {
+  const states = new Map<string, 'ready' | 'attention'>([
+    ['connected', 'ready'], ['ok', 'ready'], ['error', 'attention'], ['degraded', 'attention'], ['stale', 'attention'],
+  ]);
+  const state = states.get(health?.toLowerCase() ?? '') ?? 'waiting';
+  return state === 'ready' && !evidence ? 'waiting' : state;
 }

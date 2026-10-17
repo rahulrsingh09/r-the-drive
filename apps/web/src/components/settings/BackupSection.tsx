@@ -1,11 +1,13 @@
 import React from 'react';
+import { downloadFeatureFile, useFeatureOperation } from '../../features/featureOperation';
+import { observeRestore } from './restorePolling';
+import { backupCatalog, emptyRestoreWorkflow, restoreWorkflowTransition } from './restoreWorkflow';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys } from '@panda/hooks';
 import type {
   BackupFrequency,
   BackupOverview,
   BackupTargetType,
-  RestoreJob,
   RestorePlan,
   UpdateBackupSettingsBody,
 } from '@panda/types';
@@ -82,6 +84,25 @@ interface BackupDraft {
   access_key: string;
 }
 
+interface BackupEditor {
+  draft: BackupDraft | null;
+  secretKey: string;
+  clearSecretKey: boolean;
+}
+type BackupEditorEvent =
+  | { type: 'load'; draft: BackupDraft }
+  | { type: 'field'; key: keyof BackupDraft; value: BackupDraft[keyof BackupDraft] }
+  | { type: 'secret'; value: string }
+  | { type: 'clear-secret'; value: boolean };
+function backupEditorTransition(state: BackupEditor, event: BackupEditorEvent): BackupEditor {
+  switch (event.type) {
+    case 'load': return { draft: event.draft, secretKey: '', clearSecretKey: false };
+    case 'field': return state.draft ? { ...state, draft: { ...state.draft, [event.key]: event.value } } : state;
+    case 'secret': return { ...state, secretKey: event.value, clearSecretKey: false };
+    case 'clear-secret': return { ...state, clearSecretKey: event.value };
+  }
+}
+
 function emitToast(title: string, message: string) {
   window.dispatchEvent(
     new CustomEvent('panda:toast', {
@@ -118,38 +139,23 @@ function buildPayload(
 ): UpdateBackupSettingsBody | null {
   const retention = Number.parseInt(draft.retention_count, 10);
   if (!Number.isFinite(retention) || retention < 1) return null;
-
-  return {
-    enabled: draft.enabled,
-    frequency: draft.frequency,
-    run_at: draft.run_at,
-    timezone: draft.timezone.trim(),
+  const schedule = { enabled: draft.enabled, frequency: draft.frequency, run_at: draft.run_at, timezone: draft.timezone.trim(), retention_count: retention,
     day_of_week: draft.frequency === 'weekly' ? draft.day_of_week : null,
-    day_of_month: draft.frequency === 'monthly' ? draft.day_of_month : null,
-    retention_count: retention,
-    local_enabled: draft.local_enabled,
-    s3_enabled: draft.s3_enabled,
-    target_type: draft.target_type,
-    endpoint: draft.s3_enabled ? draft.endpoint.trim() : '',
-    region: draft.s3_enabled ? draft.region.trim() || null : null,
-    bucket: draft.s3_enabled ? draft.bucket.trim() : '',
-    prefix: draft.s3_enabled ? draft.prefix.trim() : '',
-    access_key: draft.s3_enabled ? draft.access_key.trim() || null : null,
-    ...(secretKey.trim() ? { secret_key: secretKey.trim() } : {}),
-    ...(clearSecretKey ? { clear_secret_key: true } : {}),
-  };
+    day_of_month: draft.frequency === 'monthly' ? draft.day_of_month : null };
+  const storage = draft.s3_enabled
+    ? { endpoint: draft.endpoint.trim(), region: draft.region.trim() || null, bucket: draft.bucket.trim(), prefix: draft.prefix.trim(), access_key: draft.access_key.trim() || null }
+    : { endpoint: '', region: null, bucket: '', prefix: '', access_key: null };
+  const credentials: Pick<UpdateBackupSettingsBody, 'secret_key' | 'clear_secret_key'> = {};
+  const secret = secretKey.trim();
+  if (secret) credentials.secret_key = secret;
+  if (clearSecretKey) credentials.clear_secret_key = true;
+  return { ...schedule, ...storage, ...credentials, local_enabled: draft.local_enabled, s3_enabled: draft.s3_enabled, target_type: draft.target_type };
 }
 
 function describeSchedule(overview: BackupOverview) {
-  const s = overview.settings;
-  const parts = [`${s.frequency} at ${s.run_at}`];
-  if (s.frequency === 'weekly') {
-    const weekday = WEEKDAYS.find((w) => w.value === s.day_of_week);
-    if (weekday) parts.push(weekday.label);
-  }
-  if (s.frequency === 'monthly' && s.day_of_month) parts.push(`day ${s.day_of_month}`);
-  parts.push(s.timezone);
-  return parts.join(' / ');
+  const { frequency, run_at, day_of_week, day_of_month, timezone } = overview.settings;
+  const detail = frequency === 'weekly' ? WEEKDAYS.find((day) => day.value === day_of_week)?.label : frequency === 'monthly' && day_of_month ? `day ${day_of_month}` : undefined;
+  return [`${frequency} at ${run_at}`, ...(detail ? [detail] : []), timezone].join(' / ');
 }
 
 function capitalizeFirstLetter(value: string) {
@@ -339,50 +345,29 @@ export function BackupSection() {
         : false;
     },
   });
-  const [draft, setDraft] = React.useState<BackupDraft | null>(null);
-  const [secretKey, setSecretKey] = React.useState('');
-  const [clearSecretKey, setClearSecretKey] = React.useState(false);
+  const [{ draft, secretKey, clearSecretKey }, editorEvent] = React.useReducer(backupEditorTransition, { draft: null, secretKey: '', clearSecretKey: false });
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
   const [catalogSource, setCatalogSource] = React.useState<'all' | 'local' | 's3' | null>(null);
   const [restoreArtifactId, setRestoreArtifactId] = React.useState('');
-  const [pendingRestoreArtifact, setPendingRestoreArtifact] = React.useState<
-    BackupOverview['artifacts'][number] | null
-  >(null);
-  const [pendingRestorePlan, setPendingRestorePlan] = React.useState<RestorePlan | null>(null);
-  const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
+  const [restore, dispatchRestore] = React.useReducer(restoreWorkflowTransition, emptyRestoreWorkflow);
+  const { pendingRestoreArtifact, pendingRestorePlan, restoreConfirmation, activeRestore, activeRestoreSizeBytes, restoreStatusUnavailable } = restore;
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
-  const [activeRestore, setActiveRestore] = React.useState<{
-    job: RestoreJob;
-    token: string;
-  } | null>(null);
-  const [activeRestoreSizeBytes, setActiveRestoreSizeBytes] = React.useState<number | null>(null);
-  const [restoreStatusUnavailable, setRestoreStatusUnavailable] = React.useState(false);
+  const inspection = useFeatureOperation();
+  const uploadOperation = useFeatureOperation();
+  const downloadOperation = useFeatureOperation();
+  const setRestoreConfirmation = (value: string) => dispatchRestore({ type: 'confirmation', value });
   const uploadInputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
-    if (!overview.data) return;
-    setDraft(buildDraft(overview.data));
-    setSecretKey('');
-    setClearSecretKey(false);
+    if (overview.data) editorEvent({ type: 'load', draft: buildDraft(overview.data) });
   }, [overview.data?.settings.updated_at]);
 
   React.useEffect(() => {
-    if (!overview.data) return;
-    setExpandedArtifactId((current) => {
-      if (current && overview.data.artifacts.some((artifact) => artifact.id === current)) {
-        return current;
-      }
-      return null;
-    });
-  }, [overview.data?.artifacts]);
-
-  React.useEffect(() => {
-    if (!overview.data) return;
-    setRestoreArtifactId((current) =>
-      current && overview.data.artifacts.some((artifact) => artifact.id === current)
-        ? current
-        : (overview.data.artifacts.find(artifactIsAvailable)?.id ?? '')
-    );
+    const artifacts = overview.data?.artifacts;
+    if (!artifacts) return;
+    const retained = new Set(artifacts.map((artifact) => artifact.id));
+    setExpandedArtifactId((id) => id && retained.has(id) ? id : null);
+    setRestoreArtifactId((id) => id && retained.has(id) ? id : artifacts.find(artifactIsAvailable)?.id ?? '');
   }, [overview.data?.artifacts]);
 
   const saveSettings = useMutation({
@@ -434,16 +419,9 @@ export function BackupSection() {
 
   const downloadArtifact = useMutation({
     mutationFn: async (artifact: BackupOverview['artifacts'][number]) => {
+      const active = downloadOperation.begin();
       const { blob, fileName } = await api.downloadBackupArtifact(artifact.id);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = fileName;
-      anchor.rel = 'noopener';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      if (active()) downloadFeatureFile(blob, fileName);
     },
     onError: (error) => {
       emitToast(
@@ -454,17 +432,19 @@ export function BackupSection() {
   });
 
   const uploadArtifact = useMutation({
-    mutationFn: (file: File) =>
+    mutationFn: ({ file, active }: { file: File; active: () => boolean }) =>
       api.uploadBackupArtifact(file, (loaded, total) => {
-        setUploadProgress(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
+        if (active()) setUploadProgress(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
       }),
-    onSuccess: ({ artifact }) => {
+    onSuccess: ({ artifact }, { active }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
+      if (!active()) return;
       setUploadProgress(null);
       setExpandedArtifactId(artifact.id);
       setRestoreArtifactId(artifact.id);
-      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
     },
-    onError: (error) => {
+    onError: (error, { active }) => {
+      if (!active()) return;
       setUploadProgress(null);
       emitToast(
         'Import recovery package',
@@ -484,25 +464,21 @@ export function BackupSection() {
   });
 
   const preflightRestore = useMutation({
+    onMutate: () => inspection.begin(),
     mutationFn: (artifact: BackupOverview['artifacts'][number]) =>
       api.preflightBackupRestore(artifact.id),
-    onSuccess: ({ plan }, artifact) => {
-      setPendingRestoreArtifact(artifact);
-      setPendingRestorePlan(plan);
-      setRestoreConfirmation('');
+    onSuccess: ({ plan }, artifact, active) => {
+      if (active?.()) dispatchRestore({ type: 'inspect', artifact, plan });
     },
-    onError: (error) =>
-      emitToast(
-        'Restore compatibility',
-        error instanceof Error ? error.message : 'The recovery package could not be inspected.'
-      ),
+    onError: (error, _artifact, active) => {
+      if (active?.()) emitToast('Restore compatibility', error instanceof Error ? error.message : 'The recovery package could not be inspected.');
+    },
   });
 
   const closeRestoreConfirmation = React.useCallback(() => {
-    setPendingRestoreArtifact(null);
-    setPendingRestorePlan(null);
-    setRestoreConfirmation('');
-  }, []);
+    inspection.cancel();
+    dispatchRestore({ type: 'close' });
+  }, [inspection.cancel]);
 
   const requestRestore = useMutation({
     mutationFn: (artifact: BackupOverview['artifacts'][number]) =>
@@ -514,10 +490,8 @@ export function BackupSection() {
         package_checksum_sha256: pendingRestorePlan?.package_checksum_sha256 ?? '',
       }),
     onSuccess: ({ job, capability_token }, artifact) => {
-      setActiveRestore({ job, token: capability_token });
-      setActiveRestoreSizeBytes(artifact.size_bytes);
-      setRestoreStatusUnavailable(false);
-      closeRestoreConfirmation();
+      inspection.cancel();
+      dispatchRestore({ type: 'start', job, token: capability_token, size: artifact.size_bytes });
       queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
     },
     onError: (error) => {
@@ -529,39 +503,18 @@ export function BackupSection() {
   });
 
   React.useEffect(() => {
-    if (
-      !activeRestore ||
-      activeRestore.job.phase === 'completed' ||
-      activeRestore.job.phase === 'failed'
-    )
-      return;
-    let stopped = false;
-    const poll = async () => {
-      try {
-        const job = await api.getRestoreJob(activeRestore.job.id, activeRestore.token);
-        if (stopped) return;
-        setRestoreStatusUnavailable(false);
-        setActiveRestore((current) => (current ? { ...current, job } : current));
-        if (job.phase === 'completed') {
-          window.setTimeout(() => window.location.reload(), 1200);
-        }
-      } catch {
-        setRestoreStatusUnavailable(true);
-        // The API process intentionally disappears during restore. The
-        // restore supervisor or restarted API may remain available while the
-        // application process is being replaced. Keep polling until it returns.
-      }
-    };
-    void poll();
-    const interval = window.setInterval(() => void poll(), 1000);
-    return () => {
-      stopped = true;
-      window.clearInterval(interval);
-    };
-  }, [activeRestore?.job.id, activeRestore?.job.phase, activeRestore?.token]);
+    if (!activeRestore || ['completed', 'failed'].includes(activeRestore.job.phase)) return;
+    const { token, job: { id } } = activeRestore;
+    return observeRestore({
+      read: () => api.getRestoreJob(id, token),
+      unavailable: (value) => dispatchRestore({ type: 'unavailable', value }),
+      job: (job) => dispatchRestore({ type: 'poll', id, job }),
+      completed: () => window.location.reload(),
+    });
+  }, [activeRestore?.job.id, activeRestore?.token]);
 
   function updateDraft<K extends keyof BackupDraft>(key: K, value: BackupDraft[K]) {
-    setDraft((cur) => (cur ? { ...cur, [key]: value } : cur));
+    editorEvent({ type: 'field', key, value });
   }
 
   const activeRestoreEstimate = estimateRestoreRange(activeRestoreSizeBytes);
@@ -609,34 +562,8 @@ export function BackupSection() {
     disabled: !artifactIsAvailable(artifact),
   }));
   const restoreAutomationReason = overview.data.runtime_readiness?.restore_automation_reason;
-  const hasLocalArtifacts = overview.data.artifacts.some(
-    (artifact) => (artifact.storage_type as string) !== 's3'
-  );
-  const hasS3Artifacts = overview.data.artifacts.some(
-    (artifact) => (artifact.storage_type as string) === 's3'
-  );
-  const hasLocalCatalog = hasLocalArtifacts || !hasS3Artifacts;
   const s3Configured = Boolean(currentSettings.endpoint && currentSettings.bucket);
-  const availableCatalogSources = [
-    ...(hasLocalCatalog && (hasS3Artifacts || s3Configured)
-      ? [{ value: 'all', label: 'All backups' }]
-      : []),
-    ...(hasLocalCatalog ? [{ value: 'local', label: 'Local' }] : []),
-    ...(hasS3Artifacts || s3Configured ? [{ value: 's3', label: 'S3' }] : []),
-  ];
-  const defaultCatalogSource =
-    hasLocalCatalog && hasS3Artifacts ? 'all' : hasS3Artifacts && !hasLocalCatalog ? 's3' : 'local';
-  const selectedCatalogSource =
-    catalogSource && availableCatalogSources.some((source) => source.value === catalogSource)
-      ? catalogSource
-      : defaultCatalogSource;
-  const visibleArtifacts = overview.data.artifacts.filter(
-    (artifact) =>
-      selectedCatalogSource === 'all' ||
-      (selectedCatalogSource === 's3'
-        ? (artifact.storage_type as string) === 's3'
-        : (artifact.storage_type as string) !== 's3')
-  );
+  const { availableCatalogSources, selectedCatalogSource, visibleArtifacts } = backupCatalog(overview.data, catalogSource);
 
   return (
     <div className="flex flex-col gap-5">
@@ -852,8 +779,7 @@ export function BackupSection() {
                     autoComplete="new-password"
                     value={secretKey}
                     onChange={(event) => {
-                      setSecretKey(event.target.value);
-                      setClearSecretKey(false);
+                      editorEvent({ type: 'secret', value: event.target.value });
                     }}
                     placeholder={
                       currentSettings.has_secret_key
@@ -868,7 +794,7 @@ export function BackupSection() {
                     <input
                       type="checkbox"
                       checked={clearSecretKey}
-                      onChange={(event) => setClearSecretKey(event.target.checked)}
+                      onChange={(event) => editorEvent({ type: 'clear-secret', value: event.target.checked })}
                     />
                     Clear the saved secret when settings are saved
                   </label>
@@ -1514,9 +1440,7 @@ export function BackupSection() {
                   variant="secondary"
                   size="sm"
                   onClick={() => {
-                    setActiveRestore(null);
-                    setActiveRestoreSizeBytes(null);
-                    setRestoreStatusUnavailable(false);
+                    dispatchRestore({ type: 'dismiss' });
                   }}
                 >
                   Close
@@ -1570,7 +1494,7 @@ export function BackupSection() {
                   className="sr-only"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
-                    if (file) uploadArtifact.mutate(file);
+                    if (file) uploadArtifact.mutate({ file, active: uploadOperation.begin() });
                     event.target.value = '';
                   }}
                 />

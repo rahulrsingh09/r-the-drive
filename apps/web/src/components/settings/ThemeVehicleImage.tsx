@@ -16,15 +16,17 @@ export function ThemeVehicleImage({
   fallback: React.ReactNode;
 }) {
   const resolved = resolveVehicleArtwork(images, model, placement === 'side' ? 'vehicle-card' : 'health');
-  const light = resolved.light;
-  const dark = resolved.dark ?? light;
-
-  if (!light && !dark && !resolved.fallback) return <>{fallback}</>;
-
+  const sources = [
+    { mode: 'light', source: resolved.light, classes: `${className ?? ''} dark:hidden` },
+    { mode: 'dark', source: resolved.dark ?? resolved.light, classes: `${className ?? ''} hidden dark:block` },
+  ];
+  const available = sources.some(({ source }) => Boolean(source)) || resolved.fallback;
+  if (!available) return <>{fallback}</>;
   return (
     <>
-      <AuthenticatedVehicleArtwork source={light} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} dark:hidden` }} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />
-      <AuthenticatedVehicleArtwork source={dark} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} hidden dark:block` }} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />
+      {sources.map(({ mode, source, classes }) => (
+        <AuthenticatedVehicleArtwork key={mode} source={source} fallbackSource={resolved.fallback} fallbackProps={{ className: classes }} alt="" className={classes} loading="lazy" />
+      ))}
     </>
   );
 }

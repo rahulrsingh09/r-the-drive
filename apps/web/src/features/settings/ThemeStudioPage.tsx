@@ -1,13 +1,14 @@
 import * as React from 'react';
+import { themeDraftTransition } from './themeDraft';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, CheckCircle2, Eye, Save, Send, Trash2 } from 'lucide-react';
-import { resolveTheme, type ThemeColorPair, type ThemeOverride } from '@panda/themes';
+import { resolveTheme, type ThemeColorPair } from '@panda/themes';
 import { queryKeys, themeClient, useAuth } from '@panda/hooks';
 import type { ThemePreferencesResponse, ThemeResource } from '@panda/types';
 import { applyThemeRuntime, resetThemePreferences } from '@panda/ui/lib/theme';
 import { useThemeRuntime } from '@panda/ui/lib/theme';
-import { contrastRatio } from '@panda/ui/lib/color';
+import { auditThemeContrast } from './themeContrast';
 import { Button, Card, CardContent, ColorPicker, Skeleton } from '@panda/ui/primitives';
 import { cn } from '@panda/ui/lib/utils';
 
@@ -19,6 +20,11 @@ const INTERFACE_TOKENS = [
 ] as const;
 
 export function ThemeStudioPage({ themeId }: { themeId: string }) {
+  const userId = useAuth((state) => state.userId);
+  return <ThemeStudioSession key={`${userId ?? 'signed-out'}:${themeId}`} themeId={themeId} />;
+}
+
+function ThemeStudioSession({ themeId }: { themeId: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const userId = useAuth((state) => state.userId);
@@ -26,40 +32,34 @@ export function ThemeStudioPage({ themeId }: { themeId: string }) {
   const catalogKey = queryKeys.themes.catalog(userId ?? 'signed-out');
   const resourceKey = queryKeys.themes.resource(userId ?? 'signed-out', themeId);
   const [section, setSection] = React.useState<StudioSectionId>('overview');
-  const [draft, setDraft] = React.useState<ThemeOverride | null>(null);
+  const [editor, dispatch] = React.useReducer(themeDraftTransition, { owner: themeId, draft: null, etag: '', revision: null });
+  const { draft, etag: resourceEtag, revision: publishTarget } = editor;
   const [previewing, setPreviewing] = React.useState(false);
   const [confirmRetire, setConfirmRetire] = React.useState(false);
   const [picker, setPicker] = React.useState<{ kind: 'token' | 'series'; key: string; value: ThemeColorPair } | null>(null);
-  const [resourceEtag, setResourceEtag] = React.useState('');
-  const [publishTarget, setPublishTarget] = React.useState<number | null>(null);
-  const previewOwnerRef = React.useRef(userId);
+  const previewActive = React.useRef(false);
+  const mounted = React.useRef(true);
   const detail = useQuery({ queryKey: resourceKey, queryFn: () => themeClient.get(themeId) as Promise<ThemeResource>, enabled: !!userId });
 
   React.useEffect(() => {
-    if (!detail.data || draft) return;
-    setDraft(detail.data.revisions[0]?.definition ?? { theme: detail.data.baseThemeId });
-    setResourceEtag(detail.data.etag);
-    setPublishTarget(detail.data.revisions[0]?.revision ?? null);
-  }, [detail.data, draft]);
-  React.useEffect(() => () => {
-    if (previewing) {
+    if (detail.data) dispatch({ type: 'load', owner: themeId, resource: detail.data });
+  }, [detail.data, themeId]);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (!previewActive.current) return;
+      previewActive.current = false;
       resetThemePreferences();
       void queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.all });
-    }
-  }, [previewing, queryClient]);
-  React.useEffect(() => {
-    if (previewOwnerRef.current === userId) return;
-    previewOwnerRef.current = userId;
-    if (!previewing) return;
-    resetThemePreferences();
-    setPreviewing(false);
-  }, [previewing, userId]);
+    };
+  }, [queryClient]);
 
   const saveRevision = useMutation({
     mutationFn: () => themeClient.saveRevision(themeId, draft!, resourceEtag),
     onSuccess: (result: { etag: string; revision?: number }) => {
-      setResourceEtag(result.etag);
-      if (result.revision) setPublishTarget(result.revision);
+      if (!mounted.current) return;
+      dispatch({ type: 'saved', ...result });
       void detail.refetch();
     },
   });
@@ -71,7 +71,8 @@ export function ThemeStudioPage({ themeId }: { themeId: string }) {
       return themeClient.publishRevision(themeId, revision, apply, resourceEtag, apply ? preferenceEtag : undefined);
     },
     onSuccess: (result: { etag: string }, apply) => {
-      setResourceEtag(result.etag);
+      if (!mounted.current) return;
+      dispatch({ type: 'saved', ...result });
       void detail.refetch();
       if (apply) void queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.all });
     },
@@ -83,35 +84,32 @@ export function ThemeStudioPage({ themeId }: { themeId: string }) {
       return themeClient.rollback(themeId, revision, resourceEtag, preferenceEtag);
     },
     onSuccess: (response: ThemePreferencesResponse) => {
-      queryClient.setQueryData(preferenceKey, response);
+      if (mounted.current) queryClient.setQueryData(preferenceKey, response);
     },
   });
   const retire = useMutation({
     mutationFn: () => themeClient.retire(themeId, resourceEtag),
-    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: catalogKey }); void navigate({ to: '/settings', search: { section: 'appearance' } }); },
+    onSuccess: () => { if (!mounted.current) return; void queryClient.invalidateQueries({ queryKey: catalogKey }); void navigate({ to: '/settings', search: { section: 'appearance' } }); },
   });
 
   if (detail.isLoading || !draft) return <div className="mx-auto grid max-w-6xl gap-4 p-4 sm:p-6"><Skeleton className="h-14" /><Skeleton className="h-[32rem]" /></div>;
   if (detail.isError || !detail.data) return <div className="mx-auto max-w-3xl p-6"><Card><CardContent className="grid gap-3 p-6"><h1 className="text-lg font-semibold text-fg">Theme unavailable</h1><p className="text-sm text-fg-secondary">This theme may have been retired or belongs to another account.</p><Button className="justify-self-start" variant="secondary" onClick={() => void navigate({ to: '/settings', search: { section: 'appearance' } })}>Back to Appearance</Button></CardContent></Card></div>;
 
   const resolved = resolveTheme(draft);
-  const criticalContrastFailures = criticalContrastIssues(resolved);
-  const chartWarnings = chartContrastIssues(resolved);
+  const { primary: criticalContrastFailures, charts: chartWarnings } = auditThemeContrast(resolved);
   const draftRevision = (detail.data.revisions[0]?.revision ?? 0) + 1;
   const togglePreview = () => {
-    if (previewing) {
-      resetThemePreferences();
-      void queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.all });
-      setPreviewing(false);
-    } else {
+    previewActive.current = !previewActive.current;
+    setPreviewing(previewActive.current);
+    if (previewActive.current) {
       applyThemeRuntime({ schemaVersion: 2, mode: 'dark', selection: { kind: 'custom', themeId, revision: draftRevision } }, resolved);
-      setPreviewing(true);
+      return;
     }
+    resetThemePreferences();
+    void queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.all });
   };
-  const updatePair = (next: ThemeColorPair) => {
-    if (!picker) return;
-    if (picker.kind === 'token') setDraft((current) => ({ ...current!, tokens: { ...current!.tokens, [picker.key]: next } }));
-    if (picker.kind === 'series') setDraft((current) => ({ ...current!, series: { ...current!.series, [picker.key]: next } }));
+  const updatePair = (value: ThemeColorPair) => {
+    if (picker) dispatch({ type: 'paint', kind: picker.kind, key: picker.key, value });
   };
 
   return <div className="min-h-screen bg-bg-page text-fg">
@@ -161,5 +159,3 @@ function BrandPreview({ resolved }: { resolved: ReturnType<typeof resolveTheme> 
   );
 }
 function RevisionHistory({ revisions, activeRevision, pending, onRollback }: { revisions: ThemeResource['revisions']; activeRevision: number | null; pending: boolean; onRollback: (revision: number) => void }) { const published = revisions.filter((revision) => revision.publishedAt !== null); if (!published.length) return null; return <div className="mt-5 rounded-xl border border-border bg-bg-elevated/35 p-4"><h3 className="text-sm font-semibold text-fg">Published history</h3><div className="mt-3 grid gap-2">{published.map((revision) => <div key={revision.revision} className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-border bg-bg-surface px-3"><span className="text-sm text-fg">Revision {revision.revision}{revision.revision === activeRevision ? <span className="ml-2 text-xs text-fg-tertiary">latest publication</span> : null}</span><Button size="sm" variant="secondary" disabled={pending} onClick={() => onRollback(revision.revision)}>Apply revision</Button></div>)}</div></div>; }
-function criticalContrastIssues(resolved: ReturnType<typeof resolveTheme>) { return (['light', 'dark'] as const).flatMap((mode) => ['bg-page', 'bg-surface'].flatMap((background) => contrastRatio(resolved.tokens[mode]['text-primary'], resolved.tokens[mode][background as 'bg-page' | 'bg-surface']) < 4.5 ? [`Primary text on ${background.replace('bg-', '')} in ${mode} mode is below 4.5:1.`] : [])); }
-function chartContrastIssues(resolved: ReturnType<typeof resolveTheme>) { const series = Object.entries(resolved.series) as Array<[string, ThemeColorPair]>; return (['light', 'dark'] as const).flatMap((mode) => series.flatMap(([key, pair], index) => { const background = resolved.tokens[mode]['bg-page']; const previous = index > 0 ? series[index - 1]![1][mode] : null; if (contrastRatio(pair[mode], background) < 1.5) return [`${key} has weak ${mode}-mode chart-background contrast.`]; if (previous && contrastRatio(pair[mode], previous) < 1.12) return [`${key} is very similar to the preceding ${mode}-mode series.`]; return []; })); }

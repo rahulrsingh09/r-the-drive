@@ -1,49 +1,15 @@
+import { placeRequest, buildNextSchedule, METERS_TO_FEET, normalizeScheduleEdges, placeEditorInitial, placeEditorTransition, validateScheduleDraft, type PlaceDraft, type ScheduleDraft } from './placeEditor';
+import { useFeatureOperation } from '../../features/featureOperation';
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, invalidateChargingData } from '@panda/hooks';
-import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@panda/types';
+import type { Place, PlaceSearchSuggestion, UpsertPlaceBody } from '@panda/types';
 import type { UnitSystem } from '@panda/ui/lib/utils';
-import { getAppTimezone } from '@panda/ui/lib/dateTime';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@panda/ui/primitives';
 import { HelpCircle, Home, Loader2, Pencil, Plus, Search, Zap, Trash2 } from 'lucide-react';
 
 type PlanType = 'per_kwh' | 'tou';
 type PlaceType = 'home' | 'work' | 'poi';
-
-interface ScheduleDraft {
-  label: string;
-  start: string;
-  end: string;
-  rate: string;
-}
-
-interface PlaceDraft {
-  name: string;
-  radius_m: string;
-  placeType: PlaceType;
-  chargingEnabled: boolean;
-  planType: PlanType;
-  energyRate: string;
-  sessionFee: string;
-  timezone: string;
-  schedule: ScheduleDraft[];
-}
-
-const METERS_TO_FEET = 3.28084;
-
-function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
-  return {
-    name: '',
-    radius_m: unitSystem === 'metric' ? '75' : '250',
-    placeType: 'poi',
-    chargingEnabled: false,
-    planType: 'per_kwh',
-    energyRate: '0.13',
-    sessionFee: '0',
-    timezone: getAppTimezone(),
-    schedule: [{ label: 'All day', start: '00:00', end: '24:00', rate: '0.13' }],
-  };
-}
 
 function radiusDraftToMeters(value: number, unitSystem: UnitSystem) {
   return unitSystem === 'metric' ? value : value / METERS_TO_FEET;
@@ -53,64 +19,16 @@ function radiusInputLabel(unitSystem: UnitSystem) {
   return unitSystem === 'metric' ? 'Radius (m)' : 'Radius (ft)';
 }
 
-function buildNextSchedule(schedule: ScheduleDraft[]) {
-  if (schedule.length === 0) {
-    return normalizeScheduleEdges([{ label: 'Period 1', start: '00:00', end: '24:00', rate: '0' }]);
-  }
-
-  const nextSchedule = [...schedule];
-  const lastIndex = nextSchedule.length - 1;
-  const lastPeriod = nextSchedule[lastIndex];
-  if (!lastPeriod) {
-    return normalizeScheduleEdges([{ label: 'All day', start: '00:00', end: '24:00', rate: '0' }]);
-  }
-  const startMinute = parseTimeToMinute(lastPeriod.start, false);
-  const endMinute = parseTimeToMinute(lastPeriod.end, true);
-
-  if (startMinute !== null && endMinute !== null && endMinute - startMinute >= 120) {
-    const splitMinute = Math.max(startMinute + 60, Math.min(endMinute - 60, Math.ceil((startMinute + endMinute) / 120) * 60));
-    nextSchedule[lastIndex] = { ...lastPeriod, end: minutesToTime(splitMinute) };
-    nextSchedule.push({
-      label: `Period ${nextSchedule.length + 1}`,
-      start: minutesToTime(splitMinute),
-      end: minutesToTime(endMinute),
-      rate: lastPeriod.rate || '0',
-    });
-    return normalizeScheduleEdges(nextSchedule);
-  }
-
-  const fallbackStart = lastPeriod.end === '24:00' ? '23:00' : lastPeriod.end;
-  nextSchedule.push({
-    label: `Period ${nextSchedule.length + 1}`,
-    start: fallbackStart,
-    end: '24:00',
-    rate: lastPeriod.rate || '0',
-  });
-  return normalizeScheduleEdges(nextSchedule);
-}
-
-function normalizeScheduleEdges(schedule: ScheduleDraft[]): ScheduleDraft[] {
-  if (schedule.length === 0) {
-    return [{ label: 'All day', start: '00:00', end: '24:00', rate: '0' }];
-  }
-
-  return schedule.map((period, index): ScheduleDraft => ({
-    label: period.label,
-    start: index === 0 ? '00:00' : period.start,
-    end: index === schedule.length - 1 ? '24:00' : period.end,
-    rate: period.rate,
-  }));
-}
-
 export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const queryClient = useQueryClient();
-  const [draft, setDraft] = React.useState<PlaceDraft>(() => emptyDraft(unitSystem));
-  const [editingPlaceId, setEditingPlaceId] = React.useState<string | null>(null);
-  const [addressQuery, setAddressQuery] = React.useState('');
-  const [submittedAddressQuery, setSubmittedAddressQuery] = React.useState('');
+  const [editor, dispatchEditor] = React.useReducer(placeEditorTransition, unitSystem, placeEditorInitial);
+  const { draft, editingPlaceId, addressQuery, submittedAddressQuery, selectedAddress } = editor;
+  const setDraft: React.Dispatch<React.SetStateAction<PlaceDraft>> = (update) => dispatchEditor({ type: 'draft', update });
+  const setAddressQuery = (value: string) => dispatchEditor({ type: 'query', value });
+  const setSubmittedAddressQuery = (value: string) => dispatchEditor({ type: 'query', value, submitted: true });
   const [autocompleteAddressQuery, setAutocompleteAddressQuery] = React.useState('');
   const [savedPlacesQuery, setSavedPlacesQuery] = React.useState('');
-  const [selectedAddress, setSelectedAddress] = React.useState<PlaceAddress | null>(null);
+  const saveOperation = useFeatureOperation();
   const connectionPolicy = useQuery({
     queryKey: ['external-connections'],
     queryFn: () => api.getExternalConnections(),
@@ -136,18 +54,15 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   });
 
   const savePlace = useMutation({
+    onMutate: () => saveOperation.begin(),
     mutationFn: async (body: UpsertPlaceBody) => {
       if (editingPlaceId) {
         return api.updatePlace(editingPlaceId, body);
       }
       return api.createPlace(body);
     },
-    onSuccess: () => {
-      setEditingPlaceId(null);
-      setDraft(emptyDraft(unitSystem));
-      setSelectedAddress(null);
-      setAddressQuery('');
-      setSubmittedAddressQuery('');
+    onSuccess: (_result, _body, active) => {
+      if (active?.()) dispatchEditor({ type: 'reset', unit: unitSystem });
       queryClient.invalidateQueries({ queryKey: ['places'] });
       invalidateChargingData(queryClient);
     },
@@ -173,13 +88,14 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   React.useEffect(() => {
     if (previousUnitSystem.current === unitSystem) return;
 
+    const previousUnit = previousUnitSystem.current;
     setDraft((current) => {
       const currentRadius = Number(current.radius_m);
       if (!Number.isFinite(currentRadius) || currentRadius <= 0) {
         return current;
       }
 
-      const meters = radiusDraftToMeters(currentRadius, previousUnitSystem.current);
+      const meters = radiusDraftToMeters(currentRadius, previousUnit);
       return {
         ...current,
         radius_m: String(Math.round(unitSystem === 'metric' ? meters : meters * METERS_TO_FEET)),
@@ -220,103 +136,37 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     : [];
   const isSearchingSuggestions = shouldSearchSuggestions && addressSearch.isFetching;
   const hasNoSuggestions = shouldSearchSuggestions && !isSearchingSuggestions && placeSuggestions.length === 0;
-  const filteredPlaces = React.useMemo(() => {
-    const allPlaces = places.data ?? [];
-    if (!deferredSavedPlacesQuery) {
-      return allPlaces;
-    }
-
-    return allPlaces.filter((place) => {
-      const fields = [
-        place.name,
-        place.address?.display_name,
-        place.address?.city,
-        place.address?.state,
-      ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase());
-
-      return fields.some((field) => field.includes(deferredSavedPlacesQuery));
-    });
-  }, [places.data, deferredSavedPlacesQuery]);
+  const searchablePlaces = React.useMemo(() => (places.data ?? []).map((place) => ({
+    place,
+    fields: [place.name, place.address?.display_name, place.address?.city, place.address?.state].filter(Boolean).map((value) => String(value).toLowerCase()),
+  })), [places.data]);
+  const filteredPlaces = React.useMemo(() => searchablePlaces.filter(({ fields }) => !deferredSavedPlacesQuery || fields.some((field) => field.includes(deferredSavedPlacesQuery))).map(({ place }) => place), [searchablePlaces, deferredSavedPlacesQuery]);
 
   function updateDraft<K extends keyof PlaceDraft>(key: K, value: PlaceDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
   function updateSchedulePeriod(index: number, updates: Partial<ScheduleDraft>, syncNextStart = false) {
-    setDraft((current) => {
-      const schedule = current.schedule.map((item, itemIndex) => (
-        itemIndex === index ? { ...item, ...updates } : item
-      ));
-
-      if (syncNextStart && index < schedule.length - 1 && updates.end) {
-        const nextPeriod = schedule[index + 1];
-        if (nextPeriod) {
-          schedule[index + 1] = { ...nextPeriod, start: updates.end };
-        }
-      }
-
-      return { ...current, schedule: normalizeScheduleEdges(schedule) };
-    });
+    dispatchEditor({ type: 'period', index, updates, syncNextStart });
   }
 
   function resetEditor() {
-    setEditingPlaceId(null);
-    setDraft(emptyDraft(unitSystem));
-    setSelectedAddress(null);
-    setAddressQuery('');
-    setSubmittedAddressQuery('');
+    saveOperation.cancel();
+    dispatchEditor({ type: 'reset', unit: unitSystem });
   }
 
   function startEditing(place: Place) {
-    setEditingPlaceId(place.id);
-    setSelectedAddress(place.address);
-    setAddressQuery(place.address?.display_name ?? '');
-    setSubmittedAddressQuery('');
-    const placeType = place.is_home ? 'home' : place.is_work ? 'work' : 'poi';
-    setDraft({
-      name: place.name,
-      radius_m: String(Math.round(unitSystem === 'metric' ? place.radius_m : place.radius_m * METERS_TO_FEET)),
-      placeType,
-      chargingEnabled: !!place.charging,
-      planType: place.charging?.billing_type === 'tou' ? 'tou' : 'per_kwh',
-      energyRate: String(place.charging?.rate ?? 0.13),
-      sessionFee: String(place.charging?.session_fee ?? 0),
-      timezone: place.charging?.timezone ?? getAppTimezone(),
-      schedule: normalizeScheduleEdges(place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
-        ? place.charging.tou_periods.map((period) => ({
-            label: period.label,
-            start: minutesToTime(period.start_minute),
-            end: minutesToTime(period.end_minute),
-            rate: String(period.rate),
-          }))
-        : [{ label: 'All day', start: '00:00', end: '24:00', rate: String(place.charging?.rate ?? 0.13) }]),
-    });
+    saveOperation.cancel();
+    dispatchEditor({ type: 'edit', place, unit: unitSystem });
   }
 
   function handleAddressSelect(address: PlaceSearchSuggestion) {
-    setSelectedAddress(address);
-    setAddressQuery(address.display_name);
-    setSubmittedAddressQuery('');
+    dispatchEditor({ type: 'address', address });
   }
 
   async function handleSave() {
-    if (!selectedAddress) return;
-
-    const charging = buildChargingPayload(draft);
-    if (draft.chargingEnabled && draft.planType === 'tou' && !charging) {
-      return;
-    }
-
-    await savePlace.mutateAsync({
-      name: draft.name.trim(),
-      radius_m: radiusDraftToMeters(Number(draft.radius_m || '0'), unitSystem),
-      is_home: draft.placeType === 'home',
-      is_work: draft.placeType === 'work',
-      address: selectedAddress,
-      charging,
-    });
+    const request = placeRequest(editor, unitSystem);
+    if (request) await savePlace.mutateAsync(request);
   }
 
   return (
@@ -348,7 +198,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                     onChange={(event) => {
                       setAddressQuery(event.target.value);
                       if (selectedAddress?.display_name !== event.target.value) {
-                        setSelectedAddress(null);
+                        dispatchEditor({ type: 'clearAddress' });
                       }
                     }}
                     onKeyDown={(event) => {
@@ -710,117 +560,4 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       </Card>
     </div>
   );
-}
-
-function buildChargingPayload(draft: PlaceDraft): PlaceChargingInput | null {
-  if (!draft.chargingEnabled) {
-    return null;
-  }
-
-  const rate = Number(draft.energyRate || '0');
-  const sessionFee = Number(draft.sessionFee || '0');
-
-  if (draft.planType === 'per_kwh') {
-    return {
-      billing_type: 'per_kwh',
-      rate,
-      session_fee: sessionFee,
-      currency: 'USD',
-    };
-  }
-
-  const periods = scheduleDraftToPeriods(draft.schedule);
-  if (!periods) {
-    return null;
-  }
-
-  return {
-    billing_type: 'tou',
-    rate,
-    session_fee: sessionFee,
-    currency: 'USD',
-    timezone: draft.timezone.trim() || getAppTimezone(),
-    tou_periods: periods,
-  };
-}
-
-function scheduleDraftToPeriods(schedule: ScheduleDraft[]): TouPeriod[] | null {
-  const periods: TouPeriod[] = [];
-  for (const item of schedule) {
-    const start = parseTimeToMinute(item.start, false);
-    const end = parseTimeToMinute(item.end, true);
-    const rate = Number(item.rate);
-
-    if (start === null || end === null || !Number.isFinite(rate)) {
-      return null;
-    }
-
-    periods.push({
-      label: item.label.trim(),
-      start_minute: start,
-      end_minute: end,
-      rate,
-    });
-  }
-  return periods;
-}
-
-function validateScheduleDraft(schedule: ScheduleDraft[]) {
-  const periods = scheduleDraftToPeriods(schedule);
-  if (!periods || periods.length === 0) {
-    return 'Each TOU period needs a valid start, end, and rate.';
-  }
-
-  let expectedStart = 0;
-  for (const period of periods) {
-    if (!period.label) {
-      return 'Each TOU period needs a label.';
-    }
-    if (period.start_minute !== expectedStart) {
-      return 'TOU periods must be contiguous and begin at 00:00.';
-    }
-    if (period.end_minute <= period.start_minute) {
-      return 'Each TOU period must end after it starts.';
-    }
-    if (period.rate < 0) {
-      return 'Each TOU period needs a non-negative rate.';
-    }
-    expectedStart = period.end_minute;
-  }
-
-  if (expectedStart !== 24 * 60) {
-    return 'TOU periods must cover the entire day through midnight.';
-  }
-
-  return null;
-}
-
-function parseTimeToMinute(value: string, allow24Hour: boolean) {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-  if (!match) {
-    return null;
-  }
-
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) {
-    return null;
-  }
-  if (allow24Hour && hour === 24 && minute === 0) {
-    return 24 * 60;
-  }
-  if (hour < 0 || hour > 23) {
-    return null;
-  }
-
-  return hour * 60 + minute;
-}
-
-function minutesToTime(minutes: number) {
-  if (minutes >= 24 * 60) {
-    return '24:00';
-  }
-  const hour = Math.floor(minutes / 60).toString().padStart(2, '0');
-  const minute = (minutes % 60).toString().padStart(2, '0');
-  return `${hour}:${minute}`;
 }

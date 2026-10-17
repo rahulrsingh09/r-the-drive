@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useFeatureOperation } from '../featureOperation';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys, useBasemapConfig } from '@panda/hooks';
 import { DEFAULT_THEME_PREFERENCES, type ThemeMode, type ThemePreferences, type UserPreferencesResponse } from '@panda/types';
@@ -14,6 +15,7 @@ interface PreferencesQuery {
 
 export function AppearanceSection({ preferencesQuery }: { preferencesQuery: PreferencesQuery }) {
   const queryClient = useQueryClient();
+  const operation = useFeatureOperation();
   const basemapConfig = useBasemapConfig();
   const [themePreferences, setThemePreferences] = React.useState<ThemePreferences>(DEFAULT_THEME_PREFERENCES);
 
@@ -22,27 +24,30 @@ export function AppearanceSection({ preferencesQuery }: { preferencesQuery: Pref
     if (next) setThemePreferences(next);
   }, [preferencesQuery.data?.theme]);
 
+  function commitTheme(theme: ThemePreferences) {
+    setThemePreferences(theme);
+    applyThemePreferences(theme);
+  }
   const updateThemePreferences = useMutation({
     mutationFn: (theme: ThemePreferences) => api.updateThemePreferences(theme),
     scope: { id: 'settings-theme-preferences' },
     onMutate: async (next) => {
+      const active = operation.begin();
       await queryClient.cancelQueries({ queryKey: queryKeys.unitPreferences.current });
       const previous = queryClient.getQueryData<UserPreferencesResponse>(queryKeys.unitPreferences.current);
-      setThemePreferences(next);
-      applyThemePreferences(next);
-      return { previous };
+      if (active()) commitTheme(next);
+      return { previous, active };
     },
-    onSuccess: (result) => {
-      setThemePreferences(result.theme);
-      applyThemePreferences(result.theme);
+    onSuccess: (result, _next, context) => {
+      if (!context?.active()) return;
       queryClient.setQueryData(queryKeys.unitPreferences.current, result);
+      commitTheme(result.theme);
       void queryClient.invalidateQueries({ queryKey: queryKeys.themePreferences.all });
     },
     onError: (_error, _next, context) => {
-      const previous = context?.previous?.theme ?? DEFAULT_THEME_PREFERENCES;
-      setThemePreferences(previous);
-      applyThemePreferences(previous);
-      if (context?.previous) queryClient.setQueryData(queryKeys.unitPreferences.current, context.previous);
+      if (!context?.active()) return;
+      if (context.previous) queryClient.setQueryData(queryKeys.unitPreferences.current, context.previous);
+      commitTheme(context.previous?.theme ?? DEFAULT_THEME_PREFERENCES);
     },
   });
 

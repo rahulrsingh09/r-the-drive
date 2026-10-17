@@ -11,20 +11,9 @@ test('chart manager and editor remain usable at desktop and phone widths', async
   await expect(enabled).toHaveAttribute('aria-checked', 'true');
   expect((await enabled.boundingBox())?.width).toBeLessThanOrEqual(44);
 
-  const assignmentTrigger = page.getByRole('button', { name: 'Edit dashboard assignments for Battery Capacity by Mileage' });
-  await assignmentTrigger.click();
-  const desktopDialog = page.getByRole('dialog', { name: 'Assigned dashboards' });
-  await expect(desktopDialog).toBeVisible();
-  expect((await desktopDialog.boundingBox())?.width).toBeLessThan(1280);
-  await expect(desktopDialog).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await page.keyboard.press('Escape');
-  await expect(assignmentTrigger).toBeFocused();
-
-  await assignmentTrigger.click();
-  await page.getByRole('checkbox').filter({ hasText: 'Battery' }).click();
-  await page.getByRole('button', { name: 'Save assignments' }).click();
-  await expect.poll(() => apiState.createdCharts.length).toBe(1);
-  expect(apiState.createdCharts[0]?.config.placements).not.toContainEqual({ dashboardSlug: 'battery' });
+  await expect(page.getByRole('button', { name: /Edit dashboard assignments/ })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Assigned dashboards' })).toHaveCount(0);
+  expect(apiState.createdCharts).toEqual([]);
 
   await page.getByRole('button', { name: 'Edit Battery Capacity by Mileage' }).click();
   await expect(page).toHaveURL(/\/settings\/charts\/chart-1$/);
@@ -51,12 +40,8 @@ test('chart manager and editor remain usable at desktop and phone widths', async
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/settings?section=charts');
-  const mobileTrigger = page.getByRole('button', { name: 'Edit dashboard assignments for Battery Capacity by Mileage' });
-  await mobileTrigger.scrollIntoViewIfNeeded();
-  await mobileTrigger.click();
-  const mobileDialog = page.getByRole('dialog', { name: 'Assigned dashboards' });
-  expect(await mobileDialog.boundingBox()).toMatchObject({ x: 0, y: 0, width: 390, height: 844 });
-  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: /Edit dashboard assignments/ })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Assigned dashboards' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Edit Battery Capacity by Mileage' }).click();
   const mobilePreview = await page.getByText('Live preview', { exact: true }).boundingBox();
