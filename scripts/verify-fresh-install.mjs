@@ -1,276 +1,148 @@
 #!/usr/bin/env node
-/**
- * Disposable new-user verification. Run from a clean worktree:
- *   node scripts/verify-fresh-install.mjs --mode standard --production-env /path/to/fresh.env --source-build
- *   node scripts/verify-fresh-install.mjs --mode production --production-env /path/to/fresh.env
- * The env file is intentionally caller-owned: it must contain valid production
- * secrets (including the complete external RSA/AGE bundle) and is never copied
- * into this repository or logged by this script. --keys-source may instead mount
- * a caller-owned bundle directory through the read-only key overlay.
- */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Commands, direct, option, pollUntil } from './operational-runtime.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const args = process.argv.slice(2);
-const value = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
-const mode = value('--mode') ?? 'all';
-const productionEnv = value('--production-env');
-const imageTag = value('--image-tag');
-const imageRef = value('--image-ref');
-const sourceBuild = args.includes('--source-build');
-const keysSource = value('--keys-source');
-const project = `panda-fresh-${Date.now().toString(36)}`;
-const port = String(18080 + Math.floor(Math.random() * 1000));
-const composeFile = 'compose/docker-compose.yml';
-const compose = [
-  'compose',
-  '-p',
-  project,
-  '-f',
-  composeFile,
-  ...(sourceBuild ? ['-f', 'compose/docker-compose.build.yml'] : []),
-  ...(keysSource ? ['-f', 'compose/docker-compose.keys.yml'] : []),
-];
-let productionStarted = false;
-let productionEnvironment;
-let productionDataRoot;
-
-function run(command, commandArgs, options = {}) {
-  return execFileSync(command, commandArgs, { cwd: root, stdio: 'inherit', ...options });
-}
-
-function ensureCleanWorktree() {
-  const status = execFileSync('git', ['status', '--porcelain'], {
-    cwd: root,
-    encoding: 'utf8',
-  }).trim();
-  if (status)
-    throw new Error(
-      'Fresh-install verification requires a clean worktree. Run it from an isolated worktree or checkout.'
-    );
-}
-
-async function waitFor(url, timeoutMs = 120000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch {
-      /* retry */
-    }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+export function readEnvValue(file, name) {
+  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const entry = line.trim();
+    if (!entry.startsWith(name + '=')) continue;
+    const value = entry.slice(name.length + 1).trim();
+    const quoted = value.length >= 2 && ['"', "'"].includes(value[0]) && value.at(-1) === value[0];
+    return quoted ? value.slice(1, -1) : value;
   }
-  throw new Error(`Timed out waiting for ${url}`);
 }
-
-function readEnvValue(file, name) {
-  const prefix = `${name}=`;
-  const line = readFileSync(file, 'utf8')
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .find((entry) => entry.startsWith(prefix) && !entry.startsWith('#'));
-  if (!line) return undefined;
-
-  const rawValue = line.slice(prefix.length).trim();
-  if (
-    (rawValue.startsWith('"') && rawValue.endsWith('"')) ||
-    (rawValue.startsWith("'") && rawValue.endsWith("'"))
-  ) {
-    return rawValue.slice(1, -1);
-  }
-  return rawValue;
-}
-
-function readSetupToken(file) {
+export function readSetupToken(file) {
   const inline = readEnvValue(file, 'PANDA_SETUP_TOKEN');
   if (inline) return inline;
-
-  const tokenFile = readEnvValue(file, 'PANDA_SETUP_TOKEN_FILE');
-  if (tokenFile && existsSync(tokenFile)) return readFileSync(tokenFile, 'utf8').trimEnd();
-  return undefined;
+  const path = readEnvValue(file, 'PANDA_SETUP_TOKEN_FILE');
+  if (!path || !existsSync(path)) return undefined;
+  return readFileSync(path, 'utf8').trimEnd();
+}
+export function sortJson(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return Array.from(value, sortJson);
+  const result = {};
+  for (const key of Object.keys(value).sort()) result[key] = sortJson(value[key]);
+  return result;
 }
 
-async function verifyOwnerSetup(baseUrl) {
-  await waitFor(`${baseUrl}/health`);
-  const setup = await fetch(`${baseUrl}/v1/auth/setup`).then((response) => response.json());
-  if (!setup.setup_required) throw new Error('Fresh stack unexpectedly already has a user.');
-  const setupToken = setup.setup_proof_required ? readSetupToken(productionEnv) : undefined;
-  if (setup.setup_proof_required && !setupToken)
-    throw new Error(
-      'Production first-owner verification requires PANDA_SETUP_TOKEN in the supplied env file.'
-    );
-  const first = await fetch(`${baseUrl}/v1/auth/register`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      email: 'owner@example.test',
-      password: 'fresh-install-password',
-      ...(setupToken ? { setup_token: setupToken } : {}),
-    }),
-  });
-  if (first.status !== 201)
-    throw new Error(`First owner registration failed with ${first.status}.`);
-  const firstBody = await first.json();
-  const accessToken = firstBody.access_token;
-  if (!accessToken) throw new Error('First owner registration did not return an access token.');
-  await verifyBundledDashboards(baseUrl, accessToken);
-  const closed = await fetch(`${baseUrl}/v1/auth/register`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: 'second@example.test', password: 'fresh-install-password' }),
-  });
-  if (closed.status !== 403)
-    throw new Error(`Registration remained open after owner setup (status ${closed.status}).`);
-  return accessToken;
-}
-
-async function verifyBundledDashboards(baseUrl, accessToken) {
-  const response = await fetch(`${baseUrl}/v1/dashboards`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) throw new Error(`Fresh dashboard list failed with ${response.status}.`);
-
-  const rows = await response.json();
-  const expectedFiles = ['dashboard', 'battery', 'efficiency', 'charging', 'trips'];
-  if (
-    rows.filter((row) => row.owner_id == null && row.is_default === true).length !==
-    expectedFiles.length
-  ) {
-    throw new Error('Fresh install did not seed exactly five system dashboards.');
+export class FreshInstall {
+  constructor(args, { commands = new Commands(root), probe = spawnSync, fetchImpl = fetch, poll = pollUntil, env = process.env } = {}) {
+    Object.assign(this, { commands, probe, fetchImpl, poll, env });
+    const fields = ['mode', 'production-env', 'image-tag', 'image-ref', 'keys-source'];
+    this.options = Object.fromEntries(fields.map(name => [name, option(args, '--' + name)]));
+    this.options.mode ??= 'all';
+    this.sourceBuild = args.includes('--source-build');
+    this.project = `panda-fresh-${Date.now().toString(36)}`;
+    this.port = String(18080 + Math.floor(Math.random() * 1000));
+    this.compose = ['compose', '-p', this.project, '-f', 'compose/docker-compose.yml'];
+    if (this.sourceBuild) this.compose.push('-f', 'compose/docker-compose.build.yml');
+    if (this.options['keys-source']) this.compose.push('-f', 'compose/docker-compose.keys.yml');
+    this.started = false;
   }
-
-  for (const slug of expectedFiles) {
-    const expected = JSON.parse(
-      readFileSync(
-        resolve(root, 'packages', 'dashboards', 'src', 'defaults', `${slug}.json`),
-        'utf8'
-      )
-    );
-    const row = rows.find((entry) => entry.owner_id == null && entry.slug === expected.slug);
-    if (!row) throw new Error(`Fresh install is missing the ${expected.slug} system dashboard.`);
-    if (JSON.stringify(sortJson(row.config)) !== JSON.stringify(sortJson(expected))) {
-      throw new Error(
-        `Fresh install ${expected.slug} dashboard does not match its bundled baseline.`
-      );
+  command(args, options = {}) {
+    return this.commands.invoke('docker', this.compose.concat(['--env-file', this.options['production-env']], args),
+      { env: this.environment, ...options });
+  }
+  async healthy(url) {
+    await this.poll(async () => { try { return (await this.fetchImpl(url)).ok; } catch { return false; } },
+      { timeout: 120000, message: `Timed out waiting for ${url}` });
+  }
+  async dashboards(origin, token) {
+    const response = await this.fetchImpl(origin + '/v1/dashboards', { headers: { authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`Fresh dashboard list failed with ${response.status}.`);
+    const rows = await response.json();
+    const names = ['dashboard', 'battery', 'efficiency', 'charging', 'trips'];
+    const defaults = rows.filter(row => row.owner_id == null && row.is_default === true);
+    if (defaults.length !== names.length) throw new Error('Fresh install did not seed exactly five system dashboards.');
+    for (const name of names) {
+      const expected = JSON.parse(readFileSync(resolve(root, 'packages/dashboards/src/defaults', name + '.json'), 'utf8'));
+      const actual = rows.find(row => row.owner_id == null && row.slug === expected.slug);
+      if (!actual) throw new Error(`Fresh install is missing the ${expected.slug} system dashboard.`);
+      const equivalent = JSON.stringify(sortJson(actual.config)) === JSON.stringify(sortJson(expected));
+      if (!equivalent) throw new Error(`Fresh install ${expected.slug} dashboard does not match its bundled baseline.`);
     }
   }
-}
-
-function sortJson(value) {
-  if (Array.isArray(value)) return value.map(sortJson);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, sortJson(value[key])])
-  );
-}
-
-async function verifyProduction() {
-  if (!productionEnv || !existsSync(productionEnv))
-    throw new Error('--production-env must point to a valid, ephemeral production env file.');
-  if (imageTag && imageRef)
-    throw new Error('--image-tag and --image-ref are mutually exclusive.');
-  productionDataRoot = mkdtempSync(join(tmpdir(), 'panda-fresh-data-'));
-  const environment = {
-    ...process.env,
-    PANDA_ORIGIN_PORT: port,
-    PANDA_ENV_FILE: resolve(productionEnv),
-    PANDA_DATA_DIR: productionDataRoot.replaceAll('\\', '/'),
-    ...(imageTag ? { PANDA_IMAGE: `${process.env.PANDA_IMAGE_REGISTRY ?? 'ghcr.io/your-org'}/panda:${imageTag}` } : {}),
-    ...(imageRef ? { PANDA_IMAGE: imageRef } : {}),
-    ...(sourceBuild ? { PANDA_IMAGE: 'panda:local' } : {}),
-    ...(keysSource ? { PANDA_KEYS_SOURCE: resolve(keysSource) } : {}),
-  };
-  productionEnvironment = environment;
-  run('docker', [...compose, '--env-file', productionEnv, 'config', '--quiet'], {
-    env: environment,
-  });
-  run(
-    'docker',
-    [...compose, '--env-file', productionEnv, 'up', ...(sourceBuild ? ['--build'] : []), '-d'],
-    { env: environment }
-  );
-  productionStarted = true;
-  const baseUrl = `http://localhost:${port}`;
-  const accessToken = await verifyOwnerSetup(baseUrl);
-  run('docker', [...compose, '--env-file', productionEnv, 'restart', 'panda'], {
-    env: productionEnvironment,
-  });
-  await waitFor(`${baseUrl}/health`);
-  const persistedSetup = await fetch(`${baseUrl}/v1/auth/setup`).then((response) => response.json());
-  if (persistedSetup.setup_required)
-    throw new Error(`${composeFile} restart did not preserve the first owner.`);
-  await verifyBundledDashboards(baseUrl, accessToken);
-}
-
-function printProductionLogs() {
-  if (!productionStarted) return;
-  console.error('Published production smoke-test container logs:');
-  spawnSync(
-    'docker',
-    [...compose, '--env-file', productionEnv, 'logs', '--no-color', '--tail', '200', 'panda'],
-    { cwd: root, stdio: 'inherit', env: productionEnvironment }
-  );
-}
-
-function verifyDevSmoke() {
-  const env = { ...process.env, DEV_COMPOSE_PROJECT_NAME: `${project}-dev` };
-  run('pnpm', ['run', 'dev:stack', '--', '--once'], { env, shell: process.platform === 'win32' });
-}
-
-function cleanupProductionDataRoot() {
-  if (!productionDataRoot) return;
-  try {
-    rmSync(productionDataRoot, { recursive: true, force: true });
-  } catch (error) {
-    if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error;
-    // PostgreSQL and Redis run as container users and can leave root-owned
-    // files in the bind-mounted disposable directory. Remove only this
-    // generated temp root through a short-lived root container, then retry.
-    const cleanup = spawnSync(
-      'docker',
-      [
-        'run',
-        '--rm',
-        '--user',
-        '0:0',
-        '--mount',
-        `type=bind,source=${productionDataRoot},target=/cleanup`,
-        'alpine:3.22.1',
-        'sh',
-        '-c',
-        'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*',
-      ],
-      { cwd: root, stdio: 'inherit' }
-    );
-    if (cleanup.status !== 0) throw error;
-    rmSync(productionDataRoot, { recursive: true, force: true });
+  async owner(origin) {
+    await this.healthy(origin + '/health');
+    const setup = await (await this.fetchImpl(origin + '/v1/auth/setup')).json();
+    if (!setup.setup_required) throw new Error('Fresh stack unexpectedly already has a user.');
+    const proof = setup.setup_proof_required ? readSetupToken(this.options['production-env']) : undefined;
+    if (setup.setup_proof_required && !proof) throw new Error('Production first-owner verification requires PANDA_SETUP_TOKEN in the supplied env file.');
+    const body = { email: 'owner@example.test', password: 'fresh-install-password' };
+    if (proof) body.setup_token = proof;
+    const register = value => this.fetchImpl(origin + '/v1/auth/register', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value),
+    });
+    const response = await register(body);
+    if (response.status !== 201) throw new Error(`First owner registration failed with ${response.status}.`);
+    const token = (await response.json()).access_token;
+    if (!token) throw new Error('First owner registration did not return an access token.');
+    await this.dashboards(origin, token);
+    const closed = await register({ email: 'second@example.test', password: 'fresh-install-password' });
+    if (closed.status !== 403) throw new Error(`Registration remained open after owner setup (status ${closed.status}).`);
+    return token;
+  }
+  async production() {
+    const file = this.options['production-env'];
+    if (!file || !existsSync(file)) throw new Error('--production-env must point to a valid, ephemeral production env file.');
+    const tag = this.options['image-tag'], ref = this.options['image-ref'], keys = this.options['keys-source'];
+    if (tag && ref) throw new Error('--image-tag and --image-ref are mutually exclusive.');
+    this.dataRoot = mkdtempSync(join(tmpdir(), 'panda-fresh-data-'));
+    this.environment = { ...this.env, PANDA_ORIGIN_PORT: this.port, PANDA_ENV_FILE: resolve(file), PANDA_DATA_DIR: this.dataRoot.split('\\').join('/') };
+    const image = this.sourceBuild ? 'panda:local' : ref || (tag ? `${this.env.PANDA_IMAGE_REGISTRY ?? 'ghcr.io/your-org'}/panda:${tag}` : undefined);
+    if (image) this.environment.PANDA_IMAGE = image;
+    if (keys) this.environment.PANDA_KEYS_SOURCE = resolve(keys);
+    this.command(['config', '--quiet']);
+    this.command(['up', ...(this.sourceBuild ? ['--build'] : []), '-d']);
+    this.started = true;
+    const origin = `http://localhost:${this.port}`;
+    const token = await this.owner(origin);
+    this.command(['restart', 'panda']);
+    await this.healthy(origin + '/health');
+    if ((await (await this.fetchImpl(origin + '/v1/auth/setup')).json()).setup_required)
+      throw new Error('compose/docker-compose.yml restart did not preserve the first owner.');
+    await this.dashboards(origin, token);
+  }
+  logs() {
+    if (!this.started) return;
+    console.error('Published production smoke-test container logs:');
+    this.probe('docker', [...this.compose, '--env-file', this.options['production-env'], 'logs', '--no-color', '--tail', '200', 'panda'],
+      { cwd: root, stdio: 'inherit', env: this.environment });
+  }
+  cleanup() {
+    if (this.started) this.probe('docker', [...this.compose, '--env-file', this.options['production-env'], 'down', '-v', '--remove-orphans'],
+      { cwd: root, stdio: 'inherit', env: this.environment });
+    if (!this.dataRoot) return;
+    try { rmSync(this.dataRoot, { recursive: true, force: true }); }
+    catch (error) {
+      if (!['EACCES', 'EPERM'].includes(error?.code)) throw error;
+      const result = this.probe('docker', ['run', '--rm', '--user', '0:0', '--mount', `type=bind,source=${this.dataRoot},target=/cleanup`,
+        'alpine:3.22.1', 'sh', '-c', 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*'], { cwd: root, stdio: 'inherit' });
+      if (result.status !== 0) throw error;
+      rmSync(this.dataRoot, { recursive: true, force: true });
+    }
+  }
+  async main() {
+    try {
+      if (this.commands.invoke('git', ['status', '--porcelain'], { capture: true }))
+        throw new Error('Fresh-install verification requires a clean worktree. Run it from an isolated worktree or checkout.');
+      const modes = { all: ['dev', 'production'], standard: ['production'], production: ['production'], dev: ['dev'] };
+      const steps = modes[this.options.mode];
+      if (!steps) throw new Error('--mode must be all, standard, production, or dev.');
+      for (const step of steps) {
+        if (step === 'production') await this.production();
+        else this.commands.invoke('pnpm', ['run', 'dev:stack', '--', '--once'], {
+          env: { ...this.env, DEV_COMPOSE_PROJECT_NAME: this.project + '-dev' }, shell: process.platform === 'win32' });
+      }
+      console.log('Fresh-install verification passed.');
+    } catch (error) { this.logs(); throw error; }
+    finally { this.cleanup(); }
   }
 }
-
-try {
-  ensureCleanWorktree();
-  if (!['all', 'standard', 'production', 'dev'].includes(mode))
-    throw new Error('--mode must be all, standard, production, or dev.');
-  if (mode === 'all' || mode === 'dev') verifyDevSmoke();
-  if (mode === 'all' || mode === 'standard' || mode === 'production')
-    await verifyProduction();
-  console.log('Fresh-install verification passed.');
-} catch (error) {
-  printProductionLogs();
-  throw error;
-} finally {
-  if (productionStarted)
-    spawnSync(
-      'docker',
-      [...compose, '--env-file', productionEnv, 'down', '-v', '--remove-orphans'],
-      { cwd: root, stdio: 'inherit', env: productionEnvironment }
-    );
-  cleanupProductionDataRoot();
-}
+if (direct(import.meta.url)) await new FreshInstall(process.argv.slice(2)).main();

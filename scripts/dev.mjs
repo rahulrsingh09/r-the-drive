@@ -4,890 +4,451 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBuildVersionFromGit } from './resolve-build-version.mjs';
+import { childCompletion, delay, direct, pollUntil } from './operational-runtime.mjs';
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const rootDir = resolve(scriptDir, '..');
-const apiDir = resolve(rootDir, 'apps/api');
-const webDir = resolve(rootDir, 'apps/web');
-const composeFile = resolve(rootDir, 'compose/docker-compose.dev.yml');
-const devRestoreAgentKeyFile = resolve(rootDir, 'data/dev-restore-agent-key');
-const devRestoreMarkerFile = resolve(rootDir, 'data/dev-restore-in-progress');
-const devApiPidFile = resolve(rootDir, 'data/dev-api.pid');
-const isWindows = process.platform === 'win32';
-
-function parsePort(value, fallback) {
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const services = [
+  ['api', 'DEV_API_PORT', 3001, 'API'], ['web', 'DEV_WEB_PORT', 5173, 'Web'],
+  ['postgres', 'DEV_POSTGRES_PORT', 5432, 'PostgreSQL', 'timescaledb:5432'],
+  ['redis', 'DEV_REDIS_PORT', 6379, 'Redis', 'redis:6379'],
+  ['garageApi', 'DEV_GARAGE_PORT', 3900, 'Garage API', 'garage:3900'],
+  ['garageAdmin', 'DEV_GARAGE_ADMIN_PORT', 3903, 'Garage admin', 'garage:3903'],
+  ['restoreAgent', 'DEV_RESTORE_AGENT_PORT', 3002, 'Restore agent'],
+];
+const stripAnsi = text => text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+const normalizedPath = value => String(value).trim().split('\\').join('/').replace(/\/+/g, '/').toLowerCase();
+function integer(value, fallback, lower, upper = Infinity) {
   const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
+  return Number.isInteger(parsed) && parsed >= lower && parsed <= upper ? parsed : fallback;
 }
-
-function parseSeconds(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed >= 60 ? parsed : fallback;
+function records(output) {
+  const result = [];
+  for (const line of output.split(/\r?\n/)) if (line.trim()) result.push(JSON.parse(line.trim()));
+  return result;
 }
-
-function parsePositiveInteger(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+export function deriveDevComposeProjectName(_checkoutRoot, env = process.env) {
+  return [env.DEV_COMPOSE_PROJECT_NAME, env.COMPOSE_PROJECT_NAME, 'panda'].find(Boolean);
 }
-
-const requestedPorts = {
-  api: parsePort(process.env.DEV_API_PORT, 3001),
-  web: parsePort(process.env.DEV_WEB_PORT, 5173),
-  postgres: parsePort(process.env.DEV_POSTGRES_PORT, 5432),
-  redis: parsePort(process.env.DEV_REDIS_PORT, 6379),
-  garageApi: parsePort(process.env.DEV_GARAGE_PORT, 3900),
-  garageAdmin: parsePort(process.env.DEV_GARAGE_ADMIN_PORT, 3903),
-  restoreAgent: parsePort(process.env.DEV_RESTORE_AGENT_PORT, 3002),
-};
-
-let ports = { ...requestedPorts };
-
-export function deriveDevComposeProjectName(checkoutRoot, env = process.env) {
-  const override = env.DEV_COMPOSE_PROJECT_NAME || env.COMPOSE_PROJECT_NAME;
-  if (override) return override;
-  return 'panda';
-}
-
-const composeProjectName = deriveDevComposeProjectName(rootDir);
-const databaseReadyTimeoutMs = parseSeconds(process.env.DEV_DATABASE_READY_TIMEOUT_SECONDS, 600) * 1000;
-// Keep a Windows host responsive during cold Rust builds. Other platforms retain
-// Cargo's normal concurrency.
-const cargoBuildJobs = isWindows ? parsePositiveInteger(process.env.DEV_CARGO_BUILD_JOBS, 4) : null;
-
-const urls = {
-  get apiHealth() {
-    return `http://localhost:${ports.api}/health`;
-  },
-  get web() {
-    return `http://localhost:${ports.web}`;
-  },
-};
-
-const runOnce = process.argv.includes('--once');
-const children = new Set();
-let shuttingDown = false;
-
-function log(message = '') {
-  console.log(message);
-}
-
-function sleep(ms) {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
-}
-
-function stripAnsi(text) {
-  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
-}
-
-function webOrigins() {
-  return Array.from({ length: 11 }, (_, index) => `http://localhost:${ports.web + index}`);
-}
-
-function spawnProcess(command, args, options = {}) {
-  const child = spawn(command, args, {
-    cwd: options.cwd ?? rootDir,
-    env: { ...process.env, ...(options.env ?? {}) },
-    stdio: options.stdio ?? 'inherit',
-    shell: options.shell ?? false,
-    windowsHide: true,
-  });
-
-  if (options.track !== false) {
-    children.add(child);
-    child.once('exit', () => children.delete(child));
-  }
-
-  return child;
-}
-
-function run(command, args, options = {}) {
-  return new Promise((resolveRun, rejectRun) => {
-    const child = spawnProcess(command, args, { ...options, track: false });
-
-    child.once('error', rejectRun);
-    child.once('exit', (code, signal) => {
-      if (code === 0) {
-        resolveRun();
-        return;
-      }
-
-      const suffix = signal ? `signal ${signal}` : `exit code ${code}`;
-      rejectRun(new Error(`${command} ${args.join(' ')} failed with ${suffix}`));
-    });
-  });
-}
-
-function capture(command, args, options = {}) {
-  return new Promise((resolveCapture, rejectCapture) => {
-    let stdout = '';
-    let stderr = '';
-    const child = spawnProcess(command, args, {
-      ...options,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      track: false,
-    });
-
-    child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once('error', rejectCapture);
-    child.once('exit', (code) => {
-      resolveCapture({ code, stdout, stderr });
-    });
-  });
-}
-
-async function commandExists(command) {
-  const checker = isWindows ? 'where' : 'command';
-  const args = isWindows ? [command] : ['-v', command];
-  const { code } = await capture(checker, args, { shell: !isWindows });
-  return code === 0;
-}
-
-async function requireTools() {
-  for (const tool of ['pnpm', 'docker', 'curl']) {
-    if (!(await commandExists(tool))) {
-      throw new Error(`Missing required tool: ${tool}`);
+export async function allocateDistinctRuntimePorts(definitions, findPort, reusedPorts = new Map()) {
+  const reserved = new Set(reusedPorts.values());
+  const values = [];
+  const probe = findPort ?? ((...args) => new DevelopmentStack().availablePort(...args));
+  for (const definition of definitions) {
+    let port = reusedPorts.get(definition.key);
+    if (!port) {
+      port = await probe(definition.start, definition.label, 50, reserved);
+      reserved.add(port);
     }
+    values.push([definition.key, port]);
   }
+  return Object.fromEntries(values);
 }
-
-async function installDependencies() {
-  log('Installing workspace dependencies...');
-  try {
-    await run('pnpm', ['install', '--frozen-lockfile'], { shell: isWindows });
-  } catch (error) {
-    log('Lockfile needed an update; retrying install without frozen lockfile.');
-    await run('pnpm', ['install', '--no-frozen-lockfile'], { shell: isWindows });
-  }
-}
-
-function parseProcessList(output) {
-  const trimmed = output.trim();
-  if (!trimmed) return [];
-
-  const parsed = JSON.parse(trimmed);
-  return (Array.isArray(parsed) ? parsed : [parsed]).filter((process) =>
-    Number.isInteger(process.ProcessId) && process.ProcessId > 0,
-  );
-}
-
-function powerShellLiteral(value) {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-async function listRepoOwnedProcesses() {
-  const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'panda-api.exe' : 'panda-api');
-  const restoreAgentBin = resolve(apiDir, 'target/debug', isWindows ? 'panda-restore-agent.exe' : 'panda-restore-agent');
-
-  if (isWindows) {
-    const command = [
-      `$apiBin = ${powerShellLiteral(apiBin)}`,
-      `$restoreAgentBin = ${powerShellLiteral(restoreAgentBin)}`,
-      `$webDir = ${powerShellLiteral(webDir)}`,
-      'Get-CimInstance Win32_Process -ErrorAction Stop |',
-      'Where-Object {',
-      "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
-      "  $isRestoreAgent = $_.ExecutablePath -and $_.ExecutablePath -ieq $restoreAgentBin",
-      "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
-      '  $isApi -or $isRestoreAgent -or $isVite',
-      '} |',
-      'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
-      'ConvertTo-Json -Compress',
-    ].join('\n');
-    const { code, stdout, stderr } = await capture('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      command,
-    ]);
-    if (code !== 0) {
-      log(`[dev] Could not inspect existing Windows processes; leaving occupied ports alone. ${stripAnsi(stderr).trim()}`);
-      return [];
-    }
-
-    try {
-      return parseProcessList(stdout).map((process) => ({
-        pid: process.ProcessId,
-        name: process.Name,
-        kind: String(process.ExecutablePath ?? '').toLowerCase() === apiBin.toLowerCase()
-          ? 'api'
-          : String(process.ExecutablePath ?? '').toLowerCase() === restoreAgentBin.toLowerCase()
-            ? 'restore-agent'
-            : 'vite',
-      }));
-    } catch (error) {
-      log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
-      return [];
-    }
-  }
-
-  const { code, stdout, stderr } = await capture('ps', ['-axo', 'pid=,command=']);
-  if (code !== 0) {
-    log(`[dev] Could not inspect existing processes; leaving occupied ports alone. ${stripAnsi(stderr).trim()}`);
-    return [];
-  }
-
-  return stdout.split(/\r?\n/).flatMap((line) => {
-    const match = line.trim().match(/^(\d+)\s+(.+)$/);
-    if (!match) return [];
-    const [, rawPid, command] = match;
-    if (command.includes(apiBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'panda-api', kind: 'api' }];
-    if (command.includes(restoreAgentBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'panda-restore-agent', kind: 'restore-agent' }];
-    if (command.includes(webDir) && /\bvite(?:\.js)?\b/i.test(command)) {
-      return [{ pid: Number.parseInt(rawPid, 10), name: 'vite', kind: 'vite' }];
-    }
-    return [];
-  });
-}
-
-async function clearRepoOwnedDevProcesses() {
-  const processes = await listRepoOwnedProcesses();
-  if (processes.length === 0) return;
-
-  // Stop Vite before the API: a dev-stack launcher exits when its web child
-  // exits, preventing it from restarting the API while cleanup is in flight.
-  processes.sort((left, right) => (left.kind === 'vite' ? -1 : 1) - (right.kind === 'vite' ? -1 : 1));
-  log(`[dev] Clearing ${processes.length} stale Panda dev process(es): ${processes.map((process) => `${process.name} (${process.pid})`).join(', ')}`);
-
-  for (const process of processes) {
-    const result = isWindows
-      ? await capture('taskkill', ['/PID', String(process.pid), '/T', '/F'])
-      : await capture('kill', ['-TERM', String(process.pid)]);
-    if (result.code !== 0) {
-      log(`[dev] Could not stop stale ${process.name} (${process.pid}): ${stripAnsi(result.stderr).trim()}`);
-    }
-  }
-
-  await sleep(500);
-}
-
-async function findAvailablePort(start, label, maxTries = 50, reservedPorts = new Set()) {
-  for (let attempt = 0; attempt < maxTries; attempt += 1) {
-    const candidate = start + attempt;
-    if (reservedPorts.has(candidate)) {
-      log(`[dev] ${label} port ${candidate} is already reserved; trying ${candidate + 1}`);
-      continue;
-    }
-
-    const pids = await getListeningPids(candidate);
-    if (pids.length === 0) {
-      if (attempt > 0) {
-        log(`[dev] ${label} port ${start} was busy, using ${candidate}`);
-      }
-      return candidate;
-    }
-
-    log(`[dev] ${label} port ${candidate} is in use; trying ${candidate + 1}`);
-  }
-
-  throw new Error(`[dev] Could not find an available ${label} port after ${maxTries} attempts from ${start}.`);
-}
-
-export async function allocateDistinctRuntimePorts(
-  definitions,
-  findPort = findAvailablePort,
-  reusedPorts = new Map(),
-) {
-  const reservedPorts = new Set(reusedPorts.values());
-  const allocated = {};
-
-  for (const { key, start, label } of definitions) {
-    const reusedPort = reusedPorts.get(key);
-    if (reusedPort) {
-      allocated[key] = reusedPort;
-      continue;
-    }
-    const port = await findPort(start, label, 50, reservedPorts);
-    reservedPorts.add(port);
-    allocated[key] = port;
-  }
-
-  return allocated;
-}
-
 export function parseComposePortMetadata(output) {
-  const records = output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const metadata = new Map();
-
-  for (const record of records) {
-    const service = record.Service ?? record.service;
-    const state = String(record.State ?? record.state ?? '').toLowerCase();
-    if (!service || !Array.isArray(record.Publishers ?? record.publishers)) continue;
-
-    for (const publisher of record.Publishers ?? record.publishers) {
-      const targetPort = Number.parseInt(publisher.TargetPort ?? publisher.targetPort, 10);
-      const publishedPort = Number.parseInt(publisher.PublishedPort ?? publisher.publishedPort, 10);
-      if (!Number.isInteger(targetPort) || !Number.isInteger(publishedPort)) continue;
-      metadata.set(`${service}:${targetPort}`, { port: publishedPort, running: state === 'running' });
+  const result = new Map();
+  for (const entry of records(output)) {
+    const name = entry.Service ?? entry.service;
+    const publishers = entry.Publishers ?? entry.publishers;
+    if (!name || !Array.isArray(publishers)) continue;
+    const running = String(entry.State ?? entry.state ?? '').toLowerCase() === 'running';
+    for (const publisher of publishers) {
+      const target = Number.parseInt(publisher.TargetPort ?? publisher.targetPort, 10);
+      const port = Number.parseInt(publisher.PublishedPort ?? publisher.publishedPort, 10);
+      if ([target, port].every(Number.isInteger)) result.set(name + ':' + target, { port, running });
     }
   }
-
-  return metadata;
+  return result;
 }
-
-function normalizeComposeFilePath(value) {
-  return String(value)
-    .trim()
-    .replaceAll('\\', '/')
-    .replace(/\/+/g, '/')
-    .toLowerCase();
-}
-
-function composeFilesFromRecord(record) {
-  let configFiles = record.ConfigFiles ?? record.configFiles ?? record.config_files;
-  let labels = record.Labels ?? record.labels;
+function composeFiles(record) {
+  let value = record.ConfigFiles ?? record.configFiles ?? record.config_files;
+  const labels = record.Labels ?? record.labels;
   if (typeof labels === 'string') {
-    const configLabel = labels.match(/(?:^|,)com\.docker\.compose\.project\.config_files=([\s\S]*?)(?=,[^=,]+=|$)/i);
-    configFiles = configFiles ?? configLabel?.[1]?.split(',');
-    labels = null;
+    const captured = /(?:^|,)com\.docker\.compose\.project\.config_files=([\s\S]*?)(?=,[^=,]+=|$)/i.exec(labels);
+    value ??= captured?.[1]?.split(',');
+  } else if (value === undefined && labels && typeof labels === 'object') {
+    value = labels['com.docker.compose.project.config_files'] ?? labels['com.docker.compose.project.config-files'];
   }
-  if (configFiles === undefined && labels && typeof labels === 'object') {
-    configFiles = labels['com.docker.compose.project.config_files']
-      ?? labels['com.docker.compose.project.config-files'];
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { /* Labels may contain comma-separated paths. */ }
   }
-  if (typeof configFiles === 'string') {
-    try {
-      configFiles = JSON.parse(configFiles);
-    } catch {
-      // Compose labels are normally comma-separated when multiple files exist.
-    }
+  if (typeof value === 'string') value = value.split(',');
+  const unique = new Set();
+  if (Array.isArray(value)) for (const path of value) {
+    const normalized = normalizedPath(path);
+    if (normalized) unique.add(normalized);
   }
-  if (typeof configFiles === 'string') configFiles = configFiles.split(',');
-  if (!Array.isArray(configFiles)) return [];
-  return [...new Set(configFiles.map(normalizeComposeFilePath).filter(Boolean))].sort();
+  return Array.from(unique).sort();
 }
-
-function siblingProductionComposeFile(expectedComposeFile) {
-  return expectedComposeFile.replace(/\.dev(?=\.[^/]+$)/, '');
-}
-
 export function parseComposeIdentityMetadata(output, expectedComposeFile) {
-  const records = output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const expected = normalizeComposeFilePath(expectedComposeFile);
-  const production = siblingProductionComposeFile(expected);
-  const identities = records.map((record) => ({
-    service: record.Service ?? record.service,
-    composeFiles: composeFilesFromRecord(record),
-  }));
-  const signatures = new Set(identities.map(({ composeFiles }) => composeFiles.join('\n')));
-  const hasMissing = identities.some(({ composeFiles }) => composeFiles.length === 0);
-  const mixed = signatures.size > 1;
-  const includesExpected = identities.length > 0 && identities.every(({ composeFiles }) => composeFiles.includes(expected));
-  const includesProduction = identities.some(({ composeFiles }) => composeFiles.includes(production));
-  const hasDevelopmentAndProduction = includesExpected && includesProduction;
-
-  return {
-    records: identities,
-    composeFiles: identities[0]?.composeFiles ?? [],
-    hasExistingRecords: identities.length > 0,
-    valid: identities.length === 0 || (!hasMissing && !mixed && includesExpected && !includesProduction),
-    reason: hasMissing
-      ? 'missing identity metadata'
-      : mixed
-        ? 'mixed Compose config files'
-        : hasDevelopmentAndProduction
-          ? 'production Compose config file'
-          : includesExpected
-            ? null
-            : 'unexpected Compose config file',
-  };
+  const expected = normalizedPath(expectedComposeFile);
+  const production = expected.replace(/\.dev(?=\.[^/]+$)/, '');
+  const identities = records(output).map(record => ({ service: record.Service ?? record.service, composeFiles: composeFiles(record) }));
+  const signatures = new Set();
+  let missing = false, hasExpected = identities.length > 0, hasProduction = false;
+  for (const identity of identities) {
+    const files = identity.composeFiles;
+    signatures.add(files.join('\n'));
+    missing ||= files.length === 0;
+    hasExpected &&= files.includes(expected);
+    hasProduction ||= files.includes(production);
+  }
+  const reasons = [[missing, 'missing identity metadata'], [signatures.size > 1, 'mixed Compose config files'],
+    [hasExpected && hasProduction, 'production Compose config file'], [!hasExpected, 'unexpected Compose config file']];
+  return { records: identities, composeFiles: identities[0]?.composeFiles ?? [], hasExistingRecords: identities.length > 0,
+    valid: identities.length === 0 || (!missing && signatures.size <= 1 && hasExpected && !hasProduction),
+    reason: reasons.find(([active]) => active)?.[1] ?? null };
 }
-
-function assertExpectedDevelopmentComposeProject(output) {
-  const identity = parseComposeIdentityMetadata(output, composeFile);
-  if (!identity.valid) {
-    throw new Error(
-      `[dev] The selected project is not the expected development project (${identity.reason}); `
-      + 'set DEV_COMPOSE_PROJECT_NAME to a unique isolated name before starting.',
-    );
+export function extractViteLocalUrl(output) {
+  const clean = stripAnsi(output);
+  for (const pattern of [/Local:\s+https?:\/\/localhost:(\d+)(?:\/|$)/i, /http:\/\/localhost:(\d+)(?:\/|$)/i]) {
+    const result = pattern.exec(clean);
+    if (result) return 'http://localhost:' + result[1];
   }
-  return identity;
-}
-
-async function readExistingComposePorts() {
-  const result = await capture('docker', [
-    'compose', '-p', composeProjectName, '-f', composeFile,
-    'ps', '--all', '--format', 'json',
-  ]);
-  if (result.code !== 0) {
-    throw new Error(
-      `[dev] Could not verify the selected project before startup; `
-      + 'set DEV_COMPOSE_PROJECT_NAME to a unique isolated name and retry.',
-    );
-  }
-  if (!result.stdout.trim()) {
-    return new Map();
-  }
-  assertExpectedDevelopmentComposeProject(result.stdout);
-  return parseComposePortMetadata(result.stdout);
-}
-
-async function allocateRuntimePorts() {
-  // Probe ports serially and reserve each result. Parallel probes can all see
-  // the same free requested port when users override multiple services to one
-  // value (for example API and restore agent both set to 3003).
-  const existingComposePorts = await readExistingComposePorts();
-  const reusedPorts = new Map([
-    ['postgres', existingComposePorts.get('timescaledb:5432')],
-    ['redis', existingComposePorts.get('redis:6379')],
-    ['garageApi', existingComposePorts.get('garage:3900')],
-    ['garageAdmin', existingComposePorts.get('garage:3903')],
-  ].filter(([, metadata]) => metadata?.running).map(([key, metadata]) => [key, metadata.port]));
-  const allocated = await allocateDistinctRuntimePorts([
-    { key: 'api', start: requestedPorts.api, label: 'API' },
-    { key: 'web', start: requestedPorts.web, label: 'Web' },
-    { key: 'postgres', start: requestedPorts.postgres, label: 'PostgreSQL' },
-    { key: 'redis', start: requestedPorts.redis, label: 'Redis' },
-    { key: 'garageApi', start: requestedPorts.garageApi, label: 'Garage API' },
-    { key: 'garageAdmin', start: requestedPorts.garageAdmin, label: 'Garage admin' },
-    { key: 'restoreAgent', start: requestedPorts.restoreAgent, label: 'Restore agent' },
-  ], findAvailablePort, reusedPorts);
-  const { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent } = allocated;
-
-  ports = { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent };
-
-  process.env.DEV_API_PORT = String(api);
-  process.env.DEV_WEB_PORT = String(web);
-  process.env.DEV_POSTGRES_PORT = String(postgres);
-  process.env.DEV_REDIS_PORT = String(redis);
-  process.env.DEV_GARAGE_PORT = String(garageApi);
-  process.env.DEV_GARAGE_ADMIN_PORT = String(garageAdmin);
-  process.env.DEV_RESTORE_AGENT_PORT = String(restoreAgent);
-  process.env.DEV_WEB_ORIGINS = webOrigins().join(',');
-  process.env.COMPOSE_PROJECT_NAME = composeProjectName;
-}
-
-async function assertPortAvailable(port, label) {
-  const pids = await getListeningPids(port);
-  if (pids.length > 0) {
-    throw new Error(`${label} port ${port} became occupied before startup by PID(s): ${pids.join(', ')}`);
-  }
-}
-
-// API startup can bind and report health before the resumable charge-history
-// worker finishes its first pass. Keep local readiness tolerant of a cold Rust
-// start and database recovery without changing the single-container contract.
-async function waitForHttp(url, child, label, timeoutMs = 120000) {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    if (child && child.exitCode !== null) {
-      throw new Error(`${label} exited before it became ready.`);
-    }
-
-    const { code } = await capture('curl', ['-fsS', '--max-time', '2', url]);
-    if (code === 0) {
-      if (child && child.exitCode !== null) {
-        throw new Error(`${label} health check was answered by another process; the managed process exited.`);
-      }
-      return;
-    }
-
-    await sleep(500);
-  }
-
-  throw new Error(`Timed out waiting for ${label} at ${url}`);
-}
-
-async function startInfrastructure() {
-  log(`Starting infrastructure (TimescaleDB, Redis, Garage) for ${composeProjectName}...`);
-  await run('docker', ['compose', '-f', composeFile, 'up', '-d', 'timescaledb', 'redis', 'garage']);
-  await initializeGarage();
-
-  const deadline = Date.now() + databaseReadyTimeoutMs;
-  let nextProgressLog = Date.now() + 15000;
-  let dbReady = false;
-  while (Date.now() < deadline) {
-    const { code: idCode, stdout: idOutput } = await capture('docker', [
-      'compose', '-f', composeFile, 'ps', '-q', 'timescaledb',
-    ]);
-    const containerId = idOutput.trim();
-    if (idCode !== 0 || !containerId) {
-      throw new Error('TimescaleDB container was not created. Inspect docker compose logs timescaledb.');
-    }
-
-    const { code: statusCode, stdout: statusOutput } = await capture('docker', [
-      'inspect', '--format', '{{.State.Status}}', containerId,
-    ]);
-    const status = statusOutput.trim();
-    if (statusCode === 0 && ['exited', 'dead'].includes(status)) {
-      const { stdout: logs } = await capture('docker', [
-        'compose', '-f', composeFile, 'logs', '--tail', '40', 'timescaledb',
-      ]);
-      throw new Error(`TimescaleDB container stopped during startup (${status}).\n${stripAnsi(logs).trim()}`);
-    }
-
-    const { code } = await capture('docker', [
-      'compose', '-f', composeFile, 'exec', '-T', 'timescaledb', 'pg_isready', '-U', 'panda',
-    ]);
-    if (code === 0) {
-      dbReady = true;
-      break;
-    }
-    if (Date.now() >= nextProgressLog) {
-      const remainingSeconds = Math.ceil((deadline - Date.now()) / 1000);
-      log(`TimescaleDB is still recovering or starting; waiting up to ${remainingSeconds}s more...`);
-      nextProgressLog += 15000;
-    }
-    await sleep(1000);
-  }
-
-  if (!dbReady) {
-    throw new Error(`Timed out waiting for TimescaleDB to accept connections after ${databaseReadyTimeoutMs / 1000}s. Inspect docker compose logs timescaledb for recovery errors.`);
-  }
-
-  log('');
-  log('Infrastructure is running');
-  log(`   TimescaleDB: postgresql://localhost:${ports.postgres}`);
-  log(`   Redis: redis://localhost:${ports.redis}`);
-  log(`   S3 (Garage): http://localhost:${ports.garageApi}`);
-  log('');
-}
-
-async function initializeGarage() {
-  const garage = ['compose', '-f', composeFile, 'exec', '-T', 'garage', '/garage', '-c', '/config/garage.toml'];
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const status = await capture('docker', [...garage, 'status']);
-    if (status.code === 0) break;
-    if (attempt === 59) throw new Error(`Garage did not become ready.\n${stripAnsi(status.stderr).trim()}`);
-    await sleep(500);
-  }
-  const keys = await capture('docker', [...garage, 'key', 'list']);
-  if (keys.code === 0) return;
-  const node = await capture('docker', [...garage, 'node', 'id']);
-  if (node.code !== 0 || !node.stdout.trim()) throw new Error(`Could not read the Garage node id.\n${stripAnsi(node.stderr).trim()}`);
-  const nodeId = node.stdout.trim().split(/\s+/)[0];
-  await run('docker', [...garage, 'layout', 'assign', nodeId, '-z', 'dc1', '-c', '1G']);
-  await run('docker', [...garage, 'layout', 'apply', '--version', '1']);
-  await run('docker', [...garage, 'key', 'import', '--yes', '-n', 'dev-key', 'GKdeadbeef0000000000000000000000', 'deadbeef0000000000000000000000000000000000000000000000000000cafe']);
-  await run('docker', [...garage, 'bucket', 'create', 'panda']);
-  await run('docker', [...garage, 'bucket', 'allow', '--read', '--write', '--owner', 'panda', '--key', 'GKdeadbeef0000000000000000000000']);
-}
-
-async function getListeningPids(port) {
-  if (isWindows) {
-    const command = [
-      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue`,
-      'Select-Object -ExpandProperty OwningProcess -Unique',
-    ].join(' | ');
-    const { stdout } = await capture('powershell.exe', ['-NoProfile', '-Command', command], {
-      shell: false,
-    });
-    return parsePids(stdout);
-  }
-
-  const lsof = await capture('lsof', ['-ti', `tcp:${port}`], { shell: false });
-  if (lsof.code === 0) {
-    return parsePids(lsof.stdout);
-  }
-
-  const ss = await capture('sh', ['-c', `ss -ltnp 'sport = :${port}' 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u`], {
-    shell: false,
-  });
-  return parsePids(ss.stdout);
-}
-
-function parsePids(output) {
-  return [
-    ...new Set(
-      output
-        .split(/\s+/)
-        .map((value) => Number.parseInt(value, 10))
-        .filter((value) => Number.isInteger(value) && value > 0 && value !== process.pid),
-    ),
-  ];
-}
-
-async function ensureDevRestoreAgentKey() {
-  await mkdir(dirname(devRestoreAgentKeyFile), { recursive: true });
-  await rm(devRestoreMarkerFile, { force: true });
-  try {
-    const existing = (await readFile(devRestoreAgentKeyFile, 'utf8')).trim();
-    if (existing) return;
-  } catch {
-    // The development key is generated on first startup.
-  }
-
-  await writeFile(devRestoreAgentKeyFile, `${randomBytes(32).toString('base64')}\n`, {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
-}
-
-function apiEnv() {
-  return {
-    // The checked-in SQLx metadata lets a brand-new development database build
-    // before the API process applies its embedded migrations on first start.
-    SQLX_OFFLINE: 'true',
-    DATABASE_URL: `postgresql://panda:devpassword@localhost:${ports.postgres}/panda?options=-c%20search_path%3Dpanda,timeseries,public`,
-    REDIS_URL: `redis://localhost:${ports.redis}`,
-    S3_ENDPOINT: `http://localhost:${ports.garageApi}`,
-    S3_ALLOW_DEVELOPMENT_GARAGE: 'true',
-    S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
-    S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
-    PORT: String(ports.api),
-    ALLOWED_ORIGINS: webOrigins().join(','),    // Dev stack is served over http://localhost (and often LAN IPs), so
-    // refresh cookies must not be marked Secure or browser reload will drop
-    // session continuity and trigger repeated 401/WS reconnect churn.
-    COOKIE_INSECURE: 'true',
-    PANDA_ENV: 'development',
-    PANDA_BUILD_VERSION: resolveBuildVersionFromGit(),
-    RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
-    RESTORE_AGENT_KEY_FILE: devRestoreAgentKeyFile,
-    RESTORE_AGENT_PORT: String(ports.restoreAgent),
-    PANDA_API_PID_FILE: devApiPidFile,
-    PANDA_RESTORE_MARKER_FILE: devRestoreMarkerFile,
-  };
-}
-
-function extractViteLocalUrl(output) {
-  const cleaned = stripAnsi(output);
-
-  const localMatch = cleaned.match(/Local:\s+https?:\/\/localhost:(\d+)(?:\/|$)/i);
-  if (localMatch) {
-    return `http://localhost:${localMatch[1]}`;
-  }
-
-  const genericMatch = cleaned.match(/http:\/\/localhost:(\d+)(?:\/|$)/i);
-  if (genericMatch) {
-    return `http://localhost:${genericMatch[1]}`;
-  }
-
   return null;
 }
-
-async function waitForViteUrl(child, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  let output = '';
-
-  return new Promise((resolvePromise, rejectPromise) => {
-    const cleanup = () => {
-      child.stdout?.off('data', onData);
-      child.stderr?.off('data', onData);
-      child.off('exit', onExit);
-      clearInterval(timer);
-    };
-
-    const settle = (fn, value) => {
-      cleanup();
-      fn(value);
-    };
-
-    const onData = (chunk) => {
-      const text = chunk.toString();
-      output += text;
-      const url = extractViteLocalUrl(output);
-      if (url) {
-        settle(resolvePromise, url);
-      }
-    };
-
-    const onExit = (code, signal) => {
-      settle(
-        rejectPromise,
-        new Error(`web dev server exited before announcing a URL (${signal ? `signal ${signal}` : `exit code ${code}`}).`),
-      );
-    };
-
-    const timer = setInterval(() => {
-      if (Date.now() >= deadline) {
-        child.kill(isWindows ? undefined : 'SIGTERM');
-        settle(rejectPromise, new Error('Timed out waiting for Vite to announce a local URL.'));
-      }
-    }, 250);
-
-    child.stdout?.on('data', onData);
-    child.stderr?.on('data', onData);
-    child.once('exit', onExit);
-  });
-}
-
-async function startApi() {
-  await assertPortAvailable(ports.api, 'API');
-
-  const buildArgs = ['build', '--bin', 'panda-api', '--bin', 'panda-restore-agent'];
-  if (cargoBuildJobs !== null) {
-    buildArgs.push('--jobs', String(cargoBuildJobs));
+export function parsePids(output, ownPid = process.pid) {
+  const unique = new Set();
+  for (const text of output.split(/\s+/)) {
+    const pid = Number.parseInt(text, 10);
+    if (Number.isInteger(pid) && pid > 0 && pid !== ownPid) unique.add(pid);
   }
-
-  log(`Building API targets${cargoBuildJobs !== null ? ` (maximum ${cargoBuildJobs} concurrent Cargo jobs)` : ''}...`);
-  await run('cargo', buildArgs, { cwd: apiDir, env: apiEnv() });
-
-  await startRestoreAgent();
-  return launchApi();
+  return Array.from(unique);
 }
 
-async function startRestoreAgent() {
-  await ensureDevRestoreAgentKey();
-  await assertPortAvailable(ports.restoreAgent, 'Restore agent');
-
-  log('Starting restore supervisor...');
-  const agentBin = resolve(apiDir, 'target/debug', isWindows ? 'panda-restore-agent.exe' : 'panda-restore-agent');
-  const agent = spawnProcess(agentBin, [], {
-    cwd: apiDir,
-    env: apiEnv(),
-  });
-
-  await waitForHttp(`http://127.0.0.1:${ports.restoreAgent}/health`, agent, 'restore supervisor');
-  log(`Restore supervisor is responding at http://127.0.0.1:${ports.restoreAgent}`);
-  return agent;
-}
-
-async function launchApi() {
-  await assertPortAvailable(ports.api, 'API');
-
-  log('Starting API...');
-  const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'panda-api.exe' : 'panda-api');
-  const api = spawnProcess(apiBin, [], {
-    cwd: apiDir,
-    env: apiEnv(),
-  });
-  await writeFile(devApiPidFile, `${api.pid}\n`, 'utf8');
-
-  await waitForHttp(urls.apiHealth, api, 'API');
-  log(`API is responding at ${urls.apiHealth}`);
-  return api;
-}
-
-async function superviseApi(api) {
-  let currentApi = api;
-
-  while (!shuttingDown) {
+export class DevelopmentStack {
+  constructor({ env = process.env, platform = process.platform, launch = spawn, log = console.log } = {}) {
+    Object.assign(this, { env, launch, log });
+    this.windows = platform === 'win32';
+    this.apiDir = resolve(root, 'apps/api');
+    this.webDir = resolve(root, 'apps/web');
+    this.composeFile = resolve(root, 'compose/docker-compose.dev.yml');
+    this.keyFile = resolve(root, 'data/dev-restore-agent-key');
+    this.markerFile = resolve(root, 'data/dev-restore-in-progress');
+    this.pidFile = resolve(root, 'data/dev-api.pid');
+    this.project = deriveDevComposeProjectName(root, env);
+    this.ports = Object.fromEntries(services.map(([key, variable, fallback]) => [key, integer(env[variable], fallback, 1, 65535)]));
+    this.dbTimeout = integer(env.DEV_DATABASE_READY_TIMEOUT_SECONDS, 600, 60) * 1000;
+    this.jobs = this.windows ? integer(env.DEV_CARGO_BUILD_JOBS, 4, 1) : null;
+    this.children = new Set();
+    this.stopping = false;
+  }
+  binary(name) { return resolve(this.apiDir, 'target/debug', name + (this.windows ? '.exe' : '')); }
+  origins() { return Array.from({ length: 11 }, (_, offset) => `http://localhost:${this.ports.web + offset}`); }
+  health() { return `http://localhost:${this.ports.api}/health`; }
+  start(command, args, options = {}) {
+    const configuration = { cwd: options.cwd ?? root, env: { ...this.env, ...options.env },
+      stdio: options.stdio ?? 'inherit', shell: options.shell ?? false, windowsHide: true };
+    const child = this.launch(command, args, configuration);
+    if (options.track !== false) {
+      this.children.add(child);
+      child.once('exit', () => this.children.delete(child));
+    }
+    return child;
+  }
+  async run(command, args, options = {}) {
+    const result = await childCompletion(this.start(command, args, { ...options, track: false }));
+    if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed with ${result.signal ? `signal ${result.signal}` : `exit code ${result.code}`}`);
+  }
+  async capture(command, args, options = {}) {
+    const child = this.start(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'], track: false });
+    const output = { stdout: '', stderr: '' };
+    for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', data => { output[stream] += data.toString(); });
+    const { code } = await childCompletion(child);
+    return { code, ...output };
+  }
+  async tools() {
+    for (const tool of ['pnpm', 'docker', 'curl']) {
+      const result = await this.capture(this.windows ? 'where' : 'command', this.windows ? [tool] : ['-v', tool], { shell: !this.windows });
+      if (result.code !== 0) throw new Error(`Missing required tool: ${tool}`);
+    }
+  }
+  async dependencies() {
+    this.log('Installing workspace dependencies...');
+    try { await this.run('pnpm', ['install', '--frozen-lockfile'], { shell: this.windows }); }
+    catch {
+      this.log('Lockfile needed an update; retrying install without frozen lockfile.');
+      await this.run('pnpm', ['install', '--no-frozen-lockfile'], { shell: this.windows });
+    }
+  }
+  async ownedProcesses() {
+    const api = this.binary('panda-api'), agent = this.binary('panda-restore-agent');
+    if (!this.windows) {
+      const response = await this.capture('ps', ['-axo', 'pid=,command=']);
+      if (response.code !== 0) {
+        this.log(`[dev] Could not inspect existing processes; leaving occupied ports alone. ${stripAnsi(response.stderr).trim()}`);
+        return [];
+      }
+      const found = [];
+      for (const line of response.stdout.split(/\r?\n/)) {
+        const match = /^(\d+)\s+(.+)$/.exec(line.trim());
+        if (!match) continue;
+        const command = match[2];
+        let kind, name;
+        if (command.includes(api)) [kind, name] = ['api', 'panda-api'];
+        else if (command.includes(agent)) [kind, name] = ['restore-agent', 'panda-restore-agent'];
+        else if (command.includes(this.webDir) && /\bvite(?:\.js)?\b/i.test(command)) [kind, name] = ['vite', 'vite'];
+        if (kind) found.push({ pid: Number.parseInt(match[1], 10), name, kind });
+      }
+      return found;
+    }
+    const script = 'Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, Name, ExecutablePath, CommandLine | ConvertTo-Json -Compress';
+    const response = await this.capture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+    if (response.code !== 0) {
+      this.log(`[dev] Could not inspect existing Windows processes; leaving occupied ports alone. ${stripAnsi(response.stderr).trim()}`);
+      return [];
+    }
     try {
-      await onceExit(currentApi, 'API');
-      return;
+      if (!response.stdout.trim()) return [];
+      const parsed = JSON.parse(response.stdout.trim());
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      const kinds = new Map([[api.toLowerCase(), 'api'], [agent.toLowerCase(), 'restore-agent']]);
+      const found = [];
+      for (const row of rows) {
+        if (!Number.isInteger(row.ProcessId) || row.ProcessId <= 0) continue;
+        let kind = kinds.get(String(row.ExecutablePath ?? '').toLowerCase());
+        const command = String(row.CommandLine ?? '');
+        if (!kind && command.toLowerCase().includes(this.webDir.toLowerCase()) && /\bvite(?:\.cmd|\.js)?\b/i.test(command))
+          kind = 'vite';
+        if (kind) found.push({ pid: row.ProcessId, name: row.Name, kind });
+      }
+      return found;
     } catch (error) {
-      if (shuttingDown) {
-        return;
-      }
-
-      log(`${error.message}`);
-      while (!shuttingDown) {
-        try {
-          await readFile(devRestoreMarkerFile, 'utf8');
-          log('API stopped for an in-app restore; waiting for the restore supervisor.');
-          await sleep(500);
-        } catch {
-          break;
-        }
-      }
-      if (shuttingDown) return;
-      log('Restarting API...');
-
-      try {
-        currentApi = await launchApi();
-      } catch (restartError) {
-        throw new Error(`API restart failed: ${restartError.message}`);
-      }
+      this.log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
+      return [];
     }
   }
-}
-
-async function startWeb() {
-  log('Starting web dev server...');
-  const viteBin = resolve(webDir, 'node_modules/.bin', isWindows ? 'vite.cmd' : 'vite');
-  const web = spawnProcess(viteBin, ['--port', String(ports.web)], {
-    cwd: webDir,
-    env: {
-      // Route websocket traffic directly to the API in dev so refresh/reconnect
-      // churn does not flow through Vite's ws proxy error path.
-      VITE_WS_URL: process.env.VITE_WS_URL ?? `http://localhost:${ports.api}`,
-      VITE_API_URL: process.env.VITE_API_URL ?? `http://localhost:${ports.api}`,
-      VITE_PANDA_API_BASE_URL: process.env.VITE_PANDA_API_BASE_URL ?? `http://localhost:${ports.api}`,
-      VITE_RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: isWindows,
-  });
-
-  web.stdout?.on('data', (chunk) => process.stdout.write(chunk));
-  web.stderr?.on('data', (chunk) => process.stderr.write(chunk));
-
-  const webUrl = await waitForViteUrl(web);
-  await waitForHttp(webUrl, web, 'web dev server');
-  log(`Web dev server is responding at ${webUrl}`);
-  return { child: web, url: webUrl };
-}
-
-async function shutdown(code = 0) {
-  if (shuttingDown) {
-    return;
-  }
-  shuttingDown = true;
-
-  for (const child of [...children]) {
-    if (child.exitCode === null && !child.killed) {
-      child.kill(isWindows ? undefined : 'SIGTERM');
+  async clearOwnedProcesses() {
+    const found = await this.ownedProcesses();
+    if (!found.length) return;
+    const ordered = found.filter(row => row.kind === 'vite').concat(found.filter(row => row.kind !== 'vite'));
+    this.log(`[dev] Clearing ${ordered.length} stale Panda dev process(es): ${ordered.map(row => `${row.name} (${row.pid})`).join(', ')}`);
+    for (const row of ordered) {
+      const command = this.windows ? ['taskkill', ['/PID', String(row.pid), '/T', '/F']] : ['kill', ['-TERM', String(row.pid)]];
+      const result = await this.capture(...command);
+      if (result.code !== 0) this.log(`[dev] Could not stop stale ${row.name} (${row.pid}): ${stripAnsi(result.stderr).trim()}`);
     }
+    await delay(500);
   }
-
-  process.exit(code);
-}
-
-async function main() {
-  log('Starting Panda development stack...');
-  log('');
-
-  await requireTools();
-  await clearRepoOwnedDevProcesses();
-  await installDependencies();
-  await allocateRuntimePorts();
-  await startInfrastructure();
-log('Starting local dev servers...');
-  log(`   API:  ${urls.apiHealth.replace('/health', '')}`);
-  log(`   Web:  ${urls.web} (will advance if blocked)`);
-  log('');
-
-  const api = await startApi();
-  const apiSupervisor = superviseApi(api);
-  log('To view infra logs in another terminal, run:');
-  log(`   docker compose -p "${composeProjectName}" -f "${composeFile}" logs -f`);
-  log('');
-  const web = await startWeb();
-
-  if (runOnce) {
-    log('Startup smoke test passed; shutting down managed dev servers.');
-    await shutdown(0);
-    return;
+  async listeners(port) {
+    if (this.windows) {
+      const script = `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`;
+      return parsePids((await this.capture('powershell.exe', ['-NoProfile', '-Command', script], { shell: false })).stdout);
+    }
+    const first = await this.capture('lsof', ['-ti', `tcp:${port}`], { shell: false });
+    if (first.code === 0) return parsePids(first.stdout);
+    const script = `ss -ltnp 'sport = :${port}' 2>/dev/null | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | sort -u`;
+    return parsePids((await this.capture('sh', ['-c', script], { shell: false })).stdout);
   }
-
-  await Promise.race([
-    apiSupervisor,
-    onceExit(web.child, 'Web dev server'),
-  ]);
-}
-
-function onceExit(child, label) {
-  return new Promise((_, reject) => {
-    child.once('exit', (code, signal) => {
+  async availablePort(start, label, tries = 50, reserved = new Set()) {
+    let port = start;
+    while (port < start + tries) {
+      const reservedPort = reserved.has(port);
+      if (!reservedPort && (await this.listeners(port)).length === 0) {
+        if (port > start) this.log(`[dev] ${label} port ${start} was busy, using ${port}`);
+        return port;
+      }
+      this.log(`[dev] ${label} port ${port} is ${reservedPort ? 'already reserved' : 'in use'}; trying ${port + 1}`);
+      port += 1;
+    }
+    throw new Error(`[dev] Could not find an available ${label} port after ${tries} attempts from ${start}.`);
+  }
+  async allocatePorts() {
+    const result = await this.capture('docker', ['compose', '-p', this.project, '-f', this.composeFile, 'ps', '--all', '--format', 'json']);
+    if (result.code !== 0) throw new Error('[dev] Could not verify the selected project before startup; set DEV_COMPOSE_PROJECT_NAME to a unique isolated name and retry.');
+    const reused = new Map();
+    if (result.stdout.trim()) {
+      const identity = parseComposeIdentityMetadata(result.stdout, this.composeFile);
+      if (!identity.valid) throw new Error(`[dev] The selected project is not the expected development project (${identity.reason}); set DEV_COMPOSE_PROJECT_NAME to a unique isolated name before starting.`);
+      const metadata = parseComposePortMetadata(result.stdout);
+      for (const [key, , , , address] of services) {
+        const existing = metadata.get(address);
+        if (existing?.running) reused.set(key, existing.port);
+      }
+    }
+    const definitions = services.map(([key, , , label]) => ({ key, start: this.ports[key], label }));
+    this.ports = await allocateDistinctRuntimePorts(definitions, this.availablePort.bind(this), reused);
+    for (const [key, variable] of services) this.env[variable] = String(this.ports[key]);
+    this.env.DEV_WEB_ORIGINS = this.origins().join(',');
+    this.env.COMPOSE_PROJECT_NAME = this.project;
+  }
+  async assertPort(port, label) {
+    const pids = await this.listeners(port);
+    if (!pids.length) return;
+    throw new Error(`${label} port ${port} became occupied before startup by PID(s): ${pids.join(', ')}`);
+  }
+  async waitHttp(url, child, label, timeout = 120000) {
+    await pollUntil(async () => {
+      if (child && child.exitCode !== null) throw new Error(`${label} exited before it became ready.`);
+      const response = await this.capture('curl', ['-fsS', '--max-time', '2', url]);
+      if (response.code !== 0) return false;
+      if (child && child.exitCode !== null) throw new Error(`${label} health check was answered by another process; the managed process exited.`);
+      return true;
+    }, { timeout, interval: 500, message: `Timed out waiting for ${label} at ${url}` });
+  }
+  async garage() {
+    const prefix = ['compose', '-f', this.composeFile, 'exec', '-T', 'garage', '/garage', '-c', '/config/garage.toml'];
+    let response;
+    for (let remaining = 60; remaining > 0; remaining -= 1) {
+      response = await this.capture('docker', [...prefix, 'status']);
+      if (response.code === 0) break;
+      if (remaining === 1) throw new Error(`Garage did not become ready.\n${stripAnsi(response.stderr).trim()}`);
+      await delay(500);
+    }
+    if ((await this.capture('docker', [...prefix, 'key', 'list'])).code === 0) return;
+    const node = await this.capture('docker', [...prefix, 'node', 'id']);
+    if (node.code !== 0 || !node.stdout.trim()) throw new Error(`Could not read the Garage node id.\n${stripAnsi(node.stderr).trim()}`);
+    const steps = [
+      ['layout', 'assign', node.stdout.trim().split(/\s+/)[0], '-z', 'dc1', '-c', '1G'], ['layout', 'apply', '--version', '1'],
+      ['key', 'import', '--yes', '-n', 'dev-key', 'GKdeadbeef0000000000000000000000', 'deadbeef0000000000000000000000000000000000000000000000000000cafe'],
+      ['bucket', 'create', 'panda'], ['bucket', 'allow', '--read', '--write', '--owner', 'panda', '--key', 'GKdeadbeef0000000000000000000000'],
+    ];
+    for (const args of steps) await this.run('docker', prefix.concat(args));
+  }
+  async infrastructure() {
+    this.log(`Starting infrastructure (TimescaleDB, Redis, Garage) for ${this.project}...`);
+    const compose = ['compose', '-f', this.composeFile];
+    await this.run('docker', [...compose, 'up', '-d', 'timescaledb', 'redis', 'garage']);
+    await this.garage();
+    const deadline = Date.now() + this.dbTimeout;
+    let nextLog = Date.now() + 15000;
+    await pollUntil(async () => {
+      const id = await this.capture('docker', [...compose, 'ps', '-q', 'timescaledb']);
+      if (id.code !== 0 || !id.stdout.trim()) throw new Error('TimescaleDB container was not created. Inspect docker compose logs timescaledb.');
+      const status = await this.capture('docker', ['inspect', '--format', '{{.State.Status}}', id.stdout.trim()]);
+      if (status.code === 0 && ['exited', 'dead'].includes(status.stdout.trim())) {
+        const logs = await this.capture('docker', [...compose, 'logs', '--tail', '40', 'timescaledb']);
+        throw new Error(`TimescaleDB container stopped during startup (${status.stdout.trim()}).\n${stripAnsi(logs.stdout).trim()}`);
+      }
+      if ((await this.capture('docker', [...compose, 'exec', '-T', 'timescaledb', 'pg_isready', '-U', 'panda'])).code === 0) return true;
+      if (Date.now() >= nextLog) {
+        this.log(`TimescaleDB is still recovering or starting; waiting up to ${Math.ceil((deadline - Date.now()) / 1000)}s more...`);
+        nextLog += 15000;
+      }
+      return false;
+    }, { timeout: this.dbTimeout, message: `Timed out waiting for TimescaleDB to accept connections after ${this.dbTimeout / 1000}s. Inspect docker compose logs timescaledb for recovery errors.` });
+    for (const line of ['', 'Infrastructure is running', `   TimescaleDB: postgresql://localhost:${this.ports.postgres}`,
+      `   Redis: redis://localhost:${this.ports.redis}`, `   S3 (Garage): http://localhost:${this.ports.garageApi}`, '']) this.log(line);
+  }
+  async ensureKey() {
+    await mkdir(dirname(this.keyFile), { recursive: true });
+    await rm(this.markerFile, { force: true });
+    let key;
+    try { key = (await readFile(this.keyFile, 'utf8')).trim(); } catch { /* First startup has no key. */ }
+    if (!key) await writeFile(this.keyFile, randomBytes(32).toString('base64') + '\n', { encoding: 'utf8', mode: 0o600 });
+  }
+  apiEnvironment() {
+    const local = { postgres: `postgresql://panda:devpassword@localhost:${this.ports.postgres}/panda?options=-c%20search_path%3Dpanda,timeseries,public`,
+      redis: `redis://localhost:${this.ports.redis}`, garage: `http://localhost:${this.ports.garageApi}` };
+    return { SQLX_OFFLINE: 'true', DATABASE_URL: local.postgres, REDIS_URL: local.redis, S3_ENDPOINT: local.garage,
+      S3_ALLOW_DEVELOPMENT_GARAGE: 'true', S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
+      S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
+      PORT: String(this.ports.api), ALLOWED_ORIGINS: this.origins().join(','), COOKIE_INSECURE: 'true', PANDA_ENV: 'development',
+      PANDA_BUILD_VERSION: resolveBuildVersionFromGit(), RESTORE_AGENT_URL: `http://127.0.0.1:${this.ports.restoreAgent}`,
+      RESTORE_AGENT_KEY_FILE: this.keyFile, RESTORE_AGENT_PORT: String(this.ports.restoreAgent),
+      PANDA_API_PID_FILE: this.pidFile, PANDA_RESTORE_MARKER_FILE: this.markerFile };
+  }
+  async launchApi() {
+    await this.assertPort(this.ports.api, 'API');
+    this.log('Starting API...');
+    const child = this.start(this.binary('panda-api'), [], { cwd: this.apiDir, env: this.apiEnvironment() });
+    await writeFile(this.pidFile, child.pid + '\n', 'utf8');
+    await this.waitHttp(this.health(), child, 'API');
+    this.log(`API is responding at ${this.health()}`);
+    return child;
+  }
+  async api() {
+    await this.assertPort(this.ports.api, 'API');
+    const args = ['build', '--bin', 'panda-api', '--bin', 'panda-restore-agent'];
+    if (this.jobs !== null) args.push('--jobs', String(this.jobs));
+    this.log(`Building API targets${this.jobs !== null ? ` (maximum ${this.jobs} concurrent Cargo jobs)` : ''}...`);
+    await this.run('cargo', args, { cwd: this.apiDir, env: this.apiEnvironment() });
+    await this.ensureKey();
+    await this.assertPort(this.ports.restoreAgent, 'Restore agent');
+    this.log('Starting restore supervisor...');
+    const supervisor = this.start(this.binary('panda-restore-agent'), [], { cwd: this.apiDir, env: this.apiEnvironment() });
+    const address = `http://127.0.0.1:${this.ports.restoreAgent}`;
+    await this.waitHttp(address + '/health', supervisor, 'restore supervisor');
+    this.log(`Restore supervisor is responding at ${address}`);
+    return this.launchApi();
+  }
+  unexpectedExit(child, label) {
+    return new Promise((_, reject) => child.once('exit', (code, signal) => {
       reject(new Error(`${label} exited unexpectedly (${signal ?? `exit code ${code}`}).`));
-    });
-  });
-}
-
-const isDirectExecution = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-
-if (isDirectExecution) {
-  for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-      shutdown(signal === 'SIGINT' ? 130 : 143);
+    }));
+  }
+  async supervise(child) {
+    let current = child;
+    while (!this.stopping) {
+      try { await this.unexpectedExit(current, 'API'); return; }
+      catch (error) { if (this.stopping) return; this.log(error.message); }
+      for (;;) {
+        if (this.stopping) return;
+        try { await readFile(this.markerFile, 'utf8'); } catch { break; }
+        this.log('API stopped for an in-app restore; waiting for the restore supervisor.');
+        await delay(500);
+      }
+      if (this.stopping) return;
+      this.log('Restarting API...');
+      try { current = await this.launchApi(); }
+      catch (error) { throw new Error(`API restart failed: ${error.message}`); }
+    }
+  }
+  viteUrl(child, timeout = 30000) {
+    return new Promise((accept, reject) => {
+      let output = '';
+      const finish = (error, url) => {
+        clearTimeout(timer);
+        for (const stream of ['stdout', 'stderr']) child[stream]?.off('data', data);
+        child.off('exit', exit);
+        if (error) reject(error); else accept(url);
+      };
+      const data = chunk => { output += chunk.toString(); const url = extractViteLocalUrl(output); if (url) finish(null, url); };
+      const exit = (code, signal) => finish(new Error(`web dev server exited before announcing a URL (${signal ? `signal ${signal}` : `exit code ${code}`}).`));
+      const timer = setTimeout(() => {
+        child.kill(this.windows ? undefined : 'SIGTERM');
+        finish(new Error('Timed out waiting for Vite to announce a local URL.'));
+      }, timeout);
+      for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', data);
+      child.once('exit', exit);
     });
   }
-
-  main().catch(async (error) => {
-    console.error(error.message);
-    await shutdown(1);
-  });
+  async web() {
+    this.log('Starting web dev server...');
+    const env = { VITE_RESTORE_AGENT_URL: `http://127.0.0.1:${this.ports.restoreAgent}` };
+    for (const key of ['VITE_WS_URL', 'VITE_API_URL', 'VITE_PANDA_API_BASE_URL']) env[key] = this.env[key] ?? `http://localhost:${this.ports.api}`;
+    const child = this.start(resolve(this.webDir, 'node_modules/.bin', this.windows ? 'vite.cmd' : 'vite'),
+      ['--port', String(this.ports.web)], { cwd: this.webDir, env, stdio: ['ignore', 'pipe', 'pipe'], shell: this.windows });
+    for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', data => process[stream].write(data));
+    const url = await this.viteUrl(child);
+    await this.waitHttp(url, child, 'web dev server');
+    this.log(`Web dev server is responding at ${url}`);
+    return { child, url };
+  }
+  shutdown(code = 0) {
+    if (this.stopping) return;
+    this.stopping = true;
+    for (const child of Array.from(this.children))
+      if (child.exitCode === null && !child.killed) child.kill(this.windows ? undefined : 'SIGTERM');
+    process.exit(code);
+  }
+  async main(once) {
+    this.log('Starting Panda development stack...'); this.log('');
+    for (const step of [this.tools, this.clearOwnedProcesses, this.dependencies, this.allocatePorts, this.infrastructure]) await step.call(this);
+    for (const line of ['Starting local dev servers...', `   API:  ${this.health().replace('/health', '')}`,
+      `   Web:  http://localhost:${this.ports.web} (will advance if blocked)`, '']) this.log(line);
+    const supervisor = this.supervise(await this.api());
+    this.log('To view infra logs in another terminal, run:');
+    this.log(`   docker compose -p "${this.project}" -f "${this.composeFile}" logs -f`); this.log('');
+    const web = await this.web();
+    if (once) {
+      this.log('Startup smoke test passed; shutting down managed dev servers.');
+      this.shutdown(0);
+      return;
+    }
+    await Promise.race([supervisor, this.unexpectedExit(web.child, 'Web dev server')]);
+  }
+}
+if (direct(import.meta.url)) {
+  const stack = new DevelopmentStack();
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(signal, () => stack.shutdown(code));
+  stack.main(process.argv.includes('--once')).catch(error => { console.error(error.message); stack.shutdown(1); });
 }
