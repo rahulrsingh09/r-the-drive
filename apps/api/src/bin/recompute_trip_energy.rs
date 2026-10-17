@@ -4,7 +4,6 @@ use snapshot_scan::SnapshotScan;
 use uuid::Uuid;
 
 use anyhow::Result;
-use panda_api::ingestion::trip_detector::compute_trip_energy;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tracing::info;
 
@@ -16,8 +15,9 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
-
-    recompute_trip_energy(&pool).await
+    let outcome = async { recompute_trip_energy(&pool).await }.await;
+    pool.close().await;
+    outcome
 }
 
 async fn recompute_trip_energy(pool: &PgPool) -> Result<()> {
@@ -39,34 +39,17 @@ async fn recompute_trip_energy(pool: &PgPool) -> Result<()> {
         }
         for trip in trips {
             let distance = trip.distance_miles.unwrap_or(0.0);
-            let (energy_wh, strategy, efficiency_wh_per_mile) = match compute_trip_energy(
-                trip.soc_start,
-                trip.soc_end,
-                trip.battery_capacity_wh,
-                trip.range_start_mi,
-                trip.range_end_mi,
-                distance,
-                trip.efficiency_wh_per_mile,
-            ) {
-                Some((wh, strategy)) => {
-                    let efficiency = if distance > 0.0 {
-                        Some(wh / distance)
-                    } else {
-                        None
-                    };
-                    (Some(wh), Some(strategy.to_string()), efficiency)
+            let (energy_wh, strategy, efficiency_wh_per_mile) =
+                panda_api::db::maintenance::TripEnergyInputs {
+                    soc_start: trip.soc_start,
+                    soc_end: trip.soc_end,
+                    capacity: trip.battery_capacity_wh,
+                    range_start: trip.range_start_mi,
+                    range_end: trip.range_end_mi,
+                    distance,
+                    efficiency: trip.efficiency_wh_per_mile,
                 }
-                None => {
-                    let efficiency = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh)
-                    {
-                        (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
-                            Some(((s0 - s1) / 100.0) * cap / distance)
-                        }
-                        _ => None,
-                    };
-                    (None, None, efficiency)
-                }
-            };
+                .columns();
 
             sqlx::query!(
                 r#"UPDATE panda.trips

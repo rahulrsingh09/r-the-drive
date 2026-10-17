@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::Row;
 use uuid::Uuid;
 
 struct SensorInventory {
@@ -35,25 +34,34 @@ async fn main() -> Result<()> {
         .max_connections(4)
         .connect(&database_url)
         .await?;
+    let outcome = async {
+        let mut report = Vec::new();
+        for sensor in inventory() {
+            report.push(audit_sensor(&pool, sensor, vehicle_filter).await?);
+        }
 
-    let mut report = Vec::new();
-    for sensor in inventory() {
-        report.push(audit_sensor(&pool, sensor, vehicle_filter).await?);
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        Ok(())
     }
-
-    println!("{}", serde_json::to_string_pretty(&report)?);
-    Ok(())
+    .await;
+    pool.close().await;
+    outcome
 }
 
 fn parse_vehicle_filter() -> Result<Option<Uuid>> {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--vehicle" {
-            let raw = args.next().context("expected UUID after --vehicle")?;
-            return Ok(Some(Uuid::parse_str(&raw).context("invalid vehicle UUID")?));
-        }
-    }
-    Ok(None)
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    let Some(position) = arguments
+        .iter()
+        .position(|argument| argument == "--vehicle")
+    else {
+        return Ok(None);
+    };
+    arguments
+        .get(position + 1)
+        .context("expected UUID after --vehicle")?
+        .parse()
+        .context("invalid vehicle UUID")
+        .map(Some)
 }
 
 async fn audit_sensor(
@@ -67,58 +75,57 @@ async fn audit_sensor(
         .map(|field| format!("t.{field} IS NOT NULL"))
         .collect::<Vec<_>>()
         .join(" OR ");
-
     let sql = format!(
         r#"
-        SELECT
-          v.model,
-          COUNT(DISTINCT v.id)::BIGINT AS vehicle_count,
-          COUNT(*) FILTER (WHERE {predicate})::BIGINT AS sample_count,
-          MIN(t.ts) FILTER (WHERE {predicate}) AS first_seen,
-          MAX(t.ts) FILTER (WHERE {predicate}) AS last_seen
+        SELECT v.model, COUNT(*)::bigint AS vehicle_count, SUM(samples.count)::bigint AS sample_count,
+               MIN(samples.first_seen) AS first_seen, MAX(samples.last_seen) AS last_seen
         FROM panda.vehicles v
-        LEFT JOIN timeseries.telemetry t ON t.vehicle_id = v.id
+        CROSS JOIN LATERAL (
+            SELECT COUNT(*)::bigint AS count, MIN(t.ts) AS first_seen, MAX(t.ts) AS last_seen
+            FROM timeseries.telemetry t WHERE t.vehicle_id = v.id AND ({predicate})
+        ) samples
         WHERE ($1::uuid IS NULL OR v.id = $1)
-        GROUP BY v.model
-        ORDER BY v.model
-        "#
+        GROUP BY v.model ORDER BY v.model
+    "#
     );
-
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vehicle_filter)
-        .fetch_all(pool)
-        .await?;
-
-    let mut models = Vec::with_capacity(rows.len());
-    for row in rows {
-        let sample_count = row.try_get::<i64, _>("sample_count")?;
-        models.push(AuditModelRecord {
-            model: row.try_get::<String, _>("model")?,
-            vehicle_count: row.try_get::<i64, _>("vehicle_count")?,
-            sample_count,
-            first_seen: row.try_get("first_seen")?,
-            last_seen: row.try_get("last_seen")?,
-            disposition: if sample_count > 0 {
-                "keep-historical-fallback"
-            } else {
-                "remove-from-shared-defaults"
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            i64,
+            i64,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+        ),
+    >(sqlx::AssertSqlSafe(sql))
+    .bind(vehicle_filter)
+    .fetch_all(pool)
+    .await?;
+    let mut global_disposition = "remove-from-shared-defaults";
+    let models = rows
+        .into_iter()
+        .map(
+            |(model, vehicle_count, sample_count, first_seen, last_seen)| {
+                let disposition = if sample_count > 0 {
+                    global_disposition = "keep-historical-fallback";
+                    "keep-historical-fallback"
+                } else {
+                    "remove-from-shared-defaults"
+                };
+                AuditModelRecord {
+                    model,
+                    vehicle_count,
+                    sample_count,
+                    first_seen,
+                    last_seen,
+                    disposition,
+                }
             },
-        });
-    }
-
-    let global_disposition = if models.iter().any(|model| model.sample_count > 0) {
-        "keep-historical-fallback"
-    } else {
-        "remove-from-shared-defaults"
-    };
-
+        )
+        .collect();
     Ok(SensorAuditRecord {
-        sensor_id: sensor.sensor_id.to_string(),
-        fields: sensor
-            .fields
-            .iter()
-            .map(|field| (*field).to_string())
-            .collect(),
+        sensor_id: sensor.sensor_id.into(),
+        fields: sensor.fields.iter().map(|field| (*field).into()).collect(),
         global_disposition,
         models,
     })

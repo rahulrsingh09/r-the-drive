@@ -21,21 +21,24 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await
         .context("connect to the database")?;
-
-    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtext($1))")
-        .bind(ADOPTION_LOCK)
-        .fetch_one(&pool)
-        .await?;
-    if !locked {
-        bail!("another baseline adoption process holds the database lock");
+    let outcome = async {
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtext($1))")
+            .bind(ADOPTION_LOCK)
+            .fetch_one(&pool)
+            .await?;
+        if !locked {
+            bail!("another baseline adoption process holds the database lock");
+        }
+        let result = adopt(&database_url, &pool, confirm, backup_path.as_deref()).await;
+        let _ = sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+            .bind(ADOPTION_LOCK)
+            .execute(&pool)
+            .await;
+        result
     }
-
-    let result = adopt(&database_url, &pool, confirm, backup_path.as_deref()).await;
-    let _ = sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
-        .bind(ADOPTION_LOCK)
-        .execute(&pool)
-        .await;
-    result
+    .await;
+    pool.close().await;
+    outcome
 }
 
 async fn adopt(
@@ -75,44 +78,13 @@ async fn adopt(
     verify_backup_evidence(backup_path).await?;
     refuse_active_clients(pool).await?;
 
-    let baseline = compiled
-        .first()
-        .context("compiled migration catalog is empty")?;
-    let checksum = hex::decode(&baseline.checksum_sha384)?;
-    let mut transaction = pool.begin().await?;
-    let public_ledger_exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
-            .fetch_one(&mut *transaction)
-            .await?;
-    if !public_ledger_exists {
-        let historical_ledger_exists: bool =
-            sqlx::query_scalar("SELECT to_regclass('panda._sqlx_migrations') IS NOT NULL")
-                .fetch_one(&mut *transaction)
-                .await?;
-        if !historical_ledger_exists {
-            bail!("the current SQLx migration ledger is missing");
-        }
-        sqlx::query("ALTER TABLE panda._sqlx_migrations SET SCHEMA public")
-            .execute(&mut *transaction)
-            .await?;
+    let ledger_remains: bool = sqlx::query_scalar(
+        "SELECT to_regclass('public._sqlx_migrations') IS NOT NULL OR to_regclass('panda._sqlx_migrations') IS NOT NULL",
+    ).fetch_one(pool).await?;
+    if !ledger_remains {
+        bail!("the current SQLx migration ledger is missing");
     }
-    sqlx::query("DROP TABLE IF EXISTS panda._sqlx_migrations")
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query("DELETE FROM public._sqlx_migrations")
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query(
-        "INSERT INTO public._sqlx_migrations
-         (version, description, success, checksum, execution_time)
-         VALUES ($1, $2, TRUE, $3, 0)",
-    )
-    .bind(baseline.version)
-    .bind(&baseline.description)
-    .bind(checksum)
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
+    migrations::restore_baseline_ledger(pool).await?;
 
     // The flattened baseline represents the complete pre-release schema, but
     // later migrations may add data or schema changes after that baseline.
@@ -146,64 +118,46 @@ async fn is_adopted(pool: &sqlx::PgPool, expected: &[MigrationIdentity]) -> anyh
 }
 
 async fn read_public_ledger(pool: &sqlx::PgPool) -> anyhow::Result<Vec<MigrationIdentity>> {
-    Ok(sqlx::query_as::<_, (i64, String, bool, String)>(
-        "SELECT version, description, success, encode(checksum, 'hex') FROM public._sqlx_migrations ORDER BY version",
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(
-        |(version, description, _success, checksum_sha384)| MigrationIdentity {
-            version,
-            description,
-            checksum_sha384,
-        },
-    )
-    .collect())
+    let rows = sqlx::query_as::<_, (i64, String, String)>(
+        "SELECT version, description, encode(checksum, 'hex') FROM public._sqlx_migrations ORDER BY version")
+        .fetch_all(pool).await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(version, description, checksum_sha384)| MigrationIdentity {
+                version,
+                description,
+                checksum_sha384,
+            },
+        )
+        .collect())
 }
 
 async fn verify_existing_ledger(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-    let public_exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
-            .await?;
-    let historical_exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('panda._sqlx_migrations') IS NOT NULL")
-            .fetch_one(pool)
-            .await?;
-    let table = match (public_exists, historical_exists) {
-        (true, false) => "public._sqlx_migrations",
-        (false, true) => "panda._sqlx_migrations",
+    let ledgers: (bool, bool) = sqlx::query_as(
+        "SELECT to_regclass('public._sqlx_migrations') IS NOT NULL, to_regclass('panda._sqlx_migrations') IS NOT NULL")
+        .fetch_one(pool).await?;
+    let query = match ledgers {
+        (true, false) => "SELECT version, success FROM public._sqlx_migrations ORDER BY version",
+        (false, true) => "SELECT version, success FROM panda._sqlx_migrations ORDER BY version",
         (false, false) => bail!("the current SQLx migration ledger is missing"),
         (true, true) => {
             bail!("both public and historical SQLx ledgers exist; adoption is ambiguous")
         }
     };
-    let rows = if table == "public._sqlx_migrations" {
-        sqlx::query_as::<_, (i64, bool)>(
-            "SELECT version, success FROM public._sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as::<_, (i64, bool)>(
-            "SELECT version, success FROM panda._sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(pool)
-        .await?
-    };
-    if rows.is_empty() {
+    let rows: Vec<(i64, bool)> = sqlx::query_as(query).fetch_all(pool).await?;
+    let Some(&(first, _)) = rows.first() else {
         bail!("the existing SQLx migration ledger is empty");
-    }
-    if rows.iter().any(|row| !row.1) {
+    };
+    if rows.iter().any(|(_, success)| !success) {
         bail!("the existing SQLx migration ledger contains a failed migration");
     }
-    if rows[0].0 < 1
-        || rows
-            .windows(2)
-            .any(|pair| pair[1].0 != pair[0].0.saturating_add(1))
-    {
-        bail!("the existing SQLx migration ledger is not contiguous and ordered");
+    let mut expected = first;
+    for (version, _) in rows {
+        if first < 1 || version != expected {
+            bail!("the existing SQLx migration ledger is not contiguous and ordered");
+        }
+        expected = version.saturating_add(1);
     }
     Ok(())
 }
@@ -227,40 +181,34 @@ async fn refuse_active_clients(pool: &sqlx::PgPool) -> anyhow::Result<()> {
 
 async fn verify_backup_evidence(path: &str) -> anyhow::Result<()> {
     let path = Path::new(path);
-    let metadata = path
-        .metadata()
+    let metadata = tokio::fs::metadata(path)
+        .await
         .with_context(|| format!("backup evidence does not exist: {}", path.display()))?;
-    if !metadata.is_file() || metadata.len() == 0 {
+    if metadata.len() == 0 || !metadata.is_file() {
         bail!(
             "backup evidence must be a non-empty file: {}",
             path.display()
         );
     }
-    if path
+    let recovery_package = path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".rma.tar.gz"))
-    {
-        backups::validate_recovery_package(path)
+        .is_some_and(|name| name.ends_with(".rma.tar.gz"));
+    if recovery_package {
+        return backups::validate_recovery_package(path)
             .await
-            .context("validate recovery package supplied as backup evidence")?;
-    } else {
-        let output = Command::new("pg_restore")
-            .arg("--list")
-            .arg(path)
-            .output()
-            .await
-            .context(
-                "verify raw dump with pg_restore; install PostgreSQL client tools or provide a validated .rma.tar.gz package",
-            )?;
-        if !output.status.success() {
-            bail!(
-                "pg_restore could not verify backup evidence: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
+            .context("validate recovery package supplied as backup evidence")
+            .map(|_| ());
     }
-    Ok(())
+    let output = Command::new("pg_restore").args([std::ffi::OsStr::new("--list"), path.as_os_str()])
+        .output().await.context("verify raw dump with pg_restore; install PostgreSQL client tools or provide a validated .rma.tar.gz package")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    bail!(
+        "pg_restore could not verify backup evidence: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
 }
 
 fn contract_fingerprint(contract: &serde_json::Value) -> anyhow::Result<String> {
@@ -273,33 +221,36 @@ fn contract_fingerprint(contract: &serde_json::Value) -> anyhow::Result<String> 
 }
 
 fn contract_difference(live: &serde_json::Value, baseline: &serde_json::Value) -> String {
-    let item_set = |value: &serde_json::Value| {
-        value
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|item| serde_json::to_string(item).ok())
-            .collect::<std::collections::BTreeSet<_>>()
-    };
-    let live = item_set(live);
-    let baseline = item_set(baseline);
-    let live_only = live
-        .difference(&baseline)
-        .take(8)
-        .cloned()
-        .collect::<Vec<_>>();
-    let baseline_only = baseline
-        .difference(&live)
-        .take(8)
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut membership = std::collections::BTreeMap::<String, u8>::new();
+    for (side, value) in [(1, live), (2, baseline)] {
+        if let Some(items) = value.as_array() {
+            for item in items {
+                if let Ok(serialized) = serde_json::to_string(item) {
+                    *membership.entry(serialized).or_default() |= side;
+                }
+            }
+        }
+    }
+    let mut live_only = Vec::new();
+    let mut baseline_only = Vec::new();
+    for (item, sides) in membership {
+        let destination = match sides {
+            1 => &mut live_only,
+            2 => &mut baseline_only,
+            _ => continue,
+        };
+        if destination.len() < 8 {
+            destination.push(item);
+        }
+    }
     format!("live-only={live_only:?}; baseline-only={baseline_only:?}")
 }
 
 async fn scratch_baseline_contract(
     database_url: &str,
 ) -> anyhow::Result<(String, serde_json::Value)> {
-    let mut admin_url = Url::parse(database_url).context("parse DATABASE_URL")?;
+    let mut scratch_url = Url::parse(database_url).context("parse DATABASE_URL")?;
+    let mut admin_url = scratch_url.clone();
     admin_url.set_path("/postgres");
     let admin_pool = PgPoolOptions::new()
         .max_connections(1)
@@ -307,64 +258,122 @@ async fn scratch_baseline_contract(
         .await
         .context("connect to postgres maintenance database")?;
     let database_name = format!("panda_baseline_verify_{}", Uuid::new_v4().simple());
-    sqlx::query(AssertSqlSafe(format!(
+    let create = sqlx::query(AssertSqlSafe(format!(
         "CREATE DATABASE \"{database_name}\" TEMPLATE template0"
     )))
     .execute(&admin_pool)
     .await
-    .context("create disposable baseline database")?;
-
-    let mut scratch_url = Url::parse(database_url)?;
+    .context("create disposable baseline database");
+    if let Err(error) = create {
+        admin_pool.close().await;
+        return Err(error);
+    }
     scratch_url.set_path(&format!("/{database_name}"));
     let outcome = async {
-        let scratch_pool = PgPoolOptions::new()
+        sqlx::query(AssertSqlSafe(format!(
+            "ALTER DATABASE \"{database_name}\" SET timescaledb.telemetry_level = 'off'"
+        )))
+        .execute(&admin_pool)
+        .await
+        .context("disable telemetry in disposable baseline database")?;
+        match PgPoolOptions::new()
             .max_connections(2)
             .connect(scratch_url.as_str())
             .await
-            .context("connect to disposable baseline database")?;
-        migrations::apply_baseline_schema(&scratch_pool)
-            .await
-            .context("apply immutable baseline to disposable database")?;
-        let contract = restore_compatibility::schema_contract_description(&scratch_pool)
-            .await
-            .context("describe disposable baseline")?;
-        let fingerprint = contract_fingerprint(&contract)?;
-        scratch_pool.close().await;
-        Ok::<_, anyhow::Error>((fingerprint, contract))
+            .context("connect to disposable baseline database")
+        {
+            Err(error) => Err(error),
+            Ok(scratch_pool) => {
+                let describe = async {
+                    migrations::apply_baseline_schema(&scratch_pool)
+                        .await
+                        .context("apply immutable baseline to disposable database")?;
+                    let contract =
+                        restore_compatibility::schema_contract_description(&scratch_pool)
+                            .await
+                            .context("describe disposable baseline")?;
+                    Ok((contract_fingerprint(&contract)?, contract))
+                }
+                .await;
+                scratch_pool.close().await;
+                describe
+            }
+        }
     }
     .await;
-
-    let drop_result = sqlx::query(AssertSqlSafe(format!(
-        "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
-    )))
-    .execute(&admin_pool)
+    let cleanup = async {
+        sqlx::query(AssertSqlSafe(format!(
+            "ALTER DATABASE \"{database_name}\" ALLOW_CONNECTIONS false"
+        )))
+        .execute(&admin_pool)
+        .await
+        .context("close disposable baseline database to new connections")?;
+        sqlx::query(AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
+        )))
+        .execute(&admin_pool)
+        .await
+        .context("drop disposable baseline database")
+    }
     .await;
     admin_pool.close().await;
-    if let Err(error) = drop_result {
-        return Err(error).context("drop disposable baseline database");
-    }
+    cleanup?;
     outcome
 }
 
 fn parse_args() -> anyhow::Result<(bool, Option<String>)> {
-    let mut confirm = false;
-    let mut backup_path = None;
-    let mut args = env::args().skip(1);
-    while let Some(argument) = args.next() {
-        match argument.as_str() {
-            "--yes" => confirm = true,
-            "--backup" => {
-                backup_path = Some(args.next().context("--backup requires a path argument")?);
-            }
-            "--help" | "-h" => {
-                println!(
-                    "Usage: cargo run --bin rebaseline_db -- [--yes --backup <path>]\n\
-                     Without --yes, creates a disposable database and proves the live schema matches the compiled baseline without writing to the live database."
-                );
-                std::process::exit(0);
-            }
-            _ => bail!("unknown argument: {argument}"),
+    use panda_api::db::maintenance::{command_options, OptionKind};
+    let options = command_options(&[OptionKind::Yes, OptionKind::Backup],
+        "Usage: cargo run --bin rebaseline_db -- [--yes --backup <path>]\n\
+         Without --yes, creates a disposable database and proves the live schema matches the compiled baseline without writing to the live database.", "unknown argument")?;
+    Ok((options.yes, options.backup))
+}
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+    use sqlx::Executor;
+
+    #[tokio::test]
+    #[ignore = "requires explicit isolated synthetic TimescaleDB with disposable role/database creation"]
+    async fn scratch_verification_cleans_success_and_baseline_failure() {
+        let configured = env::var("MAINTENANCE_DATABASE_URL").expect("explicit synthetic fixture");
+        let mut url = Url::parse(&configured).unwrap();
+        assert_eq!(url.host_str(), Some("db"));
+        assert_eq!(url.username(), "maintenance_bootstrap");
+        url.set_path("/postgres");
+        let admin = sqlx::PgPool::connect(url.as_str()).await.unwrap();
+        let inventory = "SELECT datname::text FROM pg_database WHERE datname LIKE 'panda_baseline_verify_%' ORDER BY datname";
+        let before: Vec<String> = sqlx::query_scalar(inventory)
+            .fetch_all(&admin)
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            let (fingerprint, contract) = scratch_baseline_contract(&configured).await.unwrap();
+            assert_eq!(fingerprint.len(), 64);
+            assert!(!contract.as_array().unwrap().is_empty());
         }
+        let role = format!("maintenance_scratch_{}", Uuid::new_v4().simple());
+        admin.execute(AssertSqlSafe(format!("CREATE ROLE {role} LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'synthetic_scratch_only'"))).await.unwrap();
+        url.set_username(&role).unwrap();
+        url.set_password(Some("synthetic_scratch_only")).unwrap();
+        let error = scratch_baseline_contract(url.as_str()).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("apply immutable baseline"),
+            "{error:#}"
+        );
+        let after: Vec<String> = sqlx::query_scalar(inventory)
+            .fetch_all(&admin)
+            .await
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "success and failure must leave no scratch database"
+        );
+        admin
+            .execute(AssertSqlSafe(format!("DROP ROLE {role}")))
+            .await
+            .unwrap();
+        admin.close().await;
     }
-    Ok((confirm, backup_path))
 }

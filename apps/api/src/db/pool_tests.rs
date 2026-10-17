@@ -245,3 +245,185 @@ async fn exercise_pool(legacy_function_bodies: bool) {
     admin.close().await;
     result.expect("geospatial functions must work through the normal application pool");
 }
+
+#[tokio::test]
+#[ignore = "requires an explicitly configured disposable PostgreSQL/TimescaleDB administrator"]
+async fn full_replacement_db_helpers_preserve_membership_and_role_boundaries() {
+    use crate::db::{users, vehicles};
+    use crate::errors::AppError;
+    use crate::middleware::auth::AuthUser;
+    let base = std::env::var("DATABASE_URL").expect("explicit disposable DATABASE_URL");
+    let (prefix, _) = base.rsplit_once('/').unwrap();
+    let name = format!("maintenance_helpers_{}", Uuid::new_v4().simple());
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("{prefix}/postgres"))
+        .await
+        .unwrap();
+    admin
+        .execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .await
+        .unwrap();
+    let pool = create_pool(&format!("{prefix}/{name}")).await.unwrap();
+    run_current_migrations(&pool).await.unwrap();
+    let people = [
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    ];
+    for (person, role) in people.iter().zip(["super_user", "admin", "user", "user"]) {
+        sqlx::query(
+            "INSERT INTO panda.users(id,email,password_hash,role) VALUES($1,$2,'unused',$3)",
+        )
+        .bind(person)
+        .bind(format!("{person}@example.invalid"))
+        .bind(role)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let vehicle = Uuid::new_v4();
+    sqlx::query("INSERT INTO panda.vehicles(id,user_id,rivian_vehicle_id,model,battery_capacity_wh) VALUES($1,$2,'synthetic','R1T',100000)")
+        .bind(vehicle).bind(people[0]).execute(&pool).await.unwrap();
+    for (person, role) in people.iter().zip(["owner", "manager", "viewer"]) {
+        sqlx::query("INSERT INTO panda.vehicle_memberships(vehicle_id,user_id,role,is_default) VALUES($1,$2,$3,TRUE)")
+            .bind(vehicle).bind(person).bind(role).execute(&pool).await.unwrap();
+    }
+    for (index, person) in people.iter().enumerate() {
+        let auth = AuthUser {
+            user_id: *person,
+            default_vehicle_id: None,
+            api_access_level: None,
+            api_vehicle_id: None,
+        };
+        assert_eq!(
+            vehicles::require_vehicle_read_access(&pool, &auth, vehicle)
+                .await
+                .is_ok(),
+            index < 3
+        );
+        assert_eq!(
+            vehicles::require_vehicle_manager_access(&pool, &auth, vehicle)
+                .await
+                .is_ok(),
+            index < 2
+        );
+        assert_eq!(
+            vehicles::require_vehicle_owner_access(&pool, &auth, vehicle)
+                .await
+                .is_ok(),
+            index == 0
+        );
+        assert_eq!(
+            vehicles::require_vehicle_session_access(&pool, &auth, vehicle)
+                .await
+                .is_ok(),
+            index < 3
+        );
+        assert_eq!(
+            vehicles::get_default_vehicle_id(&pool, *person)
+                .await
+                .unwrap(),
+            (index < 3).then_some(vehicle)
+        );
+        let key = AuthUser {
+            api_access_level: Some("read".into()),
+            api_vehicle_id: Some(vehicle),
+            ..auth
+        };
+        assert_eq!(
+            vehicles::require_vehicle_read_access(&pool, &key, vehicle)
+                .await
+                .is_ok(),
+            index < 3
+        );
+        assert!(matches!(
+            vehicles::require_vehicle_manager_access(&pool, &key, vehicle).await,
+            Err(AppError::Forbidden)
+        ));
+        assert!(matches!(
+            vehicles::require_vehicle_owner_access(&pool, &key, vehicle).await,
+            Err(AppError::Forbidden)
+        ));
+        assert!(matches!(
+            vehicles::require_vehicle_session_access(&pool, &key, vehicle).await,
+            Err(AppError::Forbidden)
+        ));
+        assert!(matches!(
+            vehicles::require_vehicle_read_access(&pool, &key, Uuid::nil()).await,
+            Err(AppError::Forbidden)
+        ));
+    }
+    assert_eq!(
+        vehicles::get_vehicle_owner_id(&pool, vehicle)
+            .await
+            .unwrap(),
+        Some(people[0])
+    );
+    assert_eq!(
+        vehicles::get_vehicle_battery_capacity(&pool, vehicle)
+            .await
+            .unwrap(),
+        Some(100000.0)
+    );
+    assert_eq!(
+        vehicles::get_vehicle_battery_capacity(&pool, Uuid::nil())
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        vehicles::get_default_vehicle_id(&pool, Uuid::nil())
+            .await
+            .unwrap(),
+        None
+    );
+    sqlx::query("UPDATE panda.users SET default_vehicle_id=$1 WHERE id=$2")
+        .bind(vehicle)
+        .bind(people[3])
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        vehicles::get_default_vehicle_id(&pool, people[3])
+            .await
+            .unwrap(),
+        Some(vehicle)
+    );
+    assert!(users::require_super_user(&pool, people[0]).await.is_ok());
+    assert!(users::require_super_user(&pool, people[1]).await.is_err());
+    assert!(users::require_admin_or_super_user(&pool, people[1])
+        .await
+        .is_ok());
+    assert!(users::require_admin_or_super_user(&pool, people[2])
+        .await
+        .is_err());
+    assert!(matches!(
+        users::get_user_role(&pool, Uuid::nil()).await,
+        Err(AppError::Forbidden)
+    ));
+    assert_eq!(
+        users::get_electricity_rate(&pool, people[0]).await.unwrap(),
+        0.13
+    );
+    sqlx::query(
+        "INSERT INTO panda.user_preferences(user_id,electricity_rate_per_kwh) VALUES($1,0.27)",
+    )
+    .bind(people[0])
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        users::get_electricity_rate(&pool, people[0]).await.unwrap(),
+        0.27
+    );
+    pool.close().await;
+    admin
+        .execute(sqlx::AssertSqlSafe(format!(
+            "DROP DATABASE {name} WITH(FORCE)"
+        )))
+        .await
+        .unwrap();
+    admin.close().await;
+}

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{migrate::Migrator, Connection, PgConnection, PgPool, Postgres, Row, Transaction};
+use sqlx::{migrate::Migrator, Connection, PgConnection, PgPool, Postgres, Transaction};
 use std::sync::LazyLock;
 
 #[path = "private_catalog.rs"]
@@ -104,10 +104,15 @@ pub fn latest_migration_version() -> i64 {
 }
 
 pub fn baseline_migration() -> anyhow::Result<MigrationIdentity> {
-    compiled_migration_ledger()
-        .into_iter()
+    let migration = MIGRATOR
+        .iter()
         .find(|migration| migration.version == BASELINE_MIGRATION_VERSION)
-        .context("compiled migration catalog is missing the public baseline")
+        .context("compiled migration catalog is missing the public baseline")?;
+    Ok(MigrationIdentity {
+        version: migration.version,
+        description: migration.description.to_string(),
+        checksum_sha384: hex::encode(migration.checksum.as_ref()),
+    })
 }
 
 /// Apply exactly the immutable public baseline to an empty disposable
@@ -140,19 +145,18 @@ pub async fn run_current_migrations(pool: &PgPool) -> anyhow::Result<MigrationRu
         .execute(&mut *connection)
         .await
         .context("acquire migration coordinator advisory lock")?;
-
-    let result = run_current_migrations_locked(&mut connection).await;
-    let unlock_result =
-        sqlx::query("SELECT pg_advisory_unlock(hashtext('panda-schema-migrations'))")
-            .execute(&mut *connection)
-            .await
-            .context("release migration coordinator advisory lock");
-    match (result, unlock_result) {
-        (Ok(summary), Ok(_)) => Ok(summary),
-        (Err(error), Ok(_)) => Err(error),
-        (Ok(_), Err(unlock_error)) => Err(unlock_error),
-        (Err(error), Err(unlock_error)) => Err(error.context(unlock_error.to_string())),
+    let outcome = run_current_migrations_locked(&mut connection).await;
+    let release = sqlx::query("SELECT pg_advisory_unlock(hashtext('panda-schema-migrations'))")
+        .execute(&mut *connection)
+        .await
+        .context("release migration coordinator advisory lock");
+    if let Err(release) = release {
+        return Err(match outcome {
+            Ok(_) => release,
+            Err(error) => error.context(release.to_string()),
+        });
     }
+    outcome
 }
 
 async fn run_current_migrations_locked(
@@ -167,97 +171,85 @@ async fn run_current_migrations_locked(
             .await
             .context("inspect Panda schema state")?;
 
-    let ledger_action = match (public_exists, legacy_exists) {
-        (false, false) if !schema_has_users && database_is_empty(connection).await? => {
-            initialize_fresh_database(connection).await?;
-            MigrationLedgerAction::InitializedFresh
+    let ledger_action;
+    if !public_exists && !legacy_exists {
+        if schema_has_users || !database_is_empty(connection).await? {
+            bail!("database contains an untracked or pre-release schema; run `pnpm db:rebaseline` after taking a verified backup");
         }
-        (false, false) => {
-            bail!(
-                "database contains an untracked or pre-release schema; run `pnpm db:rebaseline` after taking a verified backup"
-            )
-        }
-        (true, false) => {
-            let public = read_ledger(connection, "public").await?;
-            validate_ledger_prefix(&public).context("validate public migration ledger")?;
-            require_baseline_schema(schema_has_users, &public)?;
-            MigrationLedgerAction::UsedPublic
-        }
-        (false, true) => {
-            let legacy = read_ledger(connection, "panda").await?;
-            validate_ledger_prefix(&legacy).context("validate legacy migration ledger")?;
-            require_baseline_schema(schema_has_users, &legacy)?;
-            replace_ledger(connection, &legacy).await?;
-            MigrationLedgerAction::RelocatedLegacy
-        }
-        (true, true) => {
-            let public = read_ledger(connection, "public").await?;
-            let legacy = read_ledger(connection, "panda").await?;
-            validate_ledger_prefix(&public).context("validate public migration ledger")?;
-            require_baseline_schema(schema_has_users, &public)?;
-            if legacy.is_empty() {
-                sqlx::query("DROP TABLE panda._sqlx_migrations")
-                    .execute(&mut *connection)
-                    .await
-                    .context("remove empty legacy migration ledger")?;
-                MigrationLedgerAction::RemovedRedundantLegacy
+        initialize_fresh_database(connection).await?;
+        ledger_action = MigrationLedgerAction::InitializedFresh;
+    } else {
+        let schema = if public_exists { "public" } else { "panda" };
+        let canonical = read_ledger(connection, schema).await?;
+        let legacy = if public_exists && legacy_exists {
+            Some(read_ledger(connection, "panda").await?)
+        } else {
+            None
+        };
+        let description = if public_exists {
+            "validate public migration ledger"
+        } else {
+            "validate legacy migration ledger"
+        };
+        validate_ledger_prefix(&canonical).context(description)?;
+        require_baseline_schema(schema_has_users, &canonical)?;
+        if !public_exists {
+            replace_ledger(connection, &canonical).await?;
+            ledger_action = MigrationLedgerAction::RelocatedLegacy;
+        } else if !legacy_exists {
+            ledger_action = MigrationLedgerAction::UsedPublic;
+        } else {
+            let legacy = legacy.expect("both ledgers were read before validation");
+            let removal = if legacy.is_empty() {
+                "remove empty legacy migration ledger"
             } else {
                 validate_ledger_prefix(&legacy).context("validate legacy migration ledger")?;
-                if public != legacy {
-                    bail!(
-                        "public and legacy SQLx migration ledgers disagree; refusing automatic repair"
-                    );
+                if canonical != legacy {
+                    bail!("public and legacy SQLx migration ledgers disagree; refusing automatic repair");
                 }
-                sqlx::query("DROP TABLE panda._sqlx_migrations")
-                    .execute(&mut *connection)
-                    .await
-                    .context("remove redundant legacy migration ledger")?;
-                MigrationLedgerAction::RemovedRedundantLegacy
-            }
+                "remove redundant legacy migration ledger"
+            };
+            sqlx::query("DROP TABLE panda._sqlx_migrations")
+                .execute(&mut *connection)
+                .await
+                .context(removal)?;
+            ledger_action = MigrationLedgerAction::RemovedRedundantLegacy;
         }
-    };
+    }
 
     set_public_search_path(connection).await?;
-    let applied: Vec<i64> = read_ledger(connection, "public")
+    let applied: std::collections::BTreeSet<_> = read_ledger(connection, "public")
         .await?
-        .iter()
-        .map(|migration| migration.version)
+        .into_iter()
+        .map(|entry| entry.version)
         .collect();
-    let pending: Vec<String> = MIGRATOR
-        .migrations
+    let pending: Vec<_> = MIGRATOR
         .iter()
-        .filter(|migration| !applied.contains(&migration.version))
-        .map(|migration| format!("{:04}_{}", migration.version, migration.description))
+        .filter(|entry| !applied.contains(&entry.version))
+        .map(|entry| format!("{:04}_{}", entry.version, entry.description))
         .collect();
     if pending.is_empty() {
         tracing::info!("database migrations are up to date");
     } else {
-        tracing::info!(
-            pending = ?pending,
-            "applying database migrations; the API does not accept requests until they finish, and data repairs on large databases can take a long time"
-        );
+        tracing::info!(pending = ?pending, "applying database migrations; the API does not accept requests until they finish, and data repairs on large databases can take a long time");
     }
     let started = std::time::Instant::now();
-    let heartbeat = (!pending.is_empty()).then(|| {
-        let pending = pending.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(MIGRATION_HEARTBEAT);
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                tracing::info!(
-                    elapsed_secs = started.elapsed().as_secs(),
-                    pending = ?pending,
-                    "database migrations still running"
-                );
+    {
+        let migration = MIGRATOR.run_direct(None, &mut *connection, false);
+        tokio::pin!(migration);
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + MIGRATION_HEARTBEAT,
+            MIGRATION_HEARTBEAT,
+        );
+        loop {
+            tokio::select! {
+                outcome = &mut migration => { outcome.context("apply current Panda migrations")?; break; }
+                _ = heartbeat.tick(), if !pending.is_empty() => {
+                    tracing::info!(elapsed_secs = started.elapsed().as_secs(), pending = ?pending, "database migrations still running");
+                }
             }
-        })
-    });
-    let outcome = MIGRATOR.run_direct(None, &mut *connection, false).await;
-    if let Some(heartbeat) = heartbeat {
-        heartbeat.abort();
+        }
     }
-    outcome.context("apply current Panda migrations")?;
     if !pending.is_empty() {
         tracing::info!(
             elapsed_secs = started.elapsed().as_secs(),
@@ -265,8 +257,8 @@ async fn run_current_migrations_locked(
             "database migrations applied"
         );
     }
-    let completed = read_ledger(connection, "public").await?;
-    validate_complete_ledger(&completed).context("validate completed public migration ledger")?;
+    validate_complete_ledger(&read_ledger(connection, "public").await?)
+        .context("validate completed public migration ledger")?;
     if ledger_exists(connection, "panda").await? {
         bail!("legacy panda._sqlx_migrations still exists after migration");
     }
@@ -309,20 +301,28 @@ async fn initialize_fresh_database(connection: &mut PgConnection) -> anyhow::Res
         .begin()
         .await
         .context("begin fresh baseline initialization transaction")?;
-    sqlx::raw_sql(BASELINE_SCHEMA_SQL)
-        .execute(&mut *transaction)
-        .await
-        .context("apply immutable schema baseline")?;
-    // The baseline snapshot ends with Panda first in search_path; all
-    // bookkeeping within this transaction must be explicitly public.
-    sqlx::query("SET search_path = public")
-        .execute(&mut *transaction)
-        .await
-        .context("restore fresh baseline transaction search_path")?;
-    if fail_fresh_initialization_before_ledger_insertion() {
-        bail!("test failpoint before fresh baseline ledger insertion");
+    let initialization = async {
+        sqlx::raw_sql(BASELINE_SCHEMA_SQL)
+            .execute(&mut *transaction)
+            .await
+            .context("apply immutable schema baseline")?;
+        // The baseline snapshot ends with Panda first in search_path; all
+        // bookkeeping within this transaction must be explicitly public.
+        sqlx::query("SET search_path = public")
+            .execute(&mut *transaction)
+            .await
+            .context("restore fresh baseline transaction search_path")?;
+        if fail_fresh_initialization_before_ledger_insertion() {
+            bail!("test failpoint before fresh baseline ledger insertion");
+        }
+        replace_ledger_in_transaction(&mut transaction, &fresh_ledger).await?;
+        Ok::<_, anyhow::Error>(())
     }
-    replace_ledger_in_transaction(&mut transaction, &fresh_ledger).await?;
+    .await;
+    if let Err(error) = initialization {
+        let _ = transaction.rollback().await;
+        return Err(error);
+    }
     transaction
         .commit()
         .await
@@ -335,9 +335,9 @@ fn fresh_initialization_ledger() -> anyhow::Result<Vec<MigrationIdentity>> {
 }
 
 async fn database_is_empty(connection: &mut PgConnection) -> anyhow::Result<bool> {
-    let has_objects: bool = sqlx::query_scalar(
+    sqlx::query_scalar(
         r#"
-        SELECT EXISTS (
+        SELECT NOT EXISTS (
           SELECT 1
           FROM pg_class c
           JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -357,8 +357,7 @@ async fn database_is_empty(connection: &mut PgConnection) -> anyhow::Result<bool
     )
     .fetch_one(&mut *connection)
     .await
-    .context("inspect database object inventory")?;
-    Ok(!has_objects)
+    .context("inspect database object inventory")
 }
 
 async fn ledger_exists(connection: &mut PgConnection, schema: &str) -> anyhow::Result<bool> {
@@ -379,32 +378,26 @@ async fn read_ledger(
     schema: &str,
 ) -> anyhow::Result<Vec<MigrationIdentity>> {
     let query = match schema {
-        "public" => {
-            "SELECT version, description, success, encode(checksum, 'hex') AS checksum FROM public._sqlx_migrations ORDER BY version"
-        }
-        "panda" => {
-            "SELECT version, description, success, encode(checksum, 'hex') AS checksum FROM panda._sqlx_migrations ORDER BY version"
-        }
+        "public" => "SELECT version, description, success, encode(checksum, 'hex') AS checksum FROM public._sqlx_migrations ORDER BY version",
+        "panda" => "SELECT version, description, success, encode(checksum, 'hex') AS checksum FROM panda._sqlx_migrations ORDER BY version",
         _ => bail!("unsupported migration ledger schema {schema}"),
     };
-    let rows = sqlx::query(query)
+    sqlx::query_as::<_, (i64, String, bool, String)>(query)
         .fetch_all(&mut *connection)
         .await
-        .with_context(|| format!("read {schema} migration ledger"))?;
-    let mut ledger = Vec::with_capacity(rows.len());
-    for row in rows {
-        let version: i64 = row.try_get("version")?;
-        let success: bool = row.try_get("success")?;
-        if !success {
-            bail!("migration {version} is recorded as failed in the {schema} ledger");
-        }
-        ledger.push(MigrationIdentity {
-            version,
-            description: row.try_get("description")?,
-            checksum_sha384: row.try_get("checksum")?,
-        });
-    }
-    Ok(ledger)
+        .with_context(|| format!("read {schema} migration ledger"))?
+        .into_iter()
+        .map(|(version, description, success, checksum_sha384)| {
+            if !success {
+                bail!("migration {version} is recorded as failed in the {schema} ledger");
+            }
+            Ok(MigrationIdentity {
+                version,
+                description,
+                checksum_sha384,
+            })
+        })
+        .collect()
 }
 
 async fn replace_ledger(
@@ -412,9 +405,13 @@ async fn replace_ledger(
     source_ledger: &[MigrationIdentity],
 ) -> anyhow::Result<()> {
     let mut transaction = connection.begin().await?;
-    replace_ledger_in_transaction(&mut transaction, source_ledger).await?;
-    transaction.commit().await?;
-    Ok(())
+    match replace_ledger_in_transaction(&mut transaction, source_ledger).await {
+        Ok(()) => transaction.commit().await.map_err(Into::into),
+        Err(error) => {
+            let _ = transaction.rollback().await;
+            Err(error)
+        }
+    }
 }
 
 /// Write the canonical ledger using a transaction owned by the caller. This
@@ -425,7 +422,17 @@ async fn replace_ledger_in_transaction(
     source_ledger: &[MigrationIdentity],
 ) -> anyhow::Result<()> {
     validate_ledger_prefix(source_ledger)?;
-    sqlx::query(
+    let mut versions = Vec::with_capacity(source_ledger.len());
+    let mut descriptions = Vec::with_capacity(source_ledger.len());
+    let mut checksums = Vec::with_capacity(source_ledger.len());
+    for entry in source_ledger {
+        versions.push(entry.version);
+        descriptions.push(entry.description.as_str());
+        checksums.push(
+            hex::decode(&entry.checksum_sha384).context("decode validated migration checksum")?,
+        );
+    }
+    sqlx::raw_sql(
         r#"
         CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
             version BIGINT PRIMARY KEY,
@@ -434,33 +441,19 @@ async fn replace_ledger_in_transaction(
             success BOOLEAN NOT NULL,
             checksum BYTEA NOT NULL,
             execution_time BIGINT NOT NULL
-        )
-        "#,
+        );
+        DROP TABLE IF EXISTS panda._sqlx_migrations;
+        DELETE FROM public._sqlx_migrations;
+    "#,
     )
     .execute(&mut **transaction)
     .await?;
-    sqlx::query("DROP TABLE IF EXISTS panda._sqlx_migrations")
-        .execute(&mut **transaction)
-        .await?;
-    sqlx::query("DELETE FROM public._sqlx_migrations")
-        .execute(&mut **transaction)
-        .await?;
-    for migration in source_ledger {
-        let checksum = hex::decode(&migration.checksum_sha384)
-            .context("decode validated migration checksum")?;
-        sqlx::query(
-            r#"
-            INSERT INTO public._sqlx_migrations
-                (version, description, success, checksum, execution_time)
-            VALUES ($1, $2, TRUE, $3, 0)
-            "#,
-        )
-        .bind(migration.version)
-        .bind(&migration.description)
-        .bind(checksum)
-        .execute(&mut **transaction)
-        .await?;
-    }
+    sqlx::query(r#"
+        INSERT INTO public._sqlx_migrations (version, description, success, checksum, execution_time)
+        SELECT version, description, TRUE, checksum, 0
+        FROM unnest($1::bigint[], $2::text[], $3::bytea[]) AS entry(version, description, checksum)
+    "#).bind(&versions).bind(&descriptions).bind(&checksums)
+        .execute(&mut **transaction).await?;
     Ok(())
 }
 
@@ -478,74 +471,94 @@ fn fail_fresh_initialization_before_ledger_insertion() -> bool {
 }
 
 pub fn validate_ledger_prefix(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
-    if ledger.is_empty() {
-        return Err(LedgerValidationError {
-            kind: LedgerValidationKind::Empty,
-            message: "migration ledger is empty".into(),
-        });
-    }
+    validate_ledger(ledger, false)
+}
+
+fn validate_ledger(
+    ledger: &[MigrationIdentity],
+    complete: bool,
+) -> Result<(), LedgerValidationError> {
     let compiled = compiled_migration_ledger();
-    if ledger.len() > compiled.len() {
-        return Err(LedgerValidationError {
-            kind: LedgerValidationKind::TooLong,
-            message: format!(
+    let length_error = if ledger.is_empty() {
+        Some((
+            LedgerValidationKind::Empty,
+            "migration ledger is empty".to_owned(),
+        ))
+    } else if ledger.len() > compiled.len() {
+        Some((
+            LedgerValidationKind::TooLong,
+            format!(
                 "migration ledger has {} entries, but this release knows only {}",
                 ledger.len(),
                 compiled.len()
             ),
-        });
+        ))
+    } else {
+        None
+    };
+    if let Some((kind, message)) = length_error {
+        return Err(LedgerValidationError { kind, message });
     }
-    for (position, (actual, expected)) in ledger.iter().zip(&compiled).enumerate() {
-        if actual.version != expected.version {
-            return Err(LedgerValidationError {
-                kind: LedgerValidationKind::Version,
-                message: format!(
-                    "migration ledger entry {} has version {}; expected {}",
-                    position + 1,
-                    actual.version,
-                    expected.version
-                ),
+    let mismatch =
+        ledger
+            .iter()
+            .zip(&compiled)
+            .enumerate()
+            .find_map(|(position, (actual, expected))| {
+                let fields = [
+                    (
+                        actual.version == expected.version,
+                        LedgerValidationKind::Version,
+                    ),
+                    (
+                        actual.description == expected.description,
+                        LedgerValidationKind::Description,
+                    ),
+                    (
+                        actual
+                            .checksum_sha384
+                            .eq_ignore_ascii_case(&expected.checksum_sha384),
+                        LedgerValidationKind::Checksum,
+                    ),
+                ];
+                let (_, kind) = fields.into_iter().find(|(equal, _)| !equal)?;
+                let message = match kind {
+                    LedgerValidationKind::Version => format!(
+                        "migration ledger entry {} has version {}; expected {}",
+                        position + 1,
+                        actual.version,
+                        expected.version
+                    ),
+                    LedgerValidationKind::Description => format!(
+                        "migration {} description is {:?}; expected {:?}",
+                        actual.version, actual.description, expected.description
+                    ),
+                    LedgerValidationKind::Checksum => format!(
+                        "migration {} checksum differs from this release",
+                        actual.version
+                    ),
+                    _ => unreachable!("field mismatch"),
+                };
+                Some(LedgerValidationError { kind, message })
             });
-        }
-        if actual.description != expected.description {
-            return Err(LedgerValidationError {
-                kind: LedgerValidationKind::Description,
-                message: format!(
-                    "migration {} description is {:?}; expected {:?}",
-                    actual.version, actual.description, expected.description
-                ),
-            });
-        }
-        if !actual
-            .checksum_sha384
-            .eq_ignore_ascii_case(&expected.checksum_sha384)
-        {
-            return Err(LedgerValidationError {
-                kind: LedgerValidationKind::Checksum,
-                message: format!(
-                    "migration {} checksum differs from this release",
-                    actual.version
-                ),
-            });
-        }
+    if let Some(error) = mismatch {
+        return Err(error);
     }
-    Ok(())
-}
-
-pub fn validate_complete_ledger(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
-    validate_ledger_prefix(ledger)?;
-    let expected = compiled_migration_ledger();
-    if ledger.len() != expected.len() {
+    if complete && ledger.len() != compiled.len() {
         return Err(LedgerValidationError {
             kind: LedgerValidationKind::Version,
             message: format!(
                 "migration ledger stops at version {}; this release requires version {}",
                 ledger.last().map(|item| item.version).unwrap_or(0),
-                expected.last().map(|item| item.version).unwrap_or(0)
+                compiled.last().map(|item| item.version).unwrap_or(0)
             ),
         });
     }
     Ok(())
+}
+
+pub fn validate_complete_ledger(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
+    validate_ledger(ledger, true)
 }
 
 /// Rebuild SQLx bookkeeping for an isolated restore candidate. The caller must
@@ -566,48 +579,11 @@ pub async fn restore_ledger(
     {
         bail!("recovery package migration ledger is newer than this release");
     }
-
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('panda-restore-migration-ledger'))")
         .execute(&mut *transaction)
         .await?;
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
-            version BIGINT PRIMARY KEY,
-            description TEXT NOT NULL,
-            installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
-            success BOOLEAN NOT NULL,
-            checksum BYTEA NOT NULL,
-            execution_time BIGINT NOT NULL
-        )
-        "#,
-    )
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query("DROP TABLE IF EXISTS panda._sqlx_migrations")
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query("DELETE FROM public._sqlx_migrations")
-        .execute(&mut *transaction)
-        .await?;
-
-    for migration in source_ledger {
-        let checksum = hex::decode(&migration.checksum_sha384)
-            .context("decode validated migration checksum")?;
-        sqlx::query(
-            r#"
-            INSERT INTO public._sqlx_migrations
-                (version, description, success, checksum, execution_time)
-            VALUES ($1, $2, TRUE, $3, 0)
-            "#,
-        )
-        .bind(migration.version)
-        .bind(&migration.description)
-        .bind(checksum)
-        .execute(&mut *transaction)
-        .await?;
-    }
+    replace_ledger_in_transaction(&mut transaction, source_ledger).await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -923,5 +899,68 @@ mod tests {
         );
 
         database.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn full_replacement_ledger_round_trip_and_failed_row_precedence() {
+        let database = DisposableDatabase::new().await;
+        run_current_migrations(&database.pool).await.unwrap();
+        let compiled = compiled_migration_ledger();
+        let mut prefix = compiled[..1].to_vec();
+        prefix[0].checksum_sha384.make_ascii_uppercase();
+        restore_ledger(&database.pool, &prefix).await.unwrap();
+        let mut connection = database.pool.acquire().await.unwrap();
+        assert_eq!(
+            read_ledger(&mut connection, "public").await.unwrap(),
+            compiled[..1]
+        );
+        drop(connection);
+        restore_ledger(&database.pool, &compiled).await.unwrap();
+        run_current_migrations(&database.pool).await.unwrap();
+        sqlx::query("ALTER TABLE public._sqlx_migrations SET SCHEMA panda")
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            run_current_migrations(&database.pool)
+                .await
+                .unwrap()
+                .ledger_action,
+            MigrationLedgerAction::RelocatedLegacy
+        );
+        sqlx::raw_sql("CREATE TABLE panda._sqlx_migrations (LIKE public._sqlx_migrations INCLUDING ALL); INSERT INTO panda._sqlx_migrations SELECT * FROM public._sqlx_migrations; UPDATE public._sqlx_migrations SET description='drift' WHERE version=1; UPDATE panda._sqlx_migrations SET success=FALSE WHERE version=1;").execute(&database.pool).await.unwrap();
+        let failure = run_current_migrations(&database.pool).await.unwrap_err();
+        assert_eq!(
+            failure.to_string(),
+            "migration 1 is recorded as failed in the panda ledger"
+        );
+        sqlx::query("DROP TABLE panda._sqlx_migrations")
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        restore_ledger(&database.pool, &compiled).await.unwrap();
+        database.cleanup().await;
+    }
+
+    #[test]
+    fn full_replacement_validation_retains_exact_error_priority_and_case_rules() {
+        let mut ledger = compiled_migration_ledger();
+        ledger[0].checksum_sha384.make_ascii_uppercase();
+        validate_complete_ledger(&ledger).unwrap();
+        ledger[0].description = "wrong".into();
+        ledger[0].checksum_sha384 = "wrong".into();
+        let description = validate_ledger_prefix(&ledger).unwrap_err();
+        assert_eq!(description.kind, LedgerValidationKind::Description);
+        assert!(description
+            .message
+            .starts_with("migration 1 description is \"wrong\"; expected "));
+        ledger[0].version = 99;
+        let version = validate_ledger_prefix(&ledger).unwrap_err();
+        assert_eq!(version.kind, LedgerValidationKind::Version);
+        assert_eq!(
+            version.message,
+            "migration ledger entry 1 has version 99; expected 1"
+        );
     }
 }

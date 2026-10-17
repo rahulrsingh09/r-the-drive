@@ -256,3 +256,11 @@ fn normalize(value: &mut Value, ids: &mut std::collections::BTreeMap<String, Str
         _ => {}
     }
 }
+
+#[allow(dead_code)]
+pub fn full_replacement_normalized(mut value: Value) -> Value {
+    let mut ids = std::collections::BTreeMap::new();
+    collect_generated_ids(&value, &mut ids);
+    normalize(&mut value, &mut ids);
+    value
+}

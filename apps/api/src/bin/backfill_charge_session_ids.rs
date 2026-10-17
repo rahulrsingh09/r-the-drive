@@ -6,6 +6,12 @@
 //! Run once after deploying migration 0011:
 //!   cargo run --bin backfill_charge_session_ids
 
+#[path = "maintenance_replay/snapshot_scan.rs"]
+mod snapshot_scan;
+use chrono::{DateTime, Utc};
+use snapshot_scan::SnapshotScan;
+use uuid::Uuid;
+
 use anyhow::Result;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tracing::info;
@@ -18,54 +24,45 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
-
-    backfill_charge_session_ids(&pool).await?;
-    Ok(())
+    let outcome = async {
+        backfill_charge_session_ids(&pool).await?;
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    outcome
 }
 
 async fn backfill_charge_session_ids(pool: &PgPool) -> Result<()> {
-    let sessions = sqlx::query!(
-        r#"SELECT id, vehicle_id, started_at, ended_at
-           FROM panda.charge_sessions
-           WHERE ended_at IS NOT NULL
-           ORDER BY started_at"#
-    )
-    .fetch_all(pool)
-    .await?;
-
+    let mut scan = SnapshotScan::open(pool,
+        "SELECT id, vehicle_id, started_at, ended_at, count(*) OVER() AS total FROM panda.charge_sessions WHERE ended_at IS NOT NULL ORDER BY started_at", None).await?;
+    let mut batch = scan.next::<CompletedWindow>().await?;
     info!(
         "Found {} completed charge sessions to backfill",
-        sessions.len()
+        batch.first().map_or(0, |row| row.total)
     );
-
-    for session in &sessions {
-        let Some(ended_at) = session.ended_at else {
-            continue;
-        };
-        let result = sqlx::query!(
-            r#"UPDATE timeseries.telemetry
-               SET charge_session_id = $1
-               WHERE vehicle_id = $2
-                 AND ts >= $3
-                 AND ts <= $4
-                 AND charge_session_id IS NULL"#,
-            session.id,
-            session.vehicle_id,
-            session.started_at,
-            ended_at
-        )
-        .execute(pool)
-        .await?;
-
-        if result.rows_affected() > 0 {
-            info!(
-                session_id = %session.id,
-                rows = result.rows_affected(),
-                "Stamped telemetry rows"
-            );
+    while !batch.is_empty() {
+        for window in batch {
+            let affected = sqlx::query(
+                "UPDATE timeseries.telemetry SET charge_session_id = $1 WHERE vehicle_id = $2 AND ts >= $3 AND ts <= $4 AND charge_session_id IS NULL")
+                .bind(window.id).bind(window.vehicle_id).bind(window.started_at).bind(window.ended_at)
+                .execute(pool).await?.rows_affected();
+            if affected != 0 {
+                info!(session_id = %window.id, rows = affected, "Stamped telemetry rows");
+            }
         }
+        batch = scan.next::<CompletedWindow>().await?;
     }
-
+    scan.finish().await?;
     info!("Backfill complete");
     Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct CompletedWindow {
+    id: Uuid,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    total: i64,
 }

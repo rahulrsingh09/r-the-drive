@@ -17,15 +17,14 @@ mod charge_windows;
 mod snapshot_scan;
 use snapshot_scan::SnapshotScan;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use panda_api::db::pool::application_pool_options;
 use panda_api::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::trip_detector::{
-        compute_distance_odometer_or_gps, compute_trip_energy, CompletedTripData,
-        TripDetectorState, TripEvent,
+        compute_distance_odometer_or_gps, CompletedTripData, TripDetectorState, TripEvent,
     },
     ingestion::trip_signals::TripSignalFusion,
     models::telemetry::{ChargerState, DriveMode, PowerState, TelemetryEvent},
@@ -87,85 +86,137 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
-    let http_client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
+    let outcome = async {
+        let http_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
 
-    rebuild_vehicle_history(&pool, &http_client, args).await?;
-    Ok(())
+        rebuild_vehicle_history(&pool, &http_client, args).await?;
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    outcome
 }
 
 fn parse_args() -> Result<Args> {
-    let mut vehicle_id = None;
-    let mut iter = std::env::args().skip(1);
-
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--vehicle" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| anyhow!("--vehicle requires a UUID argument"))?;
-                vehicle_id = Some(raw.parse().context("invalid --vehicle UUID")?);
-            }
-            "--help" | "-h" => {
-                println!("Usage: cargo run --bin rebuild_vehicle_history -- [--vehicle <uuid>]");
-                std::process::exit(0);
-            }
-            other => return Err(anyhow!("unknown argument: {other}")),
-        }
-    }
-
-    Ok(Args { vehicle_id })
+    use panda_api::db::maintenance::{command_options, OptionKind};
+    let options = command_options(
+        &[OptionKind::Vehicle],
+        "Usage: cargo run --bin rebuild_vehicle_history -- [--vehicle <uuid>]",
+        "unknown argument",
+    )?;
+    Ok(Args {
+        vehicle_id: options.vehicle_id,
+    })
 }
 
 async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> Result<()> {
+    #[derive(Clone, Copy)]
+    enum Stage {
+        Clear,
+        States,
+        Charges,
+        Canonicalize,
+        Locations,
+        Costs,
+        Trips,
+        Links,
+        Enrichment,
+    }
+    #[derive(Default)]
+    struct Counts {
+        state_periods: u64,
+        charge_sessions: u64,
+        charge_locations: u64,
+        charge_costs: u64,
+        trips: u64,
+        trip_ids: u64,
+    }
+    let order = [
+        Stage::Clear,
+        Stage::States,
+        Stage::Charges,
+        Stage::Canonicalize,
+        Stage::Locations,
+        Stage::Costs,
+        Stage::Trips,
+        Stage::Links,
+        Stage::Enrichment,
+    ];
     let vehicles = load_vehicle_scope(pool, args.vehicle_id).await?;
     if vehicles.is_empty() {
         info!("No vehicles found for rebuild");
         return Ok(());
     }
-
     info!(
         vehicle_count = vehicles.len(),
         filtered = args.vehicle_id.is_some(),
         "starting historical rebuild"
     );
-
     for vehicle_id in vehicles {
         info!(vehicle_id = %vehicle_id, "rebuilding vehicle history");
-
-        clear_vehicle_history_for_vehicle(pool, vehicle_id).await?;
-        let state_periods = backfill_state_periods_for_vehicle(pool, vehicle_id).await?;
-        let charge_sessions = repair_charge_sessions_for_vehicle(pool, vehicle_id).await?;
-        let charge_canonicalization = canonicalize_charge_sessions(pool, Some(vehicle_id)).await?;
-        let charge_locations =
-            repair_charge_session_locations_for_vehicle(pool, vehicle_id).await?;
-        let charge_costs = repair_charge_session_costs_for_vehicle(pool, vehicle_id).await?;
-        let trips = replay_trips_for_vehicle(pool, vehicle_id, client).await?;
-        let trip_ids = backfill_trip_ids_for_vehicle(pool, vehicle_id).await?;
-        let enrichment = enrich_trip_history_for_vehicle(pool, client, vehicle_id).await?;
-
-        info!(
-            vehicle_id = %vehicle_id,
-            state_periods,
-            charge_sessions,
-            charge_clusters_merged = charge_canonicalization.clusters_merged,
-            charge_duplicates_deleted = charge_canonicalization.duplicate_rows_deleted,
-            charge_payload_reconciliations = charge_canonicalization.payload_reconciliations,
-            charge_locations,
-            charge_costs,
-            trips,
-            trip_ids,
-            trip_geofence_filled = enrichment.geofence_matches.filled,
-            trip_geofence_failed = enrichment.geofence_matches.failed,
-            trip_address_filled = enrichment.address_matches.filled,
-            trip_address_failed = enrichment.address_matches.failed,
-            trip_temp_filled = enrichment.outside_temps.filled,
-            trip_temp_failed = enrichment.outside_temps.failed,
-            "vehicle history rebuild complete"
-        );
+        let mut counts = Counts::default();
+        let mut canonicalization = None;
+        for stage in order {
+            match stage {
+                Stage::Clear => clear_vehicle_history_for_vehicle(pool, vehicle_id).await?,
+                Stage::States => {
+                    counts.state_periods =
+                        backfill_state_periods_for_vehicle(pool, vehicle_id).await?
+                }
+                Stage::Charges => {
+                    counts.charge_sessions =
+                        repair_charge_sessions_for_vehicle(pool, vehicle_id).await?
+                }
+                Stage::Canonicalize => {
+                    canonicalization =
+                        Some(canonicalize_charge_sessions(pool, Some(vehicle_id)).await?)
+                }
+                Stage::Locations => {
+                    counts.charge_locations =
+                        repair_charge_session_locations_for_vehicle(pool, vehicle_id).await?
+                }
+                Stage::Costs => {
+                    counts.charge_costs =
+                        repair_charge_session_costs_for_vehicle(pool, vehicle_id).await?
+                }
+                Stage::Trips => {
+                    counts.trips = replay_trips_for_vehicle(pool, vehicle_id, client).await?
+                }
+                Stage::Links => {
+                    counts.trip_ids = backfill_trip_ids_for_vehicle(pool, vehicle_id).await?
+                }
+                Stage::Enrichment => {
+                    let enrichment =
+                        enrich_trip_history_for_vehicle(pool, client, vehicle_id).await?;
+                    let charge_canonicalization = canonicalization
+                        .as_ref()
+                        .expect("canonicalization precedes enrichment");
+                    let Counts {
+                        state_periods,
+                        charge_sessions,
+                        charge_locations,
+                        charge_costs,
+                        trips,
+                        trip_ids,
+                    } = counts;
+                    info!(vehicle_id = %vehicle_id, state_periods, charge_sessions,
+                        charge_clusters_merged = charge_canonicalization.clusters_merged,
+                        charge_duplicates_deleted = charge_canonicalization.duplicate_rows_deleted,
+                        charge_payload_reconciliations = charge_canonicalization.payload_reconciliations,
+                        charge_locations, charge_costs, trips, trip_ids,
+                        trip_geofence_filled = enrichment.geofence_matches.filled,
+                        trip_geofence_failed = enrichment.geofence_matches.failed,
+                        trip_address_filled = enrichment.address_matches.filled,
+                        trip_address_failed = enrichment.address_matches.failed,
+                        trip_temp_filled = enrichment.outside_temps.filled,
+                        trip_temp_failed = enrichment.outside_temps.failed,
+                        "vehicle history rebuild complete");
+                }
+            }
+        }
     }
-
     info!("historical rebuild finished");
     Ok(())
 }
@@ -193,52 +244,31 @@ async fn load_vehicle_scope(pool: &PgPool, filter: Option<Uuid>) -> Result<Vec<U
 }
 
 async fn backfill_state_periods_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
+    use panda_api::db::maintenance::extend_period;
     sqlx::query("DELETE FROM panda.vehicle_state_periods WHERE vehicle_id = $1")
         .bind(vehicle_id)
         .execute(pool)
         .await?;
-
     let mut rows = sqlx::query_as::<_, StateRow>(
-        r#"
-        SELECT ts, power_state
-        FROM timeseries.telemetry
-        -- Partial rows without power state (a door or tire update) say
-        -- nothing about the vehicle state; counting them as unknown split
-        -- the timeline into seconds-long periods.
-        WHERE vehicle_id = $1 AND power_state IS NOT NULL
-        ORDER BY ts
-        "#,
-    )
-    .bind(vehicle_id)
-    .fetch(pool);
-
-    let Some(first) = rows.try_next().await? else {
-        return Ok(0);
-    };
-
-    let mut inserted = 0u64;
-    let mut current_state = normalize_state(first.power_state.as_deref());
-    let mut period_start = first.ts;
-    let mut prev_ts = first.ts;
-
+        "SELECT ts, power_state FROM timeseries.telemetry WHERE vehicle_id = $1 AND power_state IS NOT NULL ORDER BY ts")
+        .bind(vehicle_id).fetch(pool);
+    let mut active = None;
+    let mut inserted = 0;
     while let Some(row) = rows.try_next().await? {
-        let state = normalize_state(row.power_state.as_deref());
-        let gap_secs = (row.ts - prev_ts).num_seconds();
-        let state_changed = state != current_state;
-        let large_gap = gap_secs > 600;
-
-        if state_changed || large_gap {
+        if let Some(period) = extend_period(
+            &mut active,
+            row.ts,
+            normalize_state(row.power_state.as_deref()),
+        ) {
             inserted +=
-                insert_state_period(pool, vehicle_id, &current_state, period_start, prev_ts)
+                insert_state_period(pool, vehicle_id, &period.state, period.start, period.end)
                     .await?;
-            period_start = row.ts;
-            current_state = state;
         }
-        prev_ts = row.ts;
     }
-
-    inserted +=
-        insert_state_period(pool, vehicle_id, &current_state, period_start, prev_ts).await?;
+    if let Some(period) = active {
+        inserted +=
+            insert_state_period(pool, vehicle_id, &period.state, period.start, period.end).await?;
+    }
     Ok(inserted)
 }
 
@@ -249,15 +279,7 @@ struct StateRow {
 }
 
 fn normalize_state(power_state: Option<&str>) -> String {
-    match power_state.map(|state| state.trim().to_ascii_lowercase()) {
-        Some(state) if state == "drive" || state == "go" => "drive".to_string(),
-        Some(state) if state == "charging" => "charging".to_string(),
-        Some(state) if state == "ready" => "ready".to_string(),
-        Some(state) if state == "sleep" => "sleep".to_string(),
-        Some(state) if state == "offline" => "offline".to_string(),
-        Some(state) if state == "updating" => "updating".to_string(),
-        _ => "unknown".to_string(),
-    }
+    panda_api::db::maintenance::normalized_state(power_state)
 }
 
 async fn insert_state_period(
@@ -629,56 +651,59 @@ async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Clie
 }
 
 fn row_to_event(row: ReplayTelemetryRow) -> TelemetryEvent {
-    let mut event = TelemetryEvent::empty(row.vehicle_id, row.ts);
-    event.latitude = row.latitude;
-    event.longitude = row.longitude;
-    event.altitude_m = row.altitude_m;
-    event.speed_mph = row.speed_mph;
-    event.battery_level = row.battery_level;
-    event.battery_capacity_wh = row.battery_capacity_wh;
-    event.distance_to_empty_mi = row.distance_to_empty_mi;
-    event.battery_limit = row.battery_limit;
-    event.power_state = row.power_state.as_deref().and_then(parse_power_state);
-    event.charger_state = row.charger_state.as_deref().and_then(parse_charger_state);
-    event.charger_status = row.charger_status;
-    event.time_to_end_of_charge_min = row.time_to_end_of_charge_min;
-    event.drive_mode = row.drive_mode.as_deref().and_then(parse_drive_mode);
-    event.gear_status = row.gear_status;
-    event.cabin_temp_c = row.cabin_temp_c;
-    event.outside_temp_c = row.outside_temp_c;
-    event.power_kw = row.power_kw;
-    event.regen_power_kw = row.regen_power_kw;
-    event.heading_deg = row.heading_deg;
-    event.odometer_miles = row.odometer_miles;
-    event.is_online = row.is_online;
-    event
+    TelemetryEvent {
+        latitude: row.latitude,
+        longitude: row.longitude,
+        altitude_m: row.altitude_m,
+        speed_mph: row.speed_mph,
+        battery_level: row.battery_level,
+        battery_capacity_wh: row.battery_capacity_wh,
+        distance_to_empty_mi: row.distance_to_empty_mi,
+        battery_limit: row.battery_limit,
+        power_state: row.power_state.as_deref().and_then(parse_power_state),
+        charger_state: row.charger_state.as_deref().and_then(parse_charger_state),
+        charger_status: row.charger_status,
+        time_to_end_of_charge_min: row.time_to_end_of_charge_min,
+        drive_mode: row.drive_mode.as_deref().and_then(parse_drive_mode),
+        gear_status: row.gear_status,
+        cabin_temp_c: row.cabin_temp_c,
+        outside_temp_c: row.outside_temp_c,
+        power_kw: row.power_kw,
+        regen_power_kw: row.regen_power_kw,
+        heading_deg: row.heading_deg,
+        odometer_miles: row.odometer_miles,
+        is_online: row.is_online,
+        ..TelemetryEvent::empty(row.vehicle_id, row.ts)
+    }
 }
 
 /// Historical rows lack source provenance. Power-only rows match the typed
 /// Parallax power frame; richer telemetry uses periodic freshness. A legacy
 /// power-only frame remains indistinguishable, so this is an inference only.
 fn replay_power_is_change_only(event: &TelemetryEvent) -> bool {
-    event.power_state.is_some()
-        && event.latitude.is_none()
-        && event.longitude.is_none()
-        && event.altitude_m.is_none()
-        && event.speed_mph.is_none()
-        && event.battery_level.is_none()
-        && event.battery_capacity_wh.is_none()
-        && event.distance_to_empty_mi.is_none()
-        && event.battery_limit.is_none()
-        && event.charger_state.is_none()
-        && event.charger_status.is_none()
-        && event.time_to_end_of_charge_min.is_none()
-        && event.drive_mode.is_none()
-        && event.gear_status.is_none()
-        && event.cabin_temp_c.is_none()
-        && event.outside_temp_c.is_none()
-        && event.power_kw.is_none()
-        && event.regen_power_kw.is_none()
-        && event.heading_deg.is_none()
-        && event.odometer_miles.is_none()
-        && event.is_online.is_none()
+    let other_signals = [
+        event.latitude.is_some(),
+        event.longitude.is_some(),
+        event.altitude_m.is_some(),
+        event.speed_mph.is_some(),
+        event.battery_level.is_some(),
+        event.battery_capacity_wh.is_some(),
+        event.distance_to_empty_mi.is_some(),
+        event.battery_limit.is_some(),
+        event.charger_state.is_some(),
+        event.charger_status.is_some(),
+        event.time_to_end_of_charge_min.is_some(),
+        event.drive_mode.is_some(),
+        event.gear_status.is_some(),
+        event.cabin_temp_c.is_some(),
+        event.outside_temp_c.is_some(),
+        event.power_kw.is_some(),
+        event.regen_power_kw.is_some(),
+        event.heading_deg.is_some(),
+        event.odometer_miles.is_some(),
+        event.is_online.is_some(),
+    ];
+    event.power_state.is_some() && !other_signals.into_iter().any(|present| present)
 }
 
 #[cfg(test)]
@@ -778,33 +803,17 @@ async fn persist_replayed_trip(
         None
     };
 
-    let (energy_wh, energy_strategy, efficiency_wh_per_mi) = match compute_trip_energy(
-        trip.soc_start,
-        trip.soc_end,
-        trip.battery_capacity_wh,
-        trip.range_start_mi,
-        trip.range_end_mi,
-        distance,
-        None,
-    ) {
-        Some((wh, strat)) => {
-            let eff = if distance > 0.0 {
-                Some(wh / distance)
-            } else {
-                None
-            };
-            (Some(wh), Some(strat.to_string()), eff)
+    let (energy_wh, energy_strategy, efficiency_wh_per_mi) =
+        panda_api::db::maintenance::TripEnergyInputs {
+            soc_start: trip.soc_start,
+            soc_end: trip.soc_end,
+            capacity: trip.battery_capacity_wh,
+            range_start: trip.range_start_mi,
+            range_end: trip.range_end_mi,
+            distance,
+            efficiency: None,
         }
-        None => {
-            let eff = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
-                (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
-                    Some(((s0 - s1) / 100.0) * cap / distance)
-                }
-                _ => None,
-            };
-            (None, None, eff)
-        }
-    };
+        .columns();
 
     let start = trip.points.first();
     let end = trip.points.last();
@@ -909,7 +918,8 @@ async fn persist_replayed_trip(
 }
 
 async fn backfill_trip_ids_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
-    let trips = sqlx::query_as::<_, TripRangeRow>(
+    let mut scan = SnapshotScan::open(
+        pool,
         r#"
         SELECT id, started_at, ended_at
         FROM panda.trips
@@ -917,15 +927,18 @@ async fn backfill_trip_ids_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Resul
           AND ended_at IS NOT NULL
         ORDER BY started_at
         "#,
+        Some(vehicle_id),
     )
-    .bind(vehicle_id)
-    .fetch_all(pool)
     .await?;
-
     let mut stamped = 0u64;
-    for trip in trips {
-        let result = sqlx::query(
-            r#"
+    loop {
+        let trips = scan.next::<TripRangeRow>().await?;
+        if trips.is_empty() {
+            break;
+        }
+        for trip in trips {
+            let result = sqlx::query(
+                r#"
         UPDATE timeseries.telemetry
         SET trip_id = $1
         WHERE vehicle_id = $2
@@ -940,17 +953,18 @@ async fn backfill_trip_ids_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Resul
               )
           )
         "#,
-        )
-        .bind(trip.id)
-        .bind(vehicle_id)
-        .bind(trip.started_at)
-        .bind(trip.ended_at)
-        .execute(pool)
-        .await?;
+            )
+            .bind(trip.id)
+            .bind(vehicle_id)
+            .bind(trip.started_at)
+            .bind(trip.ended_at)
+            .execute(pool)
+            .await?;
 
-        stamped += result.rows_affected();
+            stamped += result.rows_affected();
+        }
     }
-
+    scan.finish().await?;
     Ok(stamped)
 }
 

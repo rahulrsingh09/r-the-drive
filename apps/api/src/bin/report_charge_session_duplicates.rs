@@ -51,6 +51,8 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
+    let outcome = async {
+
 
     let duplicate_rivian_ids = sqlx::query_as::<_, DuplicateRivianIdRow>(
         r#"
@@ -130,53 +132,24 @@ async fn main() -> Result<()> {
     .fetch_all(&pool)
     .await?;
 
-    println!("=== Duplicate report: rivian_session_id collisions ===");
-    println!("rows={}", duplicate_rivian_ids.len());
-    for row in &duplicate_rivian_ids {
-        println!(
-            "vehicle={} rivian_session_id={} count={} first={} last={}",
-            row.vehicle_id,
-            row.rivian_session_id,
-            row.row_count,
-            row.earliest_started_at,
-            row.latest_started_at
-        );
-    }
 
-    println!();
-    println!("=== Duplicate report: overlapping session pairs ===");
-    println!("rows={}", overlap_pairs.len());
-    for row in &overlap_pairs {
-        println!(
-            "vehicle={} left={} [{}..{}] right={} [{}..{}] left_rivian={:?} right_rivian={:?}",
-            row.vehicle_id,
-            row.left_id,
-            row.left_started_at,
-            row.left_ended_at,
-            row.right_id,
-            row.right_started_at,
-            row.right_ended_at,
-            row.left_rivian_session_id,
-            row.right_rivian_session_id
-        );
+    let sections = [
+        ("rivian_session_id collisions", duplicate_rivian_ids.iter().map(|row| format!(
+            "vehicle={} rivian_session_id={} count={} first={} last={}", row.vehicle_id, row.rivian_session_id, row.row_count, row.earliest_started_at, row.latest_started_at)).collect::<Vec<_>>()),
+        ("overlapping session pairs", overlap_pairs.iter().map(|row| format!(
+            "vehicle={} left={} [{}..{}] right={} [{}..{}] left_rivian={:?} right_rivian={:?}", row.vehicle_id, row.left_id, row.left_started_at, row.left_ended_at, row.right_id, row.right_started_at, row.right_ended_at, row.left_rivian_session_id, row.right_rivian_session_id)).collect()),
+        ("near-midnight split candidates", midnight_splits.iter().map(|row| format!(
+            "vehicle={} left={} [{}..{}] right={} [{}..{}] gap_min={}", row.vehicle_id, row.left_id, row.left_started_at, row.left_ended_at, row.right_id, row.right_started_at, row.right_ended_at, row.gap_minutes)).collect()),
+    ];
+    for (index, (title, rows)) in sections.into_iter().enumerate() {
+        if index > 0 { println!(); }
+        println!("=== Duplicate report: {title} ===");
+        println!("rows={}", rows.len());
+        for row in rows { println!("{row}"); }
     }
-
-    println!();
-    println!("=== Duplicate report: near-midnight split candidates ===");
-    println!("rows={}", midnight_splits.len());
-    for row in &midnight_splits {
-        println!(
-            "vehicle={} left={} [{}..{}] right={} [{}..{}] gap_min={}",
-            row.vehicle_id,
-            row.left_id,
-            row.left_started_at,
-            row.left_ended_at,
-            row.right_id,
-            row.right_started_at,
-            row.right_ended_at,
-            row.gap_minutes
-        );
-    }
-
     Ok(())
+
+    }.await;
+    pool.close().await;
+    outcome
 }

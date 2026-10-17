@@ -28,25 +28,29 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
-
-    let repaired = repair_charge_sessions_from_telemetry(&pool).await?;
-    let canonicalized = canonicalize_charge_sessions(&pool, None).await?;
-    let repaired_api_metadata = repair_api_summary_metadata(&pool).await?;
-    let estimated_soc = estimate_api_session_soc_from_energy(&pool).await?;
-    let retagged = repair_charge_session_locations(&pool).await?;
-    let recosted = repair_charge_session_costs(&pool).await?;
-    info!(
-        repaired,
-        charge_clusters_merged = canonicalized.clusters_merged,
-        charge_duplicates_deleted = canonicalized.duplicate_rows_deleted,
-        charge_payload_reconciliations = canonicalized.payload_reconciliations,
-        repaired_api_metadata,
-        estimated_soc,
-        retagged,
-        recosted,
-        "charge session telemetry repair complete"
-    );
-    Ok(())
+    let outcome = async {
+        let repaired = repair_charge_sessions_from_telemetry(&pool).await?;
+        let canonicalized = canonicalize_charge_sessions(&pool, None).await?;
+        let repaired_api_metadata = repair_api_summary_metadata(&pool).await?;
+        let estimated_soc = estimate_api_session_soc_from_energy(&pool).await?;
+        let retagged = repair_charge_session_locations(&pool).await?;
+        let recosted = repair_charge_session_costs(&pool).await?;
+        info!(
+            repaired,
+            charge_clusters_merged = canonicalized.clusters_merged,
+            charge_duplicates_deleted = canonicalized.duplicate_rows_deleted,
+            charge_payload_reconciliations = canonicalized.payload_reconciliations,
+            repaired_api_metadata,
+            estimated_soc,
+            retagged,
+            recosted,
+            "charge session telemetry repair complete"
+        );
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    outcome
 }
 
 async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u64> {
@@ -322,63 +326,36 @@ async fn repair_charge_session_locations(pool: &sqlx::PgPool) -> Result<u64> {
 }
 
 async fn estimate_api_session_soc_from_energy(pool: &sqlx::PgPool) -> Result<u64> {
-    let repaired = sqlx::query!(
-        r#"
-        UPDATE panda.charge_sessions cs
-        SET soc_start = GREATEST(
-                0.0,
-                cs.soc_end - (cs.kwh_added / (v.battery_capacity_wh / 1000.0) * 100.0)
-            )
-        FROM panda.vehicles v
-        WHERE cs.vehicle_id = v.id
-          AND cs.source = 'rivian_api'
-          AND cs.kwh_added IS NOT NULL
-          AND cs.soc_end IS NOT NULL
-          AND v.battery_capacity_wh IS NOT NULL
-          AND v.battery_capacity_wh > 0
-          AND (
-              cs.soc_start IS NULL
-              OR ((cs.soc_end - cs.soc_start) / 100.0 * (v.battery_capacity_wh / 1000.0)) < cs.kwh_added * 0.6
-          )
-        "#
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-
-    Ok(repaired)
+    Ok(sqlx::query(r#"
+        WITH estimates AS MATERIALIZED (
+            SELECT cs.id, cs.soc_start,
+                   GREATEST(0.0, cs.soc_end - (cs.kwh_added / (v.battery_capacity_wh / 1000.0) * 100.0)) AS estimated_start,
+                   ((cs.soc_end - cs.soc_start) / 100.0 * (v.battery_capacity_wh / 1000.0)) AS observed_kwh,
+                   cs.kwh_added * 0.6 AS minimum_kwh
+            FROM panda.charge_sessions cs JOIN panda.vehicles v ON v.id = cs.vehicle_id
+            WHERE cs.source = 'rivian_api' AND cs.kwh_added IS NOT NULL AND cs.soc_end IS NOT NULL
+              AND v.battery_capacity_wh IS NOT NULL AND v.battery_capacity_wh > 0
+        )
+        UPDATE panda.charge_sessions cs SET soc_start = estimates.estimated_start
+        FROM estimates WHERE cs.id = estimates.id
+          AND (estimates.soc_start IS NULL OR estimates.observed_kwh < estimates.minimum_kwh)
+    "#).execute(pool).await?.rows_affected())
 }
 
 async fn repair_api_summary_metadata(pool: &sqlx::PgPool) -> Result<u64> {
-    let repaired = sqlx::query!(
-        r#"
-        UPDATE panda.charge_sessions
-        SET duration_minutes = COALESCE(
-                duration_minutes,
-                CASE
-                    WHEN ended_at IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (ended_at - started_at))::int / 60
-                END
-            ),
-            charger_type = COALESCE(
-                charger_type,
-                CASE
-                    WHEN lower(COALESCE(network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-                    WHEN is_home THEN 'ac'
-                END
-            )
-        WHERE source = 'rivian_api'
-          AND (
-              duration_minutes IS NULL
-              OR charger_type IS NULL
-          )
-        "#
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-
-    Ok(repaired)
+    Ok(sqlx::query(r#"
+        WITH incomplete AS MATERIALIZED (
+            SELECT id,
+                   COALESCE(duration_minutes, CASE WHEN ended_at IS NOT NULL THEN EXTRACT(EPOCH FROM (ended_at - started_at))::int / 60 END) AS duration,
+                   COALESCE(charger_type, CASE
+                       WHEN lower(COALESCE(network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
+                       WHEN is_home THEN 'ac' END) AS type
+            FROM panda.charge_sessions
+            WHERE source = 'rivian_api' AND (duration_minutes IS NULL OR charger_type IS NULL)
+        )
+        UPDATE panda.charge_sessions cs SET duration_minutes = incomplete.duration, charger_type = incomplete.type
+        FROM incomplete WHERE cs.id = incomplete.id
+    "#).execute(pool).await?.rows_affected())
 }
 
 async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {

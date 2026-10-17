@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use panda_api::routes::range_normalization::plausible_max_mi_per_kwh;
 use sqlx::postgres::PgPoolOptions;
@@ -23,43 +23,15 @@ struct RepairScope {
 }
 
 fn parse_scope() -> Result<RepairScope> {
-    let mut scope = RepairScope::default();
-    let mut args = std::env::args().skip(1);
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--vehicle-id" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--vehicle-id requires a UUID value"))?;
-                scope.vehicle_id = Some(value.parse::<Uuid>()?);
-            }
-            "--from" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--from requires an RFC3339 timestamp"))?;
-                scope.from = Some(DateTime::parse_from_rfc3339(&value)?.with_timezone(&Utc));
-            }
-            "--to" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--to requires an RFC3339 timestamp"))?;
-                scope.to = Some(DateTime::parse_from_rfc3339(&value)?.with_timezone(&Utc));
-            }
-            "--dry-run" => {
-                scope.dry_run = true;
-            }
-            "--help" | "-h" => {
-                println!(
-                    "Usage: cargo run --bin repair_range_outliers [--dry-run] [--vehicle-id <uuid>] [--from <rfc3339>] [--to <rfc3339>]"
-                );
-                std::process::exit(0);
-            }
-            other => return Err(anyhow!("Unknown argument: {other}")),
-        }
-    }
-
-    Ok(scope)
+    use panda_api::db::maintenance::{command_options, OptionKind};
+    let options = command_options(&[OptionKind::VehicleId, OptionKind::From, OptionKind::To, OptionKind::DryRun],
+        "Usage: cargo run --bin repair_range_outliers [--dry-run] [--vehicle-id <uuid>] [--from <rfc3339>] [--to <rfc3339>]", "Unknown argument")?;
+    Ok(RepairScope {
+        vehicle_id: options.vehicle_id,
+        from: options.from,
+        to: options.to,
+        dry_run: options.dry_run,
+    })
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -79,24 +51,28 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
+    let outcome = async {
+        let summary = summarize(&pool, &scope).await?;
+        info!(
+            converted_rows = summary.converted_rows,
+            nulled_rows = summary.nulled_rows,
+            untouched_rows = summary.untouched_rows,
+            dry_run = scope.dry_run,
+            "range outlier analysis"
+        );
 
-    let summary = summarize(&pool, &scope).await?;
-    info!(
-        converted_rows = summary.converted_rows,
-        nulled_rows = summary.nulled_rows,
-        untouched_rows = summary.untouched_rows,
-        dry_run = scope.dry_run,
-        "range outlier analysis"
-    );
+        if scope.dry_run {
+            return Ok(());
+        }
 
-    if scope.dry_run {
-        return Ok(());
+        let updated = apply_repairs(&pool, &scope).await?;
+        info!(rows_updated = updated, "range outlier repair complete");
+
+        Ok(())
     }
-
-    let updated = apply_repairs(&pool, &scope).await?;
-    info!(rows_updated = updated, "range outlier repair complete");
-
-    Ok(())
+    .await;
+    pool.close().await;
+    outcome
 }
 
 const RANGE_ASSESSMENT: &str = r#"

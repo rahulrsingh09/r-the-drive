@@ -16,11 +16,12 @@ async fn main() -> anyhow::Result<()> {
         })
         .connect(&database_url)
         .await?;
-    let summary = panda_api::db::migrations::run_current_migrations(&pool).await?;
+    let outcome = panda_api::db::migrations::run_current_migrations(&pool).await;
+    pool.close().await;
+    let summary = outcome?;
     println!(
         "Panda migrations are current at version {} ({:?})",
         summary.latest_version, summary.ledger_action
     );
-    pool.close().await;
     Ok(())
 }

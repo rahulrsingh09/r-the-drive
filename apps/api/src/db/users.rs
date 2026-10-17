@@ -30,35 +30,42 @@ impl UserRole {
 }
 
 pub async fn get_user_role(pool: &PgPool, user_id: Uuid) -> Result<UserRole, AppError> {
-    let role =
-        sqlx::query_scalar::<_, Option<String>>("SELECT role FROM panda.users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?
-            .flatten()
-            .ok_or(AppError::Forbidden)?;
-
-    UserRole::from_str(&role).ok_or_else(|| AppError::Validation("unknown user role".into()))
+    authorized_role(pool, user_id, &["super_user", "admin", "user"]).await
 }
 
 pub async fn require_admin_or_super_user(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<UserRole, AppError> {
-    let role = get_user_role(pool, user_id).await?;
-    match role {
-        UserRole::SuperUser | UserRole::Admin => Ok(role),
-        UserRole::User => Err(AppError::Forbidden),
-    }
+    authorized_role(pool, user_id, &["super_user", "admin"]).await
 }
 
 pub async fn require_super_user(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
-    let role = get_user_role(pool, user_id).await?;
-    if role == UserRole::SuperUser {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
-    }
+    authorized_role(pool, user_id, &["super_user"])
+        .await
+        .map(|_| ())
+}
+
+async fn authorized_role(
+    pool: &PgPool,
+    user_id: Uuid,
+    allowed: &[&str],
+) -> Result<UserRole, AppError> {
+    let record: Option<(Option<String>, Option<bool>)> =
+        sqlx::query_as("SELECT role, role = ANY($2::text[]) FROM panda.users WHERE id = $1")
+            .bind(user_id)
+            .bind(allowed)
+            .fetch_optional(pool)
+            .await?;
+    let (Some(stored), permitted) = record.ok_or(AppError::Forbidden)? else {
+        return Err(AppError::Forbidden);
+    };
+    let role = UserRole::from_str(&stored)
+        .ok_or_else(|| AppError::Validation("unknown user role".into()))?;
+    permitted
+        .filter(|value| *value)
+        .map(|_| role)
+        .ok_or(AppError::Forbidden)
 }
 
 pub fn can_manage_user(actor: UserRole, target: UserRole) -> bool {
@@ -70,15 +77,9 @@ pub fn can_manage_user(actor: UserRole, target: UserRole) -> bool {
 }
 
 pub async fn get_electricity_rate(pool: &PgPool, user_id: Uuid) -> Result<f64, AppError> {
-    let rate = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT electricity_rate_per_kwh FROM panda.user_preferences WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten()
-    .unwrap_or(0.13);
-    Ok(rate)
+    sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE((SELECT electricity_rate_per_kwh FROM panda.user_preferences WHERE user_id = $1), 0.13::float8)")
+        .bind(user_id).fetch_one(pool).await.map_err(AppError::from)
 }
 
 #[cfg(test)]

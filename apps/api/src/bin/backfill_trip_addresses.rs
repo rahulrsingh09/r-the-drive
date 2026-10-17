@@ -8,7 +8,7 @@
 //! Usage:
 //!   DATABASE_URL=... cargo run --bin backfill_trip_addresses -- [--vehicle <uuid>]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use panda_api::db::pool::application_pool_options;
 use panda_api::services::trip_enrichment::{
     backfill_charge_session_coordinates, backfill_charge_session_locations,
@@ -32,51 +32,45 @@ async fn main() -> Result<()> {
         .max_connections(3)
         .connect(&database_url)
         .await?;
+    let outcome = async {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
+        backfill_trip_coordinates(&pool, args.vehicle_id).await?;
+        backfill_charge_session_coordinates(&pool, args.vehicle_id).await?;
+        let trip_stats = backfill_trip_addresses(&pool, &client, args.vehicle_id).await?;
+        let session_stats =
+            backfill_charge_session_locations(&pool, &client, args.vehicle_id).await?;
 
-    backfill_trip_coordinates(&pool, args.vehicle_id).await?;
-    backfill_charge_session_coordinates(&pool, args.vehicle_id).await?;
-    let trip_stats = backfill_trip_addresses(&pool, &client, args.vehicle_id).await?;
-    let session_stats = backfill_charge_session_locations(&pool, &client, args.vehicle_id).await?;
+        info!(
+            vehicle_id = ?args.vehicle_id,
+            trip_scanned = trip_stats.scanned,
+            trip_filled = trip_stats.filled,
+            trip_failed = trip_stats.failed,
+            trip_skipped = trip_stats.skipped,
+            session_scanned = session_stats.scanned,
+            session_filled = session_stats.filled,
+            session_failed = session_stats.failed,
+            session_skipped = session_stats.skipped,
+            "trip address backfill complete"
+        );
 
-    info!(
-        vehicle_id = ?args.vehicle_id,
-        trip_scanned = trip_stats.scanned,
-        trip_filled = trip_stats.filled,
-        trip_failed = trip_stats.failed,
-        trip_skipped = trip_stats.skipped,
-        session_scanned = session_stats.scanned,
-        session_filled = session_stats.filled,
-        session_failed = session_stats.failed,
-        session_skipped = session_stats.skipped,
-        "trip address backfill complete"
-    );
-
-    Ok(())
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    outcome
 }
 
 fn parse_args() -> Result<Args> {
-    let mut vehicle_id = None;
-    let mut iter = std::env::args().skip(1);
-
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--vehicle" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| anyhow!("--vehicle requires a UUID argument"))?;
-                vehicle_id = Some(raw.parse().context("invalid --vehicle UUID")?);
-            }
-            "--help" | "-h" => {
-                println!("Usage: cargo run --bin backfill_trip_addresses -- [--vehicle <uuid>]");
-                std::process::exit(0);
-            }
-            other => return Err(anyhow!("unknown argument: {other}")),
-        }
-    }
-
-    Ok(Args { vehicle_id })
+    use panda_api::db::maintenance::{command_options, OptionKind};
+    let options = command_options(
+        &[OptionKind::Vehicle],
+        "Usage: cargo run --bin backfill_trip_addresses -- [--vehicle <uuid>]",
+        "unknown argument",
+    )?;
+    Ok(Args {
+        vehicle_id: options.vehicle_id,
+    })
 }

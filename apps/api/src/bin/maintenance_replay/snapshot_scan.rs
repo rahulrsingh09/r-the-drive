@@ -44,3 +44,51 @@ impl SnapshotScan {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(super) mod full_replacement_db {
+    use super::*;
+    use sqlx::Executor;
+
+    pub struct Database {
+        pub pool: PgPool,
+        admin: PgPool,
+        name: String,
+    }
+
+    impl Database {
+        pub async fn new(schema: &'static str) -> Self {
+            let mut url = url::Url::parse(
+                &std::env::var("MAINTENANCE_DATABASE_URL")
+                    .expect("explicit synthetic fixture required"),
+            )
+            .unwrap();
+            assert_eq!(url.host_str(), Some("db"));
+            assert_eq!(url.username(), "maintenance_bootstrap");
+            url.set_path("/postgres");
+            let admin = PgPool::connect(url.as_str()).await.unwrap();
+            let name = format!("maintenance_algorithm_{}", Uuid::new_v4().simple());
+            admin
+                .execute(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+                .await
+                .unwrap();
+            url.set_path(&format!("/{name}"));
+            let pool = PgPool::connect(url.as_str()).await.unwrap();
+            sqlx::raw_sql(schema).execute(&pool).await.unwrap();
+            Self { pool, admin, name }
+        }
+
+        pub async fn cleanup(self) {
+            self.pool.close().await;
+            self.admin
+                .execute(sqlx::AssertSqlSafe(format!(
+                    "DROP DATABASE {} WITH(FORCE)",
+                    self.name
+                )))
+                .await
+                .unwrap();
+            self.admin.close().await;
+        }
+    }
+}

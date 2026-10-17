@@ -16,16 +16,21 @@ async fn main() -> Result<()> {
         .max_connections(4)
         .connect(&database_url)
         .await?;
+    let outcome = async {
+        match mode.as_str() {
+            "--seed" => seed(&pool).await?,
+            "--check-complete" => check_complete(&pool).await?,
+            "--stats" => print_stats(&pool).await?,
+            other => {
+                anyhow::bail!("unknown mode {other}; use --seed, --stats, or --check-complete")
+            }
+        }
 
-    match mode.as_str() {
-        "--seed" => seed(&pool).await?,
-        "--check-complete" => check_complete(&pool).await?,
-        "--stats" => print_stats(&pool).await?,
-        other => anyhow::bail!("unknown mode {other}; use --seed, --stats, or --check-complete"),
+        Ok(())
     }
-
+    .await;
     pool.close().await;
-    Ok(())
+    outcome
 }
 
 async fn seed(pool: &sqlx::PgPool) -> Result<()> {
@@ -34,47 +39,22 @@ async fn seed(pool: &sqlx::PgPool) -> Result<()> {
         .execute(&mut *transaction)
         .await?;
 
-    let user_id: uuid::Uuid = match sqlx::query_scalar(
-        "SELECT id FROM panda.users
-         WHERE email = 'charge-identity-upgrade-fixture@example.test'
-         LIMIT 1",
-    )
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        Some(id) => id,
-        None => {
-            sqlx::query_scalar(
-                "INSERT INTO panda.users (email, password_hash, role)
-             VALUES ('charge-identity-upgrade-fixture@example.test', 'fixture-only', 'admin')
-             RETURNING id",
-            )
-            .fetch_one(&mut *transaction)
-            .await?
-        }
-    };
-
-    let vehicle_id: uuid::Uuid = match sqlx::query_scalar(
-        "SELECT id FROM panda.vehicles
-         WHERE user_id = $1 AND rivian_vehicle_id = 'charge-identity-upgrade-fixture'
-         LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        Some(id) => id,
-        None => {
-            sqlx::query_scalar(
-                "INSERT INTO panda.vehicles (user_id, rivian_vehicle_id, model, name)
-             VALUES ($1, 'charge-identity-upgrade-fixture', 'fixture', 'Charge identity fixture')
-             RETURNING id",
-            )
-            .bind(user_id)
-            .fetch_one(&mut *transaction)
-            .await?
-        }
-    };
+    let user_id: uuid::Uuid = sqlx::query_scalar(r#"
+        WITH existing AS (SELECT id FROM panda.users WHERE email = 'charge-identity-upgrade-fixture@example.test' LIMIT 1),
+        inserted AS (
+            INSERT INTO panda.users (email, password_hash, role)
+            SELECT 'charge-identity-upgrade-fixture@example.test', 'fixture-only', 'admin'
+            WHERE NOT EXISTS (SELECT 1 FROM existing) RETURNING id
+        ) SELECT id FROM existing UNION ALL SELECT id FROM inserted
+    "#).fetch_one(&mut *transaction).await?;
+    let vehicle_id: uuid::Uuid = sqlx::query_scalar(r#"
+        WITH existing AS (SELECT id FROM panda.vehicles WHERE user_id = $1 AND rivian_vehicle_id = 'charge-identity-upgrade-fixture' LIMIT 1),
+        inserted AS (
+            INSERT INTO panda.vehicles (user_id, rivian_vehicle_id, model, name)
+            SELECT $1, 'charge-identity-upgrade-fixture', 'fixture', 'Charge identity fixture'
+            WHERE NOT EXISTS (SELECT 1 FROM existing) RETURNING id
+        ) SELECT id FROM existing UNION ALL SELECT id FROM inserted
+    "#).bind(user_id).fetch_one(&mut *transaction).await?;
 
     sqlx::query(
         "INSERT INTO panda.rivian_charge_payloads
@@ -105,56 +85,14 @@ async fn seed(pool: &sqlx::PgPool) -> Result<()> {
 }
 
 async fn print_stats(pool: &sqlx::PgPool) -> Result<()> {
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint
-         FROM panda.rivian_charge_payloads
-         WHERE payload_fingerprint IS NULL",
-    )
-    .fetch_one(pool)
-    .await?;
-    let payloads: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM panda.rivian_charge_payloads")
-            .fetch_one(pool)
-            .await?;
-    let identities: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM panda.rivian_charge_payload_identities")
-            .fetch_one(pool)
-            .await?;
-    let status: String = sqlx::query_scalar(
-        "SELECT status
-         FROM panda.charge_payload_identity_backfill_status
-         WHERE job_key = 'charge_payload_identity'",
-    )
-    .fetch_one(pool)
-    .await?;
+    let (pending, payloads, identities, status) = fixture_stats(pool).await?;
     println!("status={status} pending={pending} payloads={payloads} identities={identities}");
     Ok(())
 }
 
 async fn check_complete(pool: &sqlx::PgPool) -> Result<()> {
-    print_stats(pool).await?;
-    let pending: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint
-         FROM panda.rivian_charge_payloads
-         WHERE payload_fingerprint IS NULL",
-    )
-    .fetch_one(pool)
-    .await?;
-    let payloads: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM panda.rivian_charge_payloads")
-            .fetch_one(pool)
-            .await?;
-    let identities: i64 =
-        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM panda.rivian_charge_payload_identities")
-            .fetch_one(pool)
-            .await?;
-    let status: String = sqlx::query_scalar(
-        "SELECT status
-         FROM panda.charge_payload_identity_backfill_status
-         WHERE job_key = 'charge_payload_identity'",
-    )
-    .fetch_one(pool)
-    .await?;
+    let (pending, payloads, identities, status) = fixture_stats(pool).await?;
+    println!("status={status} pending={pending} payloads={payloads} identities={identities}");
     let non_oldest_canonical: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::bigint
          FROM panda.rivian_charge_payload_identities identity
@@ -197,4 +135,13 @@ async fn check_complete(pool: &sqlx::PgPool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn fixture_stats(pool: &sqlx::PgPool) -> Result<(i64, i64, i64, String)> {
+    Ok(sqlx::query_as(r#"
+        SELECT (SELECT count(*) FROM panda.rivian_charge_payloads WHERE payload_fingerprint IS NULL),
+               (SELECT count(*) FROM panda.rivian_charge_payloads),
+               (SELECT count(*) FROM panda.rivian_charge_payload_identities), status
+        FROM panda.charge_payload_identity_backfill_status WHERE job_key = 'charge_payload_identity'
+    "#).fetch_one(pool).await?)
 }

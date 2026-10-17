@@ -65,93 +65,84 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL")?;
 
     let pool = panda_api::db::pool::create_pool(&database_url).await?;
-    let rows = sqlx::query_as::<_, VehicleImageRow>(
-        "SELECT placement, design, size, resolution, url, overlays, metadata
+    let outcome = async {
+        let rows = sqlx::query_as::<_, VehicleImageRow>(
+            "SELECT placement, design, size, resolution, url, overlays, metadata
          FROM panda.vehicle_images
          WHERE vehicle_id = $1
          ORDER BY created_at, placement, design NULLS LAST",
-    )
-    .bind(vehicle_id)
-    .fetch_all(&pool)
-    .await?;
+        )
+        .bind(vehicle_id)
+        .fetch_all(&pool)
+        .await?;
 
-    if rows.is_empty() {
-        anyhow::bail!("no cached vehicle_images rows found for {vehicle_id}");
-    }
+        if rows.is_empty() {
+            anyhow::bail!("no cached vehicle_images rows found for {vehicle_id}");
+        }
 
-    let output_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../web/public/vehicle-images/fixtures")
-        .join(model.to_lowercase());
-    std::fs::create_dir_all(&output_dir)?;
+        let output_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/public/vehicle-images/fixtures")
+            .join(model.to_lowercase());
+        std::fs::create_dir_all(&output_dir)?;
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    let mut manifest_images = Vec::with_capacity(rows.len());
-    let mut used_filenames = HashSet::new();
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        let mut manifest_images = Vec::with_capacity(rows.len());
+        let mut used_filenames = HashSet::new();
 
-    for row in rows {
-        let base_file =
-            download_fixture_asset(&client, &output_dir, &row.url, &mut used_filenames).await?;
-        let mut overlays = Vec::new();
-        for overlay in serde_json::from_value::<Vec<VehicleImageOverlay>>(row.overlays.clone())
-            .unwrap_or_default()
-        {
-            let overlay_file =
-                download_fixture_asset(&client, &output_dir, &overlay.url, &mut used_filenames)
-                    .await?;
-            overlays.push(VehicleImageOverlay {
-                url: format!(
-                    "/vehicle-images/fixtures/{}/{}",
-                    model.to_lowercase(),
-                    overlay_file
-                ),
-                overlay: overlay.overlay,
-                z_index: overlay.z_index,
+        let public_prefix = format!("/vehicle-images/fixtures/{}/", model.to_lowercase());
+        for row in rows {
+            let mut overlays = serde_json::from_value::<Vec<VehicleImageOverlay>>(row.overlays)
+                .unwrap_or_default();
+            let mut base_url = row.url;
+            let source_url = base_url.clone();
+            for url in std::iter::once(&mut base_url)
+                .chain(overlays.iter_mut().map(|overlay| &mut overlay.url))
+            {
+                let filename =
+                    download_fixture_asset(&client, &output_dir, url, &mut used_filenames).await?;
+                *url = format!("{public_prefix}{filename}");
+            }
+            let mut metadata = row.metadata;
+            if let Some(object) = metadata.as_object_mut() {
+                object.extend([
+                    ("source_url".into(), serde_json::Value::String(source_url)),
+                    ("packaged".into(), serde_json::Value::Bool(true)),
+                    ("model".into(), serde_json::Value::String(model.clone())),
+                ]);
+            }
+            manifest_images.push(DemoFixtureImageEntry {
+                placement: row.placement,
+                design: row.design,
+                size: row.size,
+                resolution: row.resolution,
+                url: base_url,
+                overlays,
+                metadata,
             });
         }
 
-        let mut metadata = row.metadata.clone();
-        if let Some(obj) = metadata.as_object_mut() {
-            obj.insert(
-                "source_url".into(),
-                serde_json::Value::String(row.url.clone()),
-            );
-            obj.insert("packaged".into(), serde_json::Value::Bool(true));
-            obj.insert("model".into(), serde_json::Value::String(model.clone()));
-        }
+        let manifest = DemoFixtureManifest {
+            model: model.clone(),
+            images: manifest_images,
+        };
 
-        manifest_images.push(DemoFixtureImageEntry {
-            placement: row.placement,
-            design: row.design,
-            size: row.size,
-            resolution: row.resolution,
-            url: format!(
-                "/vehicle-images/fixtures/{}/{}",
-                model.to_lowercase(),
-                base_file
-            ),
-            overlays,
-            metadata,
-        });
+        std::fs::write(
+            output_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest)?,
+        )?;
+
+        println!(
+            "exported {} image entries to {}",
+            manifest.images.len(),
+            output_dir.display()
+        );
+        Ok(())
     }
-
-    let manifest = DemoFixtureManifest {
-        model: model.clone(),
-        images: manifest_images,
-    };
-
-    std::fs::write(
-        output_dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest)?,
-    )?;
-
-    println!(
-        "exported {} image entries to {}",
-        manifest.images.len(),
-        output_dir.display()
-    );
-    Ok(())
+    .await;
+    pool.close().await;
+    outcome
 }
 
 async fn download_fixture_asset(
@@ -161,37 +152,106 @@ async fn download_fixture_asset(
     used_filenames: &mut HashSet<String>,
 ) -> anyhow::Result<String> {
     panda_api::services::outbound_policy::require_optional_traffic()?;
+    fetch_fixture_asset(client, output_dir, source_url, used_filenames).await
+}
+
+async fn fetch_fixture_asset(
+    client: &Client,
+    output_dir: &Path,
+    source_url: &str,
+    used_filenames: &mut HashSet<String>,
+) -> anyhow::Result<String> {
     let response = client.get(source_url).send().await?.error_for_status()?;
-    let content_type = response
+    let mime = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("image/webp")
-        .to_string();
+        .to_owned();
     let bytes =
         panda_api::services::outbound_policy::read_limited(response, 5 * 1024 * 1024).await?;
-
-    let basename = source_url
-        .split('/')
-        .next_back()
-        .unwrap_or("asset.webp")
-        .split('?')
-        .next()
-        .unwrap_or("asset.webp");
-    let extension = if basename.contains('.') {
-        basename.rsplit('.').next().unwrap_or("webp").to_string()
-    } else if content_type == "image/png" {
-        "png".into()
-    } else {
-        "webp".into()
-    };
-    let prefix = &hex::encode(Sha256::digest(source_url.as_bytes()))[..12];
-    let filename = format!("{prefix}_{basename}");
-    let filename = if used_filenames.insert(filename.clone()) {
-        filename
-    } else {
-        format!("{prefix}_dup.{extension}")
-    };
-    tokio::fs::write(output_dir.join(&filename), &bytes).await?;
+    let filename = fixture_filename(source_url, &mime, used_filenames);
+    tokio::fs::write(output_dir.join(&filename), bytes).await?;
     Ok(filename)
+}
+
+fn fixture_filename(source_url: &str, mime: &str, used: &mut HashSet<String>) -> String {
+    let leaf = source_url
+        .rsplit_once('/')
+        .map_or(source_url, |(_, leaf)| leaf);
+    let basename = leaf.split_once('?').map_or(leaf, |(name, _)| name);
+    let digest = hex::encode(Sha256::digest(source_url.as_bytes()));
+    let prefix = &digest[..12];
+    let filename = format!("{prefix}_{basename}");
+    if used.insert(filename.clone()) {
+        return filename;
+    }
+    let extension = basename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .unwrap_or(if mime == "image/png" { "png" } else { "webp" });
+    format!("{prefix}_dup.{extension}")
+}
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+    #[test]
+    fn duplicate_asset_names_preserve_url_hash_and_legacy_suffix() {
+        let mut used = HashSet::new();
+        let url = "http://127.0.0.1/asset.png?size=2";
+        let hash = hex::encode(Sha256::digest(url.as_bytes()));
+        assert_eq!(
+            fixture_filename(url, "image/webp", &mut used),
+            format!("{}_asset.png", &hash[..12])
+        );
+        let duplicate = format!("{}_dup.png", &hash[..12]);
+        assert_eq!(fixture_filename(url, "image/webp", &mut used), duplicate);
+        assert_eq!(fixture_filename(url, "image/webp", &mut used), duplicate);
+    }
+    #[tokio::test]
+    async fn downloads_use_local_http_and_preserve_failure_cleanup() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for response in [
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\nConnection: close\r\n\r\npng",
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut chunk = [0u8; 1024];
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert_ne!(count, 0, "client closed before sending headers");
+                    request.extend_from_slice(&chunk[..count]);
+                    assert!(request.len() <= 8192, "unexpected oversized fixture request");
+                }
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let client = Client::builder().no_proxy().build().unwrap();
+        let mut names = HashSet::new();
+        let file = fetch_fixture_asset(
+            &client,
+            directory.path(),
+            &format!("http://{address}/asset.png"),
+            &mut names,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(directory.path().join(file)).unwrap(), b"png");
+        assert!(fetch_fixture_asset(
+            &client,
+            directory.path(),
+            &format!("http://{address}/failed.png"),
+            &mut names
+        )
+        .await
+        .is_err());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        server.await.unwrap();
+    }
 }

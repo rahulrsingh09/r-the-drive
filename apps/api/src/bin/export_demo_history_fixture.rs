@@ -22,6 +22,9 @@ struct AggregateShape {
     tire_rows: i64,
     door_rows: i64,
     outside_temperature_rows: i64,
+    trip_count: i64,
+    charge_count: i64,
+    weather_sample_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +80,7 @@ async fn main() -> Result<()> {
         .await
         .context("connect to database")?;
 
+    let outcome = async {
     let shape = sqlx::query_as::<_, AggregateShape>(
         r#"SELECT
              count(*)::bigint AS telemetry_rows,
@@ -85,7 +89,10 @@ async fn main() -> Result<()> {
              count(*) FILTER (WHERE battery_level IS NOT NULL)::bigint AS battery_rows,
              count(*) FILTER (WHERE tire_fl_psi IS NOT NULL)::bigint AS tire_rows,
              count(*) FILTER (WHERE door_front_left_closed IS NOT NULL)::bigint AS door_rows,
-             count(*) FILTER (WHERE outside_temp_c IS NOT NULL)::bigint AS outside_temperature_rows
+             count(*) FILTER (WHERE outside_temp_c IS NOT NULL)::bigint AS outside_temperature_rows,
+             (SELECT count(*) FROM panda.trips WHERE vehicle_id=$1 AND started_at>=now()-interval '14 days') AS trip_count,
+             (SELECT count(*) FROM panda.charge_sessions WHERE vehicle_id=$1 AND started_at>=now()-interval '14 days') AS charge_count,
+             (SELECT count(*) FROM panda.trip_weather_samples weather JOIN panda.trips trip ON trip.id=weather.trip_id WHERE trip.vehicle_id=$1 AND trip.started_at>=now()-interval '14 days') AS weather_sample_count
            FROM timeseries.telemetry
            WHERE vehicle_id=$1 AND ts>=now()-interval '14 days'"#,
     )
@@ -93,26 +100,6 @@ async fn main() -> Result<()> {
     .fetch_one(&pool)
     .await?;
 
-    let trip_count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM panda.trips WHERE vehicle_id=$1 AND started_at>=now()-interval '14 days'",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&pool)
-    .await?;
-    let charge_count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM panda.charge_sessions WHERE vehicle_id=$1 AND started_at>=now()-interval '14 days'",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&pool)
-    .await?;
-    let weather_sample_count = sqlx::query_scalar::<_, i64>(
-        r#"SELECT count(*) FROM panda.trip_weather_samples weather
-           JOIN panda.trips trip ON trip.id=weather.trip_id
-           WHERE trip.vehicle_id=$1 AND trip.started_at>=now()-interval '14 days'"#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(&pool)
-    .await?;
 
     let export = FixtureExport {
         schema_version: 1,
@@ -120,9 +107,9 @@ async fn main() -> Result<()> {
         window_days: 14,
         telemetry_rows: shape.telemetry_rows,
         active_days: shape.active_days,
-        trip_count,
-        charge_count,
-        weather_sample_count,
+        trip_count: shape.trip_count,
+        charge_count: shape.charge_count,
+        weather_sample_count: shape.weather_sample_count,
         coverage: FixtureCoverage {
             location: ratio(shape.location_rows, shape.telemetry_rows),
             battery: ratio(shape.battery_rows, shape.telemetry_rows),
@@ -139,6 +126,12 @@ async fn main() -> Result<()> {
         export.telemetry_rows, export.trip_count, export.charge_count, export.weather_sample_count
     );
     Ok(())
+
+
+
+    }.await;
+    pool.close().await;
+    outcome
 }
 
 #[cfg(test)]

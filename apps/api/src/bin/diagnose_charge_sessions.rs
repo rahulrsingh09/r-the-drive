@@ -3,7 +3,7 @@
 //! Usage:
 //!   cargo run --bin diagnose_charge_sessions -- [--vehicle <uuid>]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use panda_api::services::charge_sessions::diagnose_charge_sessions;
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -22,31 +22,24 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
-
-    let diagnostics = diagnose_charge_sessions(&pool, args.vehicle_id).await?;
-    println!("{}", serde_json::to_string_pretty(&diagnostics)?);
-    Ok(())
+    let outcome = async {
+        let diagnostics = diagnose_charge_sessions(&pool, args.vehicle_id).await?;
+        println!("{}", serde_json::to_string_pretty(&diagnostics)?);
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    outcome
 }
 
 fn parse_args() -> Result<Args> {
-    let mut vehicle_id = None;
-    let mut iter = std::env::args().skip(1);
-
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--vehicle" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| anyhow!("--vehicle requires a UUID argument"))?;
-                vehicle_id = Some(raw.parse().context("invalid --vehicle UUID")?);
-            }
-            "--help" | "-h" => {
-                println!("Usage: cargo run --bin diagnose_charge_sessions -- [--vehicle <uuid>]");
-                std::process::exit(0);
-            }
-            other => return Err(anyhow!("unknown argument: {other}")),
-        }
-    }
-
-    Ok(Args { vehicle_id })
+    use panda_api::db::maintenance::{command_options, OptionKind};
+    let options = command_options(
+        &[OptionKind::Vehicle],
+        "Usage: cargo run --bin diagnose_charge_sessions -- [--vehicle <uuid>]",
+        "unknown argument",
+    )?;
+    Ok(Args {
+        vehicle_id: options.vehicle_id,
+    })
 }

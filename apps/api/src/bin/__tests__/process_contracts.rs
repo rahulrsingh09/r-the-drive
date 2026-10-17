@@ -121,3 +121,88 @@ async fn charge_and_compaction_contracts() {
         include_bytes!("charge-compaction.json.gz"),
     );
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated synthetic TimescaleDB and built maintenance binaries"]
+async fn full_small_maintenance_contracts() {
+    let f = Fixture::new().await;
+    f.seed().await;
+    let mut evidence = vec![];
+    let vehicle = "00000000-0000-0000-0000-00000000000a";
+    for bin in [
+        "backfill_charge_session_ids",
+        "backfill_trip_ids",
+        "backfill_software_versions",
+        "backfill_state_periods",
+        "backfill_trip_odometer_endpoints",
+        "recompute_charging_costs",
+        "report_charge_session_duplicates",
+        "charge_identity_upgrade_fixture",
+    ] {
+        evidence.push(json!({"case":"empty","binary":bin,"process":f.process(bin,&[]).await,"state":f.state().await}));
+    }
+    for bin in [
+        "backfill_geofence_matches",
+        "backfill_outside_temp",
+        "backfill_trip_addresses",
+        "canonicalize_charge_sessions",
+        "diagnose_charge_sessions",
+        "report_trip_enrichment_gaps",
+    ] {
+        for args in [
+            vec!["--help"],
+            vec!["--vehicle"],
+            vec!["--vehicle", "invalid"],
+            vec!["--unknown"],
+            vec!["--vehicle", vehicle, "--vehicle", vehicle],
+        ] {
+            evidence.push(json!({"case":"vehicle cli","binary":bin,"args":args,"process":f.process(bin,&args).await}));
+        }
+    }
+    for args in [
+        vec![],
+        vec!["--vehicle", vehicle],
+        vec!["ignored", "--vehicle", vehicle, "ignored"],
+        vec!["--vehicle"],
+        vec!["--vehicle", "invalid"],
+    ] {
+        evidence.push(json!({"case":"sensor audit","args":args,"process":f.process("audit_health_sensor_availability",&args).await}));
+    }
+    for args in [
+        vec!["--help"],
+        vec!["--backup"],
+        vec!["--unknown"],
+        vec![],
+        vec!["--yes", "--backup", "/unused"],
+    ] {
+        evidence.push(json!({"case":"rebaseline","args":args,"process":f.process("rebaseline_db",&args).await}));
+    }
+    evidence.push(json!({"case":"migrate","process":f.process("panda-migrate",&[]).await}));
+    f.sql("INSERT INTO panda.trips(id,vehicle_id,started_at,ended_at,distance_miles) VALUES('00000000-0000-0000-0000-000000000064','00000000-0000-0000-0000-00000000000a','2025-01-01Z','2025-01-01T00:02:00Z',2),('00000000-0000-0000-0000-000000000065','00000000-0000-0000-0000-00000000000a','2025-01-01T00:01:00Z','2025-01-01T00:03:00Z',2)").await;
+    f.sql("INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,ended_at) VALUES('00000000-0000-0000-0000-0000000000c8','00000000-0000-0000-0000-00000000000a','2025-01-01Z','2025-01-01T00:02:00Z'),('00000000-0000-0000-0000-0000000000c9','00000000-0000-0000-0000-00000000000a','2025-01-01T00:01:00Z','2025-01-01T00:03:00Z')").await;
+    f.sql("INSERT INTO timeseries.telemetry(ts,vehicle_id,odometer_miles,distance_to_empty_mi,power_state,ota_current_version) SELECT '2025-01-01Z'::timestamptz+make_interval(secs=>n*60),'00000000-0000-0000-0000-00000000000a',100+n,200-n,CASE WHEN n%2=0 THEN 'go' ELSE 'ready' END,CASE WHEN n<2 THEN '1.0' ELSE '2.0' END FROM generate_series(0,4) n").await;
+    for run in 0..2 {
+        for bin in [
+            "backfill_charge_session_ids",
+            "backfill_trip_ids",
+            "backfill_trip_odometer_endpoints",
+            "backfill_software_versions",
+            "recompute_charging_costs",
+            "report_charge_session_duplicates",
+        ] {
+            evidence.push(json!({"case":"populated","binary":bin,"run":run,"process":f.process(bin,&[]).await,"state":f.state().await}));
+        }
+    }
+    let actual = json!(evidence);
+    f.cleanup().await;
+    let directory = std::path::PathBuf::from(std::env::var("MAINTENANCE_ARTIFACT_DIR").unwrap());
+    std::fs::write(
+        directory.join("small-maintenance-raw.json"),
+        serde_json::to_vec_pretty(&full_replacement_normalized(actual.clone())).unwrap(),
+    )
+    .unwrap();
+    if let Ok(oracle) = std::env::var("MAINTENANCE_SMALL_ORACLE") {
+        let expected = std::fs::read(oracle).unwrap();
+        freeze("small-maintenance", actual, &expected);
+    }
+}
