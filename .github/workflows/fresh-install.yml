@@ -49,10 +49,21 @@ jobs:
       - name: Run isolated acceptance
         run: |
           fresh_env="$RUNNER_TEMP/fresh-install.env"
-          cp compose/.env.example "$fresh_env"
-          sed -i 's|DATABASE_URL=.*|DATABASE_URL=postgresql://panda:fresh-install-password@timescaledb:5432/panda|' "$fresh_env"
-          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=fresh-install-password|' "$fresh_env"
-          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=fresh-install-redis-password|' "$fresh_env"
-          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://fresh-install.example.test|' "$fresh_env"
-          echo "PANDA_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$fresh_env"
+          python3 - "$fresh_env" <<'PY'
+          import re
+          import secrets
+          import sys
+          from pathlib import Path
+
+          values = {
+              "DATABASE_URL": "postgresql://panda:fresh-install-password@timescaledb:5432/panda",
+              "POSTGRES_PASSWORD": "fresh-install-password",
+              "REDIS_PASSWORD": "fresh-install-redis-password",
+              "ALLOWED_ORIGINS": "https://fresh-install.example.test",
+          }
+          content = Path("compose/.env.example").read_bytes().decode()
+          pattern = re.compile(r"(DATABASE_URL|POSTGRES_PASSWORD|REDIS_PASSWORD|ALLOWED_ORIGINS)=.*")
+          configured = pattern.sub(lambda match: match[1] + "=" + values[match[1]], content)
+          Path(sys.argv[1]).write_bytes((configured + "PANDA_SETUP_TOKEN=" + secrets.token_hex(32) + "\n").encode())
+          PY
           pnpm verify:fresh-install -- --mode "${{ inputs.mode || 'production' }}" --production-env "$fresh_env" --source-build

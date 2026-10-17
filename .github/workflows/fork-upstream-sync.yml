@@ -120,18 +120,22 @@ jobs:
           AUTOMATION_RESULT: ${{ needs.automate.result }}
         run: |
           python3 - <<'PY'
-          import json, os
-          ready = os.environ['SYNC_RESULT'] == 'success' and os.environ['AUTOMATION_RESULT'] == 'success'
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('## Candidate readiness\n\n')
-              summary.write('```json\n' + json.dumps({
-                  'candidate': os.environ['CANDIDATE'],
-                  'sync': os.environ['SYNC_STATUS'] or os.environ['SYNC_RESULT'],
-                  'automation': os.environ['AUTOMATION_RESULT'],
-                  'needs_review': not ready,
-              }, indent=2) + '\n```\n')
-              summary.write('See the automation job for promotion and CI-dispatch results. '
-                            'Final deployment status belongs to the Northflank workflow.\n')
-          if os.environ['SYNC_RESULT'] != 'success' or os.environ['AUTOMATION_RESULT'] == 'failure':
-              raise SystemExit(1)
+          import json
+          import os
+          from pathlib import Path
+
+          sync, automation = (os.environ[key] for key in ("SYNC_RESULT", "AUTOMATION_RESULT"))
+          outcomes = {"success": (False, 0), "failure": (True, 1)}
+          needs_review, status = outcomes.get(automation, (True, 0)) if sync == "success" else (True, 1)
+          report = {
+              "candidate": os.environ["CANDIDATE"],
+              "sync": os.environ["SYNC_STATUS"] or sync,
+              "automation": automation,
+              "needs_review": needs_review,
+          }
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write("## Candidate readiness\n\n```json\n" + json.dumps(report, indent=2) + "\n```\n")
+              summary.write("See the automation job for promotion and CI-dispatch results. "
+                            "Final deployment status belongs to the Northflank workflow.\n")
+          raise SystemExit(status)
           PY

@@ -79,19 +79,42 @@ jobs:
       - name: Start API and probe health
         working-directory: apps/api
         run: |
-          REDIS_URL=redis://localhost:6379 cargo run --bin panda-api &
-          API_PID=$!
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:3001/health; then
-              echo "Health check passed"
-              kill $API_PID
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Health check timed out"
-          kill $API_PID
-          exit 1
+          python3 - <<'PY'
+          import os
+          import signal
+          import subprocess
+          import time
+
+          environment = dict(os.environ, REDIS_URL="redis://localhost:6379")
+          process = subprocess.Popen(["cargo", "run", "--bin", "panda-api"], env=environment, start_new_session=True)
+          healthy = False
+          try:
+              for attempt in range(20):
+                  try:
+                      probe = subprocess.run(["curl", "-sf", "http://localhost:3001/health"], timeout=2)
+                  except subprocess.TimeoutExpired:
+                      time.sleep(2)
+                      continue
+                  if probe.returncode == 0:
+                      healthy = True
+                      break
+                  time.sleep(2)
+          finally:
+              try:
+                  os.killpg(process.pid, signal.SIGTERM)
+              except ProcessLookupError:
+                  pass
+              try:
+                  process.wait(timeout=5)
+              except subprocess.TimeoutExpired:
+                  try:
+                      os.killpg(process.pid, signal.SIGKILL)
+                  except ProcessLookupError:
+                      pass
+                  process.wait()
+          print("Health check passed" if healthy else "Health check timed out")
+          raise SystemExit(0 if healthy else 1)
+          PY
       - name: Validate Compose and published commit candidate
         env:
           POSTGRES_PASSWORD: ci-password

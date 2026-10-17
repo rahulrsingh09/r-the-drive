@@ -40,13 +40,22 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" != "pull_request" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- apps/api/migrations apps/api/src/bin/panda-restore-agent.rs apps/api/src/services/backups.rs apps/api/src/services/restore_compatibility.rs apps/api/src/services/restore_jobs.rs scripts/restore-backup.mjs tools/restore-lab .github/workflows/restore-compatibility.yml; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No restore-contract inputs changed; reporting a successful no-op."
-          fi
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          paths = ['apps/api/migrations', 'apps/api/src/bin/panda-restore-agent.rs', 'apps/api/src/services/backups.rs', 'apps/api/src/services/restore_compatibility.rs', 'apps/api/src/services/restore_jobs.rs', 'scripts/restore-backup.mjs', 'tools/restore-lab', '.github/workflows/restore-compatibility.yml']
+          changed = True
+          if "${{ github.event_name }}" == "pull_request":
+              comparison = subprocess.run(["git", "diff", "--name-only", "-z", os.environ["BASE_SHA"], "HEAD", "--", *paths], stdout=subprocess.PIPE)
+              changed = comparison.returncode != 0 or bool(comparison.stdout)
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write('run' + "=" + str(changed).lower() + "\n")
+          if not changed:
+              print("No restore-contract inputs changed; reporting a successful no-op.")
+          PY
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}

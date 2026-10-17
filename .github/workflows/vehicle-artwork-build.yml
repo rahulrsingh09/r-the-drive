@@ -33,13 +33,22 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" != "pull_request" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- apps/web/public/vehicle-images apps/web/src packages/hooks/src packages/dashboards/src scripts/build_vehicle_fallback_artwork.py .github/workflows/vehicle-artwork-build.yml; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "No artwork-contract inputs changed; reporting a successful no-op."
-          fi
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          paths = ['apps/web/public/vehicle-images', 'apps/web/src', 'packages/hooks/src', 'packages/dashboards/src', 'scripts/build_vehicle_fallback_artwork.py', '.github/workflows/vehicle-artwork-build.yml']
+          changed = True
+          if "${{ github.event_name }}" == "pull_request":
+              comparison = subprocess.run(["git", "diff", "--name-only", "-z", os.environ["BASE_SHA"], "HEAD", "--", *paths], stdout=subprocess.PIPE)
+              changed = comparison.returncode != 0 or bool(comparison.stdout)
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write('run' + "=" + str(changed).lower() + "\n")
+          if not changed:
+              print("No artwork-contract inputs changed; reporting a successful no-op.")
+          PY
 
       - name: Set up Python
         if: steps.changes.outputs.run == 'true'

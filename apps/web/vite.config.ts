@@ -82,9 +82,16 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: (id) => {
-          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) return 'react-vendor';
-          if (id.includes('node_modules/@tanstack/react-router/')) return 'router';
-          if (id.includes('node_modules/@tanstack/react-query/')) return 'query';
+          const packages = new Set(
+            Array.from(id.matchAll(/node_modules\/(react(?:-dom)?|@tanstack\/react-(?:router|query))\//g),
+              (match) => match[1]),
+          );
+          const groups = [
+            ['react-vendor', ['react', 'react-dom']],
+            ['router', ['@tanstack/react-router']],
+            ['query', ['@tanstack/react-query']],
+          ] as const;
+          return groups.find(([, members]) => members.some((name) => packages.has(name)))?.[0];
         },
       },
     },

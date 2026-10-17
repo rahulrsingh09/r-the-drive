@@ -65,10 +65,25 @@ jobs:
         env:
           BASE_SHA: ${{ inputs.baseline_sha || github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ || "$BASE_SHA" =~ ^0+$ ]]; then
-            BASE_SHA="$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD)"
-          fi
-          node scripts/fork-migration-integrity.mjs "$BASE_SHA"
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          supplied = os.environ["BASE_SHA"]
+          if re.fullmatch(r"[0-9a-f]{40}", supplied) and set(supplied) != {"0"}:
+              baseline = supplied
+          else:
+              baseline = None
+              for revision in ["HEAD^1", "HEAD"]:
+                  resolved = subprocess.run(["git", "rev-parse", revision], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                  if resolved.returncode == 0:
+                      baseline = resolved.stdout.rstrip("\n")
+                      break
+              if baseline is None:
+                  raise SystemExit("Cannot resolve the migration baseline")
+          subprocess.run(["node", "scripts/fork-migration-integrity.mjs", baseline], check=True)
+          PY
       - name: Verify origin gateway with nginx
         run: |
           sudo apt-get update
@@ -90,9 +105,18 @@ jobs:
       - name: Evaluate every npm advisory
         shell: bash
         run: |
-          status=0
-          pnpm audit --json > "$RUNNER_TEMP/npm-audit.json" || status=$?
-          node scripts/check-dependency-audits.mjs pnpm "$RUNNER_TEMP/npm-audit.json" "$status"
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+
+          report = Path(os.environ["RUNNER_TEMP"]) / 'npm-audit.json'
+          with report.open("w") as destination:
+              result = subprocess.run(['pnpm', 'audit', '--json'], stdout=destination)
+          status = result.returncode if result.returncode >= 0 else 128 - result.returncode
+          subprocess.run(["node", 'scripts/check-dependency-audits.mjs', 'pnpm', str(report), str(status)], check=True)
+          PY
 
   backend:
     if: github.repository == 'your-org/r-the-drive'
@@ -164,7 +188,16 @@ jobs:
       - name: Evaluate every Cargo advisory
         shell: bash
         run: |
-          cargo install cargo-audit --version 0.22.2 --locked
-          status=0
-          cargo audit --deny warnings --json > "$RUNNER_TEMP/cargo-audit.json" || status=$?
-          node ../../scripts/check-dependency-audits.mjs cargo "$RUNNER_TEMP/cargo-audit.json" "$status"
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          subprocess.run(["cargo", "install", "cargo-audit", "--version", "0.22.2", "--locked"], check=True)
+
+          report = Path(os.environ["RUNNER_TEMP"]) / 'cargo-audit.json'
+          with report.open("w") as destination:
+              result = subprocess.run(['cargo', 'audit', '--deny', 'warnings', '--json'], stdout=destination)
+          status = result.returncode if result.returncode >= 0 else 128 - result.returncode
+          subprocess.run(["node", '../../scripts/check-dependency-audits.mjs', 'cargo', str(report), str(status)], check=True)
+          PY

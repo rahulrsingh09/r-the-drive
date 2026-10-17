@@ -40,14 +40,22 @@ jobs:
           VERSION: ${{ inputs.version }}
           INCLUDE_ARM64: ${{ inputs.include_arm64 || false }}
         run: |
-          set -euo pipefail
-          if [[ ! "$VERSION" =~ ^[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
-            echo "Pre-release versions must use YYYY.MM.PATCH-(alpha|beta|rc).N; received $VERSION" >&2
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "include_arm64=$INCLUDE_ARM64" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          version = os.environ['VERSION']
+          if re.fullmatch(r"[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+-(alpha|beta|rc)\.[0-9]+", version) is None:
+              raise SystemExit("Invalid calendar release version: " + version)
+
+          source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).rstrip("\n")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.writelines(f"{key}={value}\n" for key, value in [
+                  ("version", version), ("source_sha", source), ("include_arm64", os.environ["INCLUDE_ARM64"]),
+              ])
+          PY
 
   promote-image:
     if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
@@ -75,26 +83,43 @@ jobs:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           INCLUDE_ARM64: ${{ needs.validate.outputs.include_arm64 }}
         run: |
-          set -euo pipefail
-          started=$(date +%s)
-          sources=("$IMAGE:candidate-$SOURCE_SHA-amd64")
-          docker buildx imagetools inspect "${sources[0]}" >/dev/null
-          if [[ "$INCLUDE_ARM64" == "true" ]]; then
-            sources+=("$IMAGE:candidate-$SOURCE_SHA-arm64")
-            docker buildx imagetools inspect "${sources[1]}" >/dev/null
-          fi
-          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/prerelease-image-metadata.json" \
-            --tag "$IMAGE:$VERSION" "${sources[@]}"
-          digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/prerelease-image-metadata.json")
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          platforms=linux/amd64
-          if [[ "$INCLUDE_ARM64" == "true" ]]; then platforms="$platforms, linux/arm64"; fi
-          echo "### Preview promotion" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Source commit: \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Platforms: \`$platforms\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Digest: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Promotion: $(( $(date +%s) - started ))s" >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import time
+          from pathlib import Path
+
+          started = int(time.time())
+          image, version, source = (os.environ[key] for key in ("IMAGE", "VERSION", "SOURCE_SHA"))
+          architectures = ["amd64", "arm64"] if os.environ["INCLUDE_ARM64"] == "true" else ["amd64"]
+          candidates = {arch: f"{image}:candidate-{source}-{arch}" for arch in architectures}
+          manifests = []
+          for arch, candidate in candidates.items():
+              subprocess.run(["docker", "buildx", "imagetools", "inspect", candidate], check=True, stdout=subprocess.DEVNULL)
+              manifests.append(candidate)
+
+          metadata = Path(os.environ["RUNNER_TEMP"]) / 'prerelease-image-metadata.json'
+          tags = ["--tag", f"{image}:{version}"]
+          subprocess.run(["docker", "buildx", "imagetools", "create", "--metadata-file", str(metadata), *tags, *manifests], check=True)
+          details = json.loads(metadata.read_text())
+          descriptor = details.get("containerimage.descriptor")
+          digest = descriptor.get("digest") if isinstance(descriptor, dict) else None
+          if digest is None:
+              digest = details.get("containerimage.digest")
+          if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+              raise SystemExit("Promotion did not return an immutable SHA-256 digest")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"digest={digest}\n")
+          platforms = ", ".join(f"linux/{arch}" for arch in architectures)
+          lines = [
+              '### Preview promotion', f"- Source commit: `{source}`", f"- Platforms: `{platforms}`",
+              f"- Digest: `{digest}`", f"- Promotion: {int(time.time()) - started}s",
+          ]
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write("\n".join(lines) + "\n")
+          PY
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/panda
@@ -119,13 +144,25 @@ jobs:
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Create ephemeral production environment
         run: |
-          smoke_env="$RUNNER_TEMP/prerelease-smoke.env"
-          cp compose/.env.example "$smoke_env"
-          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=prerelease-smoke-password|' "$smoke_env"
-          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=prerelease-smoke-redis-password|' "$smoke_env"
-          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://prerelease-smoke.example.test|' "$smoke_env"
-          echo "PANDA_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
-          echo "PRERELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os
+          import re
+          import secrets
+          from pathlib import Path
+
+          destination = Path(os.environ["RUNNER_TEMP"]) / 'prerelease-smoke.env'
+          values = {
+              "POSTGRES_PASSWORD": 'prerelease-smoke-password',
+              "REDIS_PASSWORD": 'prerelease-smoke-redis-password',
+              "ALLOWED_ORIGINS": 'https://prerelease-smoke.example.test',
+          }
+          content = Path("compose/.env.example").read_bytes().decode()
+          pattern = re.compile(r"(POSTGRES_PASSWORD|REDIS_PASSWORD|ALLOWED_ORIGINS)=.*")
+          content = pattern.sub(lambda match: match[1] + "=" + values[match[1]], content)
+          destination.write_bytes((content + "PANDA_SETUP_TOKEN=" + secrets.token_hex(32) + "\n").encode())
+          with Path(os.environ["GITHUB_ENV"]).open("a") as output:
+              output.write('PRERELEASE_SMOKE_ENV' + "=" + str(destination) + "\n")
+          PY
       - name: Exercise published preview image stack
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-ref "${{ env.REGISTRY }}/${{ env.OWNER }}/panda@${{ needs.promote-image.outputs.digest }}"
 
@@ -206,7 +243,20 @@ jobs:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           IMAGE_DIGEST: ${{ needs.promote-image.outputs.digest }}
         run: |
-          echo "ghcr.io/your-org/r-the-drive@${IMAGE_DIGEST}" > images.lock
-          cp compose/docker-compose.yml docker-compose.yml
-          cp compose/.env.example example.env
-          gh release create "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$VERSION" --prerelease --generate-notes
+          python3 - <<'PY'
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          Path("images.lock").write_text("ghcr.io/your-org/r-the-drive@" + os.environ["IMAGE_DIGEST"] + "\n")
+          assets = [("compose/docker-compose.yml", "docker-compose.yml"), ("compose/.env.example", "example.env")]
+          for source, destination in assets:
+              shutil.copyfile(source, destination)
+          version, repository = os.environ["VERSION"], os.environ["GITHUB_REPOSITORY"]
+          arguments = [version, "images.lock#images.lock", "docker-compose.yml#docker-compose.yml", "example.env#example.env", "--repo", repository]
+
+          operation = "create"
+          options = ["--target", os.environ["SOURCE_SHA"], "--title", version, "--prerelease", "--generate-notes"]
+          subprocess.run(["gh", "release", operation, *arguments, *options], check=True)
+          PY

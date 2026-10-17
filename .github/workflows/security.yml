@@ -47,17 +47,35 @@ jobs:
         working-directory: apps/api
         shell: bash
         run: |
-          audit_status=0
-          cargo audit --deny warnings --json > "$RUNNER_TEMP/cargo-audit.json" || audit_status=$?
-          cat "$RUNNER_TEMP/cargo-audit.json"
-          node ../../scripts/check-dependency-audits.mjs cargo "$RUNNER_TEMP/cargo-audit.json" "$audit_status"
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+
+          report = Path(os.environ["RUNNER_TEMP"]) / 'cargo-audit.json'
+          with report.open("w") as destination:
+              result = subprocess.run(['cargo', 'audit', '--deny', 'warnings', '--json'], stdout=destination)
+          status = result.returncode if result.returncode >= 0 else 128 - result.returncode
+          print(report.read_text(), end="")
+          subprocess.run(["node", '../../scripts/check-dependency-audits.mjs', 'cargo', str(report), str(status)], check=True)
+          PY
       - name: pnpm audit
         shell: bash
         run: |
-          audit_status=0
-          pnpm audit --json > "$RUNNER_TEMP/pnpm-audit.json" || audit_status=$?
-          cat "$RUNNER_TEMP/pnpm-audit.json"
-          node scripts/check-dependency-audits.mjs pnpm "$RUNNER_TEMP/pnpm-audit.json" "$audit_status"
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+
+          report = Path(os.environ["RUNNER_TEMP"]) / 'pnpm-audit.json'
+          with report.open("w") as destination:
+              result = subprocess.run(['pnpm', 'audit', '--json'], stdout=destination)
+          status = result.returncode if result.returncode >= 0 else 128 - result.returncode
+          print(report.read_text(), end="")
+          subprocess.run(["node", 'scripts/check-dependency-audits.mjs', 'pnpm', str(report), str(status)], check=True)
+          PY
       - name: Secret scan
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:

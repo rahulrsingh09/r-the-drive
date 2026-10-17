@@ -39,17 +39,25 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
           INCLUDE_ARM64: ${{ inputs.include_arm64 || false }}
         run: |
-          set -euo pipefail
-          version="$RELEASE_VERSION"
-          if [[ ! "$version" =~ ^[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+$ ]]; then
-            echo "Release tags must use YYYY.MM.PATCH; received $version" >&2
-            exit 1
-          fi
-          git fetch origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "include_arm64=$INCLUDE_ARM64" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          version = os.environ['RELEASE_VERSION']
+          if re.fullmatch(r"[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+", version) is None:
+              raise SystemExit("Invalid calendar release version: " + version)
+
+          subprocess.run(["git", "fetch", "origin", "main"], check=True)
+          subprocess.run(["git", "merge-base", "--is-ancestor", os.environ["GITHUB_SHA"], "origin/main"], check=True)
+
+          source = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).rstrip("\n")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.writelines(f"{key}={value}\n" for key, value in [
+                  ("version", version), ("source_sha", source), ("include_arm64", os.environ["INCLUDE_ARM64"]),
+              ])
+          PY
 
   promote-image:
     if: vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'
@@ -80,36 +88,51 @@ jobs:
           SOURCE_SHA: ${{ needs.validate-tag.outputs.source_sha }}
           INCLUDE_ARM64: ${{ needs.validate-tag.outputs.include_arm64 }}
         run: |
-          set -euo pipefail
-          started=$(date +%s)
-          # Stamp each tested candidate with the release version (one metadata
-          # layer; no rebuild) so the running app reports the real release.
-          stamp() {
-            local arch="$1" candidate="$2"
-            docker buildx imagetools inspect "$candidate" >/dev/null
-            docker buildx build --platform "linux/$arch" --provenance=false --push \
-              --build-arg "BASE_IMAGE=$candidate" \
-              --build-arg "PANDA_BUILD_VERSION=$VERSION" \
-              --tag "$IMAGE:release-$VERSION-$arch" - < compose/Dockerfile.release-stamp
-          }
-          stamp amd64 "$IMAGE:candidate-$SOURCE_SHA-amd64"
-          sources=("$IMAGE:release-$VERSION-amd64")
-          if [[ "$INCLUDE_ARM64" == "true" ]]; then
-            stamp arm64 "$IMAGE:candidate-$SOURCE_SHA-arm64"
-            sources+=("$IMAGE:release-$VERSION-arm64")
-          fi
-          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/release-image-metadata.json" \
-            --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" "${sources[@]}"
-          digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/release-image-metadata.json")
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          platforms=linux/amd64
-          if [[ "$INCLUDE_ARM64" == "true" ]]; then platforms="$platforms, linux/arm64"; fi
-          echo "### Release promotion" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Source commit: \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Platforms: \`$platforms\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Digest: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Promotion: $(( $(date +%s) - started ))s" >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import time
+          from pathlib import Path
+
+          started = int(time.time())
+          image, version, source = (os.environ[key] for key in ("IMAGE", "VERSION", "SOURCE_SHA"))
+          architectures = ["amd64", "arm64"] if os.environ["INCLUDE_ARM64"] == "true" else ["amd64"]
+          candidates = {arch: f"{image}:candidate-{source}-{arch}" for arch in architectures}
+          manifests = []
+          for arch, candidate in candidates.items():
+              subprocess.run(["docker", "buildx", "imagetools", "inspect", candidate], check=True, stdout=subprocess.DEVNULL)
+
+              stamped = f"{image}:release-{version}-{arch}"
+              with Path("compose/Dockerfile.release-stamp").open("rb") as recipe:
+                  subprocess.run([
+                      "docker", "buildx", "build", "--platform", f"linux/{arch}", "--provenance=false", "--push",
+                      "--build-arg", f"BASE_IMAGE={candidate}", "--build-arg", f"PANDA_BUILD_VERSION={version}",
+                      "--tag", stamped, "-",
+                  ], stdin=recipe, check=True)
+              manifests.append(stamped)
+
+          metadata = Path(os.environ["RUNNER_TEMP"]) / 'release-image-metadata.json'
+          tags = ["--tag", f"{image}:{version}", "--tag", f"{image}:latest"]
+          subprocess.run(["docker", "buildx", "imagetools", "create", "--metadata-file", str(metadata), *tags, *manifests], check=True)
+          details = json.loads(metadata.read_text())
+          descriptor = details.get("containerimage.descriptor")
+          digest = descriptor.get("digest") if isinstance(descriptor, dict) else None
+          if digest is None:
+              digest = details.get("containerimage.digest")
+          if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+              raise SystemExit("Promotion did not return an immutable SHA-256 digest")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"digest={digest}\n")
+          platforms = ", ".join(f"linux/{arch}" for arch in architectures)
+          lines = [
+              '### Release promotion', f"- Source commit: `{source}`", f"- Platforms: `{platforms}`",
+              f"- Digest: `{digest}`", f"- Promotion: {int(time.time()) - started}s",
+          ]
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write("\n".join(lines) + "\n")
+          PY
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/panda
@@ -134,13 +157,25 @@ jobs:
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Create ephemeral production environment
         run: |
-          smoke_env="$RUNNER_TEMP/release-smoke.env"
-          cp compose/.env.example "$smoke_env"
-          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=release-smoke-password|' "$smoke_env"
-          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=release-smoke-redis-password|' "$smoke_env"
-          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://release-smoke.example.test|' "$smoke_env"
-          echo "PANDA_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
-          echo "RELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os
+          import re
+          import secrets
+          from pathlib import Path
+
+          destination = Path(os.environ["RUNNER_TEMP"]) / 'release-smoke.env'
+          values = {
+              "POSTGRES_PASSWORD": 'release-smoke-password',
+              "REDIS_PASSWORD": 'release-smoke-redis-password',
+              "ALLOWED_ORIGINS": 'https://release-smoke.example.test',
+          }
+          content = Path("compose/.env.example").read_bytes().decode()
+          pattern = re.compile(r"(POSTGRES_PASSWORD|REDIS_PASSWORD|ALLOWED_ORIGINS)=.*")
+          content = pattern.sub(lambda match: match[1] + "=" + values[match[1]], content)
+          destination.write_bytes((content + "PANDA_SETUP_TOKEN=" + secrets.token_hex(32) + "\n").encode())
+          with Path(os.environ["GITHUB_ENV"]).open("a") as output:
+              output.write('RELEASE_SMOKE_ENV' + "=" + str(destination) + "\n")
+          PY
       - name: Exercise published image-only stack
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$RELEASE_SMOKE_ENV" --image-ref "${{ env.REGISTRY }}/${{ env.OWNER }}/panda@${{ needs.promote-image.outputs.digest }}"
 
@@ -220,11 +255,20 @@ jobs:
           VERSION: ${{ needs.validate-tag.outputs.version }}
           IMAGE_DIGEST: ${{ needs.promote-image.outputs.digest }}
         run: |
-          echo "ghcr.io/your-org/r-the-drive@${IMAGE_DIGEST}" > images.lock
-          cp compose/docker-compose.yml docker-compose.yml
-          cp compose/.env.example example.env
-          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
-          fi
+          python3 - <<'PY'
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          Path("images.lock").write_text("ghcr.io/your-org/r-the-drive@" + os.environ["IMAGE_DIGEST"] + "\n")
+          assets = [("compose/docker-compose.yml", "docker-compose.yml"), ("compose/.env.example", "example.env")]
+          for source, destination in assets:
+              shutil.copyfile(source, destination)
+          version, repository = os.environ["VERSION"], os.environ["GITHUB_REPOSITORY"]
+          arguments = [version, "images.lock#images.lock", "docker-compose.yml#docker-compose.yml", "example.env#example.env", "--repo", repository]
+
+          lookup = subprocess.run(["gh", "release", "view", version, "--repo", repository], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+          operation, options = ("upload", ["--clobber"]) if lookup.returncode == 0 else ("create", ["--title", version, "--generate-notes"])
+          subprocess.run(["gh", "release", operation, *arguments, *options], check=True)
+          PY

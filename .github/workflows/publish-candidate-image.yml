@@ -67,27 +67,18 @@ jobs:
           ref: ${{ needs.resolve.outputs.source_sha }}
       - name: Apply pnpm patch compatibility overlay
         run: |
-          set -euo pipefail
-          dockerfile=compose/Dockerfile
-          compatibility='RUN pnpm config set allowUnusedPatches true --location project'
-          if grep -Fq "$compatibility" "$dockerfile"; then
-            exit 0
-          fi
-          grep -Fq 'RUN pnpm install --frozen-lockfile' "$dockerfile" || {
-            echo "Expected pnpm install seam is missing from $dockerfile" >&2
-            exit 1
-          }
-          python3 - "$dockerfile" <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          import sys
 
-          path = Path(sys.argv[1])
+          path = Path("compose/Dockerfile")
           contents = path.read_text()
-          old = 'RUN pnpm install --frozen-lockfile'
-          new = 'RUN pnpm config set allowUnusedPatches true --location project \\\n              && pnpm install --frozen-lockfile'
-          if contents.count(old) != 1:
-              raise SystemExit(f'Expected exactly one install seam in {path}')
-          path.write_text(contents.replace(old, new))
+          compatibility = "RUN pnpm config set allowUnusedPatches true --location project"
+          if compatibility not in contents:
+              pieces = contents.split("RUN pnpm install --frozen-lockfile")
+              if len(pieces) != 2:
+                  raise SystemExit(f"Expected exactly one install seam in {path}")
+              overlay = compatibility + " \\\n              && pnpm install --frozen-lockfile"
+              path.write_text(overlay.join(pieces))
           PY
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
@@ -148,27 +139,18 @@ jobs:
           ref: ${{ needs.resolve.outputs.source_sha }}
       - name: Apply pnpm patch compatibility overlay
         run: |
-          set -euo pipefail
-          dockerfile=compose/Dockerfile
-          compatibility='RUN pnpm config set allowUnusedPatches true --location project'
-          if grep -Fq "$compatibility" "$dockerfile"; then
-            exit 0
-          fi
-          grep -Fq 'RUN pnpm install --frozen-lockfile' "$dockerfile" || {
-            echo "Expected pnpm install seam is missing from $dockerfile" >&2
-            exit 1
-          }
-          python3 - "$dockerfile" <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          import sys
 
-          path = Path(sys.argv[1])
+          path = Path("compose/Dockerfile")
           contents = path.read_text()
-          old = 'RUN pnpm install --frozen-lockfile'
-          new = 'RUN pnpm config set allowUnusedPatches true --location project \\\n              && pnpm install --frozen-lockfile'
-          if contents.count(old) != 1:
-              raise SystemExit(f'Expected exactly one install seam in {path}')
-          path.write_text(contents.replace(old, new))
+          compatibility = "RUN pnpm config set allowUnusedPatches true --location project"
+          if compatibility not in contents:
+              pieces = contents.split("RUN pnpm install --frozen-lockfile")
+              if len(pieces) != 2:
+                  raise SystemExit(f"Expected exactly one install seam in {path}")
+              overlay = compatibility + " \\\n              && pnpm install --frozen-lockfile"
+              path.write_text(overlay.join(pieces))
           PY
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
@@ -246,37 +228,50 @@ jobs:
           SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
           PLATFORM: ${{ needs.resolve.outputs.platform }}
         run: |
-          set -euo pipefail
-          [[ "$SOURCE_REF" == "dev" ]]
-          current_dev_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/dev" --jq '.object.sha')
-          [[ "$current_dev_sha" == "$SOURCE_SHA" ]] || {
-            echo "The upstream dev branch advanced during candidate promotion; refusing to move :dev." >&2
-            exit 1
-          }
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
 
-          sources=("$IMAGE:candidate-$SOURCE_SHA-amd64")
-          docker buildx imagetools inspect "${sources[0]}" >/dev/null
-          if [[ "$PLATFORM" == "both" ]]; then
-            sources+=("$IMAGE:candidate-$SOURCE_SHA-arm64")
-            docker buildx imagetools inspect "${sources[1]}" >/dev/null
-          fi
-          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/dev-image-metadata.json" \
-            --tag "$IMAGE:dev" "${sources[@]}"
-          digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/dev-image-metadata.json")
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          published_digest=$(docker buildx imagetools inspect "$IMAGE:dev" --format '{{.Manifest.Digest}}')
-          [[ "$published_digest" == "$digest" ]] || {
-            echo "The moving dev tag did not resolve to the promoted immutable digest." >&2
-            exit 1
-          }
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          platforms=linux/amd64
-          [[ "$PLATFORM" == "both" ]] && platforms="$platforms, linux/arm64"
-          echo "### Development image promotion" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Source commit: \`$SOURCE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Platforms: \`$platforms\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Digest: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Tag: \`$IMAGE:dev\`" >> "$GITHUB_STEP_SUMMARY"
+          image, source = os.environ["IMAGE"], os.environ["SOURCE_SHA"]
+          if os.environ["SOURCE_REF"] != "dev":
+              raise SystemExit("Development promotion requires source_ref=dev")
+          current = subprocess.check_output([
+              "gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/heads/dev", "--jq", ".object.sha",
+          ], text=True).rstrip("\n")
+          if current != source:
+              raise SystemExit("The upstream dev branch advanced during candidate promotion; refusing to move :dev.")
+          architectures = ["amd64", "arm64"] if os.environ["PLATFORM"] == "both" else ["amd64"]
+          manifests = [f"{image}:candidate-{source}-{arch}" for arch in architectures]
+          for manifest in manifests:
+              subprocess.run(["docker", "buildx", "imagetools", "inspect", manifest], check=True, stdout=subprocess.DEVNULL)
+          metadata = Path(os.environ["RUNNER_TEMP"]) / "dev-image-metadata.json"
+          subprocess.run([
+              "docker", "buildx", "imagetools", "create", "--metadata-file", str(metadata), "--tag", f"{image}:dev", *manifests,
+          ], check=True)
+          details = json.loads(metadata.read_text())
+          descriptor = details.get("containerimage.descriptor")
+          digest = descriptor.get("digest") if isinstance(descriptor, dict) else None
+          if digest is None:
+              digest = details.get("containerimage.digest")
+          if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+              raise SystemExit("Promotion did not return an immutable SHA-256 digest")
+          published = subprocess.check_output([
+              "docker", "buildx", "imagetools", "inspect", f"{image}:dev", "--format", "{{.Manifest.Digest}}",
+          ], text=True).rstrip("\n")
+          if published != digest:
+              raise SystemExit("The moving dev tag did not resolve to the promoted immutable digest.")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"digest={digest}\n")
+          platforms = ", ".join(f"linux/{arch}" for arch in architectures)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write("\n".join([
+                  "### Development image promotion", f"- Source commit: `{source}`",
+                  f"- Platforms: `{platforms}`", f"- Digest: `{digest}`", f"- Tag: `{image}:dev`",
+              ]) + "\n")
+          PY
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/panda
@@ -296,28 +291,36 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          versions=$(mktemp)
-          gh api --paginate "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/panda/versions?per_page=100" \
-            --jq '.[] | [.created_at, .id, (.metadata.container.tags | join(","))] | @tsv' > "$versions"
-          deleted=0
-          for platform in amd64 arm64; do
-            keep=10
-            [[ "$platform" == "arm64" ]] && keep=3
-            mapfile -t stale_ids < <(
-              awk -F '\t' -v suffix="-$platform" '$3 ~ /^candidate-[0-9a-f]{40}-(amd64|arm64)$/ && $3 ~ suffix "$" { print $1 "\t" $2 }' "$versions" \
-                | sort -r \
-                | tail -n "+$((keep + 1))" \
-                | cut -f2
-            )
-            for id in "${stale_ids[@]}"; do
-              gh api --method DELETE "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/panda/versions/$id"
-              deleted=$((deleted + 1))
-            done
-          done
-          mapfile -t legacy_ids < <(awk -F '\t' '$3 ~ /^[0-9a-f]{7}-dev$/ { print $2 }' "$versions")
-          for id in "${legacy_ids[@]}"; do
-            gh api --method DELETE "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/panda/versions/$id"
-            deleted=$((deleted + 1))
-          done
-          echo "- Stale candidates deleted: $deleted" >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          package = f"/users/{os.environ['GITHUB_REPOSITORY_OWNER']}/packages/container/panda/versions"
+          listing = subprocess.check_output([
+              "gh", "api", "--paginate", package + "?per_page=100",
+              "--jq", '.[] | [.created_at, .id, (.metadata.container.tags | join(","))] | @tsv',
+          ], text=True)
+          candidates = {"amd64": [], "arm64": []}
+          legacy = []
+          for row in listing.splitlines():
+              fields = row.split("\t")
+              if len(fields) < 3:
+                  continue
+              created, version_id, tags = fields[:3]
+              candidate = re.fullmatch(r"candidate-[0-9a-f]{40}-(amd64|arm64)", tags)
+              if candidate:
+                  candidates[candidate[1]].append((created, version_id))
+              elif re.fullmatch(r"[0-9a-f]{7}-dev", tags):
+                  legacy.append(version_id)
+          obsolete = []
+          for arch, limit in [("amd64", 10), ("arm64", 3)]:
+              ordered = sorted(candidates[arch], key=lambda item: "\t".join(item), reverse=True)
+              obsolete.extend(version_id for _, version_id in ordered[limit:])
+          obsolete.extend(legacy)
+          for version_id in obsolete:
+              subprocess.run(["gh", "api", "--method", "DELETE", f"{package}/{version_id}"], check=True)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write(f"- Stale candidates deleted: {len(obsolete)}\n")
+          PY

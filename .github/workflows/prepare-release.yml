@@ -45,15 +45,26 @@ jobs:
         id: version
         shell: bash
         run: |
-          set -euo pipefail
-          month="$(date -u +%Y.%m)"
-          mapfile -t tags < <(git tag --list "${month}.*")
-          version="$(node scripts/next-release-version.mjs --month "$month" "${tags[@]}")"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$version" -m "Release $version"
-          git push origin "$version"
+          python3 - <<'PY'
+          import datetime
+          import os
+          import subprocess
+          from pathlib import Path
+
+          month = datetime.datetime.now(datetime.timezone.utc).strftime("%Y.%m")
+          tags = subprocess.check_output(["git", "tag", "--list", month + ".*"], text=True).splitlines()
+          version = subprocess.check_output(["node", "scripts/next-release-version.mjs", "--month", month, *tags], text=True).rstrip("\n")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"version={version}\n")
+          commands = [
+              ["git", "config", "user.name", "github-actions[bot]"],
+              ["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"],
+              ["git", "tag", "-a", version, "-m", f"Release {version}"],
+              ["git", "push", "origin", version],
+          ]
+          for command in commands:
+              subprocess.run(command, check=True)
+          PY
 
       - name: Dispatch release image workflow
         env:
