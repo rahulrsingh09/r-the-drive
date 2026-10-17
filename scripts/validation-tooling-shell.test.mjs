@@ -197,6 +197,7 @@ test('supervisor creates private custody key, strips gateway token and normalize
     await until(() => existsSync(join(run.root, role + '.tokens')), role + ' did not start');
     assert.equal(readFileSync(join(run.root, role + '.tokens'), 'utf8').trim(), 'unset');
   }
+  await until(() => run.output().includes('source=nginx'), 'nginx diagnostic was not forwarded');
   assert.match(
     run.output(),
     /\[panda\]\[WARN\] source=nginx message="message \\"quoted\\" \\\\ path"/

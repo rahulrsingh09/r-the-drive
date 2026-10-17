@@ -161,8 +161,8 @@ test('release contract rejects mutable promotion, premature tagging and missing 
   edit(
     root,
     '.github/workflows/publish-release-images.yml',
-    'candidate-$SOURCE_SHA-amd64',
-    'latest-amd64'
+    'f"{image}:candidate-{source}-{arch}"',
+    'f"{image}:latest-{arch}"'
   );
   edit(
     root,

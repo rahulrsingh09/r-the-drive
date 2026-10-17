@@ -93,6 +93,7 @@ const sidebars: SidebarsConfig = {
     },
   ],
   developmentSidebar: [
+    'architecture/build-workflow-programs',
     'development',
     {
       type: 'category',

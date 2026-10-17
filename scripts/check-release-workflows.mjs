@@ -4,9 +4,9 @@ import { parse } from 'yaml';
 import { isMain } from './lib/validation-files.mjs';
 
 const promotion = [
-  [/candidate-\$SOURCE_SHA-amd64/, 'must require the exact AMD64 commit candidate'],
-  [/candidate-\$SOURCE_SHA-arm64/, 'must support an optional exact ARM64 candidate'],
-  [/imagetools create --metadata-file/, 'must promote candidates by immutable manifest'],
+  [/(?:candidate-\$SOURCE_SHA-amd64|architectures = \["amd64", "arm64"\][^\n]*else \["amd64"\][\s\S]*?candidates = \{arch: f"\{image\}:candidate-\{source\}-\{arch\}" for arch in architectures\})/, 'must require the exact AMD64 commit candidate'],
+  [/(?:candidate-\$SOURCE_SHA-arm64|architectures = \["amd64", "arm64"\] if os\.environ\["INCLUDE_ARM64"\] == "true" else \["amd64"\][\s\S]*?candidates = \{arch: f"\{image\}:candidate-\{source\}-\{arch\}" for arch in architectures\})/, 'must support an optional exact ARM64 candidate'],
+  [/(?:imagetools create --metadata-file|"imagetools", "create", "--metadata-file", str\(metadata\))/, 'must promote candidates by immutable manifest'],
   [/containerimage\.descriptor.*containerimage\.digest/s, 'must capture the promoted digest'],
   [
     /attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373/,
@@ -55,15 +55,15 @@ const candidateWorkflow = [
     'candidate workflow must retain the requested source ref',
   ],
   [
-    /prune-candidates:[\s\S]*?keep=10[\s\S]*?keep=3/,
+    /prune-candidates:[\s\S]*?(?:keep=10[\s\S]*?keep=3|for arch, limit in \[\("amd64", 10\), \("arm64", 3\)\]:[\s\S]*?ordered\[limit:\])/,
     'candidate workflow must bound AMD64 and ARM64 candidate retention',
   ],
   [
-    /gh api --method DELETE[^\n]*packages\/container\/panda\/versions\/\$id/,
+    /(?:gh api --method DELETE[^\n]*packages\/container\/panda\/versions\/\$id|package = f"\/users\/\{os\.environ\[\x27GITHUB_REPOSITORY_OWNER\x27\]\}\/packages\/container\/panda\/versions"[\s\S]*?\["gh", "api", "--method", "DELETE", f"\{package\}\/\{version_id\}"\])/,
     'candidate workflow must delete stale candidate versions by exact package version ID',
   ],
   [
-    /\^\[0-9a-f\]\{7\}-dev\$/,
+    /(?:\^\[0-9a-f\]\{7\}-dev\$|re\.fullmatch\(r"\[0-9a-f\]\{7\}-dev", tags\))/,
     'candidate workflow must remove orphaned legacy dev candidates without matching the moving dev tag',
   ],
 ];
@@ -86,19 +86,19 @@ const devPromotion = [
   ],
   [/git\/ref\/heads\/dev.*object\.sha/s, 'dev promotion must reread the current upstream dev SHA'],
   [
-    /current_dev_sha.*SOURCE_SHA/s,
+    /(?:current_dev_sha.*SOURCE_SHA|source = os\.environ\["IMAGE"\], os\.environ\["SOURCE_SHA"\][\s\S]*?current = subprocess\.check_output\([\s\S]*?if current != source:[\s\S]*?raise SystemExit)/s,
     'dev promotion must compare the upstream dev SHA to the built source',
   ],
   [
-    /imagetools create --metadata-file[\s\S]*--tag "\$IMAGE:dev"/,
+    /(?:imagetools create --metadata-file[\s\S]*--tag "\$IMAGE:dev"|"imagetools", "create", "--metadata-file", str\(metadata\), "--tag", f"\{image\}:dev", \*manifests)/,
     'dev promotion must retag candidates without rebuilding',
   ],
   [
-    /imagetools inspect "\$IMAGE:dev" --format.*Manifest\.Digest/s,
+    /(?:imagetools inspect "\$IMAGE:dev" --format.*Manifest\.Digest|"imagetools", "inspect", f"\{image\}:dev", "--format", "\{\{\.Manifest\.Digest\}\}")/s,
     'dev promotion must verify the mutable tag digest',
   ],
   [
-    /published_digest.*digest/s,
+    /(?:published_digest.*digest|if published != digest:[\s\S]*?raise SystemExit)/s,
     'dev promotion must compare the published digest to the promoted digest',
   ],
   [
@@ -145,7 +145,7 @@ const fileContracts = {
       /PANDA_ENV:\s*development/,
       'runtime workflow must explicitly classify its local dependency stack as development',
     ],
-    [/cargo run --bin panda-api/, 'runtime workflow must select the API binary explicitly'],
+    [/(?:cargo run --bin panda-api|\["cargo", "run", "--bin", "panda-api"\])/, 'runtime workflow must select the API binary explicitly'],
     [
       /imagetools inspect "ghcr\.io\/your-org\/r-the-drive:candidate-\$\{GITHUB_SHA\}-amd64"/,
       'runtime workflow must verify the exact AMD64 commit candidate',
@@ -275,15 +275,15 @@ export function releaseWorkflowFailures(root) {
         1,
       ],
       [
-        /contents\.count\(old\) != 1/g,
+        /(?:contents\.count\(old\) != 1|len\(pieces\) != 2)/g,
         `${name} must require exactly one historical install seam`,
         1,
       ],
     ]);
     before(
       job,
-      'if grep -Fq "$compatibility"',
-      "grep -Fq 'RUN pnpm install --frozen-lockfile'",
+      job.includes('if compatibility not in contents:') ? 'if compatibility not in contents:' : 'if grep -Fq "$compatibility"',
+      job.includes('pieces = contents.split(') ? 'pieces = contents.split("RUN pnpm install --frozen-lockfile")' : "grep -Fq 'RUN pnpm install --frozen-lockfile'",
       `${name} must check compatibility before the historical install seam`
     );
   }
@@ -307,13 +307,13 @@ export function releaseWorkflowFailures(root) {
       stable
         ? [
             [
-              /--tag "\$IMAGE:\$VERSION" --tag "\$IMAGE:latest"/,
+              /(?:--tag "\$IMAGE:\$VERSION" --tag "\$IMAGE:latest"|tags = \["--tag", f"\{image\}:\{version\}", "--tag", f"\{image\}:latest"\])/,
               'stable promotion must publish version and latest tags',
             ],
           ]
         : [
             [
-              /--tag "\$IMAGE:\$VERSION" "\$\{sources\[@\]\}"/,
+              /(?:--tag "\$IMAGE:\$VERSION" "\$\{sources\[@\]\}"|tags = \["--tag", f"\{image\}:\{version\}"\][\s\S]*?\*tags, \*manifests)/,
               'preview promotion must publish only the version tag',
             ],
           ],
@@ -324,7 +324,7 @@ export function releaseWorkflowFailures(root) {
       stable
         ? [
             [
-              /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/,
+              /(?:git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main|\["git", "merge-base", "--is-ancestor", os\.environ\["GITHUB_SHA"\], "origin\/main"\], check=True)/,
               'must retain main ancestry validation',
             ],
           ]
@@ -363,7 +363,7 @@ export function releaseWorkflowFailures(root) {
   before(
     read('.github/workflows/prepare-release.yml'),
     'docker buildx imagetools inspect "$candidate"',
-    'git push origin "$version"',
+    read('.github/workflows/prepare-release.yml').includes('["git", "push", "origin", version]') ? '["git", "push", "origin", version]' : 'git push origin "$version"',
     'prepare-release.yml must verify the exact main candidate before pushing its release tag'
   );
   forbid(
