@@ -1,13 +1,14 @@
+import { formatWidgetChargeTime } from '../widgetLifecycle';
 import React from 'react';
 import { Zap } from 'lucide-react';
-import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@panda/hooks';
+import { AuthenticatedVehicleArtwork, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@panda/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@panda/ui/lib/utils';
 import { isVehicleCharging } from '@panda/types';
 import type { VehicleStatus } from '@panda/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
-import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
+import { chargingArtwork, chargeGauge } from './vehiclePresentation';
 
 type ChargingCropFamily = 'R1T' | 'R1S' | 'default';
 
@@ -78,17 +79,8 @@ function ChargingConnectionWidget({
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
   const isDemoVehicle = activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false;
-  const rivianChargingSideLight =
-    findSideChargingImage(activeVehicle?.images?.all, 'light') ??
-    findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');
-  const rivianChargingSideDark =
-    findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
-    findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
-    rivianChargingSideLight;
   const cropFamily = chargingCropFamily(activeVehicle?.model);
-  const fallbackChargingSource = getVehicleArtworkFallback(activeVehicle?.model, 'charging');
-  const chargingSideLight = isDemoVehicle ? null : rivianChargingSideLight;
-  const chargingSideDark = isDemoVehicle ? null : rivianChargingSideDark;
+  const { fallback: fallbackChargingSource, light: chargingSideLight, dark: chargingSideDark } = chargingArtwork(activeVehicle?.images, activeVehicle?.model, isDemoVehicle);
   const imageMode = 'side-charging';
   const displaySideLight = chargingSideLight ?? fallbackChargingSource;
   const displaySideDark = chargingSideDark ?? fallbackChargingSource;
@@ -184,8 +176,7 @@ function ChargingBatteryLedBar({
   level: number | null | undefined;
   charging: boolean;
 }) {
-  const normalizedLevel = Math.max(0, Math.min(100, level ?? 0));
-  const activeSegments = Math.round(normalizedLevel / 5);
+  const { level: normalizedLevel, segments } = chargeGauge(level);
   const segmentCount = 20;
   const segmentGapPx = 2;
   const segmentWidth = `calc((100% - ${segmentGapPx * (segmentCount - 1)}px) / ${segmentCount})`;
@@ -215,8 +206,7 @@ function ChargingBatteryLedBar({
           data-testid="charging-battery-led-segments"
           style={segmentGridStyle}
         >
-          {Array.from({ length: 20 }, (_, index) => {
-            const filled = index < activeSegments;
+          {segments.map(({ index, filled }) => {
             return (
               <span
                 key={index}
@@ -325,12 +315,7 @@ function chargingCropFamily(model: string | null | undefined): ChargingCropFamil
 }
 
 function formatTimeToFull(minutes: number | null | undefined) {
-  if (minutes === null || minutes === undefined || minutes <= 0) return '-';
-  const hours = Math.floor(minutes / 60);
-  const mins = Math.round(minutes % 60);
-  if (hours === 0) return `${mins}m`;
-  if (mins === 0) return `${hours}h`;
-  return `${hours}h ${mins}m`;
+  return formatWidgetChargeTime(minutes, '-');
 }
 
 function formatMaybePercent(value: number | null | undefined, digits: number) {

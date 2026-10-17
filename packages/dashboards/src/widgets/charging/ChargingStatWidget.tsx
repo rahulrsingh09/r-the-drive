@@ -27,16 +27,27 @@ interface ChargingStatDefinition {
   title: string;
   icon: string;
   accentBorder?: boolean;
-  getValue: (summary: ChargingSummarySnapshot) => string;
-  getSecondary?: (summary: ChargingSummarySnapshot) => string | undefined;
+
 }
 
-function fmt(value: number | null | undefined, fn: (v: number) => string): string {
-  return value == null ? '—' : fn(value);
-}
-
-function fmtKw(value: number | null | undefined): string {
-  return value == null ? '—' : `${formatNumber(value, 1)} kW`;
+function chargingReadout(id: string, summary: ChargingSummarySnapshot) {
+  const fields: Record<string, [number | null, 'count' | 'energy' | 'cost' | 'percent' | 'power', number]> = {
+    sessions: [summary.session_count, 'count', 0], total_energy: [summary.total_energy_kwh, 'energy', 0],
+    total_cost: [summary.total_cost_usd, 'cost', 0], charging_cycles: [summary.charging_cycles, 'count', 0],
+    charge_efficiency: [summary.charging_efficiency_pct, 'percent', 1], max_charge_rate: [summary.max_charge_rate_kw, 'power', 1],
+    max_charge_limit: [summary.max_charge_limit_pct, 'percent', 0],
+  };
+  const energy = (value: number | null) => value == null ? '—' : formatKwh(value);
+  const totalLocation = (summary.home_kwh ?? 0) + (summary.away_kwh ?? 0) + (summary.unknown_location_kwh ?? 0);
+  fields.avg_session = [summary.session_count && summary.total_energy_kwh != null ? summary.total_energy_kwh / summary.session_count : null, 'energy', 0];
+  fields.home_share = [totalLocation ? (summary.home_kwh ?? 0) / totalLocation * 100 : null, 'percent', 0];
+  fields.dc_share = [summary.total_energy_kwh ? (summary.dc_kwh ?? 0) / summary.total_energy_kwh * 100 : null, 'percent', 0];
+  const [number, kind, digits] = fields[id]!;
+  const formatters = { count: formatNumber, energy: formatKwh, cost: formatCurrency, percent: formatPercent, power: (value: number) => `${formatNumber(value, 1)} kW` };
+  return {
+    value: number == null && id !== 'sessions' ? '—' : formatters[kind](number as number, digits),
+    secondary: id === 'home_share' ? `Home ${energy(summary.home_kwh)} / Away ${energy((summary.away_kwh ?? 0) + (summary.unknown_location_kwh ?? 0))}` : id === 'dc_share' ? `AC ${energy(summary.ac_kwh)} / DC ${energy(summary.dc_kwh)}` : undefined,
+  };
 }
 
 const CHARGING_STAT_DEFINITIONS: ChargingStatDefinition[] = [
@@ -44,77 +55,52 @@ const CHARGING_STAT_DEFINITIONS: ChargingStatDefinition[] = [
     id: 'sessions',
     title: 'Sessions',
     icon: 'lucide:calendar-days',
-    getValue: (s) => formatNumber(s.session_count, 0),
   },
   {
     id: 'total_energy',
     title: 'Total Energy',
     icon: 'lucide:bolt',
     accentBorder: true,
-    getValue: (s) => fmt(s.total_energy_kwh, formatKwh),
   },
   {
     id: 'total_cost',
     title: 'Total Cost',
     icon: 'lucide:dollar-sign',
-    getValue: (s) => fmt(s.total_cost_usd, formatCurrency),
   },
   {
     id: 'avg_session',
     title: 'Avg / Session',
     icon: 'lucide:zap',
-    getValue: (s) => {
-      if (!s.session_count || s.total_energy_kwh == null) return '—';
-      return formatKwh(s.total_energy_kwh / s.session_count);
-    },
   },
   {
     id: 'charging_cycles',
     title: 'Charging Cycles',
     icon: 'lucide:refresh-ccw',
-    getValue: (s) => fmt(s.charging_cycles, (v) => formatNumber(v, 0)),
   },
   {
     id: 'charge_efficiency',
     title: 'Charge Efficiency',
     icon: 'lucide:activity',
-    getValue: (s) => fmt(s.charging_efficiency_pct, (v) => formatPercent(v, 1)),
   },
   {
     id: 'max_charge_rate',
     title: 'Max Charge Rate',
     icon: 'lucide:gauge',
-    getValue: (s) => fmtKw(s.max_charge_rate_kw),
   },
   {
     id: 'max_charge_limit',
     title: 'Max Charge Limit',
     icon: 'lucide:battery',
-    getValue: (s) => fmt(s.max_charge_limit_pct, (v) => formatPercent(v, 0)),
   },
   {
     id: 'home_share',
     title: 'Home Charging',
     icon: 'lucide:home',
-    getValue: (s) => {
-      const knownEnergy = (s.home_kwh ?? 0) + (s.away_kwh ?? 0) + (s.unknown_location_kwh ?? 0);
-      if (!knownEnergy) return '—';
-      return formatPercent(((s.home_kwh ?? 0) / knownEnergy) * 100, 0);
-    },
-    getSecondary: (s) =>
-      `Home ${fmt(s.home_kwh, formatKwh)} / Away ${fmt((s.away_kwh ?? 0) + (s.unknown_location_kwh ?? 0), formatKwh)}`,
   },
   {
     id: 'dc_share',
     title: 'DC Fast Charging',
     icon: 'lucide:plug-zap',
-    getValue: (s) => {
-      const total = s.total_energy_kwh;
-      if (!total) return '—';
-      return formatPercent(((s.dc_kwh ?? 0) / total) * 100, 0);
-    },
-    getSecondary: (s) =>
-      `AC ${fmt(s.ac_kwh, formatKwh)} / DC ${fmt(s.dc_kwh, formatKwh)}`,
   },
 ];
 
@@ -143,9 +129,8 @@ export function ChargingStatWidget({ instance, ctx }: { instance: WidgetInstance
     );
   }
 
-  const snap = summary as ChargingSummarySnapshot | undefined;
-  const value = isLoading ? '…' : (snap ? definition.getValue(snap) : '—');
-  const secondary = !isLoading && snap ? definition.getSecondary?.(snap) : undefined;
+  const { value, secondary } = isLoading ? { value: '…', secondary: undefined }
+    : summary ? chargingReadout(definition.id, summary as ChargingSummarySnapshot) : { value: '—', secondary: undefined };
 
   return (
     <Card

@@ -49,70 +49,41 @@ function isFiniteNumber(value: number | null | undefined): value is number {
 export function buildPhantomDrainDailySeries(
   periods: PhantomDrainPeriod[]
 ): PhantomDrainDailyPoint[] {
-  const byDay = new Map<string, PhantomDrainDailyPoint>();
-
-  for (const period of periods) {
-    if (period.validation_status !== 'validated') continue;
-    const start = period.period_start ? new Date(period.period_start) : null;
-    const end = period.period_end ? new Date(period.period_end) : null;
-    const socLost = period.soc_lost_pct;
-    if (
-      !start ||
-      !end ||
-      !Number.isFinite(start.getTime()) ||
-      !Number.isFinite(end.getTime()) ||
-      !isFiniteNumber(socLost) ||
-      end <= start
-    ) {
-      continue;
-    }
-
-    const totalMilliseconds = end.getTime() - start.getTime();
-    let cursor = new Date(start);
-    while (cursor < end) {
-      const nextDay = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
-      const segmentEnd = nextDay < end ? nextDay : end;
-      const segmentMilliseconds = segmentEnd.getTime() - cursor.getTime();
-      if (segmentMilliseconds <= 0) break;
-
-      const dayStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
-      const key = dayStart.toISOString();
-      const segmentHours = segmentMilliseconds / (60 * 60 * 1000);
-      const segmentLoss = socLost * (segmentMilliseconds / totalMilliseconds);
-      const current = byDay.get(key) ?? {
-        ts: key,
-        drainRate: 0,
-        socLost: 0,
-        parkedHours: 0,
-        periodCount: 0,
-        sessions: [],
-      };
-
-      current.socLost += segmentLoss;
-      current.parkedHours += segmentHours;
-      current.periodCount += 1;
-      current.sessions.push({
-        socLost: segmentLoss,
-        parkedHours: segmentHours,
-        drainRate: segmentHours > 0 ? segmentLoss / segmentHours : 0,
-        startedAt: period.period_start ?? cursor.toISOString(),
-      });
-      byDay.set(key, current);
-      cursor = segmentEnd;
+  const intervals = periods.flatMap((period, order) => {
+    const start = period.period_start ? Date.parse(period.period_start) : NaN;
+    const end = period.period_end ? Date.parse(period.period_end) : NaN;
+    if (period.validation_status !== 'validated' || !Number.isFinite(start) || !Number.isFinite(end) || !isFiniteNumber(period.soc_lost_pct) || end <= start) return [];
+    return [{ start, end, loss: period.soc_lost_pct, startedAt: period.period_start!, order }];
+  });
+  const days = new Map<number, number>();
+  for (const interval of intervals) {
+    const date = new Date(interval.start);
+    let day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    while (day.getTime() < interval.end) {
+      const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+      days.set(day.getTime(), next.getTime()); day = next;
     }
   }
-
-  return [...byDay.values()]
-    .map((point) => ({
-      ...point,
-      drainRate: point.parkedHours > 0 ? point.socLost / point.parkedHours : 0,
-    }))
-    .filter((point) => Number.isFinite(point.drainRate))
-    .sort((a, b) => a.ts.localeCompare(b.ts))
-    .map((point) => ({
-      ...point,
-      sessions: point.sessions.sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
-    }));
+  const byStart = intervals.slice().sort((a, b) => a.start - b.start);
+  const active = new Set<(typeof intervals)[number]>();
+  let next = 0;
+  const result: PhantomDrainDailyPoint[] = [];
+  for (const [start, end] of [...days].sort((a, b) => a[0] - b[0])) {
+    while (next < byStart.length && byStart[next]!.start < end) active.add(byStart[next++]!);
+    active.forEach((interval) => { if (interval.end <= start) active.delete(interval); });
+    const point: PhantomDrainDailyPoint = { ts: new Date(start).toISOString(), drainRate: 0, socLost: 0, parkedHours: 0, periodCount: 0, sessions: [] };
+    for (const interval of [...active].sort((a, b) => a.order - b.order)) {
+      const duration = Math.min(end, interval.end) - Math.max(start, interval.start);
+      if (duration <= 0) continue;
+      const parkedHours = duration / 3600000, socLost = interval.loss * (duration / (interval.end - interval.start));
+      point.socLost += socLost; point.parkedHours += parkedHours; point.periodCount++;
+      point.sessions.push({ socLost, parkedHours, drainRate: parkedHours > 0 ? socLost / parkedHours : 0, startedAt: interval.startedAt });
+    }
+    point.drainRate = point.parkedHours > 0 ? point.socLost / point.parkedHours : 0;
+    point.sessions.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    if (Number.isFinite(point.drainRate)) result.push(point);
+  }
+  return result.sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
 function withDailyHeadroom(maximum: number) {
@@ -132,19 +103,15 @@ export function PhantomDrainChart({
   seriesColor,
 }: PhantomDrainChartProps) {
   const data = React.useMemo(() => buildPhantomDrainDailySeries(periods), [periods]);
-  const dailyXRange = React.useMemo<[number, number] | undefined>(() => {
-    if (!data.length) return undefined;
-    return [Date.parse(data[0]!.ts) / 1000 - 43200, Date.parse(data[data.length - 1]!.ts) / 1000 + 43200];
-  }, [data]);
-  const dailyYRange = React.useMemo<[number, number] | undefined>(() => {
-    if (yRange) return yRange;
-    const maximum = Math.max(0, ...data.map((point) => point.socLost));
-    return maximum > 0 ? [0, withDailyHeadroom(maximum)] : undefined;
+  const { dailyXRange, dailyYRange, sessionCount } = React.useMemo(() => {
+    let maximum = 0, sessionCount = 0;
+    for (const point of data) { maximum = Math.max(maximum, point.socLost); sessionCount = Math.max(sessionCount, point.sessions.length); }
+    return {
+      dailyXRange: data.length ? [Date.parse(data[0]!.ts) / 1000 - 43200, Date.parse(data.at(-1)!.ts) / 1000 + 43200] as [number, number] : undefined,
+      dailyYRange: yRange ?? (maximum > 0 ? [0, withDailyHeadroom(maximum)] as [number, number] : undefined),
+      sessionCount,
+    };
   }, [data, yRange]);
-  const sessionCount = React.useMemo(
-    () => Math.max(0, ...data.map((point) => point.sessions.length)),
-    [data]
-  );
   const sessionSeries = Array.from({ length: sessionCount }, (_, sessionIndex) => ({
     key: `phantom-drain-session-${sessionIndex}`,
     label: `Drain session ${sessionIndex + 1}`,

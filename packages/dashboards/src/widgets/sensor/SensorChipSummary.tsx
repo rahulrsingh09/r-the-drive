@@ -52,14 +52,18 @@ export function SensorChipSummary({
   historyTimeFilter,
 }: SensorChipSummaryProps) {
   const palette = useDocumentPalette();
-  const metricColor = getChartColor(palette === 'rad' && dataAccent ? dataAccent : 'accent');
+  const automaticColor = palette === 'rad' && dataAccent ? dataAccent : 'accent';
+  const metricColor = getChartColor(automaticColor);
   const isDark = useDocumentTheme();
   const metricValueColor = resolveSensorValueColor(
     undefined,
-    palette === 'rad' && dataAccent ? dataAccent : 'accent',
+    automaticColor,
     metricColor,
     isDark,
   );
+  const tone = valueTone && { success: 'text-status-positive', warning: 'text-status-warning', danger: 'text-status-danger', info: 'text-status-info', neutral: undefined }[valueTone];
+  const iconTone = tone ?? (dataAccent ? 'text-fg' : 'text-accent');
+  const numberTone = tone ?? (valueColor === 'accent' ? 'text-accent' : 'text-fg');
   const resolvedHistoryColor = historyColor ?? metricColor ?? CHART_COLORS.accent;
   return (
     <Card
@@ -112,15 +116,7 @@ export function SensorChipSummary({
             icon={resolveIconId(icon)}
             className={cn(
               'h-4 w-4 shrink-0',
-              valueTone === 'success'
-                ? 'text-status-positive'
-                : valueTone === 'warning'
-                  ? 'text-status-warning'
-                  : valueTone === 'danger'
-                    ? 'text-status-danger'
-                    : valueTone === 'info'
-                      ? 'text-status-info'
-                      : dataAccent ? 'text-fg' : 'text-accent'
+              iconTone
             )}
             style={dataAccent && !valueTone ? { color: metricColor } : undefined}
           />
@@ -130,19 +126,7 @@ export function SensorChipSummary({
           <span
             className={cn(
               'font-mono font-semibold tabular-nums tracking-tight',
-              valueTone === 'success'
-                ? 'text-status-positive'
-                : valueTone === 'warning'
-                  ? 'text-status-warning'
-                  : valueTone === 'danger'
-                    ? 'text-status-danger'
-                    : valueTone === 'info'
-                      ? 'text-status-info'
-                      : valueColor === 'data'
-                        ? 'text-fg'
-                        : valueColor === 'accent'
-                          ? 'text-accent'
-                          : 'text-fg',
+              numberTone,
               valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
             )}
             style={{ textShadow: 'var(--rm-value-halo)', ...(valueColor === 'data' && !valueTone ? { color: metricValueColor } : {}) }}

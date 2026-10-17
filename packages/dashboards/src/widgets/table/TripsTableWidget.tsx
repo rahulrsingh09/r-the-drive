@@ -1,35 +1,27 @@
+import { pageNavigation, TABLE_PAGE_OPTIONS, TABLE_PAGE_SIZES, tripBatchActions } from './tableControls';
+import { useTripTagBatch } from './useTripTagBatch';
+import { projectMapRoutes, tripTagBatch, tripPresentation } from './tableProjection';
+import { useWidgetMediaQuery } from '../widgetLifecycle';
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Eraser, Moon, Plus, Save, Sun } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments, useUserPreferences } from '@panda/hooks';
+import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUserPreferences } from '@panda/hooks';
 import { useDocumentTheme } from '@panda/ui/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@panda/ui/tables';
 import { Badge, Button, SelectPicker, Tooltip } from '@panda/ui/primitives';
-import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@panda/ui/charts';
-import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '@panda/ui/lib/utils';
-import { formatDriveMode, getDriveModeBadgeClass } from '@panda/ui/lib/driveMode';
-import { formatAppDateTime } from '@panda/ui/lib/dateTime';
+import { TripMapChart, type MapStyleMode } from '@panda/ui/charts';
+import { formatMiles, formatDuration } from '@panda/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
-import { deriveCommonTagIds, TripTagBadges, TripTagPicker } from './TripTagPicker';
+import { TripTagBadges, TripTagPicker } from './TripTagPicker';
 import { TripRouteKey } from './TripRouteKey';
 
 function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState(() =>
-    typeof window !== 'undefined' && window.innerWidth < 640
-  );
-  React.useEffect(() => {
-    const mq = window.matchMedia('(max-width: 639px)');
-    setIsMobile(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-  return isMobile;
+  return useWidgetMediaQuery('(max-width: 639px)', 640);
 }
 
 function TripCard({
@@ -43,8 +35,8 @@ function TripCard({
   onClick: () => void;
   onInfoClick: () => void;
 }) {
-  const startLabel = trip.start_place ?? trip.start_address;
-  const endLabel   = trip.end_place   ?? trip.end_address;
+  const model = tripPresentation(trip);
+  const { start: startLabel, end: endLabel } = model;
 
   return (
     <div
@@ -65,11 +57,11 @@ function TripCard({
       <button type="button" onClick={onClick} className="w-full text-left pr-9">
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <span className="text-xs text-fg-tertiary">
-          {formatAppDateTime(trip.started_at)}
+          {model.date}
         </span>
-        {trip.drive_mode && (
-          <Badge size="sm" className={getDriveModeBadgeClass(trip.drive_mode)}>
-            {formatDriveMode(trip.drive_mode)}
+        {trip.drive_mode && model.mode && (
+          <Badge size="sm" className={model.mode.className}>
+            {model.mode.label}
           </Badge>
         )}
       </div>
@@ -84,15 +76,15 @@ function TripCard({
         <span className="font-mono font-medium text-fg">{formatMiles(trip.distance_mi)}</span>
         <span className="text-fg-tertiary">·</span>
         <span>{formatDuration(trip.duration_min)}</span>
-        {trip.efficiency_wh_mi != null && (
+        {model.efficiency !== undefined && (
           <>
             <span className="text-fg-tertiary">·</span>
-            <span className="font-mono">{formatEfficiency(trip.efficiency_wh_mi)}</span>
+            <span className="font-mono">{model.efficiency}</span>
           </>
         )}
-        {trip.soc_start != null && trip.soc_end != null && (
+        {model.soc && (
           <span className="ml-auto font-mono text-fg-tertiary">
-            {formatPercent(trip.soc_start)} <PiArrowFatLinesRight className="inline h-3 w-3" /> {formatPercent(trip.soc_end)}
+            {model.soc[0]} <PiArrowFatLinesRight className="inline h-3 w-3" /> {model.soc[1]}
           </span>
         )}
       </div>
@@ -116,7 +108,7 @@ import {
   useTripTableState,
 } from './tripTableStateStore';
 
-const ROWS_PER_PAGE_OPTIONS = [15, 25, 50, 100] as const;
+const BATCH_ACTION_ICONS = { clear: Eraser, add: Plus, save: Save };
 
 export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const navigate = useNavigate();
@@ -130,14 +122,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const effectiveMapStyle: MapStyleMode = mapStyleOverride ?? mapStyle;
   const deferredSearch = React.useDeferredValue(search);
   const mapQuery = useTripMapRoutes(ctx.vehicleId, ctx.from, ctx.to, deferredSearch, ctx.tripTagFilter);
-  const routes = React.useMemo(
-    () => (mapQuery.data?.routes ?? []).map((route) => ({
-      id: route.trip_id,
-      track: route.coordinates.map(([lng, lat]) => ({ lat, lng })),
-    }) satisfies TripMapRoute),
-    [mapQuery.data],
-  );
-  const routeIds = React.useMemo(() => new Set(routes.map((route) => route.id)), [routes]);
+  const { routes, selectedRouteIds, key: routeKey } = React.useMemo(() => projectMapRoutes(mapQuery.data?.routes ?? [], selectedIds), [mapQuery.data, selectedIds]);
   const { ref, height } = useMeasuredWidgetHeight(360, 1);
   const basemap = useBasemapConfig();
   const userPreferences = useUserPreferences();
@@ -148,10 +133,6 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
     setHighlightedRouteId(null);
   }, [ctx.vehicleId, ctx.from, ctx.to]);
 
-  const selectedRouteIds = React.useMemo(
-    () => selectedIds.filter((id) => routeIds.has(id)),
-    [selectedIds, routeIds],
-  );
   const selectedTripId = selectedRouteIds[0];
 
   return (
@@ -190,7 +171,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       </div>
 
       <TripRouteKey
-        routes={routes.flatMap((route, index) => selectedRouteIds.includes(route.id) ? [{ id: route.id, index }] : [])}
+        routes={routeKey}
         trips={tripRegistry}
         highlightedId={highlightedRouteId}
         onHighlight={setHighlightedRouteId}
@@ -237,17 +218,16 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const { page, pageSize, search } = useTripTableState();
   const deferredSearch = React.useDeferredValue(search);
   const { selectedIds, tripRegistry } = useTripSelection();
-  const [batchTagIds, setBatchTagIds] = React.useState<string[]>([]);
-  const [pendingBatchAction, setPendingBatchAction] = React.useState<'clear' | 'add' | 'save' | null>(null);
+  const { tags: batchTagIds, pending: pendingBatchAction, stage: setBatchTagIds, run: runBatchTagAction, updateAssignments } = useTripTagBatch(ctx.vehicleId, selectedIds);
   const isMobile = useIsMobile();
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim(), ctx.tripTagFilter);
-  const updateAssignments = useUpdateTripTagAssignments(ctx.vehicleId);
   const placesQuery = useQuery({
     queryKey: ['places'],
     queryFn: () => api.listPlaces(),
     staleTime: 5 * 60 * 1000,
   });
-  const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const paginationState = pageNavigation(page, data);
+  const selectedSet = new Set(selectedIds);
   const trips = (data?.items ?? []) as TripRow[];
   const hasVisibleTags = trips.some((trip) => (trip.tags?.length ?? 0) > 0);
   const columns = React.useMemo(
@@ -264,35 +244,8 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
     resetTripTableState(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
   }, [ctx.from, ctx.to, ctx.vehicleId]);
 
-  const selectedTrips = React.useMemo(
-    () => selectedIds
-      .map((id) => tripRegistry[id] ?? trips.find((trip) => trip.id === id))
-      .filter((trip): trip is TripRow => Boolean(trip)),
-    [selectedIds, tripRegistry, trips],
-  );
-  const allSelectedTripsLoaded = selectedTrips.length === selectedIds.length;
-  const commonTagIds = React.useMemo(() => allSelectedTripsLoaded ? deriveCommonTagIds(selectedTrips) : [], [allSelectedTripsLoaded, selectedTrips]);
-  const hasMixedTags = allSelectedTripsLoaded && selectedTrips.length > 1 && selectedTrips.some((trip) => {
-    const ids = new Set((trip.tags ?? []).map((tag) => tag.id));
-    return ids.size !== commonTagIds.length || commonTagIds.some((id) => !ids.has(id));
-  });
-  const stagedAddTagIds = React.useMemo(
-    () => batchTagIds.filter((id) => !commonTagIds.includes(id)),
-    [batchTagIds, commonTagIds],
-  );
-
-  const runBatchTagAction = React.useCallback(async (action: 'clear' | 'add' | 'save', mode: 'add' | 'replace', tagIds: string[]) => {
-    setPendingBatchAction(action);
-    try {
-      await updateAssignments.mutateAsync({ trip_ids: selectedIds, tag_ids: tagIds, mode });
-      setBatchTagIds([]);
-      clearTripSelection();
-    } catch {
-      // The mutation's error state is rendered below while keeping the staged selection intact.
-    } finally {
-      setPendingBatchAction(null);
-    }
-  }, [selectedIds, updateAssignments]);
+  const { commonTagIds, hasMixedTags } = React.useMemo(() => tripTagBatch(selectedIds, tripRegistry, trips), [selectedIds, tripRegistry, trips]);
+  const batchActions = tripBatchActions(selectedIds.length, batchTagIds, commonTagIds, pendingBatchAction, updateAssignments.isPending);
 
   React.useEffect(() => {
     setBatchTagIds(commonTagIds);
@@ -305,19 +258,19 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const pagination = data ? (
     <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
       <p className="text-xs text-fg-tertiary">
-        Page {page} of {Math.max(totalPages, 1)} · {data.total} trip{data.total === 1 ? '' : 's'}
+        Page {page} of {paginationState.pages} · {data.total} trip{data.total === 1 ? '' : 's'}
       </p>
       <div className="flex gap-2">
         <button
-          disabled={page <= 1}
-          onClick={() => setTripTablePage(page - 1)}
+          disabled={paginationState.previous.disabled}
+          onClick={() => setTripTablePage(paginationState.previous.page)}
           className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Prev
         </button>
         <button
-          disabled={page >= totalPages || totalPages <= 1}
-          onClick={() => setTripTablePage(page + 1)}
+          disabled={paginationState.next.disabled}
+          onClick={() => setTripTablePage(paginationState.next.page)}
           className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Next
@@ -356,13 +309,13 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
                 value={String(pageSize)}
                 onChange={(value) => {
                   const next = Number(value);
-                  if (ROWS_PER_PAGE_OPTIONS.includes(next as (typeof ROWS_PER_PAGE_OPTIONS)[number])) {
+                  if (TABLE_PAGE_SIZES.includes(next as (typeof TABLE_PAGE_SIZES)[number])) {
                     setTripTablePageSize(next);
                   }
                 }}
                 aria-label="Trips per page"
                 size="md"
-                options={ROWS_PER_PAGE_OPTIONS.map((option) => ({ value: String(option), label: String(option) }))}
+                options={TABLE_PAGE_OPTIONS}
               />
             </label>
           )}
@@ -384,27 +337,26 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
                 disabled={updateAssignments.isPending}
               />
             </div>
-            {[
-              { key: 'clear' as const, label: `Clear tags from ${selectedIds.length} selected trips`, tooltip: 'Clear all tags from selected trips', icon: <Eraser className="h-4 w-4" />, tagIds: [], mode: 'replace' as const, disabled: false },
-              { key: 'add' as const, label: `Add staged tags to ${selectedIds.length} selected trips`, tooltip: 'Add staged tags without overwriting existing tags', icon: <Plus className="h-4 w-4" />, tagIds: stagedAddTagIds, mode: 'add' as const, disabled: stagedAddTagIds.length === 0 },
-              { key: 'save' as const, label: `Replace tags on ${selectedIds.length} selected trips`, tooltip: 'Replace all selected-trip tags with the staged tags', icon: <Save className="h-4 w-4" />, tagIds: batchTagIds, mode: 'replace' as const, disabled: batchTagIds.length === 0 },
-            ].map((action) => (
+            {batchActions.map((action) => {
+              const Icon = BATCH_ACTION_ICONS[action.key];
+              return (
               <Tooltip key={action.key} content={action.tooltip}>
                 <Button
                   type="button"
-                  variant={action.key === 'save' ? 'primary' : action.key === 'clear' ? 'danger' : 'secondary'}
+                  variant={action.variant}
                   size="md"
                   className="h-11 flex-1 gap-2 px-3 sm:w-11 sm:flex-none sm:px-0"
                   aria-label={action.label}
-                  disabled={action.disabled || pendingBatchAction !== null || updateAssignments.isPending}
-                  loading={pendingBatchAction === action.key}
-                  onClick={() => void runBatchTagAction(action.key, action.mode, action.tagIds)}
+                  disabled={action.disabled}
+                  loading={action.loading}
+                  onClick={() => void runBatchTagAction(action.key, action.mode, action.tags)}
                 >
-                  {action.icon}
-                  <span className="sm:hidden">{action.key === 'clear' ? 'Clear' : action.key === 'add' ? 'Add' : 'Replace'}</span>
+                  <Icon className="h-4 w-4" />
+                  <span className="sm:hidden">{action.mobile}</span>
                 </Button>
               </Tooltip>
-            ))}
+              );
+            })}
           </div>
           {updateAssignments.isError ? <p role="alert" className="mt-2 text-sm text-status-danger">Couldn’t update trip tags. Try again.</p> : null}
         </div>
@@ -422,7 +374,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
                 <TripCard
                   key={trip.id}
                   trip={trip}
-                  isSelected={selectedIds.includes(trip.id)}
+                  isSelected={selectedSet.has(trip.id)}
                   onClick={() => toggleTripSelection(trip.id)}
                   onInfoClick={() => navigate({ to: '/trips/$tripId', params: { tripId: trip.id } })}
                 />
@@ -436,7 +388,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
           loading={isLoading}
           loadingRows={pageSize}
           onRowClick={(row) => toggleTripSelection(row.original.id)}
-          getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
+          getRowIsSelected={(row) => selectedSet.has(row.original.id)}
           emptyTitle="No trips found"
           emptyDescription={deferredSearch.trim() ? 'No trips match that start, destination, or tag.' : 'Trips will appear here once your vehicle has been driven.'}
           fixedLayout

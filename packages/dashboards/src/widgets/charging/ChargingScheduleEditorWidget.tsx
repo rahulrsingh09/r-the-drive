@@ -1,3 +1,5 @@
+import { chargingScheduleDraft } from './schedulePresentation';
+import { scheduleFields, parseScheduleClock, scheduleNumber, toggleScheduleDay, useScheduleDraft } from './scheduleState';
 import React from 'react';
 import { Calendar, Clock, Zap, Edit2, Save, X } from 'lucide-react';
 import {
@@ -16,27 +18,18 @@ import type { WidgetCtx, WidgetInstance } from '../../registry';
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_SHORT = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
-function minutesToTimeStr(mins: number | null): string {
-  if (mins === null) return '';
-  const h = Math.floor(mins / 60) % 24;
-  const m = mins % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
 function timeStrToMinutes(t: string): number | null {
-  const parts = t.split(':').map(Number);
-  if (parts.length < 2 || parts.some(isNaN)) return null;
-  return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
+  return parseScheduleClock(t, true);
 }
 
-function formatDays(days: string[] | null): string {
-  if (!days || days.length === 0) return 'No days set';
-  if (days.length === 7) return 'Every day';
-  const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-  const weekend = ['Saturday', 'Sunday'];
-  if (weekdays.every((d) => days.includes(d)) && days.length === 5) return 'Weekdays';
-  if (weekend.every((d) => days.includes(d)) && days.length === 2) return 'Weekends';
-  return days.map((d) => d.slice(0, 3)).join(', ');
+export function formatDays(days: string[] | null): string {
+  const length = days?.length ?? 0;
+  if (!length) return 'No days set';
+  if (length === 7) return 'Every day';
+  const members = new Set(days);
+  const named = [{ days: DAYS.slice(1, 6), label: 'Weekdays' }, { days: [DAYS[6]!, DAYS[0]!], label: 'Weekends' }];
+  const match = named.find((group) => group.days.length === length && group.days.every((day) => members.has(day)));
+  return match?.label ?? days!.map((day) => day.slice(0, 3)).join(', ');
 }
 
 // ── Form state ────────────────────────────────────────────────────────────────
@@ -49,27 +42,13 @@ interface FormState {
   weekDays: string[];
 }
 
-function scheduleToForm(s: { enabled: boolean; start_time_minutes: number | null; duration_minutes: number | null; amperage: number | null; week_days: string[] | null }): FormState {
-  return {
-    enabled: s.enabled,
-    startTime: minutesToTimeStr(s.start_time_minutes),
-    durationHours: s.duration_minutes !== null ? String(Math.round(s.duration_minutes / 60 * 10) / 10) : '',
-    amperage: s.amperage !== null ? String(s.amperage) : '',
-    weekDays: s.week_days ?? [],
-  };
+export function scheduleToForm(s: { enabled: boolean; start_time_minutes: number | null; duration_minutes: number | null; amperage: number | null; week_days: string[] | null }): FormState {
+  return chargingScheduleDraft(s);
 }
 
-function formToInput(f: FormState): ChargingScheduleInput {
-  const startMins = timeStrToMinutes(f.startTime);
-  const durationMins = f.durationHours !== '' ? Math.round(parseFloat(f.durationHours) * 60) : null;
-  const amp = f.amperage !== '' ? parseFloat(f.amperage) : null;
-  return {
-    enabled: f.enabled,
-    start_time_minutes: startMins,
-    duration_minutes: isNaN(durationMins ?? NaN) ? null : durationMins,
-    amperage: amp !== null && isNaN(amp) ? null : amp,
-    week_days: f.weekDays.length > 0 ? f.weekDays : null,
-  };
+export function formToInput(f: FormState): ChargingScheduleInput {
+  const numeric = { start_time_minutes: timeStrToMinutes(f.startTime), duration_minutes: scheduleNumber(f.durationHours, 60, true), amperage: scheduleNumber(f.amperage) };
+  return { ...numeric, enabled: f.enabled, week_days: f.weekDays.length ? f.weekDays : null };
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -87,14 +66,8 @@ function ChargingScheduleEditorWidget({
   const update = useUpdateChargingSchedule(vehicleId);
   const isDemo = vehicles?.find((vehicle) => vehicle.id === vehicleId)?.is_demo ?? false;
 
-  const [editing, setEditing] = React.useState(false);
-  const [form, setForm] = React.useState<FormState>({
-    enabled: false,
-    startTime: '',
-    durationHours: '',
-    amperage: '',
-    weekDays: [],
-  });
+  const draft = useScheduleDraft<FormState>({ enabled: false, startTime: '', durationHours: '', amperage: '', weekDays: [] });
+  const { open: editing, form, setForm, show: setEditing } = draft;
 
   React.useEffect(() => {
     if (schedule) {
@@ -102,24 +75,9 @@ function ChargingScheduleEditorWidget({
     }
   }, [schedule]);
 
-  function toggleDay(day: string) {
-    setForm((prev) => ({
-      ...prev,
-      weekDays: prev.weekDays.includes(day)
-        ? prev.weekDays.filter((d) => d !== day)
-        : [...prev.weekDays, day],
-    }));
-  }
-
-  async function handleSave() {
-    await update.mutateAsync(formToInput(form));
-    setEditing(false);
-  }
-
-  function handleCancel() {
-    if (schedule) setForm(scheduleToForm(schedule));
-    setEditing(false);
-  }
+  function toggleDay(day: string) { setForm((form) => ({ ...form, weekDays: toggleScheduleDay(form.weekDays, day) })); }
+  async function handleSave() { await update.mutateAsync(formToInput(form)); draft.show(false); }
+  function handleCancel() { draft.show(false, schedule ? scheduleToForm(schedule) : undefined); }
 
   if (isDemo) {
     return (
@@ -146,8 +104,7 @@ function ChargingScheduleEditorWidget({
         <p className="text-sm text-fg-tertiary">No charging schedule configured.</p>
         <p className="text-xs text-fg-tertiary">Read-only telemetry. Change schedules in the Rivian app.</p>
         {VEHICLE_CONTROLS_ENABLED && <Button size="sm" variant="secondary" onClick={() => {
-          setForm({ enabled: false, startTime: '22:00', durationHours: '4', amperage: '32', weekDays: DAYS });
-          setEditing(true);
+          draft.show(true, { enabled: false, startTime: '22:00', durationHours: '4', amperage: '32', weekDays: DAYS });
         }}>
           Set Up Schedule
         </Button>}
@@ -202,16 +159,16 @@ function ScheduleReadView({
   schedule: { start_time_minutes: number | null; duration_minutes: number | null; amperage: number | null; week_days: string[] | null };
   form: FormState;
 }) {
+  const values = chargingScheduleDraft({ ...schedule, enabled: form.enabled });
+  const readings = [
+    { label: 'Start Time', value: form.startTime || '—', icon: Clock },
+    { label: 'Duration', value: values.durationHours ? `${values.durationHours}h` : '—', icon: Clock },
+    { label: 'Amperage', value: values.amperage ? `${values.amperage}A` : '—', icon: Zap },
+    { label: 'Days', value: formatDays(schedule.week_days), icon: Calendar },
+  ];
   return (
     <div className="grid grid-cols-2 gap-2">
-      <InfoRow icon={<Clock className="h-3.5 w-3.5" />} label="Start Time" value={form.startTime || '—'} />
-      <InfoRow
-        icon={<Clock className="h-3.5 w-3.5" />}
-        label="Duration"
-        value={schedule.duration_minutes !== null ? `${Math.round(schedule.duration_minutes / 60 * 10) / 10}h` : '—'}
-      />
-      <InfoRow icon={<Zap className="h-3.5 w-3.5" />} label="Amperage" value={schedule.amperage !== null ? `${schedule.amperage}A` : '—'} />
-      <InfoRow icon={<Calendar className="h-3.5 w-3.5" />} label="Days" value={formatDays(schedule.week_days)} />
+      {readings.map(({ label, value, icon: Icon }) => <InfoRow key={label} icon={<Icon className="h-3.5 w-3.5" />} label={label} value={value} />)}
     </div>
   );
 }
@@ -243,6 +200,7 @@ function ScheduleForm({
   onCancel: () => void;
   saving: boolean;
 }) {
+  const fields = scheduleFields(setForm);
   return (
     <div className="flex flex-col gap-3">
       {/* Enabled toggle */}
@@ -250,7 +208,7 @@ function ScheduleForm({
         <input
           type="checkbox"
           checked={form.enabled}
-          onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.checked }))}
+          onChange={(e) => fields.field('enabled', e.target.checked)}
           className="h-4 w-4 accent-[color:var(--rm-accent)]"
         />
         <span className="text-sm text-fg">Enable schedule</span>
@@ -263,7 +221,7 @@ function ScheduleForm({
           <input
             type="time"
             value={form.startTime}
-            onChange={(e) => setForm((p) => ({ ...p, startTime: e.target.value }))}
+            onChange={(e) => fields.field('startTime', e.target.value)}
             className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
           />
         </div>
@@ -275,7 +233,7 @@ function ScheduleForm({
             min="0.5"
             max="24"
             value={form.durationHours}
-            onChange={(e) => setForm((p) => ({ ...p, durationHours: e.target.value }))}
+            onChange={(e) => fields.field('durationHours', e.target.value)}
             placeholder="e.g. 4"
             className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
           />
@@ -291,7 +249,7 @@ function ScheduleForm({
           min="1"
           max="48"
           value={form.amperage}
-          onChange={(e) => setForm((p) => ({ ...p, amperage: e.target.value }))}
+          onChange={(e) => fields.field('amperage', e.target.value)}
           placeholder="e.g. 32"
           className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
         />

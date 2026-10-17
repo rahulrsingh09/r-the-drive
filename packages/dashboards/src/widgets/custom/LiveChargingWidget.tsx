@@ -1,3 +1,6 @@
+import { liveChargingModel } from './liveChargingModel';
+import { chargeGauge } from './vehiclePresentation';
+import { formatWidgetChargeTime } from '../widgetLifecycle';
 import React from 'react';
 import { Zap, Clock, Battery, Plug, RouteIcon, TrendingUp } from 'lucide-react';
 import { useCurrentVehicleStatus, useLiveSession } from '@panda/hooks';
@@ -8,12 +11,7 @@ import type { WidgetCtx, WidgetInstance } from '../../registry';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatTimeRemaining(mins: number | null): string {
-  if (mins === null || mins <= 0) return '—';
-  const h = Math.floor(mins / 60);
-  const m = Math.round(mins % 60);
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
+  return formatWidgetChargeTime(mins, '—');
 }
 
 function formatKw(kw: number | null): string {
@@ -93,6 +91,7 @@ function LiveChargingWidget({
 
   const { data: session, isLoading: isLiveSessionLoading } = useLiveSession(vehicleId, isCharging);
 
+  const readout = liveChargingModel(session, status);
   const headerText = isCharging ? 'Live Charging' : 'Charging Status';
 
   return (
@@ -121,41 +120,40 @@ function LiveChargingWidget({
         <div className="grid flex-1 grid-cols-4 gap-2">
           <LiveStat
             label="Power"
-            value={formatKw(session?.power_kw ?? null)}
+            value={formatKw(readout.power)}
             icon={<Zap className="h-4 w-4" />}
             accent
           />
           <LiveStat
             label="Battery"
-            value={formatSoc(session?.soc_pct ?? status?.battery_level ?? null)}
+            value={formatSoc(readout.soc)}
             icon={<Battery className="h-4 w-4" />}
           />
           <LiveStat
             label="Added"
-            value={formatKwh(session?.energy_kwh ?? null)}
+            value={formatKwh(readout.energy)}
             icon={<TrendingUp className="h-4 w-4" />}
           />
           <LiveStat
             label="Time Left"
-            value={formatTimeRemaining(session?.time_remaining_min ?? status?.time_to_end_of_charge_min ?? null)}
+            value={formatTimeRemaining(readout.time)}
             icon={<Clock className="h-4 w-4" />}
           />
         </div>
       ) : (
-        <NotChargingPlaceholder soc={status?.battery_level ?? null} range={status?.range_miles ?? null} />
+        <NotChargingPlaceholder soc={readout.restingSoc} range={readout.range} />
       )}
 
       {/* SoC progress bar when charging */}
       {isCharging && (
-        <SocBar soc={session?.soc_pct ?? status?.battery_level ?? null} limit={status?.battery_limit ?? null} />
+        <SocBar soc={readout.soc} limit={readout.limit} />
       )}
     </div>
   );
 }
 
 function SocBar({ soc, limit }: { soc: number | null; limit: number | null }) {
-  const pct = Math.max(0, Math.min(100, soc ?? 0));
-  const limitPct = limit ? Math.max(0, Math.min(100, limit)) : null;
+  const { level: pct, limit: limitPct } = chargeGauge(soc, limit);
 
   return (
     <div className="relative h-2 overflow-hidden rounded-full bg-bg-elevated">

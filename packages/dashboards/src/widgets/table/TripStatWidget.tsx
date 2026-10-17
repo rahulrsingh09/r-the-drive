@@ -13,7 +13,8 @@ import {
 } from '../../dashboardData';
 import { resolveIconId } from '../../editor/iconMigration';
 import type { SensorIconKey } from '../sensor/sensorDefinitions';
-import type { TripRow } from '@panda/ui/tables';
+import { selectedTripRows } from './tableProjection';
+import { resolveWidgetOptions } from '../widgetOptions';
 import { useTripSelection, resetTripSelection } from './tripSelectionStore';
 import { computeTripStat, formatTripSelectionLabel, formatTripStat, type TripStatKind } from './tripStatMetrics';
 
@@ -27,34 +28,20 @@ interface TripStatOptions {
 }
 
 function readOptions(instance: WidgetInstance): TripStatOptions {
-  const opts = (instance.options ?? {}) as Partial<TripStatOptions>;
-  return {
-    stat: opts.stat ?? 'count',
-    metric: opts.metric ?? 'total_trips',
-    icon: opts.icon ?? 'calendar',
-    accentBorder: opts.accentBorder ?? false,
-  };
+  return resolveWidgetOptions<TripStatOptions>({ stat: 'count', metric: 'total_trips', icon: 'calendar', accentBorder: false }, instance.options ?? {});
 }
 
 function formatApiValue(value: number | null | undefined, unit: string | null | undefined): string {
-  const v = value ?? null;
-  if (v === null || !Number.isFinite(v)) return '-';
-  if (unit === 'mi') return formatMiles(v);
-  if (unit === 'min') return formatDuration(v);
-  if (unit === 'Wh/mi') return formatEfficiency(v);
-  if (!unit && Number.isInteger(v)) return v.toFixed(0);
-  return Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1);
+  if (value == null || !Number.isFinite(value)) return '-';
+  const format = { mi: formatMiles, min: formatDuration, 'Wh/mi': formatEfficiency }[unit ?? ''];
+  return format ? format(value) : value.toFixed((!unit && Number.isInteger(value)) || Math.abs(value) >= 100 ? 0 : 1);
 }
 
 function aggregateSeriesForStat(stat: TripStat, series: Array<{ value: number | null | undefined }>) {
-  const values = series
-    .map((point) => point.value)
-    .filter((point): point is number => typeof point === 'number' && Number.isFinite(point));
-  if (values.length === 0) return null;
-  if (stat === 'efficiency' || stat === 'duration') {
-    return values.reduce((sum, point) => sum + point, 0) / values.length;
-  }
-  return values.reduce((sum, point) => sum + point, 0);
+  const summary = { total: 0, count: 0 };
+  for (const point of series) if (typeof point.value === 'number' && Number.isFinite(point.value)) { summary.total += point.value; summary.count++; }
+  const divisor = stat === 'efficiency' || stat === 'duration' ? summary.count : 1;
+  return summary.count ? summary.total / divisor : null;
 }
 
 export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
@@ -89,7 +76,7 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
 
   const title = instance.title ?? options.metric;
   const iconId = resolveIconId(options.icon);
-  const selectedTrips = selectedIds.map((id) => tripRegistry[id]).filter((t): t is TripRow => Boolean(t));
+  const selectedTrips = selectedTripRows(selectedIds, tripRegistry);
   const hasSelection = selectedTrips.length > 0;
   const isLifetime = ctx.timeframe?.kind === 'lifetime';
   const aggregatedValue = aggregateSeriesForStat(options.stat, series);

@@ -1,4 +1,7 @@
-import React, { useState } from 'react';
+import { pageNavigation, TABLE_PAGE_OPTIONS } from './tableControls';
+import { chargingSessionValues } from './tableProjection';
+import { useWidgetMediaQuery } from '../widgetLifecycle';
+import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useChargeSessions } from '@panda/hooks';
 import { DataTable, chargingColumns, type ChargeSessionRow } from '@panda/ui/tables';
@@ -10,47 +13,12 @@ import type { WidgetInstance, WidgetCtx } from '../../registry';
 import type { Row } from '@tanstack/react-table';
 
 function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState(() =>
-    typeof window !== 'undefined' && window.innerWidth < 640
-  );
-  React.useEffect(() => {
-    const mq = window.matchMedia('(max-width: 639px)');
-    setIsMobile(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-  return isMobile;
+  return useWidgetMediaQuery('(max-width: 639px)', 640);
 }
 
 const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success' | 'warning'> = {
   dcfc: 'warning', dc: 'warning', ac: 'success', ac_l2: 'success',
 };
-
-function normalizeAcDcType(chargerType: string | null | undefined): 'ac' | 'dc' | null {
-  if (!chargerType) return null;
-  const normalized = chargerType.toLowerCase();
-  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
-  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
-  return null;
-}
-
-function deriveAcDcType(session: ChargeSessionRow): 'ac' | 'dc' | null {
-  const explicit = normalizeAcDcType(session.charger_type);
-  if (explicit) return explicit;
-
-  const vendor = (session.network_vendor ?? '').trim().toLowerCase();
-  if (vendor && ['tesla', 'rivian', 'electrify america', 'evgo'].includes(vendor)) {
-    return 'dc';
-  }
-
-  const observedPower = session.ended_at == null ? session.live_power_kw ?? session.peak_power_kw : session.peak_power_kw;
-  if (observedPower != null && Number.isFinite(observedPower)) {
-    return observedPower < 20 ? 'ac' : 'dc';
-  }
-
-  return null;
-}
 
 function formatSessionDay(session: ChargeSessionRow): string {
   if (session.session_day_local) {
@@ -60,13 +28,7 @@ function formatSessionDay(session: ChargeSessionRow): string {
 }
 
 function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; onClick: () => void }) {
-  const type = deriveAcDcType(session);
-  const active = session.ended_at == null;
-  const energy = active ? session.live_total_charged_kwh ?? session.energy_added_kwh : session.energy_added_kwh;
-  const duration = active && session.live_time_elapsed_seconds != null ? session.live_time_elapsed_seconds / 60 : session.duration_min;
-  const power = active ? session.live_power_kw ?? session.peak_power_kw : session.peak_power_kw;
-  const socEnd = active ? session.live_soc_pct ?? session.soc_end : session.soc_end;
-  const range = active ? session.live_range_added_km ?? session.range_added_km : session.range_added_km;
+  const { type, active, energy, duration, power, socEnd, range } = chargingSessionValues(session);
 
   return (
     <button
@@ -129,9 +91,9 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
 
 export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(15);
+  const [{ search, page, pageSize }, send] = React.useReducer((state: {search: string; page: number; pageSize: number}, action: {type: 'search'; value: string} | {type: 'page' | 'pageSize'; value: number}) => state[action.type] === action.value ? state : { ...state, [action.type]: action.value }, { search: '', page: 1, pageSize: 15 });
+  const setSearch = (value: string) => send({ type: 'search', value });
+  const setPageSize = (value: number) => send({ type: 'pageSize', value });
   const deferredSearch = React.useDeferredValue(search);
   const normalizedSearch = deferredSearch.trim();
   const isMobile = useIsMobile();
@@ -145,11 +107,11 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
     ctx.chargeSessionDayLocal ?? null,
   );
   const sessions = (data?.items ?? []) as unknown as ChargeSessionRow[];
-  const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const paginationState = pageNavigation(page, data);
   const totalSessions = data?.total ?? 0;
 
   React.useEffect(() => {
-    setPage(1);
+    send({ type: 'page', value: 1 });
   }, [ctx.from, ctx.to, ctx.vehicleId, normalizedSearch, pageSize, ctx.chargeSessionDayLocal]);
 
   function handleRowClick(row: Row<ChargeSessionRow>) {
@@ -159,19 +121,19 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
   const pagination = totalSessions > 0 ? (
     <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
       <p className="text-xs text-fg-tertiary">
-        Page {page} of {Math.max(totalPages, 1)} · {totalSessions} session{totalSessions === 1 ? '' : 's'}
+        Page {page} of {paginationState.pages} · {totalSessions} session{totalSessions === 1 ? '' : 's'}
       </p>
       <div className="flex gap-2">
         <button
-          disabled={page <= 1}
-          onClick={() => setPage((p) => p - 1)}
+          disabled={paginationState.previous.disabled}
+          onClick={() => send({ type: 'page', value: paginationState.previous.page })}
           className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Prev
         </button>
         <button
-          disabled={page >= totalPages || totalPages <= 1}
-          onClick={() => setPage((p) => p + 1)}
+          disabled={paginationState.next.disabled}
+          onClick={() => send({ type: 'page', value: paginationState.next.page })}
           className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Next
@@ -203,7 +165,7 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
               onChange={(value) => setPageSize(Number(value))}
               aria-label="Charging sessions per page"
               size="sm"
-              options={[15, 25, 50, 100].map((option) => ({ value: String(option), label: String(option) }))}
+              options={TABLE_PAGE_OPTIONS}
             />
           </label>
         )}

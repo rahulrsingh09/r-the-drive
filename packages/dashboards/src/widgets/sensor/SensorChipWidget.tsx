@@ -1,3 +1,6 @@
+import { sensorSamples, sensorSourceLoading } from './sensorReadings';
+import { sensorColorSelection } from './sensorColor';
+import { resolveWidgetOptions } from '../widgetOptions';
 import React from 'react';
 import type { ChartColorDefinition, ChartColorToken } from '@panda/types';
 import { Icon } from '@iconify/react';
@@ -13,7 +16,6 @@ import {
 import {
   DEFAULT_CURVE_SMOOTHNESS,
   DEFAULT_SPRITE_TIME_FILTER,
-  getChartColor,
   MiniSparkline,
   normalizeCurveSmoothness,
   normalizeTimeFilter,
@@ -45,7 +47,7 @@ import {
 } from '../../dashboardData';
 import { resolveIconId } from '../../editor/iconMigration';
 import { seriesToDailyDeltas, seriesToDailyTotals } from '../../editor/dailyDelta';
-import type { TripRow } from '@panda/ui/tables';
+import { selectedTripRows } from '../table/tableProjection';
 import { useTripSelection } from '../table/tripSelectionStore';
 import {
   computeTripStat,
@@ -59,6 +61,7 @@ import {
   resolveSensorColorToken,
   resolveSensorValueColor,
   SENSOR_DEFINITIONS,
+  type SensorDefinition,
   type SensorChartType,
   type SensorDataSource,
   type SensorIconKey,
@@ -104,45 +107,22 @@ const DEFAULT_WINDOW_DAYS = 30;
 function readOptions(instance: WidgetInstance, automaticColor: ChartColorToken = 'accent'): Required<SensorChipOptions> {
   const definition = getSensorDefinition(instance.definitionId) ?? SENSOR_DEFINITIONS[0]!;
   const options = (instance.options ?? {}) as SensorChipOptions;
-  const chartType = options.chartType ?? definition.chartType;
-
-  return {
-    metric: options.metric ?? definition.metric ?? '',
-    icon: options.icon ?? definition.icon,
-    chartType,
-    dataSource: options.dataSource ?? definition.dataSource ?? 'metric',
-    valuePath: options.valuePath ?? definition.valuePath ?? '',
-    fallbackValuePath: options.fallbackValuePath ?? definition.fallbackValuePath ?? '',
-    valueFormula: options.valueFormula ?? definition.valueFormula ?? '',
-    unit: options.unit ?? definition.unit ?? null,
-    inlineSecondaryPath: options.inlineSecondaryPath ?? definition.inlineSecondaryPath ?? '',
-    inlineSecondaryFormula:
-      options.inlineSecondaryFormula ?? definition.inlineSecondaryFormula ?? '',
-    inlineSecondaryTemplate:
-      options.inlineSecondaryTemplate ?? definition.inlineSecondaryTemplate ?? '',
-    inlineSecondaryUnit: options.inlineSecondaryUnit ?? definition.inlineSecondaryUnit ?? null,
-    inlineSecondaryPrefix: options.inlineSecondaryPrefix ?? definition.inlineSecondaryPrefix ?? '',
-    secondaryTemplate: options.secondaryTemplate ?? definition.secondaryTemplate ?? '',
-    helpText: options.helpText ?? definition.helpText ?? '',
-    labelSuffix: options.labelSuffix ?? definition.labelSuffix ?? '',
-    showSprite: options.showSprite ?? true,
-    showSubtitle: options.showSubtitle ?? false,
-    subtitle: options.subtitle ?? '',
-    accentBorder: options.accentBorder ?? definition.accent ?? false,
-    valueSize: options.valueSize ?? 'md',
-    valueColor: options.valueColor ?? definition.valueColor ?? 'accent',
-    valueMode: options.valueMode ?? definition.valueMode,
-    curveColor: options.curveColor ?? automaticColor,
-    timeframeScope: options.timeframeScope ?? definition.timeframeScope ?? 'range',
-    tripSelectionAware: options.tripSelectionAware ?? false,
-    curveSmoothing: options.curveSmoothing ?? 0,
-    timeFilter: normalizeTimeFilter(options.timeFilter, legacySmoothingToTimeFilter(options.curveSmoothing, chartType)),
-    smoothness: normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, chartType)),
-    windowDays:
-      typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
-        ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
-        : DEFAULT_WINDOW_DAYS,
+  const defaults: Required<SensorChipOptions> = {
+    metric: '', icon: definition.icon, chartType: definition.chartType, dataSource: 'metric',
+    valuePath: '', fallbackValuePath: '', valueFormula: '', unit: null,
+    inlineSecondaryPath: '', inlineSecondaryFormula: '', inlineSecondaryTemplate: '', inlineSecondaryUnit: null,
+    inlineSecondaryPrefix: '', secondaryTemplate: '', helpText: '', labelSuffix: '',
+    showSprite: true, showSubtitle: false, subtitle: '', accentBorder: definition.accent ?? false,
+    valueSize: 'md', valueColor: 'accent', valueMode: definition.valueMode, curveColor: automaticColor,
+    timeframeScope: 'range', tripSelectionAware: false, curveSmoothing: 0,
+    timeFilter: 'raw', smoothness: 'straight', windowDays: DEFAULT_WINDOW_DAYS,
   };
+  const resolved = resolveWidgetOptions(defaults, definition, options);
+  resolved.timeFilter = normalizeTimeFilter(options.timeFilter, legacySmoothingToTimeFilter(options.curveSmoothing, resolved.chartType));
+  resolved.smoothness = normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, resolved.chartType));
+  resolved.windowDays = typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
+    ? Math.max(1, Math.min(365, Math.round(options.windowDays))) : DEFAULT_WINDOW_DAYS;
+  return resolved;
 }
 
 export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
@@ -166,7 +146,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     ? getTripStatKind(metric)
     : null;
   const selectedTrips = tripSelectionStat
-    ? selectedIds.map((id) => tripRegistry[id]).filter((trip): trip is TripRow => Boolean(trip))
+    ? selectedTripRows(selectedIds, tripRegistry)
     : [];
   const activeTripSelectionStat = tripSelectionStat != null && selectedTrips.length > 0 ? tripSelectionStat : null;
   const selectionLabel = activeTripSelectionStat ? formatTripSelectionLabel(selectedTrips.length) : null;
@@ -219,17 +199,11 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const timeframeScope = options.timeframeScope;
   const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
   const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
-  const isLoading =
-    options.dataSource === 'batteryHealth'
-      ? dashboardDataAvailable ? dashboardRefreshing : healthLoading || (needsStatus && statusLoading)
-      : options.dataSource === 'chargingSummary'
-        ? dashboardDataAvailable ? dashboardRefreshing : chargingLoading
-        : options.dataSource === 'vehicleStatus'
-          ? dashboardDataAvailable ? dashboardRefreshing : statusLoading
-          : false;
-  const hasFiniteSeriesPoint = series.some(
-    (point) => typeof point.value === 'number' && Number.isFinite(point.value)
-  );
+  const isLoading = sensorSourceLoading(options.dataSource, dashboardDataAvailable, dashboardRefreshing, {
+    health: healthLoading, charging: chargingLoading, status: statusLoading, needsStatus,
+  });
+  const samples = sensorSamples(series);
+  const hasFiniteSeriesPoint = samples.available;
   const resolvedMetricValue = allowLatestFallback || hasFiniteSeriesPoint ? (value?.value ?? null) : null;
   const resolvedValue =
     options.dataSource === 'metric'
@@ -242,27 +216,10 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       ? presentVehicleStatusDefinition(instance.definitionId, status)
       : null;
   const unit = options.dataSource === 'metric' ? value?.unit : options.unit;
-  const displayValue = statusPresentation
-    ? statusPresentation.label
-    : isLoading
-      ? '...'
-      : activeTripSelectionStat
-        ? formatTripStat(activeTripSelectionStat, selectionValue)
-        : formatMetricValue(resolvedValue, unit);
-  const inlineSecondary = statusPresentation
-    ? ''
-    : isLoading
-      ? ''
-      : activeTripSelectionStat
-        ? ''
-        : resolveInlineSecondary(options, sourceValues);
-  const secondary = statusPresentation
-    ? (statusPresentation.secondaryText ?? '')
-    : isLoading
-      ? ''
-      : activeTripSelectionStat
-        ? ''
-        : resolveTemplate(options.secondaryTemplate, sourceValues);
+  const { displayValue, inlineSecondary, secondary } = sensorReadout({
+    presentation: statusPresentation, loading: isLoading, selection: activeTripSelectionStat,
+    selectedValue: selectionValue, value: resolvedValue, unit, options, values: sourceValues,
+  });
   const lastUpdatedLabel = activeTripSelectionStat ? null : statusPresentation?.lastUpdatedLabel ?? null;
   const valueToneClass = statusPresentation
     ? statusToneClass(statusPresentation.variant)
@@ -282,8 +239,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     ? isEventTotalMetric(metric ?? '')
       ? seriesToDailyTotals(series, options.windowDays)
       : seriesToDailyDeltas(series, options.windowDays)
-    : deriveSpriteData(
-        series,
+    : samples.sprite(
         allowLatestFallback ? resolvedValue : null,
         value?.ts ?? ctx.to ?? new Date().toISOString()
       );
@@ -394,15 +350,29 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   );
 }
 
+function sensorReadout(input: {
+  presentation: ReturnType<typeof presentVehicleStatusDefinition> | null;
+  loading: boolean; selection: ReturnType<typeof getTripStatKind>; selectedValue: number | null;
+  value: number | null | undefined; unit: string | null | undefined;
+  options: Required<SensorChipOptions>; values: Record<string, unknown>;
+}) {
+  const result = { displayValue: '', inlineSecondary: '', secondary: '' };
+  if (input.presentation) return { ...result, displayValue: input.presentation.label, secondary: input.presentation.secondaryText ?? '' };
+  if (input.loading) return { ...result, displayValue: '...' };
+  if (input.selection) return { ...result, displayValue: formatTripStat(input.selection, input.selectedValue) };
+  return {
+    displayValue: formatMetricValue(input.value, input.unit),
+    inlineSecondary: resolveInlineSecondary(input.options, input.values),
+    secondary: resolveTemplate(input.options.secondaryTemplate, input.values),
+  };
+}
+
 function resolveSensorVisualColor(
   curveColor: ChartColorToken | ChartColorDefinition | undefined,
   automaticColor: ChartColorToken,
   isDark: boolean,
 ) {
-  if (typeof curveColor === 'string') return getChartColor(curveColor);
-  if (curveColor?.mode === 'token') return getChartColor(curveColor.token);
-  if (curveColor?.mode === 'custom') return isDark ? curveColor.dark : curveColor.light;
-  return getChartColor(automaticColor);
+  return sensorColorSelection(curveColor, automaticColor, isDark).color;
 }
 
 function buildSourceValues(
@@ -412,38 +382,16 @@ function buildSourceValues(
   efficiencySummary: unknown,
   status: unknown
 ) {
-  const charging = objectValues(chargingSummary);
-  const primary =
-    dataSource === 'batteryHealth'
-      ? health
-      : dataSource === 'chargingSummary'
-        ? chargingSummary
-        : dataSource === 'efficiencySummary'
-          ? efficiencySummary
-        : dataSource === 'vehicleStatus'
-          ? status
-          : {};
-
-  return {
-    ...objectValues(primary),
-    ...(dataSource === 'chargingSummary'
-      ? {
-          away_kwh_including_unknown:
-            (typeof charging.away_kwh === 'number' && Number.isFinite(charging.away_kwh)
-              ? charging.away_kwh
-              : 0) +
-            (typeof charging.unknown_location_kwh === 'number' &&
-            Number.isFinite(charging.unknown_location_kwh)
-              ? charging.unknown_location_kwh
-              : 0),
-        }
-      : {}),
-    health,
-    battery: health,
-    charging: chargingSummary,
-    efficiency: efficiencySummary,
-    status,
-  } as Record<string, unknown>;
+  const sources = { batteryHealth: health, chargingSummary, efficiencySummary, vehicleStatus: status, metric: {} };
+  const values: Record<string, unknown> = { ...objectValues(sources[dataSource]) };
+  if (dataSource === 'chargingSummary') {
+    const charging = objectValues(chargingSummary);
+    values.away_kwh_including_unknown = ['away_kwh', 'unknown_location_kwh'].reduce((sum, key) => {
+      const value = charging[key];
+      return sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+    }, 0);
+  }
+  return Object.assign(values, { health, battery: health, charging: chargingSummary, efficiency: efficiencySummary, status });
 }
 
 function getHelpContent(
@@ -467,42 +415,35 @@ function resolveConfiguredValue(
   values: Record<string, unknown>
 ) {
   if (options.valueFormula) return resolveFormula(options.valueFormula, values);
-  const value = resolveNumberPath(values, options.valuePath);
-  if (value != null) return value;
-  return resolveNumberPath(values, options.fallbackValuePath);
+  const paths = [options.valuePath, options.fallbackValuePath];
+  const selected = paths.map((path) => resolveNumberPath(values, path)).find((value) => value != null);
+  return selected ?? null;
 }
 
 function resolveInlineSecondary(
   options: Required<SensorChipOptions>,
   values: Record<string, unknown>
 ) {
-  if (options.inlineSecondaryTemplate) {
-    return resolveTemplate(options.inlineSecondaryTemplate, values);
-  }
-
-  const value = options.inlineSecondaryFormula
-    ? resolveFormula(options.inlineSecondaryFormula, values)
-    : resolveNumberPath(values, options.inlineSecondaryPath);
-
-  if (value == null) return '';
-  return `${options.inlineSecondaryPrefix}${formatMetricValue(value, options.inlineSecondaryUnit)}`;
+  const template = options.inlineSecondaryTemplate;
+  if (template) return resolveTemplate(template, values);
+  const projected = resolveConfiguredValue({ ...options, valueFormula: options.inlineSecondaryFormula, valuePath: options.inlineSecondaryPath, fallbackValuePath: '' }, values);
+  return projected == null ? '' : options.inlineSecondaryPrefix + formatMetricValue(projected, options.inlineSecondaryUnit);
 }
 
 function resolveTemplate(template: string, values: Record<string, unknown>) {
-  if (!template) return '';
-  let missingValue = false;
-  const resolved = template.replace(
-    /\[([^\]:]+)(?::([^\]]+))?\]/g,
-    (_match, rawPath: string, rawFormat: string | undefined) => {
-      const value = resolveNumberPath(values, rawPath.trim());
-      if (value == null) {
-        missingValue = true;
-        return '';
-      }
-      return formatTemplateValue(value, rawFormat);
-    }
-  );
-  return missingValue ? '' : resolved;
+  const slots = [...template.matchAll(/\[([^\]:]+)(?::([^\]]+))?\]/g)];
+  const formatted: string[] = [];
+  for (const slot of slots) {
+    const number = resolveNumberPath(values, slot[1]!.trim());
+    if (number == null) return '';
+    formatted.push(formatTemplateValue(number, slot[2]));
+  }
+  let result = '', cursor = 0;
+  slots.forEach((slot, index) => {
+    result += template.slice(cursor, slot.index) + formatted[index];
+    cursor = slot.index! + slot[0].length;
+  });
+  return result + template.slice(cursor);
 }
 
 function formatTemplateValue(value: number, format: string | undefined) {
@@ -519,10 +460,12 @@ function resolveNumberPath(values: Record<string, unknown>, path: string) {
 
 function resolvePath(values: Record<string, unknown>, path: string): unknown {
   if (Object.prototype.hasOwnProperty.call(values, path)) return values[path];
-  return path.split('.').reduce<unknown>((current, part) => {
-    if (!current || typeof current !== 'object') return undefined;
-    return (current as Record<string, unknown>)[part];
-  }, values);
+  let cursor: unknown = values;
+  for (const segment of path.split('.')) {
+    if (cursor === null || typeof cursor !== 'object') return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
 }
 
 function resolveFormula(formula: string, values: Record<string, unknown>) {
@@ -541,21 +484,6 @@ function usesStatus(options: Required<SensorChipOptions>) {
   ].some((value) => value.includes('status.'));
 }
 
-function deriveSpriteData(
-  series: Array<{ ts?: string; value: number | null | undefined }>,
-  currentValue: number | null | undefined,
-  currentTs: string
-) {
-  const finiteSeries = series.filter(
-    (point) => typeof point.value === 'number' && Number.isFinite(point.value)
-  );
-  if (finiteSeries.length > 0) return finiteSeries;
-  if (typeof currentValue === 'number' && Number.isFinite(currentValue)) {
-    return [{ ts: currentTs, value: currentValue }];
-  }
-  return [];
-}
-
 function isEventTotalMetric(metric: string) {
   return metric === 'total_miles'
     || metric === 'total_trips'
@@ -565,18 +493,13 @@ function isEventTotalMetric(metric: string) {
 
 function formatMetricValue(value: number | null | undefined, unit: string | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-';
-  if (unit === 'mi') return formatMiles(value);
-  if (unit === 'kWh') return formatKwh(value);
-  if (unit === 'USD') return formatCurrency(value);
-  if (unit === 'Wh/mi') return formatEfficiency(value);
-  if (unit === 'min') return formatDuration(value);
-  if (unit === '%') return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
-  if (unit === 'psi') return formatPressure(value);
-  if (unit === 'mph') return formatMph(value);
-  if (unit === 'kW') return `${value.toFixed(1)} kW`;
-  if (unit === 'C') return formatTemp(value);
-  if (!unit && Number.isInteger(value)) return value.toFixed(0);
-  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
+  const formatter = { mi: formatMiles, kWh: formatKwh, USD: formatCurrency, 'Wh/mi': formatEfficiency, min: formatDuration, psi: formatPressure, mph: formatMph, C: formatTemp }[unit ?? ''];
+  if (formatter) return formatter(value);
+  switch (unit) {
+    case '%': return value.toFixed(value >= 10 ? 0 : 1) + '%';
+    case 'kW': return value.toFixed(1) + ' kW';
+    default: return value.toFixed((!unit && Number.isInteger(value)) || Math.abs(value) >= 100 ? 0 : 1);
+  }
 }
 
 function renderStatusValue({
@@ -592,8 +515,9 @@ function renderStatusValue({
   valueToneStyle?: React.CSSProperties;
   valueSize: Required<SensorChipOptions>['valueSize'];
 }) {
-  if (presentation?.renderUnavailableChip) {
-    const badge = (
+  const unavailable = presentation?.renderUnavailableChip;
+  const numericValue = presentation ? null : /^([+-]?[\d,.]+)\s+(.+)$/.exec(displayValue);
+  const valueNode = unavailable ? (
       <Badge
         variant="info"
         className="rounded-full font-semibold"
@@ -601,12 +525,7 @@ function renderStatusValue({
       >
         {displayValue}
       </Badge>
-    );
-    return presentation.tooltip ? <Tooltip content={presentation.tooltip}>{badge}</Tooltip> : badge;
-  }
-
-  const numericValue = presentation ? null : /^([+-]?[\d,.]+)\s+(.+)$/.exec(displayValue);
-  const valueNode = (
+    ) : (
     <span
       data-sensor-value
       className={cn(
@@ -630,78 +549,67 @@ function renderStatusValue({
 }
 
 function statusToneClass(tone: StatusTone) {
-  if (tone === 'success') return 'text-status-positive';
-  if (tone === 'warning') return 'text-status-warning';
-  if (tone === 'danger') return 'text-status-danger';
-  if (tone === 'info') return 'text-status-info';
-  return 'text-fg';
+  const tones: Partial<Record<StatusTone, string>> = { success: 'text-status-positive', warning: 'text-status-warning', danger: 'text-status-danger', info: 'text-status-info' };
+  return tones[tone] ?? 'text-fg';
 }
 
 function legacySmoothingToTimeFilter(value: unknown, chartType: SensorChartType | 'none'): TimeFilterWindow {
-  if (chartType === 'bar' || chartType === 'daily_delta') return DEFAULT_SPRITE_TIME_FILTER;
-  if (chartType !== 'line' && chartType !== 'area') return 'raw';
-  return value === false || value === 0 ? 'raw' : DEFAULT_SPRITE_TIME_FILTER;
+  const policy = SENSOR_CHART_POLICIES[chartType] ?? SENSOR_CHART_POLICIES.none;
+  const disabled = policy.curved && (value === false || value === 0);
+  return policy.filtered && !disabled ? DEFAULT_SPRITE_TIME_FILTER : 'raw';
 }
 
 function legacyCurveSmoothingToSmoothness(value: unknown, chartType: SensorChartType | 'none'): CurveSmoothness {
-  if (chartType !== 'line' && chartType !== 'area') return 'straight';
-  return normalizeCurveSmoothness(value, DEFAULT_CURVE_SMOOTHNESS);
+  return SENSOR_CHART_POLICIES[chartType]?.curved ? normalizeCurveSmoothness(value, DEFAULT_CURVE_SMOOTHNESS) : 'straight';
 }
 
 function sensorDataRequirements(instance: WidgetInstance): DashboardDataRequirements {
   const options = readOptions(instance);
-  const metric = options.dataSource === 'metric' && options.metric ? options.metric : null;
+  const requirements: DashboardDataRequirements = {};
+  const dataSource = options.dataSource;
+  if (dataSource === 'metric' && options.metric) requirements.metrics = [{ metric: options.metric, include_latest: true, include_series: options.chartType !== 'none' }];
+  if (dataSource === 'batteryHealth') requirements.batteryHealth = true;
+  if (dataSource === 'chargingSummary') requirements.chargingSummary = true;
+  if (requirements.metrics?.[0]?.metric === 'avg_efficiency' || dataSource === 'efficiencySummary') requirements.efficiencySummary = true;
+  if (dataSource === 'vehicleStatus' || usesStatus(options)) requirements.status = true;
+  return requirements;
+}
+
+
+const SENSOR_CHART_POLICIES: Record<SensorChartType | 'none', { filtered: boolean; curved: boolean }> = {
+  none: { filtered: false, curved: false },
+  line: { filtered: true, curved: true },
+  area: { filtered: true, curved: true },
+  bar: { filtered: true, curved: false },
+  daily_delta: { filtered: true, curved: false },
+};
+
+function registeredSensorOptions(definition: SensorDefinition) {
+  const defaults = {
+    metric: '', icon: definition.icon, chartType: definition.chartType,
+    dataSource: 'metric', valuePath: '', fallbackValuePath: '', valueFormula: '', unit: null,
+    inlineSecondaryPath: '', inlineSecondaryFormula: '', inlineSecondaryTemplate: '',
+    inlineSecondaryUnit: null, inlineSecondaryPrefix: '', secondaryTemplate: '', helpText: '',
+    labelSuffix: '', valueMode: definition.valueMode, valueColor: 'accent',
+  };
+  const fields = resolveWidgetOptions(defaults, definition);
+  const policy = SENSOR_CHART_POLICIES[definition.chartType];
   return {
-    ...(metric ? {
-      metrics: [{
-        metric,
-        include_latest: true,
-        include_series: options.chartType !== 'none',
-      }],
-    } : {}),
-    ...(options.dataSource === 'batteryHealth' ? { batteryHealth: true } : {}),
-    ...(options.dataSource === 'chargingSummary' ? { chargingSummary: true } : {}),
-    ...(metric === 'avg_efficiency' || options.dataSource === 'efficiencySummary' ? { efficiencySummary: true } : {}),
-    ...(options.dataSource === 'vehicleStatus' || usesStatus(options) ? { status: true } : {}),
+    ...fields, showSprite: definition.chartType !== 'none',
+    timeFilter: policy.filtered ? DEFAULT_SPRITE_TIME_FILTER : 'raw',
+    showSubtitle: false, accentBorder: definition.accent ?? false, valueSize: 'md',
+    ...(definition.cumulative === true ? { windowDays: DEFAULT_WINDOW_DAYS } : {}),
   };
 }
 
 for (const definition of SENSOR_DEFINITIONS) {
-  const cumulative = definition.cumulative === true;
   registerWidget({
     componentType: 'sensor',
     definitionId: definition.id,
     title: definition.title,
     defaultSize: { w: 3, h: 2 },
     minSize: { w: 2, h: 2 },
-    defaultOptions: {
-      metric: definition.metric ?? '',
-      icon: definition.icon,
-      chartType: definition.chartType,
-      dataSource: definition.dataSource ?? 'metric',
-      valuePath: definition.valuePath ?? '',
-      fallbackValuePath: definition.fallbackValuePath ?? '',
-      valueFormula: definition.valueFormula ?? '',
-      unit: definition.unit ?? null,
-      inlineSecondaryPath: definition.inlineSecondaryPath ?? '',
-      inlineSecondaryFormula: definition.inlineSecondaryFormula ?? '',
-      inlineSecondaryTemplate: definition.inlineSecondaryTemplate ?? '',
-      inlineSecondaryUnit: definition.inlineSecondaryUnit ?? null,
-      inlineSecondaryPrefix: definition.inlineSecondaryPrefix ?? '',
-      secondaryTemplate: definition.secondaryTemplate ?? '',
-      helpText: definition.helpText ?? '',
-      labelSuffix: definition.labelSuffix ?? '',
-      valueMode: definition.valueMode,
-      valueColor: definition.valueColor ?? 'accent',
-      showSprite: definition.chartType !== 'none',
-      timeFilter: definition.chartType === 'line' || definition.chartType === 'area' || definition.chartType === 'bar' || definition.chartType === 'daily_delta'
-        ? DEFAULT_SPRITE_TIME_FILTER
-        : 'raw',
-      showSubtitle: false,
-      accentBorder: definition.accent ?? false,
-      valueSize: 'md',
-      ...(cumulative ? { windowDays: DEFAULT_WINDOW_DAYS } : {}),
-    },
+    defaultOptions: registeredSensorOptions(definition),
     editor: {
       category: 'Sensors',
       description:

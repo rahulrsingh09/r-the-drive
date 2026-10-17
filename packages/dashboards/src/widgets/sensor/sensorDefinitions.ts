@@ -1,3 +1,4 @@
+import { sensorTextColor } from './sensorColor';
 import type { MiniSparklineType } from '@panda/ui/charts';
 import type { ChartColorDefinition, ChartColorToken, ThemePalette, TimeframeScope } from '@panda/types';
 
@@ -223,17 +224,7 @@ export function resolveSensorValueColor(
   metricColor: string,
   isDark: boolean,
 ) {
-  if (isDark) return metricColor;
-  const selectedToken = typeof curveColor === 'string'
-    ? curveColor
-    : typeof curveColor === 'object' && curveColor.mode === 'token'
-      ? curveColor.token
-      : automaticColor;
-  if (/^series-(0[1-9]|1[0-6])$/.test(selectedToken)) return `var(--rm-${selectedToken}-text)`;
-  if (typeof curveColor === 'object' && curveColor.mode === 'custom') {
-    return `color-mix(in srgb, ${metricColor} 50%, var(--rm-text-primary) 50%)`;
-  }
-  return metricColor;
+  return sensorTextColor(curveColor, automaticColor, metricColor, isDark);
 }
 
 const definitionById = new Map(SENSOR_DEFINITIONS.map((definition) => [definition.id, definition]));

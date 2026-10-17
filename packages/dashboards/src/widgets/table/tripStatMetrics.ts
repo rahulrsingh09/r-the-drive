@@ -16,30 +16,27 @@ export function getTripStatKind(metric: string | null | undefined): TripStatKind
 }
 
 export function computeTripStat(stat: TripStatKind, trips: TripRow[]): number | null {
-  if (trips.length === 0) return null;
-  if (stat === 'count') return trips.length;
-  if (stat === 'miles') return trips.reduce((sum, trip) => sum + trip.distance_mi, 0);
-  if (stat === 'duration') return trips.reduce((sum, trip) => sum + trip.duration_min, 0) / trips.length;
-
-  const weightedTrips = trips.filter((trip) => trip.distance_mi > 0 && trip.efficiency_wh_mi != null);
-  if (weightedTrips.length === 0) return null;
-
-  const totalDistance = weightedTrips.reduce((sum, trip) => sum + trip.distance_mi, 0);
-  if (totalDistance <= 0) return null;
-
-  const weightedEfficiency = weightedTrips.reduce(
-    (sum, trip) => sum + (trip.distance_mi * (trip.efficiency_wh_mi ?? 0)),
-    0,
-  );
-  return weightedEfficiency / totalDistance;
+  if (!trips.length) return null;
+  const totals = { miles: 0, minutes: 0, weightedEnergy: 0, weightedMiles: 0 };
+  for (const trip of trips) {
+    totals.miles += trip.distance_mi;
+    totals.minutes += trip.duration_min;
+    if (trip.distance_mi > 0 && trip.efficiency_wh_mi != null) {
+      totals.weightedMiles += trip.distance_mi;
+      totals.weightedEnergy += trip.distance_mi * trip.efficiency_wh_mi;
+    }
+  }
+  switch (stat) {
+    case 'count': return trips.length;
+    case 'miles': return totals.miles;
+    case 'duration': return totals.minutes / trips.length;
+    default: return totals.weightedMiles > 0 ? totals.weightedEnergy / totals.weightedMiles : null;
+  }
 }
 
 export function formatTripStat(stat: TripStatKind, value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '-';
-  if (stat === 'miles') return formatMiles(value);
-  if (stat === 'duration') return formatDuration(value);
-  if (stat === 'efficiency') return formatEfficiency(value);
-  return value.toFixed(0);
+  const formatters = { miles: formatMiles, duration: formatDuration, efficiency: formatEfficiency, count: (count: number) => count.toFixed(0) };
+  return value !== null && Number.isFinite(value) ? formatters[stat](value) : '-';
 }
 
 export function formatTripSelectionLabel(count: number) {

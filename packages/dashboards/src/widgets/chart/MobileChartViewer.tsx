@@ -1,3 +1,4 @@
+import { useMobileChartController } from './mobileChartController';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, RotateCw, X } from 'lucide-react';
@@ -25,163 +26,8 @@ export function MobileChartViewer({
   onClose,
   children,
 }: MobileChartViewerProps) {
-  const rootRef = React.useRef<HTMLDivElement | null>(null);
-  const closeRef = React.useRef<HTMLButtonElement | null>(null);
-  const closedRef = React.useRef(false);
-  const viewerTapRef = React.useRef<{ pointerId: number; x: number; y: number; moved: boolean; multiTouch: boolean } | null>(null);
-  const [isPortrait, setIsPortrait] = React.useState(() => isPortraitViewport());
-  const [chartHeight, setChartHeight] = React.useState(() => getChartHeight());
-  const [showControls, setShowControls] = React.useState(true);
-
-  const hideControls = React.useCallback(() => {
-    setShowControls(false);
-    rootRef.current?.focus();
-  }, []);
-
-  const toggleControls = React.useCallback(() => {
-    setShowControls((visible) => !visible);
-  }, []);
-
-  const close = React.useCallback(() => {
-    if (closedRef.current) return;
-    closedRef.current = true;
-    if (document.fullscreenElement === rootRef.current) {
-      void document.exitFullscreen?.().catch(() => undefined);
-    }
-    try {
-      screen.orientation?.unlock?.();
-    } catch {
-      // Orientation support is optional and should never prevent closing.
-    }
-    onClose();
-  }, [onClose]);
-
-  React.useEffect(() => {
-    const updateViewport = () => {
-      setIsPortrait(isPortraitViewport());
-      setChartHeight(getChartHeight());
-    };
-    const orientationQuery = window.matchMedia('(orientation: portrait)');
-    orientationQuery.addEventListener('change', updateViewport);
-    window.addEventListener('resize', updateViewport);
-    updateViewport();
-    return () => {
-      orientationQuery.removeEventListener('change', updateViewport);
-      window.removeEventListener('resize', updateViewport);
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (isPortrait) {
-      setShowControls(true);
-      return undefined;
-    }
-    const timer = window.setTimeout(hideControls, 1000);
-    return () => window.clearTimeout(timer);
-  }, [hideControls, isPortrait]);
-
-  React.useEffect(() => {
-    const scrollY = window.scrollY;
-    const previousDocumentOverflow = document.documentElement.style.overflow;
-    const previousDocumentOverscroll = document.documentElement.style.overscrollBehavior;
-    const previousBodyStyles = {
-      overflow: document.body.style.overflow,
-      overscrollBehavior: document.body.style.overscrollBehavior,
-      position: document.body.style.position,
-      top: document.body.style.top,
-      width: document.body.style.width,
-    };
-    const appRoot = document.getElementById('root');
-    const previousInert = appRoot?.inert;
-
-    document.documentElement.style.overflow = 'hidden';
-    document.documentElement.style.overscrollBehavior = 'none';
-    document.body.style.overflow = 'hidden';
-    document.body.style.overscrollBehavior = 'none';
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${scrollY}px`;
-    document.body.style.width = '100%';
-    if (appRoot) appRoot.inert = true;
-    closeRef.current?.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
-    };
-    const onFullscreenChange = () => {
-      if (!closedRef.current && document.fullscreenElement == null) close();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-
-    const root = rootRef.current;
-    if (root?.requestFullscreen) {
-      void root.requestFullscreen()
-        .then(async () => {
-          try {
-            await screen.orientation?.lock?.('landscape');
-          } catch {
-            // iOS and many browser contexts intentionally reject orientation locks.
-          }
-        })
-        .catch(() => undefined);
-    }
-
-    return () => {
-      document.documentElement.style.overflow = previousDocumentOverflow;
-      document.documentElement.style.overscrollBehavior = previousDocumentOverscroll;
-      document.body.style.overflow = previousBodyStyles.overflow;
-      document.body.style.overscrollBehavior = previousBodyStyles.overscrollBehavior;
-      document.body.style.position = previousBodyStyles.position;
-      document.body.style.top = previousBodyStyles.top;
-      document.body.style.width = previousBodyStyles.width;
-      if (appRoot) appRoot.inert = previousInert ?? false;
-      if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('fullscreenchange', onFullscreenChange);
-    };
-  }, [close]);
-
+  const { rootRef, closeRef, close, isPortrait, chartHeight, showControls, onViewerPointerDownCapture, onViewerPointerMoveCapture, onViewerPointerUpCapture, onViewerKeyDown, cancelPointer } = useMobileChartController(onClose);
   if (typeof document === 'undefined') return null;
-
-  const isInteractiveTarget = (target: EventTarget | null) => (
-    target instanceof Element
-    && target.closest('button, input, select, textarea, a, [role="option"], [data-mobile-chart-controls="true"]') !== null
-  );
-
-  const onViewerPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (isPortrait || isInteractiveTarget(event.target)) return;
-    if (viewerTapRef.current) {
-      viewerTapRef.current.multiTouch = true;
-      return;
-    }
-    viewerTapRef.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      moved: false,
-      multiTouch: false,
-    };
-  };
-
-  const onViewerPointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
-    const tap = viewerTapRef.current;
-    if (!tap || tap.pointerId !== event.pointerId) return;
-    if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 12) tap.moved = true;
-  };
-
-  const onViewerPointerUpCapture = (event: React.PointerEvent<HTMLDivElement>) => {
-    const tap = viewerTapRef.current;
-    if (!tap || tap.pointerId !== event.pointerId) return;
-    viewerTapRef.current = null;
-    if (!tap.moved && !tap.multiTouch && !isInteractiveTarget(event.target)) toggleControls();
-  };
-
-  const onViewerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggleControls();
-    }
-  };
 
   return createPortal(
     <div
@@ -196,7 +42,7 @@ export function MobileChartViewer({
       onPointerDownCapture={onViewerPointerDownCapture}
       onPointerMoveCapture={onViewerPointerMoveCapture}
       onPointerUpCapture={onViewerPointerUpCapture}
-      onPointerCancelCapture={() => { viewerTapRef.current = null; }}
+      onPointerCancelCapture={cancelPointer}
       onKeyDown={onViewerKeyDown}
     >
       <p id="mobile-chart-viewer-instructions" className="sr-only">Tap the chart, or press Enter or Space, to show or hide chart controls. Press Escape to close the expanded chart.</p>
@@ -258,14 +104,4 @@ export function MobileChartViewer({
     </div>,
     document.body,
   );
-}
-
-function isPortraitViewport() {
-  return typeof window !== 'undefined' && window.matchMedia('(orientation: portrait)').matches;
-}
-
-function getChartHeight() {
-  if (typeof window === 'undefined') return 320;
-  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-  return Math.max(240, Math.floor(viewportHeight - 16));
 }

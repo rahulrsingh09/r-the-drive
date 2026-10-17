@@ -8,7 +8,7 @@ import type { VehicleStatus } from '@panda/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 
-type StatCtx = { health: BatteryHealthSummary; status: VehicleStatus | null | undefined };
+
 
 interface BatteryStatDefinition {
   id: string;
@@ -16,13 +16,35 @@ interface BatteryStatDefinition {
   icon: string;
   accentBorder?: boolean;
   labelSuffix?: string;
-  getValue: (ctx: StatCtx) => string;
-  getInlineSecondary?: (ctx: StatCtx) => string | undefined;
-  getSecondary?: (ctx: StatCtx) => string | undefined;
+
 }
 
-function fmt(value: number | null | undefined, fn: (v: number) => string): string {
-  return value == null ? '—' : fn(value);
+function batteryReadout(id: string, health: BatteryHealthSummary, status: VehicleStatus | null | undefined) {
+  const fields: Record<string, [number | null | undefined, 'percent' | 'energy' | 'count']> = {
+    health_pct: [health.battery_health_pct, 'percent'],
+    estimated_degradation_pct: [health.estimated_degradation_pct, 'percent'],
+    usable_capacity: [health.usable_now_kwh, 'energy'],
+    charge_count: [health.charge_count, 'count'],
+    charging_cycles: [health.charging_cycles || health.charge_count, 'count'],
+    energy_added: [health.total_energy_added_kwh, 'energy'],
+    charge_efficiency: [health.charging_efficiency_pct, 'percent'],
+  };
+  const result: { value: string; inlineSecondary?: string; secondary?: string } = { value: '—' };
+  if (id === 'max_range') {
+    const range = status?.range_miles;
+    const level = status?.battery_level;
+    if (range == null || level == null || level <= 0) return result;
+    const projected = range / level * 100;
+    result.value = `${formatNumber(projected, 0)} mi`;
+    if (health.battery_health_pct != null && health.battery_health_pct > 0) result.inlineSecondary = `/${formatNumber(projected / health.battery_health_pct * 100, 0)} mi`;
+    return result;
+  }
+  const [number, kind] = fields[id]!;
+  if (kind === 'count') result.value = formatNumber(number as number, 0);
+  else if (number != null) result.value = kind === 'energy' ? formatKwh(number) : formatPercent(number, 1);
+  if (id === 'usable_capacity' && health.usable_new_kwh != null) result.inlineSecondary = `/${formatKwh(health.usable_new_kwh)}`;
+  if (id === 'charge_count' && health.charging_cycles != null) result.secondary = `${formatNumber(health.charging_cycles, 0)} cycles`;
+  return result;
 }
 
 const BATTERY_STAT_DEFINITIONS: BatteryStatDefinition[] = [
@@ -31,74 +53,43 @@ const BATTERY_STAT_DEFINITIONS: BatteryStatDefinition[] = [
     title: 'Battery Health',
     icon: 'lucide:shield-check',
     accentBorder: true,
-    getValue: ({ health }) => fmt(health.battery_health_pct, (v) => formatPercent(v, 1)),
   },
   {
     id: 'estimated_degradation_pct',
     title: 'Estimated Degradation',
     icon: 'lucide:trending-down',
-    getValue: ({ health }) => fmt(health.estimated_degradation_pct, (v) => formatPercent(v, 1)),
   },
   {
     id: 'usable_capacity',
     title: 'Capacity',
     icon: 'lucide:battery',
     labelSuffix: 'now/new',
-    getValue: ({ health }) => fmt(health.usable_now_kwh, formatKwh),
-    getInlineSecondary: ({ health }) =>
-      health.usable_new_kwh != null ? `/${formatKwh(health.usable_new_kwh)}` : undefined,
   },
   {
     id: 'max_range',
     title: 'Max Range',
     icon: 'lucide:route',
     labelSuffix: 'now/new',
-    getValue: ({ status }) => {
-      const range = status?.range_miles ?? null;
-      const level = status?.battery_level ?? null;
-      if (range == null || level == null || level <= 0) return '—';
-      return `${formatNumber(range / level * 100, 0)} mi`;
-    },
-    getInlineSecondary: ({ health, status }) => {
-      const range = status?.range_miles ?? null;
-      const level = status?.battery_level ?? null;
-      if (range == null || level == null || level <= 0) return undefined;
-      const maxNow = range / level * 100;
-      const healthPct = health.battery_health_pct;
-      if (healthPct == null || healthPct <= 0) return undefined;
-      return `/${formatNumber(maxNow / healthPct * 100, 0)} mi`;
-    },
   },
   {
     id: 'charge_count',
     title: 'Charges',
     icon: 'lucide:refresh-cw',
-    getValue: ({ health }) => formatNumber(health.charge_count, 0),
-    getSecondary: ({ health }) =>
-      health.charging_cycles != null
-        ? `${formatNumber(health.charging_cycles, 0)} cycles`
-        : undefined,
   },
   {
     id: 'charging_cycles',
     title: 'Charging Cycles',
     icon: 'lucide:refresh-ccw',
-    getValue: ({ health }) => {
-      const cycles = health.charging_cycles || health.charge_count;
-      return formatNumber(cycles, 0);
-    },
   },
   {
     id: 'energy_added',
     title: 'Energy Added',
     icon: 'lucide:bolt',
-    getValue: ({ health }) => fmt(health.total_energy_added_kwh, formatKwh),
   },
   {
     id: 'charge_efficiency',
     title: 'Charge Efficiency',
     icon: 'lucide:zap',
-    getValue: ({ health }) => fmt(health.charging_efficiency_pct, (v) => formatPercent(v, 1)),
   },
 ];
 
@@ -120,10 +111,9 @@ export function BatteryStatWidget({ instance, ctx }: { instance: WidgetInstance;
     );
   }
 
-  const statCtx: StatCtx = { health: health ?? {} as BatteryHealthSummary, status };
-  const value = isLoading ? '…' : (health ? definition.getValue(statCtx) : '—');
-  const inlineSecondary = !isLoading && health ? definition.getInlineSecondary?.(statCtx) : undefined;
-  const secondary = !isLoading && health ? definition.getSecondary?.(statCtx) : undefined;
+  const { value, inlineSecondary, secondary } = isLoading
+    ? { value: '…', inlineSecondary: undefined, secondary: undefined }
+    : health ? batteryReadout(definition.id, health, status) : { value: '—', inlineSecondary: undefined, secondary: undefined };
 
   return (
     <Card

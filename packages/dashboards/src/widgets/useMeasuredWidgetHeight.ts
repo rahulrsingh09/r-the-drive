@@ -2,24 +2,15 @@ import React from 'react';
 
 export function useMeasuredWidgetHeight(fallback = 260, minimum = 140) {
   const ref = React.useRef<HTMLDivElement | null>(null);
-  const [height, setHeight] = React.useState(fallback);
-
+  const [pixels, measure] = React.useReducer((previous: number, next: number) => next > 0 ? Math.floor(next) : previous, fallback);
   React.useEffect(() => {
-    const element = ref.current;
-    if (!element || typeof ResizeObserver === 'undefined') return undefined;
-
-    const update = () => {
-      const bounds = element.getBoundingClientRect();
-      if (bounds.height > 0) {
-        setHeight(Math.floor(bounds.height));
-      }
-    };
-
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
+    const target = ref.current;
+    if (typeof ResizeObserver !== 'function' || target === null) return;
+    const sample = () => measure(target.getBoundingClientRect().height);
+    const observer = new ResizeObserver(sample);
+    sample();
+    observer.observe(target);
+    return () => { observer.disconnect(); };
   }, []);
-
-  return { ref, height: Math.max(minimum, height || fallback) };
+  return { ref, height: Math.max(minimum, pixels || fallback) };
 }

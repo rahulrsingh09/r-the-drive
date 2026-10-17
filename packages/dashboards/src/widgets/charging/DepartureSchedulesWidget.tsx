@@ -1,3 +1,5 @@
+import { departurePresentation } from './schedulePresentation';
+import { scheduleFields, parseScheduleClock, scheduleNumber, toggleScheduleDay, useScheduleDraft } from './scheduleState';
 import React from 'react';
 import { AlarmClock, Plus, Trash2, ChevronDown, ChevronUp, Thermometer, Wind } from 'lucide-react';
 import {
@@ -21,26 +23,12 @@ const HEAT_LABELS = ['Off', 'Low', 'Med', 'High'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function minutesToTime(mins: number | undefined): string {
-  if (mins === undefined) return '';
-  const h = Math.floor(mins / 60) % 24;
-  const m = mins % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
 function timeToMinutes(t: string): number {
-  const [h, m] = t.split(':').map(Number);
-  return (h ?? 0) * 60 + (m ?? 0);
+  return parseScheduleClock(t, false)!;
 }
 
-function formatOccurrence(sched: DepartureSchedule): string {
-  const occ = sched.occurrence;
-  if (!occ) return 'Not configured';
-  const timeStr = minutesToTime(occ.time_minutes);
-  const days = occ.days ?? [];
-  if (days.length === 0) return timeStr || 'Not configured';
-  const dayStr = days.length === 7 ? 'Every day' : days.map((d) => d.slice(0, 3)).join(', ');
-  return `${dayStr} at ${timeStr}`;
+export function formatOccurrence(sched: DepartureSchedule): string {
+  return departurePresentation(sched).occurrence;
 }
 
 // ── New schedule form state ────────────────────────────────────────────────────
@@ -69,25 +57,15 @@ function emptyForm(): NewForm {
   };
 }
 
-function formToInput(f: NewForm): DepartureScheduleInput {
+export function formToInput(f: NewForm): DepartureScheduleInput {
   const comfortSettings: DepartureComfortSettings = {};
-  if (f.seatFlHeat > 0) comfortSettings.seat_fl_heat = f.seatFlHeat;
-  if (f.seatFrHeat > 0) comfortSettings.seat_fr_heat = f.seatFrHeat;
-  if (f.cabinTempC !== '') {
-    const parsed = parseFloat(f.cabinTempC);
-    if (!isNaN(parsed)) comfortSettings.cabin_temp_c = parsed;
-  }
+  const heat = { seat_fl_heat: f.seatFlHeat, seat_fr_heat: f.seatFrHeat };
+  for (const key of ['seat_fl_heat', 'seat_fr_heat'] as const) if (heat[key] > 0) comfortSettings[key] = heat[key];
+  const cabin = scheduleNumber(f.cabinTempC);
+  if (cabin !== null) comfortSettings.cabin_temp_c = cabin;
   if (f.defrost) comfortSettings.defrost = true;
-  return {
-    name: f.name || null,
-    enabled: f.enabled,
-    occurrence: {
-      type: 'RepeatsWeekly',
-      days: f.days,
-      time_minutes: timeToMinutes(f.time),
-    },
-    comfort_settings: Object.keys(comfortSettings).length > 0 ? comfortSettings : null,
-  };
+  const occurrence = { type: 'RepeatsWeekly' as const, days: f.days, time_minutes: timeToMinutes(f.time) };
+  return { name: f.name || null, enabled: f.enabled, occurrence, comfort_settings: Object.keys(comfortSettings).length ? comfortSettings : null };
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -106,10 +84,7 @@ function ScheduleCard({
   deleting: boolean;
 }) {
   const [expanded, setExpanded] = React.useState(false);
-  const comfort = schedule.comfort_settings;
-  const hasComfort =
-    comfort &&
-    (comfort.seat_fl_heat || comfort.seat_fr_heat || comfort.cabin_temp_c !== undefined || comfort.defrost);
+  const { hasComfort, pills, selectedDays } = departurePresentation(schedule);
 
   return (
     <div className="rounded-xl border border-border bg-bg-elevated overflow-hidden">
@@ -171,7 +146,7 @@ function ScheduleCard({
             <span
               key={day}
               className={`flex h-5 w-6 items-center justify-center rounded text-[10px] font-medium ${
-                schedule.occurrence!.days!.includes(day)
+                selectedDays.has(day)
                   ? 'bg-accent/20 text-accent'
                   : 'bg-bg-page text-fg-tertiary'
               }`}
@@ -185,18 +160,11 @@ function ScheduleCard({
       {/* Comfort settings */}
       {expanded && hasComfort && (
         <div className="flex flex-wrap gap-2 border-t border-border px-3 py-2.5">
-          {(comfort!.seat_fl_heat !== undefined && comfort!.seat_fl_heat > 0) && (
-            <ComfortPill icon={<Thermometer className="h-3 w-3" />} label={`FL Seat: ${HEAT_LABELS[comfort!.seat_fl_heat ?? 0]}`} />
-          )}
-          {(comfort!.seat_fr_heat !== undefined && comfort!.seat_fr_heat > 0) && (
-            <ComfortPill icon={<Thermometer className="h-3 w-3" />} label={`FR Seat: ${HEAT_LABELS[comfort!.seat_fr_heat ?? 0]}`} />
-          )}
-          {comfort!.cabin_temp_c !== undefined && (
-            <ComfortPill icon={<Thermometer className="h-3 w-3" />} label={`Cabin: ${comfort!.cabin_temp_c}°C`} />
-          )}
-          {comfort!.defrost && (
-            <ComfortPill icon={<Wind className="h-3 w-3" />} label="Defrost" />
-          )}
+          {pills.map((pill) => <ComfortPill
+            key={pill.label}
+            icon={pill.kind === 'wind' ? <Wind className="h-3 w-3" /> : <Thermometer className="h-3 w-3" />}
+            label={pill.label}
+          />)}
         </div>
       )}
     </div>
@@ -226,12 +194,10 @@ function NewScheduleForm({
   saving: boolean;
 }) {
   function toggleDay(day: string) {
-    setForm((prev) => ({
-      ...prev,
-      days: prev.days.includes(day) ? prev.days.filter((d) => d !== day) : [...prev.days, day],
-    }));
-  }
+    setForm((form) => ({ ...form, days: toggleScheduleDay(form.days, day) }));
+}
 
+  const fields = scheduleFields(setForm);
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-accent/30 bg-bg-elevated p-3">
       <p className="text-sm font-medium text-fg">New Departure Schedule</p>
@@ -242,7 +208,7 @@ function NewScheduleForm({
         <input
           type="text"
           value={form.name}
-          onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+          onChange={(e) => fields.field('name', e.target.value)}
           placeholder="e.g. Work commute"
           className="h-9 w-full rounded-lg border border-border bg-bg-page px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
         />
@@ -254,7 +220,7 @@ function NewScheduleForm({
         <input
           type="time"
           value={form.time}
-          onChange={(e) => setForm((p) => ({ ...p, time: e.target.value }))}
+          onChange={(e) => fields.field('time', e.target.value)}
           className="h-9 w-full rounded-lg border border-border bg-bg-page px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
         />
       </div>
@@ -287,12 +253,12 @@ function NewScheduleForm({
           <HeatSelect
             label="FL Seat Heat"
             value={form.seatFlHeat}
-            onChange={(v) => setForm((p) => ({ ...p, seatFlHeat: v }))}
+            onChange={(v) => fields.field('seatFlHeat', v)}
           />
           <HeatSelect
             label="FR Seat Heat"
             value={form.seatFrHeat}
-            onChange={(v) => setForm((p) => ({ ...p, seatFrHeat: v }))}
+            onChange={(v) => fields.field('seatFrHeat', v)}
           />
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -304,7 +270,7 @@ function NewScheduleForm({
               min="15"
               max="32"
               value={form.cabinTempC}
-              onChange={(e) => setForm((p) => ({ ...p, cabinTempC: e.target.value }))}
+              onChange={(e) => fields.field('cabinTempC', e.target.value)}
               placeholder="e.g. 21"
               className="h-8 w-full rounded-lg border border-border bg-bg-page px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
@@ -313,7 +279,7 @@ function NewScheduleForm({
             <input
               type="checkbox"
               checked={form.defrost}
-              onChange={(e) => setForm((p) => ({ ...p, defrost: e.target.checked }))}
+              onChange={(e) => fields.field('defrost', e.target.checked)}
               className="h-4 w-4 accent-[color:var(--rm-accent)]"
             />
             <span className="text-sm text-fg">Defrost</span>
@@ -366,42 +332,17 @@ function DepartureSchedulesWidget({
   const deleteSchedule = useDeleteDepartureSchedule(vehicleId);
   const isDemo = vehicles?.find((vehicle) => vehicle.id === vehicleId)?.is_demo ?? false;
 
-  const [showCreate, setShowCreate] = React.useState(false);
-  const [newForm, setNewForm] = React.useState<NewForm>(emptyForm);
-  const [deletingId, setDeletingId] = React.useState<string | null>(null);
-  const [togglingId, setTogglingId] = React.useState<string | null>(null);
-
-  async function handleCreate() {
-    await createSchedule.mutateAsync(formToInput(newForm));
-    setShowCreate(false);
-    setNewForm(emptyForm());
+  const draft = useScheduleDraft(emptyForm());
+  const { open: showCreate, form: newForm, setForm: setNewForm, show: setShowCreate } = draft;
+  const deletingId = draft.pending.delete ?? null, togglingId = draft.pending.toggle ?? null;
+  async function handleCreate() { await createSchedule.mutateAsync(formToInput(newForm)); draft.show(false, emptyForm()); }
+  function handleToggle(schedule: DepartureSchedule) {
+    return draft.during('toggle', schedule.id, () => updateSchedule.mutateAsync({
+      scheduleId: schedule.rivian_schedule_id,
+      body: { name: schedule.name, enabled: !schedule.enabled, occurrence: schedule.occurrence, comfort_settings: schedule.comfort_settings },
+    }));
   }
-
-  async function handleToggle(sched: DepartureSchedule) {
-    setTogglingId(sched.id);
-    try {
-      await updateSchedule.mutateAsync({
-        scheduleId: sched.rivian_schedule_id,
-        body: {
-          name: sched.name,
-          enabled: !sched.enabled,
-          occurrence: sched.occurrence,
-          comfort_settings: sched.comfort_settings,
-        },
-      });
-    } finally {
-      setTogglingId(null);
-    }
-  }
-
-  async function handleDelete(sched: DepartureSchedule) {
-    setDeletingId(sched.id);
-    try {
-      await deleteSchedule.mutateAsync(sched.rivian_schedule_id);
-    } finally {
-      setDeletingId(null);
-    }
-  }
+  function handleDelete(schedule: DepartureSchedule) { return draft.during('delete', schedule.id, () => deleteSchedule.mutateAsync(schedule.rivian_schedule_id)); }
 
   if (isDemo) {
     return (
@@ -431,7 +372,7 @@ function DepartureSchedulesWidget({
             size="sm"
             variant="secondary"
             iconLeft={<Plus className="h-3.5 w-3.5" />}
-            onClick={() => { setNewForm(emptyForm()); setShowCreate(true); }}
+            onClick={() => { draft.show(true, emptyForm()); }}
           >
             New
           </Button>

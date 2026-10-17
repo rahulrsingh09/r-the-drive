@@ -1,59 +1,38 @@
-import React from 'react';
 import type { TripRow } from '@panda/ui/tables';
+import { createWidgetStore } from '../widgetStore';
 
-type Listener = () => void;
+type Selection = { selectedIds: string[]; tripRegistry: Record<string, TripRow>; contextKey: string };
+type SelectionEvent = { type: 'reset'; context: string; force?: boolean | undefined } | { type: 'toggle'; id: string } | { type: 'clear' };
+const selection = createWidgetStore<Selection, SelectionEvent>(
+  { selectedIds: [], tripRegistry: {}, contextKey: '' },
+  (state, event) => {
+    switch (event.type) {
+      case 'reset':
+        return !event.force && state.contextKey === event.context ? state : { selectedIds: [], tripRegistry: {}, contextKey: event.context };
+      case 'clear':
+        return state.selectedIds.length ? { ...state, selectedIds: [] } : state;
+      case 'toggle': {
+        const selectedIds = state.selectedIds.slice();
+        const index = selectedIds.indexOf(event.id);
+        if (index < 0) selectedIds.push(event.id);
+        else selectedIds.splice(index, 1);
+        return { ...state, selectedIds };
+      }
+    }
+  },
+);
 
-const _state = {
-  selectedIds: [] as string[],
-  tripRegistry: {} as Record<string, TripRow>,
-  contextKey: '',
-};
-
-const _listeners = new Set<Listener>();
-
-function _notify() {
-  for (const fn of _listeners) fn();
-}
-
-/** Resets selection when the vehicle/date context changes, or forcibly when requested. */
 export function resetTripSelection(contextKey: string, options?: { force?: boolean }) {
-  if (!options?.force && _state.contextKey === contextKey) return;
-  _state.contextKey = contextKey;
-  _state.selectedIds = [];
-  _state.tripRegistry = {};
-  _notify();
+  selection.send({ type: 'reset', context: contextKey, force: options?.force });
 }
+export function toggleTripSelection(id: string) { selection.send({ type: 'toggle', id }); }
+export function clearTripSelection() { selection.send({ type: 'clear' }); }
 
-export function toggleTripSelection(id: string) {
-  _state.selectedIds = _state.selectedIds.includes(id)
-    ? _state.selectedIds.filter((x) => x !== id)
-    : [..._state.selectedIds, id];
-  _notify();
-}
-
-export function clearTripSelection() {
-  if (_state.selectedIds.length === 0) return;
-  _state.selectedIds = [];
-  _notify();
-}
-
-/** Adds trips to the registry so stats can be computed from selected trip data. */
+/** Registration is deliberately silent; selection events publish the accumulated rows. */
 export function registerTripsInStore(trips: TripRow[]) {
-  for (const trip of trips) {
-    _state.tripRegistry[trip.id] = trip;
-  }
+  Object.assign(selection.read().tripRegistry, Object.fromEntries(trips.map((trip) => [trip.id, trip])));
 }
-
 export function useTripSelection() {
-  const [, rerender] = React.useReducer((n: number) => n + 1, 0);
-  React.useEffect(() => {
-    _listeners.add(rerender);
-    return () => {
-      _listeners.delete(rerender);
-    };
-  }, []);
-  return {
-    selectedIds: _state.selectedIds,
-    tripRegistry: _state.tripRegistry,
-  };
+  const { selectedIds, tripRegistry } = selection.useSnapshot();
+  return { selectedIds, tripRegistry };
 }

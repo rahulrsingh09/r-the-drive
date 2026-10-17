@@ -1,3 +1,11 @@
+import { widgetChartCapabilities } from './chartCapabilities';
+import { scatterBuckets, scatterPalette } from './scatterProjection';
+import { resolveWidgetOptions } from '../widgetOptions';
+import { efficiencyProjection, efficiencyRows, efficiencyTimeline } from './efficiencyProjection';
+import { useWidgetDialogDismiss, useCompatibleWidgetMedia } from '../widgetLifecycle';
+import { mileageProjection } from './mileageProjection';
+import { canonicalSeriesStyle, chartDomain, chartMark, projectTimestampValues } from './chartProjection';
+import { prepareSessionCurve, sessionHourSplits } from './sessionCurve';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Maximize2, SlidersHorizontal, X } from 'lucide-react';
@@ -52,12 +60,7 @@ import { formatDriveMode } from '@panda/ui/lib/driveMode';
 import {
   formatMiles,
   formatTemp,
-  getEfficiencyDisplay,
-  getUnitSystem,
   getUnitPreferences,
-  whPerMileToKmPerKwh,
-  whPerMileToMiPerKwh,
-  whPerMileToWhPerKm,
 } from '@panda/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@panda/ui/lib/vehicleTires';
 import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@panda/types';
@@ -66,8 +69,6 @@ import {
   getChartDefinition,
   getChartDefinitions,
   getChartOptions,
-  getChartSettingsCapabilities,
-  supportsDashboardChartSmoothness,
   type DashboardChartAxisCapability,
   type DashboardChartAxisId,
   type DashboardChartDefinition,
@@ -150,66 +151,79 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
   const options = (instance.options ?? {}) as DashboardChartOptions;
   const managed = instance.managed === true || options.managed === true;
   const page = isDashboardChartPage(options.page) ? options.page : undefined;
-  const catalogMode =
-    options.catalogMode ?? (page ? 'assigned' : options.chartIds ? 'fixed' : managed ? 'assigned' : 'legacy');
-  const pageDefinitions = getChartDefinitions(page);
-  const validIds = new Set(pageDefinitions.map((definition) => definition.id));
-  const chartIds = managed
-    ? pageDefinitions.map((definition) => definition.id)
-    : Array.isArray(options.chartIds)
-      ? [
-          ...new Set(
-            options.chartIds
-              .filter((id): id is string => typeof id === 'string')
-              .map(normalizeChartId)
-              .filter((id) => validIds.has(id))
-          ),
-        ]
-      : [];
-  const fallbackIds =
-    chartIds.length > 0 ? chartIds : pageDefinitions.map((definition) => definition.id);
-  const pageDefaultChartId = page === 'overview' ? 'projected-range-mileage' : undefined;
-  const fallbackChartId =
-    (pageDefaultChartId && fallbackIds.includes(pageDefaultChartId)
-      ? pageDefaultChartId
-      : fallbackIds[0]) ??
-    getChartDefinitions()[0]?.id ??
-    'projected-range-mileage';
-  const configuredChartId =
-    typeof options.chartId === 'string' ? normalizeChartId(options.chartId) : undefined;
-  const chartId =
-    configuredChartId && validIds.has(configuredChartId) ? configuredChartId : fallbackChartId;
-
+  const definitions = getChartDefinitions(page);
+  const ids = definitions.map((definition) => definition.id);
+  const valid = new Set(ids);
+  const selected = new Set<string>();
+  if (managed) ids.forEach((id) => selected.add(id));
+  else if (Array.isArray(options.chartIds)) for (const id of options.chartIds) {
+    if (typeof id !== 'string') continue;
+    const canonical = normalizeChartId(id);
+    if (valid.has(canonical)) selected.add(canonical);
+  }
+  const chartIds = selected.size ? [...selected] : ids;
+  const configured = typeof options.chartId === 'string' ? normalizeChartId(options.chartId) : undefined;
+  const preferred = page === 'overview' && chartIds.includes('projected-range-mileage') ? 'projected-range-mileage' : chartIds[0];
   return {
-    chartId,
-    chartIds: fallbackIds,
-    showPicker: options.showPicker ?? fallbackIds.length > 1,
-    legacyTimeFilter: normalizeTimeFilter(
-      options.timeFilter,
-      legacySmoothingToTimeFilter(options.curveSmoothing)
-    ),
-    legacySmoothness: normalizeCurveSmoothness(
-      options.smoothness,
-      normalizeCurveSmoothness(options.curveSmoothing)
-    ),
+    chartId: configured && valid.has(configured) ? configured : preferred ?? getChartDefinitions()[0]?.id ?? 'projected-range-mileage',
+    chartIds, showPicker: options.showPicker ?? chartIds.length > 1,
+    legacyTimeFilter: normalizeTimeFilter(options.timeFilter, legacySmoothingToTimeFilter(options.curveSmoothing)),
+    legacySmoothness: normalizeCurveSmoothness(options.smoothness, normalizeCurveSmoothness(options.curveSmoothing)),
     chartSettings: normalizeChartSettingsMap(options.chartSettings),
-    ...(page ? { page } : {}),
-    ...(typeof options.headerSubtitle === 'string'
-      ? { headerSubtitle: options.headerSubtitle }
-      : {}),
-    catalogMode,
-    requiredChartSlugs: Array.isArray(options.requiredChartSlugs)
-      ? options.requiredChartSlugs.filter((slug): slug is string => typeof slug === 'string')
-      : [],
+    ...(page ? { page } : {}), ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
+    catalogMode: options.catalogMode ?? (page ? 'assigned' : options.chartIds ? 'fixed' : managed ? 'assigned' : 'legacy'),
+    requiredChartSlugs: Array.isArray(options.requiredChartSlugs) ? options.requiredChartSlugs.filter((slug): slug is string => typeof slug === 'string') : [],
   };
 }
 
 const AXIS_ORDER: DashboardChartAxisId[] = ['x', 'y', 'y2'];
-const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
-  timeFilter: false,
-  axes: {},
-  xDomainSource: 'dashboard-timeframe',
-};
+
+type ChartChoice = { chartId: string; defaultChartId: string };
+type ChartChoiceEvent = { type: 'hydrate'; reset: boolean; favorite: string } | { type: 'select' | 'default'; id: string };
+function useChartChoice(initial: string, key: string, favorite: string, ready: boolean) {
+  const initialized = React.useRef<string | null>(null);
+  const [choice, dispatch] = React.useReducer((state: ChartChoice, event: ChartChoiceEvent): ChartChoice => {
+    const next = event.type === 'hydrate'
+      ? { chartId: event.reset ? event.favorite : state.chartId, defaultChartId: event.favorite }
+      : { ...state, [event.type === 'select' ? 'chartId' : 'defaultChartId']: event.id };
+    return next.chartId === state.chartId && next.defaultChartId === state.defaultChartId ? state : next;
+  }, { chartId: initial, defaultChartId: initial });
+  React.useEffect(() => {
+    if (!ready) return;
+    const reset = initialized.current !== key;
+    initialized.current = key;
+    dispatch({ type: 'hydrate', reset, favorite });
+  }, [key, favorite, ready]);
+  return { ...choice, setChartId: (id: string) => dispatch({ type: 'select', id }), setDefaultChartId: (id: string) => dispatch({ type: 'default', id }) };
+}
+
+function useChartDraft(initial: Record<string, DashboardChartDisplaySettings>, identity: unknown) {
+  const [settings, publish] = React.useState(initial);
+  const latest = React.useRef(initial);
+  React.useEffect(() => { latest.current = initial; publish(initial); }, [identity]);
+  const update = (id: string, transform: (value: DashboardChartDisplaySettings) => DashboardChartDisplaySettings, persist: (value: Record<string, DashboardChartDisplaySettings>) => void) => {
+    const next = setChartSettingsEntry(latest.current, id, transform(latest.current[id] ?? {}));
+    latest.current = next;
+    publish(next);
+    persist(next);
+  };
+  return { settings, update };
+}
+
+function changeAxisSetting(current: DashboardChartDisplaySettings, axis: DashboardChartAxisId, action: { mode: DashboardChartAxisMode } | { bound: 'min' | 'max'; value: number | undefined }, ranges: DashboardChartResolvedAxisRanges = {}) {
+  const setting = { ...current.axes?.[axis] };
+  if ('mode' in action) {
+    setting.mode = action.mode;
+    const suggested = axis === 'x' ? undefined : ranges[axis];
+    if (action.mode === 'manual' && suggested) {
+      for (const [index, bound] of ['min', 'max'].entries()) if (setting[bound as 'min' | 'max'] == null) setting[bound as 'min' | 'max'] = suggested[index]!;
+    }
+  } else {
+    setting.mode ??= 'manual';
+    Object.assign(setting, { [action.bound]: action.value });
+  }
+  return { ...current, axes: { ...current.axes, [axis]: setting } };
+}
 
 export function DashboardChartWidget({
   instance,
@@ -236,38 +250,19 @@ export function DashboardChartWidget({
     typeof serverFavorite === 'string' && options.chartIds.includes(serverFavorite)
       ? serverFavorite
       : options.chartId;
-  const [chartId, setChartId] = React.useState(options.chartId);
-  const [defaultChartId, setDefaultChartId] = React.useState(options.chartId);
-  const favoriteInitializationRef = React.useRef<string | null>(null);
+  const { chartId, defaultChartId, setChartId, setDefaultChartId } = useChartChoice(options.chartId, `${defaultStorageKey}|${chartIdsSignature}|${options.chartId}`, resolvedFavorite, favoritesLoaded);
   const [search, setSearch] = React.useState('');
-  const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
+  const draft = useChartDraft(options.chartSettings, JSON.stringify(options.chartSettings));
+  const draftChartSettings = draft.settings;
   const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>(
     {}
   );
-  const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
-  React.useEffect(() => {
-    if (!favoritesLoaded) return;
-    const initializationKey = `${defaultStorageKey}|${chartIdsSignature}|${options.chartId}`;
-    setDefaultChartId(resolvedFavorite);
-    if (favoriteInitializationRef.current !== initializationKey) {
-      setChartId(resolvedFavorite);
-      favoriteInitializationRef.current = initializationKey;
-    }
-  }, [defaultStorageKey, options.chartId, chartIdsSignature, favoritesLoaded, resolvedFavorite]);
 
-  React.useEffect(() => {
-    setDraftChartSettings(options.chartSettings);
-  }, [chartSettingsSignature]);
 
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
   const activeChartDefinition = getChartDefinition(activeChartId);
-  const activeCapabilities = activeChartDefinition
-    ? {
-        ...getChartSettingsCapabilities(activeChartDefinition),
-        smoothness: supportsDashboardChartSmoothness(activeChartDefinition),
-      }
-    : EMPTY_CAPABILITIES;
+  const activeCapabilities = widgetChartCapabilities(activeChartDefinition);
   const activeSettings = resolveChartDisplaySettings(
     draftChartSettings,
     activeChartId,
@@ -305,13 +300,8 @@ export function DashboardChartWidget({
   function updateActiveChartSettings(
     updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings
   ) {
-    setDraftChartSettings((current) => {
-      const nextEntry = updater(current[activeChartId] ?? {});
-      const nextMap = setChartSettingsEntry(current, activeChartId, nextEntry);
-      ctx.updateWidgetOptions?.(instance.id, { chartSettings: nextMap });
-      return nextMap;
-    });
-  }
+    draft.update(activeChartId, updater, (chartSettings) => ctx.updateWidgetOptions?.(instance.id, { chartSettings }));
+}
 
   function setChartAsDefault(nextChartId: string) {
     setDefaultChartId(nextChartId);
@@ -503,41 +493,8 @@ function DashboardChartFrame({
         onSmoothnessChange={(next) =>
           onUpdateSettings((current) => ({ ...current, smoothness: next }))
         }
-        onAxisModeChange={(axisId, mode) =>
-          onUpdateSettings((current) => ({
-            ...current,
-            axes: {
-              ...(current.axes ?? {}),
-              [axisId]: {
-                ...(current.axes?.[axisId] ?? {}),
-                mode,
-                ...(mode === 'manual' && axisId !== 'x'
-                  ? {
-                      ...(current.axes?.[axisId]?.min == null && activeAxisRanges[axisId]
-                        ? { min: activeAxisRanges[axisId]![0] }
-                        : {}),
-                      ...(current.axes?.[axisId]?.max == null && activeAxisRanges[axisId]
-                        ? { max: activeAxisRanges[axisId]![1] }
-                        : {}),
-                    }
-                  : {}),
-              },
-            },
-          }))
-        }
-        onAxisValueChange={(axisId, bound, rawValue) =>
-          onUpdateSettings((current) => ({
-            ...current,
-            axes: {
-              ...(current.axes ?? {}),
-              [axisId]: {
-                ...(current.axes?.[axisId] ?? {}),
-                mode: current.axes?.[axisId]?.mode ?? 'manual',
-                [bound]: rawValue,
-              },
-            },
-          }))
-        }
+        onAxisModeChange={(axis, mode) => onUpdateSettings((current) => changeAxisSetting(current, axis, { mode }, activeAxisRanges))}
+        onAxisValueChange={(axis, bound, value) => onUpdateSettings((current) => changeAxisSetting(current, axis, { bound, value }))}
       />
       {viewerOpen ? (
         <MobileChartViewer
@@ -580,10 +537,9 @@ function AssignedChartRuntime({
     options.chartId && available.some((chart) => chart.slug === options.chartId)
       ? options.chartId
       : (available[0]?.slug ?? '');
-  const [chartId, setChartId] = React.useState(defaultChartId);
-  const [defaultChartIdState, setDefaultChartId] = React.useState(defaultChartId);
   const [search, setSearch] = React.useState('');
-  const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
+  const draft = useChartDraft(options.chartSettings, options.chartSettings);
+  const draftChartSettings = draft.settings;
   const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>(
     {}
   );
@@ -595,19 +551,10 @@ function AssignedChartRuntime({
     favoritesLoaded && favorite && available.some((chart) => chart.slug === favorite)
       ? favorite
       : defaultChartId;
-  const favoriteInitializationRef = React.useRef<string | null>(null);
+  const { chartId, defaultChartId: defaultChartIdState, setChartId, setDefaultChartId } = useChartChoice(defaultChartId, `${storageKey}|${chartIdsSignature}|${defaultChartId}`, resolvedFavorite, available.length > 0 && favoritesLoaded);
 
-  React.useEffect(() => setDraftChartSettings(options.chartSettings), [options.chartSettings]);
 
-  React.useEffect(() => {
-    if (!available.length || !favoritesLoaded) return;
-    const initializationKey = `${storageKey}|${chartIdsSignature}|${defaultChartId}`;
-    setDefaultChartId(resolvedFavorite);
-    if (favoriteInitializationRef.current !== initializationKey) {
-      setChartId(resolvedFavorite);
-      favoriteInitializationRef.current = initializationKey;
-    }
-  }, [chartIdsSignature, defaultChartId, resolvedFavorite, storageKey, available.length, favoritesLoaded]);
+
 
   const active = available.find((chart) => chart.slug === chartId) ?? available[0];
   const settings = resolveChartDisplaySettings(
@@ -617,41 +564,7 @@ function AssignedChartRuntime({
     options.legacySmoothness
   );
   const activeDefinition = active ? getChartDefinition(active.slug) : undefined;
-  const activeCapabilities = activeDefinition
-    ? {
-        ...getChartSettingsCapabilities(activeDefinition),
-        smoothness: supportsDashboardChartSmoothness(activeDefinition),
-      }
-    : active
-      ? {
-          timeFilter: active.config.x.kind === 'time',
-          smoothness: active.config.series.some(
-            (item) => item.mark === 'line' || item.mark === 'area' || item.mark === 'step'
-          ),
-          axes: {
-            x: {
-              label: active.config.axes.x.label ?? 'X axis',
-              ...(active.config.axes.x.unit ? { unit: active.config.axes.x.unit } : {}),
-            },
-            y: {
-              label: active.config.axes.y.label ?? 'Y axis',
-              ...(active.config.axes.y.unit ? { unit: active.config.axes.y.unit } : {}),
-            },
-            ...(active.config.axes.y2
-              ? {
-                  y2: {
-                    label: active.config.axes.y2.label ?? 'Y2 axis',
-                    ...(active.config.axes.y2.unit ? { unit: active.config.axes.y2.unit } : {}),
-                  },
-                }
-              : {}),
-          },
-          xDomainSource:
-            active.config.timeframe.mode === 'dashboard'
-              ? ('dashboard-timeframe' as const)
-              : ('chart-local' as const),
-        }
-      : EMPTY_CAPABILITIES;
+  const activeCapabilities = widgetChartCapabilities(activeDefinition, active);
 
   function setChartAsDefault(next: string) {
     setDefaultChartId(next);
@@ -661,13 +574,8 @@ function AssignedChartRuntime({
   function updateChartSettings(
     updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings
   ) {
-    if (!active) return;
-    setDraftChartSettings((current) => {
-      const next = setChartSettingsEntry(current, active.slug, updater(current[active.slug] ?? {}));
-      ctx.updateWidgetOptions?.(instance.id, { chartSettings: next });
-      return next;
-    });
-  }
+    if (active) draft.update(active.slug, updater, (chartSettings) => ctx.updateWidgetOptions?.(instance.id, { chartSettings }));
+}
 
   if (!active) {
     return (
@@ -733,29 +641,16 @@ export function ManagedChartRuntime({
   presentation?: 'embedded' | 'mobile-viewer';
   onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
 }) {
-  const normalizedChart = normalizeLegacyBundledChartRecord(chart);
-  if (usesBundledChartRenderer(normalizedChart)) {
-    return (
-      <DashboardChartRenderer
-        chartId={normalizedChart.slug}
-        managedDefinition={normalizedChart.config}
-        ctx={ctx}
-        height={height}
-        presentation={presentation}
-        {...(settings ? { settings } : {})}
-        {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})}
-      />
-    );
-  }
-  return (
-    <ManagedDefinitionRuntime
-      chart={normalizedChart}
-      ctx={ctx}
-      height={height}
-      presentation={presentation}
-      {...(settings ? { settings } : {})}
-    />
-  );
+  const route = resolveManagedChartRoute(chart);
+  const shared = { ctx, height, presentation, ...(settings ? { settings } : {}) };
+  return route.kind === 'bundled' ? (
+    <DashboardChartRenderer {...shared} chartId={route.chart.slug} managedDefinition={route.chart.config} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />
+  ) : <ManagedDefinitionRuntime {...shared} chart={route.chart} />;
+}
+
+function resolveManagedChartRoute(chart: ChartRecord) {
+  const normalized = normalizeLegacyBundledChartRecord(chart);
+  return { kind: usesBundledChartRenderer(normalized) ? 'bundled' as const : 'definition' as const, chart: normalized };
 }
 
 function ManagedDefinitionRuntime({
@@ -771,20 +666,10 @@ function ManagedDefinitionRuntime({
   settings?: DashboardChartDisplaySettings;
   presentation: 'embedded' | 'mobile-viewer';
 }) {
-  const draft = {
-    ...chart.config,
-    display: {
-      ...chart.config.display,
-      ...(settings?.timeFilter
-        ? { timeFilter: settings.timeFilter as ChartDefinitionV1['display']['timeFilter'] }
-        : {}),
-      ...(settings?.smoothness
-        ? {
-            curveSmoothness: settings.smoothness as ChartDefinitionV1['display']['curveSmoothness'],
-          }
-        : {}),
-    },
-  } satisfies ChartDefinitionV1;
+  const display = { ...chart.config.display };
+  const overrides = { timeFilter: settings?.timeFilter, curveSmoothness: settings?.smoothness };
+  for (const key of ['timeFilter', 'curveSmoothness'] as const) if (overrides[key]) Object.assign(display, { [key]: overrides[key] });
+  const draft = { ...chart.config, display };
   const datasetState = useChartDatasets(draft, {
     vehicleId: ctx.vehicleId,
     from: ctx.from,
@@ -837,30 +722,11 @@ export function DashboardChartRenderer({
       </div>
     );
   }
-  return (
-    <ActiveDashboardChartSource
-      definition={definition}
-      chartDefinition={managedDefinition ?? definition.config}
-      ctx={ctx}
-      height={height}
-      timeFilter={
-        settings?.timeFilter ??
-        timeFilter ??
-        managedDefinition?.display.timeFilter ??
-        definition.config.display.timeFilter ??
-        'raw'
-      }
-      smoothness={
-        settings?.smoothness ??
-        managedDefinition?.display.curveSmoothness ??
-        definition.config.display.curveSmoothness ??
-        DEFAULT_CURVE_SMOOTHNESS
-      }
-      presentation={presentation}
-      {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})}
-      {...(settings ? { settings } : {})}
-    />
-  );
+  const controls = resolveWidgetOptions({
+    timeFilter: definition.config.display.timeFilter ?? 'raw',
+    smoothness: definition.config.display.curveSmoothness ?? DEFAULT_CURVE_SMOOTHNESS,
+  }, { timeFilter: managedDefinition?.display.timeFilter, smoothness: managedDefinition?.display.curveSmoothness }, { timeFilter }, settings ?? {});
+  return <ActiveDashboardChartSource definition={definition} chartDefinition={managedDefinition ?? definition.config} ctx={ctx} height={height} {...controls} presentation={presentation} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} {...(settings ? { settings } : {})} />;
 }
 
 const CHARGE_SESSION_DETAIL_CONFIG = {
@@ -967,37 +833,38 @@ type ActiveDashboardChartSourceProps = {
   onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
 };
 
+type CanonicalViewProps = {
+  definition: DashboardChartDefinition; chartDefinition: ChartDefinitionV1; loading: boolean; height: number;
+  timeFilter: TimeFilterWindow; smoothness: CurveSmoothness; interactionMode: 'standard' | 'touch-explore';
+  xRange?: [number, number]; yRange?: [number, number]; yRightRange?: [number, number];
+  onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
+};
+function bindCanonicalChart<Data, Projection extends object>(
+  useData: (ctx: WidgetCtx) => { data?: Data | undefined; isLoading: boolean },
+  project: (data: Data | undefined) => Projection,
+  View: React.ComponentType<CanonicalViewProps & Projection>,
+  axes: 'none' | 'y' | 'xy' | 'all',
+) {
+  return function CanonicalSource(props: ActiveDashboardChartSourceProps) {
+    const query = useData(props.ctx);
+    const ranges = sourceAxisRanges(props.settings);
+    const display: CanonicalViewProps = {
+      definition: props.definition, chartDefinition: props.chartDefinition, loading: query.isLoading, height: props.height,
+      timeFilter: props.timeFilter, smoothness: props.smoothness, interactionMode: chartInteractionMode(props.presentation),
+    };
+    if (axes !== 'none' && ranges.yRange) display.yRange = ranges.yRange;
+    if ((axes === 'xy' || axes === 'all') && ranges.xRange) display.xRange = ranges.xRange;
+    if (axes === 'all') {
+      if (ranges.yRightRange) display.yRightRange = ranges.yRightRange;
+      if (props.onResolvedAxisRanges) display.onResolvedAxisRanges = props.onResolvedAxisRanges;
+    }
+    return <View {...display} {...project(query.data)} />;
+  };
+}
+
 function ActiveDashboardChartSource(props: ActiveDashboardChartSourceProps) {
-  switch (props.definition.source) {
-    case 'soc_history':
-      return <SocHistorySource {...props} />;
-    case 'charging_sessions_energy':
-      return <ChargingSeriesSource {...props} sessions />;
-    case 'charging_weekly_energy':
-      return <ChargingSeriesSource {...props} />;
-    case 'charge_session_curve':
-      return <ChargeSessionCurveSource {...props} />;
-    case 'charging_curve_analysis':
-      return <ChargingCurveAnalysisSource {...props} />;
-    case 'efficiency_trend':
-      return <EfficiencyTrendSource {...props} />;
-    case 'efficiency_temperature':
-      return <EfficiencyTemperatureSource {...props} />;
-    case 'efficiency_mode':
-      return <EfficiencyModeSource {...props} />;
-    case 'efficiency_tags':
-      return <EfficiencyTagsSource {...props} />;
-    case 'phantom_drain':
-      return <PhantomDrainSource {...props} />;
-    case 'battery_degradation':
-      return <BatteryDegradationSource {...props} />;
-    case 'battery_capacity_mileage':
-      return <BatteryMileageSource {...props} />;
-    case 'projected_range_mileage':
-      return <ProjectedRangeMileageSource {...props} />;
-    case 'tire_pressure_trips':
-      return <TirePressureTripsSource {...props} />;
-  }
+  const View = CANONICAL_SOURCES[props.definition.source];
+  return View ? <View {...props} /> : undefined;
 }
 
 function chartInteractionMode(presentation: ActiveDashboardChartSourceProps['presentation']) {
@@ -1055,37 +922,14 @@ function ChargingSeriesSource({
 }: ActiveDashboardChartSourceProps & { sessions?: boolean }) {
   const isDark = useDocumentTheme();
   const { data, isLoading } = useChargingChartSeries(ctx.vehicleId, ctx.from, ctx.to);
-  const daily = data?.daily ?? [];
-  const seriesColor = editedSeriesColor(chartDefinition, 'accent', isDark);
-  const configuredYRange =
-    sourceAxisRanges(settings).yRange ?? fixedDefinitionRange(chartDefinition.axes.y);
-  if (sessions) {
-    return (
-      <ChargingSessionsChart
-        definition={definition}
-        daily={daily}
-        dailySessions={data?.daily_sessions ?? []}
-        loading={isLoading}
-        height={height}
-        interactionMode={chartInteractionMode(presentation)}
-        selectedDayLocal={ctx.chargeSessionDayLocal ?? null}
-        {...(ctx.setChargeSessionDayLocal ? { onDayClick: ctx.setChargeSessionDayLocal } : {})}
-        {...(seriesColor ? { seriesColor } : {})}
-        {...(configuredYRange ? { yRange: configuredYRange } : {})}
-      />
-    );
-  }
-  return (
-    <DailyEnergyChart
-      definition={definition}
-      daily={daily}
-      loading={isLoading}
-      height={height}
-      interactionMode={chartInteractionMode(presentation)}
-      {...(configuredYRange ? { yRange: configuredYRange } : {})}
-      {...(seriesColor ? { seriesColor } : {})}
-    />
-  );
+  const color = editedSeriesColor(chartDefinition, 'accent', isDark);
+  const range = sourceAxisRanges(settings).yRange ?? fixedDefinitionRange(chartDefinition.axes.y);
+  const View = sessions ? ChargingSessionsChart : DailyEnergyChart;
+  const selection = sessions ? { selectedDayLocal: ctx.chargeSessionDayLocal ?? null,
+    ...(ctx.setChargeSessionDayLocal ? { onDayClick: ctx.setChargeSessionDayLocal } : {}) } : {};
+  return <View definition={definition} daily={data?.daily ?? []} dailySessions={data?.daily_sessions ?? []}
+    loading={isLoading} height={height} interactionMode={chartInteractionMode(presentation)}
+    {...selection} {...(color ? { seriesColor: color } : {})} {...(range ? { yRange: range } : {})} />;
 }
 
 function ChargeSessionCurveSource({
@@ -1122,107 +966,13 @@ function ChargeSessionCurveSource({
   );
 }
 
-function ChargingCurveAnalysisSource({
-  definition,
-  chartDefinition,
-  ctx,
-  height,
-  settings,
-  presentation,
-}: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useChargeCurveAnalysis(ctx.vehicleId, ctx.from, ctx.to);
-  const { xRange, yRange } = sourceAxisRanges(settings);
-  return (
-    <ChargingCurveAnalysisChart
-      definition={definition}
-      chartDefinition={chartDefinition}
-      data={data}
-      loading={isLoading}
-      height={height}
-      interactionMode={chartInteractionMode(presentation)}
-      {...(xRange ? { xRange } : {})}
-      {...(yRange ? { yRange } : {})}
-    />
-  );
-}
+const ChargingCurveAnalysisSource = bindCanonicalChart(function useSource(ctx) { return useChargeCurveAnalysis(ctx.vehicleId, ctx.from, ctx.to); }, (data) => ({ data: data ?? [] }), ChargingCurveAnalysisChart, 'xy');
 
-function EfficiencyTrendSource({
-  definition,
-  chartDefinition,
-  ctx,
-  height,
-  timeFilter,
-  smoothness,
-  settings,
-  presentation,
-}: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyTrend(
-    ctx.vehicleId,
-    ctx.from,
-    ctx.to,
-    ctx.tripTagFilter
-  );
-  const { yRange } = sourceAxisRanges(settings);
-  return (
-    <EfficiencyTrendChart
-      definition={definition}
-      chartDefinition={chartDefinition}
-      trend={data}
-      loading={isLoading}
-      height={height}
-      timeFilter={timeFilter}
-      smoothness={smoothness}
-      interactionMode={chartInteractionMode(presentation)}
-      {...(yRange ? { yRange } : {})}
-    />
-  );
-}
+const EfficiencyTrendSource = bindCanonicalChart(function useSource(ctx) { return useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter); }, (data) => ({ trend: data ?? [] }), EfficiencyTrendChart, 'y');
 
-function EfficiencyTemperatureSource({
-  definition,
-  chartDefinition,
-  ctx,
-  height,
-}: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyVsTemp(
-    ctx.vehicleId,
-    ctx.from,
-    ctx.to,
-    ctx.tripTagFilter
-  );
-  return (
-    <EfficiencyTemperatureChart
-      definition={definition}
-      chartDefinition={chartDefinition}
-      data={data}
-      loading={isLoading}
-      height={height}
-    />
-  );
-}
+const EfficiencyTemperatureSource = bindCanonicalChart(function useSource(ctx) { return useEfficiencyVsTemp(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter); }, (data) => ({ data: data ?? [] }), EfficiencyTemperatureChart, 'none');
 
-function EfficiencyModeSource({
-  definition,
-  chartDefinition,
-  ctx,
-  height,
-}: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyByMode(
-    ctx.vehicleId,
-    ctx.from,
-    ctx.to,
-    ctx.tripTagFilter
-  );
-  return (
-    <EfficiencyModeChart
-      definition={definition}
-      chartDefinition={chartDefinition}
-      data={data}
-      loading={isLoading}
-      height={height}
-    />
-  );
-}
+const EfficiencyModeSource = bindCanonicalChart(function useSource(ctx) { return useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter); }, (data) => ({ data: data ?? [] }), EfficiencyModeChart, 'none');
 
 function EfficiencyTagsSource({ chartDefinition, ctx, height }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useEfficiencyByTag(
@@ -1348,67 +1098,9 @@ function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data
   }));
 }
 
-function BatteryMileageSource({
-  definition,
-  chartDefinition,
-  ctx,
-  height,
-  timeFilter,
-  smoothness,
-  settings,
-  presentation,
-  onResolvedAxisRanges,
-}: ActiveDashboardChartSourceProps) {
-  const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
-  const { xRange, yRange, yRightRange } = sourceAxisRanges(settings);
-  return (
-    <BatteryCapacityMileageChart
-      definition={definition}
-      chartDefinition={chartDefinition}
-      loading={isLoading}
-      height={height}
-      points={mileagePoints(data)}
-      timeFilter={timeFilter}
-      smoothness={smoothness}
-      interactionMode={chartInteractionMode(presentation)}
-      {...(xRange ? { xRange } : {})}
-      {...(yRange ? { yRange } : {})}
-      {...(yRightRange ? { yRightRange } : {})}
-      {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})}
-    />
-  );
-}
+const BatteryMileageSource = bindCanonicalChart(function useSource(ctx) { return useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to); }, (data) => ({ points: mileagePoints(data) }), BatteryCapacityMileageChart, 'all');
 
-function ProjectedRangeMileageSource({
-  definition,
-  chartDefinition,
-  ctx,
-  height,
-  timeFilter,
-  smoothness,
-  settings,
-  presentation,
-  onResolvedAxisRanges,
-}: ActiveDashboardChartSourceProps) {
-  const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
-  const { xRange, yRange, yRightRange } = sourceAxisRanges(settings);
-  return (
-    <ProjectedRangeMileageChart
-      definition={definition}
-      chartDefinition={chartDefinition}
-      loading={isLoading}
-      height={height}
-      points={mileagePoints(data)}
-      timeFilter={timeFilter}
-      smoothness={smoothness}
-      interactionMode={chartInteractionMode(presentation)}
-      {...(xRange ? { xRange } : {})}
-      {...(yRange ? { yRange } : {})}
-      {...(yRightRange ? { yRightRange } : {})}
-      {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})}
-    />
-  );
-}
+const ProjectedRangeMileageSource = bindCanonicalChart(function useSource(ctx) { return useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to); }, (data) => ({ points: mileagePoints(data) }), ProjectedRangeMileageChart, 'all');
 
 function TirePressureTripsSource({
   definition,
@@ -1438,21 +1130,11 @@ function TirePressureTripsSource({
     rear_right_psi: { field: 'tire_rr_psi' as const, color: CHART_COLORS.amber, token: 'amber' },
   };
   const seriesStyles = chartDefinition.series.flatMap((series) => {
-    const established = tireFields[series.y.field as keyof typeof tireFields];
-    if (!established) return [];
-    return [
-      {
-        field: established.field,
-        key: series.id,
-        label: series.label,
-        color: resolveSeriesColor(series.color, established.token, established.color, isDark),
-        mode: chartSeriesMode(series),
-        ...(series.mark === 'step' ? { interpolation: 'step' as const } : {}),
-        ...(series.visibleInLegend !== undefined ? { showInLegend: series.visibleInLegend } : {}),
-        ...(series.pointSize !== undefined ? { pointSize: series.pointSize } : {}),
-        ...(series.strokeWidth !== undefined ? { strokeWidth: series.strokeWidth } : {}),
-      },
-    ];
+    const field = tireFields[series.y.field as keyof typeof tireFields];
+    if (!field) return [];
+    const style = canonicalSeriesStyle(series, isDark, field.token, field.color);
+    delete style.stackId;
+    return [{ ...style, field: field.field, key: series.id, label: series.label, mode: chartSeriesMode(series) }];
   });
   const configuredYRange =
     sourceAxisRanges(settings).yRange ?? fixedDefinitionRange(chartDefinition.axes.y);
@@ -1493,7 +1175,7 @@ function renderSocHistoryChart(
   interactionMode: 'standard' | 'touch-explore' = 'standard',
   isDark = false
 ) {
-  const rangeByTimestamp = new Map(range.map((point) => [point.ts, point.value]));
+  const projection = projectTimestampValues(soc, range);
   const configured = configuredRichSeries(
     chartDefinition,
     {
@@ -1503,7 +1185,7 @@ function renderSocHistoryChart(
           key: definition.id,
           label: definition.title,
           color: CHART_COLORS.accent,
-          values: soc.map((point) => point.value),
+          values: projection.values,
           mode: definition.mode ?? 'line',
         },
       },
@@ -1513,13 +1195,13 @@ function renderSocHistoryChart(
 
   return (
     <RichTimeSeriesChart
-      points={soc.map((point) => ({ ts: point.ts }))}
+      points={projection.points}
       series={[
         ...configured,
         {
           key: `${definition.id}-active-range`,
           label: 'Active Range',
-          values: soc.map((point) => rangeByTimestamp.get(point.ts) ?? null),
+          values: projection.related,
           tooltipOnly: true,
           tooltipFormatter: formatMiles,
         },
@@ -1556,6 +1238,7 @@ function renderSingleChart(
   smoothness: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS,
   isDark = false
 ) {
+  const projection = projectTimestampValues(data);
   const configured = configuredRichSeries(
     chartDefinition,
     {
@@ -1565,7 +1248,7 @@ function renderSingleChart(
           key: definition.id,
           label: definition.title,
           color: CHART_COLORS.accent,
-          values: data.map((point) => point.value),
+          values: projection.values,
           mode: definition.mode ?? 'line',
         },
       },
@@ -1574,7 +1257,7 @@ function renderSingleChart(
   );
   return (
     <RichTimeSeriesChart
-      points={data.map((point) => ({ ts: point.ts }))}
+      points={projection.points}
       series={configured}
       loading={loading}
       emptyTitle={definition.emptyTitle}
@@ -1677,102 +1360,8 @@ function ChargeSessionCurveChart({
   interactionMode: 'standard' | 'touch-explore';
 }) {
   const isDark = useDocumentTheme();
-  const allRows = data.filter(
-    (point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw)
-  );
-
-  // Build time-based points when minutes_elapsed is available. This produces a
-  // single chart with charge rate (left Y, kW) and cumulative energy (right Y, kWh)
-  // on the same time axis — much easier to read than a SOC-on-X layout.
-  const { points, rateValues, energyValues, useTime } = React.useMemo(() => {
-    const startMs = startedAt ? new Date(startedAt).getTime() : null;
-    const timed = startMs != null && allRows.some((p) => p.minutes_elapsed != null);
-
-    // Drop trailing zero-power points: when ended_at is later than when charging
-    // actually stopped, we accumulate a long flat zero tail. Keep only one point
-    // past the last active reading so the dropoff is still visible.
-    const lastActiveIdx = allRows.reduce((last, p, i) => ((p.power_kw ?? 0) > 0.1 ? i : last), -1);
-    const rows =
-      lastActiveIdx >= 0 && lastActiveIdx < allRows.length - 2
-        ? allRows.slice(0, lastActiveIdx + 2)
-        : allRows;
-
-    // Compute cumulative energy (kWh) across the trimmed rows.
-    let cumulative = 0;
-    const energyValsRaw: number[] = rows.map((p, i) => {
-      if (i > 0) {
-        const prev = rows[i - 1]!;
-        if (prev.minutes_elapsed != null && p.minutes_elapsed != null) {
-          const dtHours = (p.minutes_elapsed - prev.minutes_elapsed) / 60;
-          cumulative += Math.max(0, p.power_kw ?? 0) * dtHours;
-        }
-      }
-      return Math.max(0, cumulative);
-    });
-
-    // Keep visual shape from sampled power, but anchor the cumulative endpoint
-    // to the session aggregate so the chart total matches the detail stat chip.
-    const finalEnergy = energyValsRaw[energyValsRaw.length - 1] ?? 0;
-    const targetEnergy =
-      typeof sessionEnergyKwh === 'number' && Number.isFinite(sessionEnergyKwh)
-        ? Math.max(0, sessionEnergyKwh)
-        : null;
-    const energyVals =
-      targetEnergy != null && finalEnergy > 0
-        ? energyValsRaw.map((value) => value * (targetEnergy / finalEnergy))
-        : energyValsRaw;
-
-    if (timed) {
-      // Prepend a zero-valued anchor at the session start time so any pre-charging
-      // wait (e.g. plugged in at 6 PM, scheduled charging starts at 11 PM) shows
-      // as a flat line rather than silently missing from the chart.
-      const firstMs = startMs! + (rows[0]?.minutes_elapsed ?? 0) * 60000;
-      const gapMs = firstMs - startMs!;
-      const anchored = gapMs > 5 * 60 * 1000; // >5 min gap → prepend anchor
-
-      const allPts = [
-        ...(anchored ? [{ ts: startedAt!, rate: 0, energy: 0 }] : []),
-        ...rows.map((p, i) => ({
-          ts: new Date(startMs! + p.minutes_elapsed! * 60000).toISOString(),
-          rate: p.power_kw,
-          energy: energyVals[i]!,
-        })),
-      ];
-      return {
-        useTime: true,
-        points: allPts.map((p) => ({ ts: p.ts })),
-        rateValues: allPts.map((p) => p.rate),
-        energyValues: allPts.map((p) => p.energy),
-      };
-    }
-
-    // Fallback: SOC on X axis (no minutes_elapsed data available).
-    return {
-      useTime: false,
-      points: rows.map((p) => ({ ts: p.soc_pct })),
-      rateValues: rows.map((p) => p.power_kw),
-      energyValues: energyVals,
-    };
-  }, [allRows, startedAt, sessionEnergyKwh]);
-
-  const xSplits = React.useMemo(() => {
-    if (!useTime || points.length < 2) return undefined;
-
-    const xSeconds = points
-      .map((point) => new Date(String(point.ts)).getTime() / 1000)
-      .filter((value) => Number.isFinite(value));
-    if (xSeconds.length < 2) return undefined;
-
-    const start = xSeconds[0]!;
-    const end = xSeconds[xSeconds.length - 1]!;
-    const firstWholeHour = Math.ceil(start / 3600) * 3600;
-    const splits: number[] = [];
-    for (let tick = firstWholeHour; tick <= end; tick += 3600) {
-      splits.push(tick);
-    }
-
-    return splits.length >= 2 ? splits : undefined;
-  }, [points, useTime]);
+  const { points, rateValues, energyValues, useTime } = React.useMemo(() => prepareSessionCurve(data, startedAt, sessionEnergyKwh), [data, startedAt, sessionEnergyKwh]);
+  const xSplits = React.useMemo(() => sessionHourSplits(points, useTime), [points, useTime]);
 
   const configured = configuredRichSeries(
     chartDefinition,
@@ -1855,29 +1444,15 @@ function ChargingCurveAnalysisChart({
 }) {
   const isDark = useDocumentTheme();
   const [mode, setMode] = React.useState<ChargeCurveMode>('observed');
-  const [isMobile, setIsMobile] = React.useState(isMobileViewport);
+  const isMobile = useCompatibleWidgetMedia('(max-width: 639px)');
   const plot = React.useMemo(() => buildChargeCurvePlot(data, mode), [data, mode]);
 
-  React.useEffect(() => {
-    const mediaQuery =
-      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-        ? window.matchMedia('(max-width: 639px)')
-        : null;
-    const update = () => setIsMobile(mediaQuery?.matches ?? false);
-    update();
-    mediaQuery?.addEventListener?.('change', update);
-    mediaQuery?.addListener?.(update);
-    return () => {
-      mediaQuery?.removeEventListener?.('change', update);
-      mediaQuery?.removeListener?.(update);
-    };
-  }, []);
 
   const nextMode = nextChargeCurveMode(mode);
   const nextModeLabel = chargeCurveModeLabel(nextMode);
   const primarySeries = chartDefinition.series[0];
   const observedColor = primarySeries
-    ? resolveSeriesColor(primarySeries.color, 'accent', CHART_COLORS.accent, isDark)
+    ? canonicalSeriesStyle(primarySeries, isDark, 'accent', CHART_COLORS.accent).color
     : CHART_COLORS.accent;
 
   return (
@@ -1975,97 +1550,45 @@ function normalizeSampleSource(value: unknown): CurvePoint['sample_source'] {
   return 'telemetry';
 }
 
-function buildChargeCurvePlot(data: ChargeCurveAnalysisPoint[], mode: ChargeCurveMode) {
-  const points = data
-    .filter(
-      (point): point is CurvePoint =>
-        Number.isFinite(point.soc_pct) &&
-        Number.isFinite(point.charge_rate_kw) &&
-        point.charge_rate_kw > 0 &&
-        normalizeChargeCurveType(point.charger_type) === 'dc'
-    )
-    .map((point) => ({
-      ...point,
-      sample_source: normalizeSampleSource(point.sample_source),
-      power_method:
-        point.power_method === 'recorded' ? ('recorded' as const) : ('soc_delta' as const),
-    }));
-
-  if (points.length === 0) {
-    return { rows: [] as ChargeCurvePlotRow[], hasEstimatedHistory: false };
+export function buildChargeCurvePlot(data: ChargeCurveAnalysisPoint[], mode: ChargeCurveMode) {
+  const observed: CurvePoint[] = [], estimated: CurvePoint[] = [];
+  for (const sample of data) {
+    if (!Number.isFinite(sample.soc_pct) || !Number.isFinite(sample.charge_rate_kw) || sample.charge_rate_kw <= 0 || normalizeChargeCurveType(sample.charger_type) !== 'dc') continue;
+    const point: CurvePoint = { ...sample, soc_pct: sample.soc_pct!, sample_source: normalizeSampleSource(sample.sample_source), power_method: sample.power_method === 'recorded' ? 'recorded' : 'soc_delta' };
+    (point.sample_source === 'rivian_charge_curve_points' ? estimated : observed).push(point);
   }
-
-  const observed = points.filter((point) => point.sample_source !== 'rivian_charge_curve_points');
-  const estimated = points.filter((point) => point.sample_source === 'rivian_charge_curve_points');
-  const rows: ChargeCurvePlotRow[] = [
-    ...observed.map((point) => ({
-      socPct: point.soc_pct,
-      plotSoc: point.soc_pct,
-      observedKw: point.charge_rate_kw,
-      observedDetail: `${formatExactSoc(point.soc_pct)} SoC; ${powerMethodLabel([point])}`,
-      estimatedKw: null,
-      estimatedDetail: null,
-      summaryKw: null,
-      summaryDetail: null,
-    })),
-    ...estimated.map((point) => ({
-      socPct: point.soc_pct,
-      plotSoc: point.soc_pct,
-      observedKw: null,
-      observedDetail: null,
-      estimatedKw: point.charge_rate_kw,
-      estimatedDetail: `${formatExactSoc(point.soc_pct)} SoC; Recorded kW; estimated SoC (excluded from summaries)`,
-      summaryKw: null,
-      summaryDetail: null,
-    })),
-    ...buildChargeCurveRegression(observed, mode).map((trend) => {
-      return {
-        socPct: trend.socPct,
-        plotSoc: trend.socPct,
-        observedKw: null,
-        observedDetail: null,
-        estimatedKw: null,
-        estimatedDetail: null,
-        summaryKw: trend.powerKw,
-        summaryDetail: `${formatExactSoc(trend.socPct)} SoC; ${trend.sampleCount} nearby samples; ${mode === 'best-observed' ? 'local upper-quartile regression' : 'local weighted regression'}`,
-      };
-    }),
-  ];
-
+  const row = (socPct: number): ChargeCurvePlotRow => ({ socPct, plotSoc: socPct, observedKw: null, observedDetail: null, estimatedKw: null, estimatedDetail: null, summaryKw: null, summaryDetail: null });
+  const rows: ChargeCurvePlotRow[] = [];
+  for (const group of [observed, estimated]) {
+    for (const point of group) {
+      const result = row(point.soc_pct);
+      const historical = group === estimated;
+      result[historical ? 'estimatedKw' : 'observedKw'] = point.charge_rate_kw;
+      result[historical ? 'estimatedDetail' : 'observedDetail'] = formatExactSoc(point.soc_pct) + ' SoC; ' + (historical ? 'Recorded kW; estimated SoC (excluded from summaries)' : powerMethodLabel([point]));
+      rows.push(result);
+    }
+  }
+  for (const trend of buildChargeCurveRegression(observed, mode)) rows.push({ ...row(trend.socPct), summaryKw: trend.powerKw, summaryDetail: formatExactSoc(trend.socPct) + ' SoC; ' + trend.sampleCount + ' nearby samples; ' + (mode === 'best-observed' ? 'local upper-quartile regression' : 'local weighted regression') });
   return { rows: distributeChargeCurveSoc(rows), hasEstimatedHistory: estimated.length > 0 };
 }
 
 const CHARGE_CURVE_REGRESSION_RADIUS_SOC = 8;
 
-function buildChargeCurveRegression(points: CurvePoint[], mode: ChargeCurveMode) {
+export function buildChargeCurveRegression(points: CurvePoint[], mode: ChargeCurveMode) {
   if (points.length < 3) return [];
-  const minSoc = Math.ceil(Math.min(...points.map((point) => point.soc_pct)));
-  const maxSoc = Math.floor(Math.max(...points.map((point) => point.soc_pct)));
+  const sorted = points.map((point, order) => ({ point, order })).sort((a, b) => a.point.soc_pct - b.point.soc_pct);
+  const lower = Math.ceil(sorted[0]!.point.soc_pct), upper = Math.floor(sorted.at(-1)!.point.soc_pct);
   const trend: Array<{ socPct: number; powerKw: number; sampleCount: number }> = [];
-
-  for (let socPct = minSoc; socPct <= maxSoc; socPct += 1) {
-    const nearby = points
-      .map((point) => {
-        const distance = Math.abs(point.soc_pct - socPct);
-        const normalizedDistance = distance / CHARGE_CURVE_REGRESSION_RADIUS_SOC;
-        return {
-          x: point.soc_pct,
-          y: point.charge_rate_kw,
-          weight: (1 - normalizedDistance ** 3) ** 3,
-        };
-      })
-      .filter((point) => point.weight > 0);
-    if (nearby.length < 3) continue;
-
-    const regressionPoints =
-      mode === 'best-observed'
-        ? nearby.filter((point) => point.y >= weightedPercentile(nearby, 0.75))
-        : nearby;
-    const powerKw = weightedLinearPrediction(regressionPoints, socPct);
-    if (powerKw == null) continue;
-    trend.push({ socPct, powerKw, sampleCount: regressionPoints.length });
+  let begin = 0, end = 0;
+  for (let socPct = lower; socPct <= upper; socPct++) {
+    while (begin < sorted.length && sorted[begin]!.point.soc_pct <= socPct - CHARGE_CURVE_REGRESSION_RADIUS_SOC) begin++;
+    while (end < sorted.length && sorted[end]!.point.soc_pct < socPct + CHARGE_CURVE_REGRESSION_RADIUS_SOC) end++;
+    if (end - begin < 3) continue;
+    let nearby = sorted.slice(begin, end).sort((a, b) => a.order - b.order).map(({ point }) => ({ x: point.soc_pct, y: point.charge_rate_kw, weight: (1 - (Math.abs(point.soc_pct - socPct) / CHARGE_CURVE_REGRESSION_RADIUS_SOC) ** 3) ** 3 }));
+    if (mode === 'best-observed') { const threshold = weightedPercentile(nearby, 0.75); nearby = nearby.filter((sample) => sample.y >= threshold); }
+    const powerKw = weightedLinearPrediction(nearby, socPct);
+    if (powerKw != null) trend.push({ socPct, powerKw, sampleCount: nearby.length });
   }
-
   return trend;
 }
 
@@ -2073,50 +1596,37 @@ function weightedLinearPrediction(
   points: Array<{ x: number; y: number; weight: number }>,
   atX: number
 ) {
-  if (points.length === 0) return null;
-  const sums = points.reduce<{ weight: number; x: number; y: number; xx: number; xy: number }>(
-    (total, point) => ({
-      weight: total.weight + point.weight,
-      x: total.x + point.weight * point.x,
-      y: total.y + point.weight * point.y,
-      xx: total.xx + point.weight * point.x * point.x,
-      xy: total.xy + point.weight * point.x * point.y,
-    }),
-    { weight: 0, x: 0, y: 0, xx: 0, xy: 0 }
-  );
-  if (sums.weight === 0) return null;
-  const denominator = sums.weight * sums.xx - sums.x ** 2;
-  if (Math.abs(denominator) < Number.EPSILON) return Math.max(0, sums.y / sums.weight);
-  const slope = (sums.weight * sums.xy - sums.x * sums.y) / denominator;
-  const intercept = (sums.y - slope * sums.x) / sums.weight;
-  return Math.max(0, intercept + slope * atX);
+  const moments = [0, 0, 0, 0, 0];
+  for (const point of points) {
+    const contributions = [point.weight, point.weight * point.x, point.weight * point.y, point.weight * point.x * point.x, point.weight * point.x * point.y];
+    for (let index = 0; index < moments.length; index++) moments[index]! += contributions[index]!;
+  }
+  const [weight, x, y, xx, xy] = moments as [number, number, number, number, number];
+  if (weight === 0) return null;
+  const determinant = weight * xx - x ** 2;
+  if (Math.abs(determinant) < Number.EPSILON) return Math.max(0, y / weight);
+  const slope = (weight * xy - x * y) / determinant;
+  return Math.max(0, (y - slope * x) / weight + slope * atX);
 }
 
 function weightedPercentile(points: Array<{ y: number; weight: number }>, quantile: number) {
-  const sorted = [...points].sort((left, right) => left.y - right.y);
-  const target = sorted.reduce((total, point) => total + point.weight, 0) * quantile;
-  let cumulative = 0;
-  for (const point of sorted) {
-    cumulative += point.weight;
-    if (cumulative >= target) return point.y;
-  }
-  return sorted.at(-1)?.y ?? 0;
+  if (!points.length) return 0;
+  const ordered = points.slice().sort((a, b) => a.y - b.y);
+  let weight = 0;
+  const cumulative = ordered.map((point) => (weight += point.weight));
+  const target = weight * quantile;
+  let low = 0, high = cumulative.length;
+  while (low < high) { const middle = (low + high) >>> 1; if (cumulative[middle]! >= target) high = middle; else low = middle + 1; }
+  return ordered[Math.min(low, ordered.length - 1)]!.y;
 }
 
-function distributeChargeCurveSoc(rows: ChargeCurvePlotRow[]) {
-  const sorted = [...rows].sort((left, right) => left.socPct - right.socPct);
-  const result: ChargeCurvePlotRow[] = [];
-  for (let index = 0; index < sorted.length;) {
-    let end = index + 1;
-    while (end < sorted.length && sorted[end]!.socPct === sorted[index]!.socPct) end += 1;
-    const group = sorted.slice(index, end);
-    const offset = Math.min(0.04, 0.2 / group.length);
-    group.forEach((row, rowIndex) => {
-      result.push({ ...row, plotSoc: row.socPct + (rowIndex - (group.length - 1) / 2) * offset });
-    });
-    index = end;
-  }
-  return result;
+export function distributeChargeCurveSoc(rows: ChargeCurvePlotRow[]) {
+  const groups = new Map<number, ChargeCurvePlotRow[]>();
+  rows.forEach((row) => { const group = groups.get(row.socPct); if (group) group.push(row); else groups.set(row.socPct, [row]); });
+  return [...groups].sort((a, b) => a[0] - b[0]).flatMap(([soc, group]) => {
+    const spacing = Math.min(0.04, 0.2 / group.length), midpoint = (group.length - 1) / 2;
+    return group.map((row, index) => ({ ...row, plotSoc: soc + (index - midpoint) * spacing }));
+  });
 }
 
 function formatExactSoc(soc: number) {
@@ -2142,52 +1652,17 @@ function buildChargeCurveScatterSeries(
   startColor: string = CHART_COLORS.accent,
   label = 'Verified DC sessions'
 ) {
-  const values = rows
-    .map((row) => row.observedKw)
-    .filter((value): value is number => value != null && Number.isFinite(value));
-  const low = Math.min(...values);
-  const high = Math.max(...values);
-
-  return Array.from({ length: CHARGE_CURVE_SCATTER_BUCKETS }, (_, bucket) => ({
-    key: `dc-observed-samples-${bucket}`,
-    label,
-    color: interpolateHexColor(
-      startColor,
-      CHART_COLORS.emerald,
-      bucket / (CHARGE_CURVE_SCATTER_BUCKETS - 1)
-    ),
-    mode: 'scatter' as const,
-    showInLegend: false,
-    pointSize: 6,
-    values: rows.map((row) =>
-      chargeCurvePowerBucket(row.observedKw, low, high) === bucket ? row.observedKw : null
-    ),
-    tooltipDetails: rows.map((row) =>
-      chargeCurvePowerBucket(row.observedKw, low, high) === bucket ? row.observedDetail : null
-    ),
-  }));
-}
-
-function chargeCurvePowerBucket(value: number | null, low: number, high: number) {
-  if (value == null || !Number.isFinite(value)) return -1;
-  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low)
-    return CHARGE_CURVE_SCATTER_BUCKETS - 1;
-  return Math.min(
-    CHARGE_CURVE_SCATTER_BUCKETS - 1,
-    Math.floor(((value - low) / (high - low)) * CHARGE_CURVE_SCATTER_BUCKETS)
-  );
-}
-
-function interpolateHexColor(start: string, end: string, ratio: number) {
-  const parse = (color: string) =>
-    [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
-  const [startRed, startGreen, startBlue] = parse(start);
-  const [endRed, endGreen, endBlue] = parse(end);
-  const channel = (from: number, to: number) =>
-    Math.round(from + (to - from) * ratio)
-      .toString(16)
-      .padStart(2, '0');
-  return `#${channel(startRed!, endRed!)}${channel(startGreen!, endGreen!)}${channel(startBlue!, endBlue!)}`;
+  const groups = scatterBuckets(rows.map((row) => row.observedKw), CHARGE_CURVE_SCATTER_BUCKETS);
+  const colors = scatterPalette(startColor, CHART_COLORS.emerald, CHARGE_CURVE_SCATTER_BUCKETS);
+  return groups.map((indices, bucket) => {
+    const values = Array<number | null>(rows.length).fill(null);
+    const tooltipDetails = Array<string | null>(rows.length).fill(null);
+    for (const index of indices) {
+      values[index] = rows[index]!.observedKw;
+      tooltipDetails[index] = rows[index]!.observedDetail;
+    }
+    return { key: 'dc-observed-samples-' + bucket, label, color: colors[bucket]!, mode: 'scatter' as const, showInLegend: false, pointSize: 6, values, tooltipDetails };
+  });
 }
 
 function powerMethodLabel(points: CurvePoint[]) {
@@ -2265,7 +1740,7 @@ function EfficiencyTrendChart({
   interactionMode: 'standard' | 'touch-explore';
 }) {
   const isDark = useDocumentTheme();
-  const unit = getEfficiencyUnit();
+  const timeline = efficiencyTimeline(trend);
   const configured = configuredRichSeries(
     chartDefinition,
     {
@@ -2275,7 +1750,7 @@ function EfficiencyTrendChart({
           key: 'trip',
           label: 'Trip efficiency',
           color: CHART_COLORS.accent,
-          values: trend.map((point) => convertEfficiency(point.trip_efficiency_wh_mi)),
+          values: timeline.values.trip_efficiency_wh_mi,
         },
       },
       rolling_24h_wh_mi: {
@@ -2284,7 +1759,7 @@ function EfficiencyTrendChart({
           key: 'rolling',
           label: '24-hour avg',
           color: CHART_COLORS.emerald,
-          values: trend.map((point) => convertEfficiency(point.rolling_24h_wh_mi)),
+          values: timeline.values.rolling_24h_wh_mi,
         },
       },
     },
@@ -2292,12 +1767,12 @@ function EfficiencyTrendChart({
   );
   return (
     <RichTimeSeriesChart
-      points={trend.map((point) => ({ ts: point.ts }))}
+      points={timeline.points}
       series={configured}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      yUnit={unit}
+      yUnit={timeline.unit}
       yRange={yRange}
       mode={definition.mode}
       timeFilter={timeFilter}
@@ -2338,21 +1813,14 @@ function EfficiencyTemperatureChart({
   const distanceFactor = preferences.distance_unit === 'kilometers' ? 1.609344 : 1;
   const speedFactor = preferences.speed_unit === 'kmh' ? 1.609344 : 1;
   const seriesColor = editedSeriesColor(chartDefinition, 'accent', isDark);
-  const points = data
-    .filter((point) => point.avg_efficiency_wh_mi != null)
-    .sort((left, right) => right.temp_c_low - left.temp_c_low)
-    .map((point) => ({
-      label: formatTemp(point.temp_c_low),
-      value: convertEfficiency(point.avg_efficiency_wh_mi),
-      distance: typeof point.total_miles === 'number' ? point.total_miles * distanceFactor : null,
-      speed: typeof point.avg_speed_mph === 'number' ? point.avg_speed_mph * speedFactor : null,
-    }));
+  const points = efficiencyRows(data, (row) => row.avg_efficiency_wh_mi, (row) => ({
+    label: formatTemp(row.temp_c_low), distance: typeof row.total_miles === 'number' ? row.total_miles * distanceFactor : null,
+    speed: typeof row.avg_speed_mph === 'number' ? row.avg_speed_mph * speedFactor : null,
+  }), (left, right) => right.temp_c_low - left.temp_c_low);
 
   return (
     <EfficiencyPillBarChart
-      data={points.filter(
-        (point): point is (typeof points)[number] & { value: number } => point.value != null
-      )}
+      data={points}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
@@ -2379,17 +1847,7 @@ function EfficiencyModeChart({
 }) {
   const isDark = useDocumentTheme();
   const seriesColor = editedSeriesColor(chartDefinition, 'accent', isDark);
-  const rows = data
-    .filter((point) => point.avg_efficiency != null)
-    .map((point) => ({
-      label: formatDriveModeLabel(point.drive_mode),
-      value: convertEfficiency(point.avg_efficiency),
-      count: typeof point.trip_count === 'number' ? point.trip_count : null,
-    }))
-    .filter(
-      (point): point is { label: string; value: number; count: number | null } =>
-        point.value != null
-    );
+  const rows = efficiencyRows(data, (row) => row.avg_efficiency, (row) => ({ label: formatDriveModeLabel(row.drive_mode), count: typeof row.trip_count === 'number' ? row.trip_count : null }));
 
   return (
     <EfficiencyPillBarChart
@@ -2428,33 +1886,10 @@ function EfficiencyTagsChart({
   const preferences = getUnitPreferences();
   const distanceFactor = preferences.distance_unit === 'kilometers' ? 1.609344 : 1;
   const seriesColor = editedSeriesColor(chartDefinition, 'accent', isDark);
-  const rows = data
-    .filter((point) => point.avg_efficiency_wh_mi != null)
-    .map((point) => ({
-      label: point.tag_name,
-      value: convertEfficiency(point.avg_efficiency_wh_mi),
-      count: point.trip_count,
-      distance: point.total_miles * distanceFactor,
-      coverage: point.coverage,
-      tone: point.tag_id == null ? ('neutral' as const) : ('accent' as const),
-    }))
-    .filter(
-      (
-        point
-      ): point is {
-        label: string;
-        value: number;
-        count: number;
-        distance: number;
-        coverage: number;
-        tone: 'accent' | 'neutral';
-      } => point.value != null
-    );
+  const rows = efficiencyRows(data, (row) => row.avg_efficiency_wh_mi, (row) => ({ label: row.tag_name, count: row.trip_count, distance: row.total_miles * distanceFactor, coverage: row.coverage, tone: row.tag_id == null ? 'neutral' as const : 'accent' as const }));
   const emptyTitle = hasTagFilter
     ? 'No trips match these tag filters. Clear filters above or choose another range.'
-    : data.length > 0
-      ? 'Trips in this range do not have efficiency readings yet.'
-      : 'No trips in this period.';
+    : data.length > 0 ? 'Trips in this range do not have efficiency readings yet.' : 'No trips in this period.';
 
   return (
     <EfficiencyPillBarChart
@@ -2481,20 +1916,26 @@ function editedSeriesColor(
   defaultColorToken: string,
   isDark: boolean
 ) {
-  const color = definition.series[0]?.color;
-  if (!color || (color.mode === 'token' && color.token === defaultColorToken)) return undefined;
-  return color.mode === 'token' ? getChartColor(color.token) : isDark ? color.dark : color.light;
+  const spec = definition.series[0];
+  if (!spec?.color) return undefined;
+  const retained = spec.color.mode === 'token' && spec.color.token === defaultColorToken;
+  return retained ? undefined : canonicalSeriesStyle(spec, isDark, '', '').color;
 }
 
-function resolveSeriesColor(
-  color: ChartDefinitionV1['series'][number]['color'],
-  defaultColorToken: string,
-  establishedColor: string,
-  isDark: boolean
-) {
-  if (color.mode === 'token')
-    return color.token === defaultColorToken ? establishedColor : getChartColor(color.token);
-  return isDark ? color.dark : color.light;
+function chartDefinitionPlan(definition: ChartDefinitionV1, fields: Record<string, EstablishedRichSeries>, dark: boolean) {
+  const plan: Array<{ spec: ChartDefinitionV1['series'][number]; established: EstablishedRichSeries; style: Partial<RichSeries> }> = [];
+  for (const spec of definition.series) {
+    const established = fields[spec.y.field];
+    if (!established) continue;
+    plan.push({ spec, established, style: canonicalSeriesStyle(spec, dark, established.defaultColorToken ?? '', established.series.color ?? getChartColor('accent')) });
+  }
+  return plan;
+}
+
+function finiteExtent(values: Array<number | null | undefined>) {
+  let minimum = Infinity, maximum = -Infinity;
+  for (const value of values) if (value != null && Number.isFinite(value)) { minimum = Math.min(minimum, value); maximum = Math.max(maximum, value); }
+  return maximum === -Infinity ? undefined : [minimum, maximum] as [number, number];
 }
 
 function configuredRichSeries(
@@ -2502,85 +1943,20 @@ function configuredRichSeries(
   establishedByField: Record<string, EstablishedRichSeries>,
   isDark: boolean
 ) {
-  return definition.series.flatMap((item) => {
-    const established = establishedByField[item.y.field];
-    if (!established) return [];
-    const color = resolveSeriesColor(
-      item.color,
-      established.defaultColorToken ?? '',
-      established.series.color ?? getChartColor('accent'),
-      isDark
-    );
-    return [
-      {
-        ...established.series,
-        key: established.series.key || item.id,
-        label: item.label,
-        color,
-        mode: chartSeriesMode(item),
-        ...(item.mark === 'step' ? { interpolation: 'step' as const } : {}),
-        yScale: item.yAxis,
-        ...(item.visibleInLegend !== undefined ? { showInLegend: item.visibleInLegend } : {}),
-        ...(item.pointSize !== undefined ? { pointSize: item.pointSize } : {}),
-        ...(item.strokeWidth !== undefined ? { strokeWidth: item.strokeWidth } : {}),
-        ...(item.stackId !== undefined ? { stackId: item.stackId } : {}),
-      } satisfies RichSeries,
-    ];
-  });
+  const plan = chartDefinitionPlan(definition, establishedByField, isDark);
+  return plan.map(({ spec, established, style }) => ({ ...established.series, ...style, key: established.series.key || spec.id, yScale: spec.yAxis }));
 }
 
 function chartSeriesMode(
   series: ChartDefinitionV1['series'][number]
 ): NonNullable<RichSeries['mode']> {
-  if (series.mark === 'bar' || series.mark === 'histogram') return 'bar';
-  if (series.mark === 'scatter') return 'scatter';
-  if (series.mark === 'area' || ((series.mark === 'line' || series.mark === 'step') && series.fill))
-    return 'area';
-  return 'line';
+  return chartMark(series);
 }
 
 function fixedDefinitionRange(
   axis: ChartDefinitionV1['axes']['y'] | ChartDefinitionV1['axes']['x'] | undefined
 ) {
-  return axis?.domain.mode === 'fixed'
-    ? ([axis.domain.min, axis.domain.max] as [number, number])
-    : undefined;
-}
-
-function batteryMileageDomainValue(
-  point: {
-    ts: string;
-    x: number | null;
-    y?: number | null;
-    rangeMi: number | null;
-    projectedMaxRangeMi: number | null;
-    degradationPct?: number | null;
-  },
-  chartDefinition: ChartDefinitionV1
-) {
-  if (chartDefinition.x.kind === 'time') {
-    return chartDefinition.x.field.field === 'timestamp'
-      ? new Date(point.ts).getTime() / 1000
-      : Number.NaN;
-  }
-
-  const value = (() => {
-    switch (chartDefinition.x.field.field) {
-      case 'odometer_miles':
-        return point.x;
-      case 'usable_kwh':
-        return point.y;
-      case 'range_mi':
-        return point.rangeMi;
-      case 'projected_max_range_mi':
-        return point.projectedMaxRangeMi;
-      case 'degradation_pct':
-        return point.degradationPct;
-      default:
-        return null;
-    }
-  })();
-  return value == null ? Number.NaN : Number(value);
+  return chartDomain(axis);
 }
 
 function BatteryCapacityMileageChart({
@@ -2619,14 +1995,7 @@ function BatteryCapacityMileageChart({
 }) {
   const isDark = useDocumentTheme();
   const useTime = chartDefinition.x.kind === 'time';
-  const rows = points
-    .filter((point) => point.x != null || point.y != null)
-    .map((point) => ({
-      ...point,
-      domain: batteryMileageDomainValue(point, chartDefinition),
-    }))
-    .filter((point) => Number.isFinite(point.domain))
-    .sort((a, b) => a.domain - b.domain);
+  const rows = mileageProjection(points, chartDefinition, 'capacity');
   const series = configuredRichSeries(
     chartDefinition,
     {
@@ -2722,13 +2091,8 @@ function BatteryCapacityMileageChart({
 }
 
 export function getBatteryCapacityMileageYRange(values: Array<number | null | undefined>) {
-  const populated = values.filter(
-    (value): value is number => value != null && Number.isFinite(value)
-  );
-  if (populated.length === 0) return undefined;
-
-  const max = Math.max(...populated);
-  return [0, max > 0 ? Math.ceil(max * 1.1) : 1] as [number, number];
+  const extent = finiteExtent(values);
+  return extent ? [0, extent[1] > 0 ? Math.ceil(extent[1] * 1.1) : 1] as [number, number] : undefined;
 }
 
 function ProjectedRangeMileageChart({
@@ -2765,16 +2129,7 @@ function ProjectedRangeMileageChart({
 }) {
   const isDark = useDocumentTheme();
   const useTime = chartDefinition.x.kind === 'time';
-  const rows = points
-    .filter((point) => point.x != null)
-    .map((point) => ({
-      ts: point.ts,
-      projectedRangeMi: point.projectedMaxRangeMi ?? point.rangeMi,
-      odometerMi: point.x,
-      domain: batteryMileageDomainValue(point, chartDefinition),
-    }))
-    .filter((point) => Number.isFinite(point.domain))
-    .sort((a, b) => a.domain - b.domain);
+  const rows = mileageProjection(points, chartDefinition, 'range');
   const series = configuredRichSeries(
     chartDefinition,
     {
@@ -2839,17 +2194,8 @@ function ProjectedRangeMileageChart({
 }
 
 export function getProjectedRangeMileageYRange(values: Array<number | null | undefined>) {
-  const populated = values.filter(
-    (value): value is number => value != null && Number.isFinite(value)
-  );
-  if (populated.length === 0) return undefined;
-
-  const min = 200;
-  const step = 25;
-  const max = Math.max(...populated);
-  const upper = Math.max(min + step, Math.ceil(max / step) * step);
-
-  return [min, upper] as [number, number];
+  const extent = finiteExtent(values);
+  return extent ? [200, Math.max(225, Math.ceil(extent[1] / 25) * 25)] as [number, number] : undefined;
 }
 
 function getBatteryCapacityMileagePrecision(values: number[]) {
@@ -2858,34 +2204,20 @@ function getBatteryCapacityMileagePrecision(values: number[]) {
 }
 
 function shouldUseBatteryCapacityMileageDecimals(values: number[]) {
-  const finiteValues = values.filter((value) => Number.isFinite(value));
-  if (finiteValues.length < 2) return false;
-
-  const roundedWholeValues = new Set(finiteValues.map((value) => Math.round(value)));
-  const distinctValues = new Set(finiteValues.map((value) => value.toFixed(4)));
-  return roundedWholeValues.size < distinctValues.size;
+  const precisionGroups = new Map<number, Set<string>>();
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    const whole = Math.round(value);
+    const group = precisionGroups.get(whole) ?? new Set<string>();
+    group.add(value.toFixed(4)); precisionGroups.set(whole, group);
+  }
+  const rounded = new Set<string>();
+  precisionGroups.forEach((group) => group.forEach((value) => rounded.add(value)));
+  return rounded.size > precisionGroups.size;
 }
 
 function getEfficiencyUnit() {
-  const isMetric = getUnitSystem() === 'metric';
-  const display = getEfficiencyDisplay();
-  return display === 'energy_per_distance'
-    ? isMetric
-      ? 'Wh/km'
-      : 'Wh/mi'
-    : isMetric
-      ? 'km/kWh'
-      : 'mi/kWh';
-}
-
-function convertEfficiency(value: number | null | undefined) {
-  if (value == null) return null;
-  const isMetric = getUnitSystem() === 'metric';
-  const display = getEfficiencyDisplay();
-  if (display === 'energy_per_distance') {
-    return isMetric ? whPerMileToWhPerKm(value) : value;
-  }
-  return isMetric ? whPerMileToKmPerKwh(value) : whPerMileToMiPerKwh(value);
+  return efficiencyProjection().unit;
 }
 
 function isDashboardChartPage(value: unknown): value is DashboardChartPage {
@@ -2903,83 +2235,54 @@ function legacySmoothingToTimeFilter(value: unknown): TimeFilterWindow {
   return DEFAULT_CHART_TIME_FILTER;
 }
 
-function normalizeChartSettingsMap(value: unknown): Record<string, DashboardChartDisplaySettings> {
-  if (!value || typeof value !== 'object') return {};
-
-  const entries = Object.entries(value as Record<string, unknown>);
+export function normalizeChartSettingsMap(value: unknown): Record<string, DashboardChartDisplaySettings> {
+  if (value === null || typeof value !== 'object') return {};
+  const candidates = Object.entries(value).map(([id, raw]) => ({ id, canonical: normalizeChartId(id), settings: normalizeChartDisplaySettings(raw) }));
   const result: Record<string, DashboardChartDisplaySettings> = {};
-  for (const [chartId, chartSettings] of entries) {
-    const normalized = normalizeChartDisplaySettings(chartSettings);
-    if (normalized && chartId === normalizeChartId(chartId)) {
-      result[chartId] = normalized;
-    }
-  }
-  for (const [chartId, chartSettings] of entries) {
-    const normalized = normalizeChartDisplaySettings(chartSettings);
-    const normalizedChartId = normalizeChartId(chartId);
-    if (normalized && !(normalizedChartId in result)) {
-      result[normalizedChartId] = normalized;
-    }
+  candidates.sort((left, right) => Number(left.id !== left.canonical) - Number(right.id !== right.canonical));
+  for (const candidate of candidates) {
+    if (!candidate.settings) continue;
+    if (candidate.id === candidate.canonical || !(candidate.canonical in result)) result[candidate.canonical] = candidate.settings;
   }
   return result;
 }
 
 function normalizeChartDisplaySettings(value: unknown): DashboardChartDisplaySettings | null {
-  if (!value || typeof value !== 'object') return null;
-
-  const settings = value as Record<string, unknown>;
-  const normalizedAxes = normalizeChartAxisSettingsMap(settings.axes);
-  const normalized: DashboardChartDisplaySettings = {};
-
-  if ('timeFilter' in settings) {
-    normalized.timeFilter = normalizeTimeFilter(settings.timeFilter, DEFAULT_CHART_TIME_FILTER);
-  } else if ('smoothing' in settings && typeof settings.smoothing === 'number') {
-    normalized.smoothing = settings.smoothing;
-  }
-  if ('smoothness' in settings) {
-    normalized.smoothness = normalizeCurveSmoothness(settings.smoothness);
-  }
-  if (Object.keys(normalizedAxes).length > 0) {
-    normalized.axes = normalizedAxes;
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : null;
+  if (value === null || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const result: DashboardChartDisplaySettings = {};
+  const axes = normalizeChartAxisSettingsMap(raw.axes);
+  if (Object.keys(axes).length) result.axes = axes;
+  const legacy = !('timeFilter' in raw) && typeof raw.smoothing === 'number';
+  if (legacy) result.smoothing = raw.smoothing as number;
+  if ('timeFilter' in raw) result.timeFilter = normalizeTimeFilter(raw.timeFilter, DEFAULT_CHART_TIME_FILTER);
+  if ('smoothness' in raw) result.smoothness = normalizeCurveSmoothness(raw.smoothness);
+  return Object.keys(result).length ? result : null;
 }
 
 function normalizeChartAxisSettingsMap(
   value: unknown
 ): Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> {
-  if (!value || typeof value !== 'object') return {};
-
-  const result: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> = {};
-  for (const [key, axisSettings] of Object.entries(value as Record<string, unknown>)) {
-    if (!AXIS_ORDER.includes(key as DashboardChartAxisId)) continue;
-    const normalized = normalizeChartAxisRangeSetting(axisSettings);
-    if (normalized) {
-      result[key as DashboardChartAxisId] = normalized;
-    }
+  if (value === null || typeof value !== 'object') return {};
+  const axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> = {};
+  for (const key of Object.keys(value)) {
+    const axis = key as DashboardChartAxisId;
+    if (!AXIS_ORDER.includes(axis)) continue;
+    const setting = normalizeChartAxisRangeSetting((value as Record<string, unknown>)[key]);
+    if (setting != null) axes[axis] = setting;
   }
-
-  return result;
+  return axes;
 }
 
 function normalizeChartAxisRangeSetting(value: unknown): DashboardChartAxisRangeSetting | null {
-  if (!value || typeof value !== 'object') return null;
-
-  const settings = value as Record<string, unknown>;
-  const mode =
-    settings.mode === 'manual' ? 'manual' : settings.mode === 'auto' ? 'auto' : undefined;
-  const min =
-    typeof settings.min === 'number' && Number.isFinite(settings.min) ? settings.min : undefined;
-  const max =
-    typeof settings.max === 'number' && Number.isFinite(settings.max) ? settings.max : undefined;
-
-  if (!mode && min == null && max == null) return null;
-  return {
-    ...(mode ? { mode } : {}),
-    ...(min != null ? { min } : {}),
-    ...(max != null ? { max } : {}),
-  };
+  if (value === null || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const result: DashboardChartAxisRangeSetting = {};
+  for (const bound of ['min', 'max'] as const) {
+    if (typeof raw[bound] === 'number' && Number.isFinite(raw[bound])) result[bound] = raw[bound] as number;
+  }
+  if (raw.mode === 'auto' || raw.mode === 'manual') result.mode = raw.mode;
+  return Object.keys(result).length ? result : null;
 }
 
 function resolveChartDisplaySettings(
@@ -2988,19 +2291,12 @@ function resolveChartDisplaySettings(
   legacyTimeFilter: TimeFilterWindow,
   legacySmoothness: CurveSmoothness
 ) {
-  const chartSettings = allSettings[chartId] ?? {};
-  const axes = chartSettings.axes ?? {};
-  return {
-    timeFilter:
-      chartSettings.timeFilter ??
-      (chartSettings.smoothing == null
-        ? legacyTimeFilter
-        : legacySmoothingToTimeFilter(chartSettings.smoothing)),
-    axes,
-    smoothness:
-      chartSettings.smoothness ??
-      normalizeCurveSmoothness(chartSettings.smoothing, legacySmoothness),
-  };
+  const saved = allSettings[chartId] ?? {};
+  return resolveWidgetOptions({
+    timeFilter: saved.smoothing == null ? legacyTimeFilter : legacySmoothingToTimeFilter(saved.smoothing),
+    axes: {} as NonNullable<DashboardChartDisplaySettings['axes']>,
+    smoothness: normalizeCurveSmoothness(saved.smoothing, legacySmoothness),
+  }, saved);
 }
 
 function setChartSettingsEntry(
@@ -3008,24 +2304,17 @@ function setChartSettingsEntry(
   chartId: string,
   chartSettings: DashboardChartDisplaySettings
 ) {
-  const normalized = normalizeChartDisplaySettings(chartSettings);
-  if (!normalized) {
-    const rest = { ...current };
-    delete rest[chartId];
-    return rest;
-  }
-  return {
-    ...current,
-    [chartId]: normalized,
-  };
+  const next = { ...current };
+  const entry = normalizeChartDisplaySettings(chartSettings);
+  delete next[chartId];
+  if (entry) next[chartId] = entry;
+  return next;
 }
 
-function getManualAxisRange(setting: DashboardChartAxisRangeSetting | undefined) {
-  if (!setting || setting.mode !== 'manual') return undefined;
-  if (typeof setting.min !== 'number' || typeof setting.max !== 'number') return undefined;
-  if (!Number.isFinite(setting.min) || !Number.isFinite(setting.max)) return undefined;
-  if (setting.min >= setting.max) return undefined;
-  return [setting.min, setting.max] as [number, number];
+export function getManualAxisRange(setting: DashboardChartAxisRangeSetting | undefined) {
+  const bounds = [setting?.min, setting?.max];
+  const complete = bounds.every((bound) => typeof bound === 'number' && Number.isFinite(bound));
+  return setting?.mode === 'manual' && complete && bounds[0]! < bounds[1]! ? bounds as [number, number] : undefined;
 }
 
 function sameResolvedAxisRanges(
@@ -3038,13 +2327,6 @@ function sameResolvedAxisRanges(
     left.y2?.[0] === right.y2?.[0] &&
     left.y2?.[1] === right.y2?.[1]
   );
-}
-
-function isMobileViewport() {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return false;
-  }
-  return window.matchMedia('(max-width: 639px)').matches;
 }
 
 interface ChartSettingsPanelProps {
@@ -3100,26 +2382,7 @@ function ChartSettingsPanel({
   const hasControls =
     capabilities.timeFilter || capabilities.smoothness === true || axisEntries.length > 0;
 
-  React.useEffect(() => {
-    if (!open) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-      onClose();
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open, onClose, triggerRef]);
+  useWidgetDialogDismiss(open, onClose, triggerRef, panelRef);
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -3281,7 +2544,7 @@ function ChartSettingsPanel({
             ) : null}
             {!persistent && hasControls ? (
               <p className="text-[11px] text-fg-tertiary">
-                Preview only while viewing. Save chart settings from dashboard edit mode.
+                Preview only while viewing.
               </p>
             ) : null}
           </div>
@@ -3313,6 +2576,12 @@ function ChartAxisRangeField({
 }) {
   const mode = setting?.mode === 'manual' ? 'manual' : 'auto';
   const hasValidRange = Boolean(getManualAxisRange(setting));
+  const bounds = (['min', 'max'] as const).map((bound, index) => ({
+    bound,
+    label: bound === 'min' ? 'Min' : 'Max',
+    ariaLabel: `${capability.label} ${bound === 'min' ? 'minimum' : 'maximum'}`,
+    value: setting?.[bound] ?? suggestedRange?.[index] ?? '',
+  }));
 
   return (
     <div className="rounded-lg border border-border bg-bg-surface/70 p-2.5">
@@ -3343,34 +2612,20 @@ function ChartAxisRangeField({
       </div>
       {mode === 'manual' ? (
         <div className="mt-2 grid grid-cols-2 gap-2">
-          <label className="grid min-w-0 gap-1 text-xs font-medium text-fg-secondary">
-            <span>Min</span>
-            <input
-              aria-label={`${capability.label} minimum`}
-              type="number"
-              inputMode="decimal"
-              step={getAxisInputStep(capability.unit)}
-              value={setting?.min ?? suggestedRange?.[0] ?? ''}
-              onChange={(event) =>
-                onValueChange(axisId, 'min', parseAxisInputValue(event.target.value))
-              }
-              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-            />
-          </label>
-          <label className="grid min-w-0 gap-1 text-xs font-medium text-fg-secondary">
-            <span>Max</span>
-            <input
-              aria-label={`${capability.label} maximum`}
-              type="number"
-              inputMode="decimal"
-              step={getAxisInputStep(capability.unit)}
-              value={setting?.max ?? suggestedRange?.[1] ?? ''}
-              onChange={(event) =>
-                onValueChange(axisId, 'max', parseAxisInputValue(event.target.value))
-              }
-              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-            />
-          </label>
+          {bounds.map((field) => (
+            <label key={field.bound} className="grid min-w-0 gap-1 text-xs font-medium text-fg-secondary">
+              <span>{field.label}</span>
+              <input
+                aria-label={field.ariaLabel}
+                type="number"
+                inputMode="decimal"
+                step={getAxisInputStep(capability.unit)}
+                value={field.value}
+                onChange={(event) => onValueChange(axisId, field.bound, parseAxisInputValue(event.target.value))}
+                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+              />
+            </label>
+          ))}
           {!hasValidRange ? (
             <p className="col-span-2 text-[11px] text-fg-tertiary">
               Manual range applies after both values are valid and max is greater than min.
@@ -3391,6 +2646,23 @@ function parseAxisInputValue(value: string) {
   const next = Number(value);
   return Number.isFinite(next) ? next : undefined;
 }
+
+const CANONICAL_SOURCES: Record<DashboardChartDefinition['source'], React.ComponentType<ActiveDashboardChartSourceProps>> = {
+  soc_history: SocHistorySource,
+  charging_sessions_energy: (props) => <ChargingSeriesSource {...props} sessions />,
+  charging_weekly_energy: ChargingSeriesSource,
+  charge_session_curve: ChargeSessionCurveSource,
+  charging_curve_analysis: ChargingCurveAnalysisSource,
+  efficiency_trend: EfficiencyTrendSource,
+  efficiency_temperature: EfficiencyTemperatureSource,
+  efficiency_mode: EfficiencyModeSource,
+  efficiency_tags: EfficiencyTagsSource,
+  phantom_drain: PhantomDrainSource,
+  battery_degradation: BatteryDegradationSource,
+  battery_capacity_mileage: BatteryMileageSource,
+  projected_range_mileage: ProjectedRangeMileageSource,
+  tire_pressure_trips: TirePressureTripsSource,
+};
 
 registerWidget({
   componentType: 'chart',
