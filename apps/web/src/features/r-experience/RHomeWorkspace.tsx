@@ -1,10 +1,11 @@
 import React from 'react';
-import { DashboardRenderer, type DashboardConfig } from '@panda/dashboards';
+import { DashboardRenderer } from '@panda/dashboards';
 import type { DashboardPageShellRenderState } from '../../components/dashboard/dashboardShellTypes';
 import { getTimeframeLabel } from '../../lib/dates';
 import { usesBundledLayout } from './defaultLayout';
 import { RDashboardTools } from './RDashboardTools';
 import { HomeVehicleHeadingContext } from './RDashboardVehicle';
+import { homeSections } from './dashboardModel';
 import './r-full-dashboard.css';
 
 export function RHomeWorkspace({ state, actions, activity }: {
@@ -12,16 +13,7 @@ export function RHomeWorkspace({ state, actions, activity }: {
 }) {
   const config = state.activeConfig;
   if (!config) return null;
-  const vehicleWidget = config.widgets.find(widget => widget.componentType === 'custom' && widget.definitionId === 'overview.vehicle');
-  const remaining = config.widgets.filter(widget => widget.id !== vehicleWidget?.id);
-  const totals = remaining.filter(widget => widget.componentType === 'sensor');
-  const charts = remaining.filter(widget => widget.componentType !== 'sensor');
-  const sectionConfig = (widgets: DashboardConfig['widgets']): DashboardConfig => {
-    const firstRow = widgets.length ? Math.min(...widgets.map(widget => widget.layout.y)) : 0;
-    return { ...config, widgets: widgets.map(widget => ({
-      ...widget, layout: { ...widget.layout, y: widget.layout.y - firstRow },
-    })) };
-  };
+  const { vehicle: vehicleWidget, totals, charts } = homeSections(config);
   return <div className="r-home-workspace r-dashboard-surface"
     data-r-default-layout={usesBundledLayout(state.activeConfig) || undefined}>
     <header className="r-workspace-heading">
@@ -34,12 +26,12 @@ export function RHomeWorkspace({ state, actions, activity }: {
           <DashboardRenderer config={{ ...config, widgets: [vehicleWidget] }} ctx={state.ctx} />
         </HomeVehicleHeadingContext.Provider>
       </div>}
-      {totals.length > 0 && <section className="r-home-totals" aria-label="Period totals">
-        <DashboardRenderer config={sectionConfig(totals)} ctx={state.ctx} />
+      {totals.widgets.length > 0 && <section className="r-home-totals" aria-label="Period totals">
+        <DashboardRenderer config={totals} ctx={state.ctx} />
       </section>}
       {activity}
-      {charts.length > 0 && <section className="r-home-charts" aria-label="Overview charts">
-        <DashboardRenderer config={sectionConfig(charts)} ctx={state.ctx} />
+      {charts.widgets.length > 0 && <section className="r-home-charts" aria-label="Overview charts">
+        <DashboardRenderer config={charts} ctx={state.ctx} />
       </section>}
     </section>
   </div>;

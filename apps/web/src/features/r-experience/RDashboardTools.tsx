@@ -4,6 +4,7 @@ import { downloadDashboardYaml, useCloneDashboard } from '@panda/dashboards';
 import type { DashboardPageShellRenderState } from '../../components/dashboard/dashboardShellTypes';
 import { RDashboardImport } from './RDashboardImport';
 import { PanelsTopLeft } from 'lucide-react';
+import { attemptDashboard, dashboardDestination } from './dashboardModel';
 
 export function RDashboardTools({ state }: { state: DashboardPageShellRenderState }) {
   const clone = useCloneDashboard();
@@ -12,18 +13,22 @@ export function RDashboardTools({ state }: { state: DashboardPageShellRenderStat
   const duplicate = async () => {
     if (!state.activeConfig) return;
     setError(null);
-    try {
-      const config = await clone.mutateAsync(state.activeConfig.id);
-      await navigate({ to: '/d/$slug', params: { slug: config.slug }, search: { edit: 1, dashboardId: config.id } });
-    } catch (reason) {
+    const result = await attemptDashboard(() =>
+      clone.mutateAsync(state.activeConfig!.id).then(config => navigate(dashboardDestination(config))));
+    if (!result.ok) {
+      const { reason } = result;
       setError(reason instanceof Error ? reason.message : 'Dashboard could not be duplicated.');
     }
+  };
+  const exportActive = () => {
+    const config = state.activeConfig;
+    if (config) downloadDashboardYaml(config);
   };
   return <details className="r-dashboard-tools">
     <summary aria-label="Dashboard tools" title="Dashboard tools"><PanelsTopLeft aria-hidden="true" /><span>Dashboard tools</span></summary>
     <div>
-      <button type="button" disabled={clone.isPending} onClick={() => void duplicate()}>Duplicate dashboard</button>
-      <button type="button" onClick={() => { if (state.activeConfig) downloadDashboardYaml(state.activeConfig); }}>Export dashboard</button>
+      <button type="button" disabled={clone.isPending} onClick={duplicate}>Duplicate dashboard</button>
+      <button type="button" onClick={exportActive}>Export dashboard</button>
       <RDashboardImport />
       <Link to="/settings" search={{ section: 'dashboards' }}>Dashboard library</Link>
     </div>

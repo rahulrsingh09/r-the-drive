@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
 import { useMe } from '@panda/hooks';
 import { RAppLayout } from './RAppLayout';
+import { canManagePeople } from './navigationModel';
 
 export function RExplore() {
   const { data: me } = useMe();
@@ -16,7 +17,7 @@ export function RExplore() {
         <Link to="/battery/phantom-drain"><span><strong>Phantom drain</strong><small>Parked energy, sleep and battery loss</small></span><ArrowRight /></Link>
         <Link to="/settings" search={{ section: 'dashboards' }}><span><strong>Dashboard library</strong><small>Your views and saved layouts</small></span><ArrowRight /></Link>
         <Link to="/settings"><span><strong>All settings</strong><small>Preferences, connections and administration</small></span><ArrowRight /></Link>
-        {(me?.role === 'admin' || me?.role === 'super_user') && (
+        {canManagePeople(me?.role) && (
           <Link to="/users"><span><strong>People & access</strong><small>Accounts, invitations and permissions</small></span><ArrowRight /></Link>
         )}
       </div>

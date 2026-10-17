@@ -6,6 +6,8 @@ import { useDocumentTheme } from '@panda/ui/hooks';
 import { useThemePreferenceController } from '../../hooks/useThemePreferenceController';
 import { RMark } from './RMark';
 import { useRConnection } from './useRConnection';
+import { mediaStore } from './browserBindings';
+import { activeDestination } from './navigationModel';
 
 const navigation = [
   { key: 'dashboard', label: 'Home', to: '/', icon: CarFront },
@@ -16,13 +18,8 @@ const navigation = [
   { key: 'explore', label: 'Explore', to: '/explore', icon: Compass },
 ] as const;
 
-function subscribeNavigationViewport(onChange: () => void) {
-  const media = window.matchMedia('(max-width: 900px)');
-  media.addEventListener('change', onChange);
-  return () => media.removeEventListener('change', onChange);
-}
-
-const compactNavigation = () => window.matchMedia('(max-width: 900px)').matches;
+const navigationViewport = mediaStore('(max-width: 900px)');
+const compactDestinations = navigation.filter(({ key }) => key !== 'efficiency');
 
 export function RAppLayout({ children, activeKey }: { children: React.ReactNode; activeKey: string }) {
   const { pathname } = useLocation();
@@ -31,10 +28,11 @@ export function RAppLayout({ children, activeKey }: { children: React.ReactNode;
   const theme = useThemePreferenceController();
   const dark = useDocumentTheme();
   const connection = useRConnection();
-  const compact = React.useSyncExternalStore(subscribeNavigationViewport, compactNavigation, () => false);
-  const destinations = compact ? navigation.filter(item => item.key !== 'efficiency') : navigation;
-  const active = activeKey.startsWith('battery') ? 'battery'
-    : destinations.some(item => item.key === activeKey) ? activeKey : 'explore';
+  const compact = React.useSyncExternalStore(navigationViewport.subscribe, navigationViewport.snapshot, navigationViewport.serverSnapshot);
+  const destinations = compact ? compactDestinations : navigation;
+  const active = activeDestination(activeKey, destinations.map(item => item.key));
+  const switchTheme = () => theme.onModeChange(dark ? 'light' : 'dark');
+  const signOut = () => logout().then(() => navigate({ to: '/login' }));
   return (
     <div className="r-app" data-area={activeKey}>
       <a className="r-skip-link" href="#r-content">Skip to content</a>
@@ -49,14 +47,11 @@ export function RAppLayout({ children, activeKey }: { children: React.ReactNode;
         </nav>
         <div className="r-header-actions">
           <button type="button" aria-label={`Switch to ${dark ? 'light' : 'dark'} mode`}
-            disabled={theme.isPending} onClick={() => theme.onModeChange(dark ? 'light' : 'dark')}>
+            disabled={theme.isPending} onClick={switchTheme}>
             {dark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
           </button>
           <Link to="/settings" aria-label="Settings"><Settings2 aria-hidden="true" /></Link>
-          <button type="button" aria-label="Sign out" onClick={async () => {
-            await logout();
-            await navigate({ to: '/login' });
-          }}><LogOut aria-hidden="true" /></button>
+          <button type="button" aria-label="Sign out" onClick={signOut}><LogOut aria-hidden="true" /></button>
         </div>
       </header>
       <main id="r-content" className="r-main" tabIndex={-1}>
