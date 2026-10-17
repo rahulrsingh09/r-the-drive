@@ -19,63 +19,11 @@ RUN set -eux; \
         apt-get install -y --no-install-recommends pkg-config libssl-dev; \
     fi; \
     rm -rf /var/lib/apt/lists/*
+COPY compose/build-api.sh /usr/local/bin/panda-build-api
 COPY apps/api/Cargo.toml apps/api/Cargo.lock ./
-RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
-    && printf 'fn main() {}\n' > src/bin/panda-restore-agent.rs \
-    && printf 'fn main() {}\n' > src/bin/rebaseline_db.rs \
-    && printf 'fn main() {}\n' > src/bin/panda-keys.rs \
-    && printf 'pub fn __panda_dummy() {}\n' > src/lib.rs \
-    && target_flag='' \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
-        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
-            CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
-            AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
-            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-            PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu=1 \
-            PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig \
-            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
-            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include; \
-        target_flag='--target aarch64-unknown-linux-gnu'; \
-    fi \
-    && build_jobs="${CARGO_BUILD_JOBS:-$(nproc)}" \
-    && cargo build --locked --profile container --jobs "$build_jobs" $target_flag \
-        --bin panda-api \
-        --bin panda-restore-agent \
-        --bin rebaseline_db \
-        --bin panda-keys \
-    && rm -rf src
+RUN sh /usr/local/bin/panda-build-api seed
 COPY apps/api/ ./
-RUN touch src/lib.rs src/main.rs src/bin/panda-restore-agent.rs src/bin/rebaseline_db.rs src/bin/panda-keys.rs migrations/0001_initial_schema.sql \
-    && target_flag='' \
-    && binary_path=target/container/panda-api \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then \
-        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
-            CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
-            AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
-            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-            PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu=1 \
-            PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig \
-            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
-            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include; \
-        target_flag='--target aarch64-unknown-linux-gnu'; \
-        binary_path=target/aarch64-unknown-linux-gnu/container/panda-api; \
-    fi \
-    && build_jobs="${CARGO_BUILD_JOBS:-$(nproc)}" \
-    && cargo build --locked --profile container --jobs "$build_jobs" $target_flag \
-        --bin panda-api \
-        --bin panda-restore-agent \
-        --bin rebaseline_db \
-        --bin panda-keys \
-    && cp "$binary_path" /build/apps/api/panda-api \
-    && restore_binary_path=target/container/panda-restore-agent \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/container/panda-restore-agent; fi \
-    && cp "$restore_binary_path" /build/apps/api/panda-restore-agent \
-    && rebaseline_binary_path=target/container/rebaseline_db \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then rebaseline_binary_path=target/aarch64-unknown-linux-gnu/container/rebaseline_db; fi \
-    && cp "$rebaseline_binary_path" /build/apps/api/rebaseline_db \
-    && custody_binary_path=target/container/panda-keys \
-    && if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDARCH" != "arm64" ]; then custody_binary_path=target/aarch64-unknown-linux-gnu/container/panda-keys; fi \
-    && cp "$custody_binary_path" /build/apps/api/panda-keys
+RUN sh /usr/local/bin/panda-build-api build
 
 FROM --platform=$BUILDPLATFORM node:24.18.0-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS web-builder
 RUN corepack enable

@@ -35,6 +35,7 @@ scripts/        dev/build/docs utilities
 - `packages/ui` owns shared visual primitives and tokens.
 - `apps/web` owns route composition, page-specific UX, and integration of shared packages.
 - `compose/Dockerfile` owns the unified production image containing the API, built SPA, nginx, backup tools, and the local restore supervisor. Extended Parallax acquisition runs as an integrated, isolated Tokio subsystem inside each vehicle worker; there is no second image or container. During an in-app restore nginx and the supervisor remain available while the API/ingestion process is replaced; development keeps infrastructure in `compose/docker-compose.dev.yml` while `scripts/dev.mjs` runs the API and restore supervisor as managed host processes.
+- `compose/build-api.sh` supplies the dependency-cache and application-build phases inside that image build. Both phases use the same locked Cargo profile, binary list, job limit and ARM64 cross-compilation settings; only the application phase copies executable artifacts into the image staging directory.
 - The container `TZ` setting is limited to runtime/container behavior. Panda stores a separate global IANA application timezone in `system_config`; it drives user-facing date formatting, local-day grouping, and backup scheduling.
 - Runtime logs use the common `[panda][LEVEL]` key-value prefix. Docker supplies the outer timestamp; nginx emits only failed edge requests so successful health, static, and proxied traffic is not duplicated.
 
