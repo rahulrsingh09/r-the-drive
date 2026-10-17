@@ -103,3 +103,21 @@ fn key_sources_newlines_and_redis_encoding_preserve_complete_values() {
         assert_eq!(details.redis_settings().password().unwrap_or_default(), password);
     }
 }
+
+#[test]
+fn textual_field_deserialization_keeps_representations_and_errors() {
+    for text in ["1", "8", "128"] {
+        let value: SecurityConfig = serde_json::from_value(serde_json::json!({"ws_max_per_user": text})).unwrap();
+        assert_eq!(value.ws_max_per_user, text.parse::<usize>().unwrap());
+    }
+    for (value, expected) in [
+        (serde_json::json!("bad"), "invalid value \"bad\": invalid digit found in string"),
+        (serde_json::json!("-1"), "invalid value \"-1\": invalid digit found in string"),
+        (serde_json::json!(8), "invalid type: integer `8`, expected a string containing a value"),
+        (serde_json::json!(true), "invalid type: boolean `true`, expected a string containing a value"),
+        (serde_json::Value::Null, "invalid type: null, expected a string containing a value"),
+    ] {
+        let result = serde_json::from_value::<SecurityConfig>(serde_json::json!({"ws_max_per_user": value}));
+        assert_eq!(result.unwrap_err().to_string(), expected);
+    }
+}

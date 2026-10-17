@@ -42,3 +42,7 @@ pub fn init() {
         )
         .init();
 }
+
+#[cfg(test)]
+#[path = "logging_full_replacement_tests.rs"]
+mod full_replacement_tests;
