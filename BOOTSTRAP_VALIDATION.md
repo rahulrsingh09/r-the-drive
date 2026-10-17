@@ -1,5 +1,9 @@
 # Bootstrap validation
 
+The current rewrite candidate has completed local acceptance. See
+[Functional rewrite readiness](#functional-rewrite-readiness) for its results
+and limits. The earlier sections below record historical bootstrap checks.
+
 Validated locally on 2026-10-16 from source snapshot `f9482c7dc207adbdb2b43c3f247023f2e20323d6`. The repository has a new Git history, PANDA package/configuration/schema names and the existing R interface. No application deployment was performed.
 
 The table records validation of the initial renamed snapshot. After the privacy cleanup, the workspace build, documentation checks, all 202 script tests, 116 affected web tests and 16 native deployment/guard tests were rerun successfully. The new Docker helper passed 10 safety tests, including real Compose configuration rendering and rejection of registration redirects. Actual offline key generation verified UID/GID 1001, directory permissions 0700 and key-file permissions 0600 in a disposable Docker volume. A complete deployment through a real HTTPS gateway has not been performed.
@@ -75,3 +79,78 @@ helper; all 5 helper/role tests passed and the API test target compiled. The
 database-dependent authorization fixture was not rerun in this pass. The
 GPLv3 license bytes match the source license, the backend metadata explicitly
 uses GPL-3.0-only, and NOTICE.md records attribution and the modification date.
+
+## Functional rewrite readiness
+
+The runtime candidate is `f07b2f6cd636e1ec24f614e93a10a9681d6f37c3`,
+validated locally on 2026-10-16 and 2026-10-17 with synthetic accounts and
+vehicle data. This section supersedes the earlier bootstrap's incomplete
+integration gates; it does not turn those historical results into tests of the
+current revision. This validation report is a later documentation-only change.
+No production deployment or live vehicle connection was performed.
+
+The implemented scope covers dashboard and API-client internals, telemetry
+collection and durable trip/charge state, provider orchestration, vehicle and
+access workflows, query and calculation services, enrichment, backup and
+restore, and maintenance. The selected R interface, private security modules,
+public wire/schema contracts and documented compatibility utilities remain.
+GPL-3.0-only and the attribution in NOTICE.md are preserved.
+
+| Validation | Result |
+| --- | --- |
+| Rust build and static checks | All binaries built; strict all-target/all-feature Clippy passed on the runtime candidate. |
+| Ordinary Rust tests | 682 library and 10 binary tests passed on the candidate. All 66 ordinary integration tests have passing scoped evidence. |
+| Configured Rust tests | 269 normally ignored tests have named passing evidence, including all nine final restore execution/security cases. Three intentional exclusions are explained below. |
+| Whole application acceptance | 131 HTTP checks, 10 desktop views and a 390×844 mobile view passed against the exact candidate image, with zero browser runtime or Content Security Policy errors. Restart persistence and local backup/download/upload/preflight checks passed. |
+| Guided installer | Actual `setup --image` and `start` passed on a separate fresh stack using the same image: generated keys, owner registration, setup-proof removal, private file permissions, saved-state persistence and restricted database privileges. |
+| Browser and frontend | 1,406 web, 25 UI and 4 theme tests passed; one inherited web test remains skipped. Lint, type checking and the workspace build passed. |
+| Repository and setup checks | All 202 script tests passed. Installer checks passed on Python 3.7 and 3.12, with the database-dependent unit entry explicitly skipped and actual setup covered separately. |
+| Documentation | Documentation checks, architecture checks, documentation build and search indexing passed. |
+| Privacy and license | 1,436 tracked files, including bounded decompression of gzip fixtures, contain no known personal identifiers or retired project names. GPL license bytes match the published baseline; new commit identities are neutral. |
+| Secret scanning | Strict Gitleaks scanning of changes since the published baseline found no findings. Initial-snapshot nonfunctional test fixtures retain their separately reviewed status. |
+| Cleanup | Final application, installer and restore containers, volumes and networks were removed. Installer and browser private temporary files were removed. |
+
+The compiled Rust inventory contains 1,030 top-level tests: 758 ordinary and
+272 normally ignored. The per-test evidence ledger distinguishes actual
+execution revisions. Earlier frontend, installer and stable service results
+are carried forward only after checking their relevant source files; they
+were not all rerun in one command against the final commit. Final application
+acceptance exercises the combined runtime. Nested authorization checks and
+repeated scope runs are not added again to the inventory totals.
+
+Two ignored entries generate historical capture fixtures and are intentionally
+excluded. A third performs a legacy destructive demo refresh that protected
+history does not permit; a passing regression verifies the permission denial.
+Normal historical rebuilds that require protected deletion remain unsupported.
+No history permission was relaxed to make these checks pass.
+
+Restore coverage includes candidate preparation, failure rollback, successful
+restore of nonempty history and worker restart. Scratch-database cleanup was
+corrected after cancellation and busy-database regressions exposed a defect;
+the eight original cases and four new PostgreSQL regressions pass. Other
+corrections include durable charge completion, revoked-membership cost access,
+and cursor metadata reuse. Full-output fixtures and original security assertions
+remain in the evidence, including an assertion-backed correction to two legacy
+voltage expectations that previously contained power values.
+
+The final application image ID is
+`sha256:2c619e12db189dc513a9720d57ab88aec05d881de6d57d654b26975df6bc0bd4`.
+Its revision label and embedded release identity match the runtime commit.
+The broad HTTPS/browser fixture and separate installer fixture used the same
+source archive and image. The installer used an external test adapter to map
+a digest-shaped alias to that verified local image and add network isolation;
+its setup, provisioning, key generation and authentication code ran unchanged.
+Registry pull/authentication was not exercised, and this image ID is not a
+published registry manifest digest.
+
+The deployment helper remains [scripts/deploy.py](./scripts/deploy.py). It
+installs with local Docker Compose on the host where it runs; it does not
+provision Northflank, a cloud server, DNS, TLS or an access gateway. The
+[README](./README.md#deploy-in-four-steps) records the four installation steps,
+defaults and reasons. Use new storage and credentials for a fresh installation.
+
+This is local release-readiness evidence, not a production deployment, a live
+provider certification or an independent penetration test. A user's real
+HTTPS gateway remains outside the isolated acceptance fixture. Hosted
+automation has not been enabled. No new Cargo advisory, Semgrep or Trivy scan
+is claimed by this pass.
