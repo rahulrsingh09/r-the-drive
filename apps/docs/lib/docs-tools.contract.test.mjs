@@ -86,6 +86,20 @@ test('failed compose traversal preserves assignment timing and completed nested 
   assert.equal(broken.lang, 'compose-include');
 });
 
+test('compose traversal compacts sparse child arrays while link traversal rejects them', () => {
+  const leaf = {type: 'text', value: 'kept'};
+  const children = new Array(3);
+  children[1] = leaf;
+  const tree = {type: 'root', children};
+  remarkComposeInclude()(tree);
+  assert.deepEqual(tree.children, [leaf]);
+  assert.equal(tree.children[0], leaf);
+  assert.throws(
+    () => remarkRepositoryLinks()({type: 'root', children}, {path: sourceFilePath}),
+    TypeError,
+  );
+});
+
 test('production search verifier accepts valid output and rejects incomplete artifacts', async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), 'docs-search-contract-'));
   try {

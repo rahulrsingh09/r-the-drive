@@ -5,32 +5,44 @@ import {fileURLToPath} from 'node:url';
 const siteDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(siteDir, '../..');
 export function includeComposeFile(sourceFile) {
-  if (!sourceFile || path.isAbsolute(sourceFile) || sourceFile.includes('..')) {
+  const forbidden = !sourceFile || [path.isAbsolute(sourceFile), sourceFile.includes('..')].some(Boolean);
+  if (forbidden) {
     throw new Error(`Invalid documentation include path: ${sourceFile ?? '(missing)'}`);
   }
 
-  const targetPath = path.resolve(repoRoot, sourceFile);
-  if (!targetPath.startsWith(`${repoRoot}${path.sep}`) || !fs.existsSync(targetPath)) {
+  const location = path.resolve(repoRoot, sourceFile);
+  const insideRoot = path.relative(repoRoot, location);
+  if (!insideRoot || insideRoot.startsWith(`..${path.sep}`) || path.isAbsolute(insideRoot) || !fs.existsSync(location)) {
     throw new Error(`Documentation include target does not exist: ${sourceFile}`);
   }
 
-  return fs.readFileSync(targetPath, 'utf8').replace(/\s+$/, '');
+  const text = fs.readFileSync(location, 'utf8');
+  return text.trimEnd();
 }
 
 export function remarkComposeInclude() {
   return (tree) => {
-    const visit = (node) => {
-      if (Array.isArray(node.children)) {
-        node.children = node.children.flatMap((child) => {
-          if (child.type === 'code' && child.lang === 'compose-include') {
-            return [{type: 'code', lang: 'yaml', value: includeComposeFile(child.value.trim())}];
-          }
-          visit(child);
-          return [child];
-        });
+    if (!Array.isArray(tree.children)) return;
+    const frames = [{node: tree, index: 0, children: []}];
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1];
+      if (frame.index === frame.node.children.length) {
+        frame.node.children = frame.children;
+        frames.pop();
+        continue;
       }
-    };
 
-    visit(tree);
+      const index = frame.index++;
+      if (!(index in frame.node.children)) continue;
+      const child = frame.node.children[index];
+      if (child.type === 'code' && child.lang === 'compose-include') {
+        frame.children.push({type: 'code', lang: 'yaml', value: includeComposeFile(child.value.trim())});
+        continue;
+      }
+      frame.children.push(child);
+      if (Array.isArray(child.children)) {
+        frames.push({node: child, index: 0, children: []});
+      }
+    }
   };
 }
