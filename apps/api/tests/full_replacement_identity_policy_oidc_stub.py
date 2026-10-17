@@ -35,6 +35,8 @@ class Provider(http.server.BaseHTTPRequestHandler):
         if self.path.endswith("/jwks"):
             return self.reply(200, {"keys": [JWK]})
         if self.path.endswith("/userinfo"):
+            if self.headers.get("Authorization") != "Bearer fixture-access":
+                return self.reply(401, {"error": "invalid_token"})
             return self.reply(200, {"sub": "synthetic-subject", "email": "Artist@Example.invalid", "email_verified": True, "groups": ["artists"], "tenant": "fallback"})
         if variant == "bad-json":
             return self.reply(200, b"{broken")
@@ -55,6 +57,16 @@ class Provider(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         params = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
         code = params.get("code", [""])[0]
+        basic = self.headers.get("Authorization") == "Basic " + base64.b64encode(b"fixture-client:fixture-secret").decode()
+        post = not self.headers.get("Authorization") and params.get("client_id") == ["fixture-client"] and params.get("client_secret") == ["fixture-secret"]
+        if not (basic or post):
+            return self.reply(401, {"error": "invalid_client"})
+        if code.startswith("mode-") and (code == "mode-client_secret_post") != bool(post):
+            return self.reply(401, {"error": "invalid_client"})
+        if params.get("grant_type") != ["authorization_code"] or params.get("code_verifier") != ["verifier"]:
+            return self.reply(400, {"error": "invalid_grant"})
+        if params.get("redirect_uri") != ["https://app.example.invalid/v1/auth/oidc/callback"]:
+            return self.reply(400, {"error": "invalid_grant"})
         if code == "reject-code":
             return self.reply(400, {"error": "invalid_grant"})
         claims = {"iss": ORIGIN + "/good", "sub": "synthetic-subject", "aud": "fixture-client", "iat": int(time.time()), "exp": int(time.time()) + 120, "nonce": "nonce", "tenant": "primary"}

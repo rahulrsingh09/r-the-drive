@@ -171,6 +171,62 @@ async fn full_identity_policy_oidc_local_provider_errors() {
 }
 
 #[tokio::test]
+#[ignore = "requires task-owned TLS OIDC fixture and operator CIDR env"]
+async fn full_identity_policy_oidc_verifies_submitted_client_pkce_and_redirect() {
+    let origin = std::env::var("IDENTITY_POLICY_OIDC_ORIGIN").unwrap();
+    let settings = provider(format!("{origin}/good"));
+    let transaction = oidc::Transaction {
+        state: "state".into(),
+        browser_binding: oidc::browser_binding("cookie"),
+        nonce: "nonce".into(),
+        verifier: "verifier".into(),
+        return_to: "/".into(),
+        user_id: None,
+        link: false,
+        pending_password_hash: None,
+        invitation_id: None,
+    };
+    for method in ["auto", "client_secret_basic", "client_secret_post"] {
+        let mut selected = settings.clone();
+        selected.token_auth_method = method.into();
+        let identity =
+            oidc::exchange_and_verify(&selected, &transaction, &format!("mode-{method}"))
+                .await
+                .unwrap();
+        assert!(identity.email_verified);
+        assert_eq!(identity.email.as_deref(), Some("artist@example.invalid"));
+
+        selected.client_secret = Some("incorrect-fixture-secret".into());
+        assert!(
+            oidc::exchange_and_verify(&selected, &transaction, "accept-code")
+                .await
+                .is_err()
+        );
+        selected.client_secret = settings.client_secret.clone();
+        selected.client_id = Some("incorrect-fixture-client".into());
+        assert!(
+            oidc::exchange_and_verify(&selected, &transaction, "accept-code")
+                .await
+                .is_err()
+        );
+    }
+    let mut wrong_verifier = transaction.clone();
+    wrong_verifier.verifier = "incorrect-verifier".into();
+    assert!(
+        oidc::exchange_and_verify(&settings, &wrong_verifier, "accept-code")
+            .await
+            .is_err()
+    );
+    let mut wrong_redirect = settings;
+    wrong_redirect.public_base_url = Some("https://other.example.invalid".into());
+    assert!(
+        oidc::exchange_and_verify(&wrong_redirect, &transaction, "accept-code")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 #[ignore = "requires task-owned isolated TimescaleDB and Redis; baseline rotation defect"]
 async fn full_identity_policy_rotation_overlap_and_audit_rollback() {
     let f=Fixture::new().await;
