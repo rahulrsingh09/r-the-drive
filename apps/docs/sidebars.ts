@@ -93,6 +93,10 @@ const sidebars: SidebarsConfig = {
     },
   ],
   developmentSidebar: [
+    'architecture/full-replacement-auth-routes',
+    'architecture/full-replacement-identity-policy',
+    'architecture/full-replacement-edge-sessions',
+    'architecture/full-replacement-key-custody',
     'architecture/full-replacement-backend-foundation',
     'architecture/full-replacement-acquisition',
     'architecture/build-workflow-programs',
