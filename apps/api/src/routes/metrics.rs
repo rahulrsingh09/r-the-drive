@@ -410,6 +410,7 @@ fn stream_metrics(
         body::{Body, Bytes},
         response::IntoResponse,
     };
+    use futures::StreamExt;
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
     let task = tokio::spawn(async move {
         let mut output = MetricOutput {
@@ -423,7 +424,8 @@ fn stream_metrics(
         |(mut receiver, task)| async move {
             receiver.recv().await.map(|chunk| (chunk, (receiver, task)))
         },
-    );
+    )
+    .fuse();
     (
         [
             ("content-type", "application/json"),
