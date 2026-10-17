@@ -54,12 +54,12 @@ const state = (config = getDefaultBySlug('dashboard')!) => ({
 const Icon = () => <svg />;
 const sections = ['dashboards', 'charts', 'units', 'jobs', 'other'].map(id => ({ id, label: id, icon: Icon }));
 
-it('offers export without clone, import, file input or layout-library navigation', () => {
+it('offers export and library navigation without clone, import or file input', () => {
   const current = state();
   const view = render(<RDashboardTools state={current} />);
   expect(screen.queryByText('Duplicate dashboard')).toBeNull();
   expect(screen.queryByText('Import dashboard')).toBeNull();
-  expect(screen.queryByText('Dashboard library')).toBeNull();
+  expect(screen.getByRole('link', { name: /Dashboard library/ })).toHaveAttribute('href', '/settings?section=dashboards');
   expect(view.container.querySelector('input[type=file]')).toBeNull();
   fireEvent.click(screen.getByText('Export dashboard'));
   expect(fixture.download).toHaveBeenCalledWith(current.activeConfig);
@@ -95,13 +95,13 @@ it('renders the section picker for read-only saved dashboards without navigating
   expect(select).not.toHaveBeenCalled();
 });
 
-it.each(['admin', 'super_user', 'viewer', 'user', 'unknown'])('keeps Explore links and people permissions for %s without a layout library', role => {
+it.each(['admin', 'super_user', 'viewer', 'user', 'unknown'])('keeps Explore library navigation and people permissions for %s', role => {
   fixture.role = role;
   render(<RExplore />);
-  expect(screen.queryByText('Dashboard library')).toBeNull();
+  expect(screen.getByRole('link', { name: /Dashboard library/ })).toHaveAttribute('href', '/settings?section=dashboards');
   expect(screen.queryByRole('link', { name: /People & access/ }) !== null).toBe(['admin', 'super_user'].includes(role));
   expect(screen.getAllByRole('link').map(link => link.getAttribute('href'))).toEqual([
-    '/efficiency', '/vehicle-health', '/battery', '/battery/phantom-drain', '/settings',
+    '/efficiency', '/vehicle-health', '/battery', '/battery/phantom-drain', '/settings?section=dashboards', '/settings',
     ...(['admin', 'super_user'].includes(role) ? ['/users'] : []),
   ]);
 });

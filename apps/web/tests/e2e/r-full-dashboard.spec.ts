@@ -43,7 +43,7 @@ for (const width of [393, 1280]) {
       await expect(workspace.locator('[data-testid="sensor-chip"]').filter({ hasText: 'Avg Efficiency' })).toContainText('320 Wh/mi');
       await page.getByLabel('Dashboard tools', { exact: true }).click();
       await expect(page.getByRole('button', { name: 'Edit dashboard', exact: true })).toHaveCount(0);
-      await expect(page.getByRole('link', { name: 'Dashboard library' })).toHaveCount(0);
+      await expect(page.getByRole('link', { name: 'Dashboard library' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Duplicate dashboard', exact: true })).toHaveCount(0);
       await expect(page.getByLabel('Import dashboard file')).toHaveCount(0);
       await expect(workspace).toBeVisible();

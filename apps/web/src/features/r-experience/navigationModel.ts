@@ -17,6 +17,7 @@ const exploreSections = [
   { to: '/vehicle-health', title: 'Vehicle health', description: 'Readings, tires, software and connection' },
   { to: '/battery', title: 'Battery', description: 'State of charge and parked energy' },
   { to: '/battery/phantom-drain', title: 'Phantom drain', description: 'Parked energy, sleep and battery loss' },
+  { to: '/settings', search: { section: 'dashboards' }, title: 'Dashboard library', description: 'Your views and saved layouts' },
   { to: '/settings', title: 'All settings', description: 'Preferences, connections and administration' },
 ] as const;
 const peopleSection = { to: '/users', title: 'People & access', description: 'Accounts, invitations and permissions' } as const;

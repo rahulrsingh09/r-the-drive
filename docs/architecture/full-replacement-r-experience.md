@@ -20,7 +20,7 @@ Integration follow-ups:
 
 ## Fixed layouts
 
-`RDashboardTools` retains Export. Clone controls, YAML import, the import dialog and its mutation/navigation machinery are removed. Its Dashboard library link and the Explore library shortcut are removed. The R settings directory, search and section picker retain the read-only Dashboards section, which opens and exports saved layouts. Charts, units, data imports and other settings remain available.
+`RDashboardTools` retains Export. Clone controls, YAML import, the import dialog and its mutation/navigation machinery are removed. Its Dashboard library link and the Explore library shortcut retain access to saved views. The R settings directory, search and section picker retain the read-only Dashboards section, which opens and exports saved layouts. Charts, units, data imports and other settings remain available.
 
 `RDashboardSurface` chooses the home workspace using route and readiness. It does not consult edit flags. A stored layout retains its widget IDs, options, ordering and positions; the existing home section rebasing and responsive renderer behavior remain in use. Removing editing does not reset or write stored configurations.
 
@@ -48,6 +48,6 @@ All 30 cases from the first handoff are reviewed individually in the recovery in
 
 ## Validation boundary
 
-The `fullReplacementRExperience` tests cover retained telemetry, role visibility, selected-vehicle isolation, palette, section geometry, history priorities, orbit input, decode/disposal, document cleanup and throttling. Additional tests cover absence of clone/import/library shortcuts, stale edit inputs, read-only saved-layout navigation and saved custom geometry. Retired capability assertions and the original two affected snapshots are archived with hashes; only the removed controls are trimmed from those snapshots. Unrelated golden nodes and the original six feature-test files remain intact.
+The `fullReplacementRExperience` tests cover retained telemetry, role visibility, selected-vehicle isolation, palette, section geometry, history priorities, orbit input, decode/disposal, document cleanup and throttling. Additional tests cover absence of clone/import controls, stale edit inputs, read-only saved-layout navigation and saved custom geometry. Retired capability assertions and the original two affected snapshots are archived with hashes; only the removed controls are trimmed from those snapshots. Unrelated golden nodes and the original six feature-test files remain intact.
 
 The R browser tests exercise the actual application with synthetic API fixtures, canonical charts, saved layouts and desktop/mobile sizes. Saved-layout cases start with read-only fixture data and deny writes. The new integration bypass cases cover user, admin and super-user roles, stale edit preferences and direct URLs. They must run against the combined fixed-layout shell/settings/renderer implementation before acceptance. Local browser execution uses a task-owned container with no external network. No live account, vehicle, provider or backend is used.

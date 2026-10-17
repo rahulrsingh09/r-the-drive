@@ -57,7 +57,6 @@ for (const width of [393, 1280]) {
         await expect(page.locator('.rgl-editor, [data-widget-frame="edit"]')).toHaveCount(0);
         await expect(page.getByRole('button', { name: /^(Edit dashboard|Save dashboard changes|Discard dashboard changes|Create dashboard|Import dashboard|Duplicate dashboard)$/ })).toHaveCount(0);
         await expect(page.getByLabel('Import dashboard file')).toHaveCount(0);
-        await expect(page.getByRole('link', { name: 'Dashboard library' })).toHaveCount(0);
       }
       expect(fixture.writes.filter(write => write.includes('/dashboards'))).toEqual([]);
     });
