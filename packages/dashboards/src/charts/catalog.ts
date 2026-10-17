@@ -157,11 +157,11 @@ export function supportsBundledRendererCurve(
   sourceId: string,
   field: string | undefined
 ): boolean | undefined {
-  const supported = bundledCapabilityBySlug.get(slug)?.curves;
-  return supported
-    ? field !== undefined &&
-        supported.some((curve) => curve.sourceId === sourceId && curve.field === field)
-    : undefined;
+  const capability = bundledCapabilityBySlug.get(slug);
+  if (!capability) return undefined;
+  if (field === undefined) return false;
+  const fields = rendererCurveIndex(capability).get(sourceId);
+  return fields?.has(field) ?? false;
 }
 
 export function supportsBundledRichEditing(slug: string): boolean | undefined {
@@ -216,12 +216,7 @@ export function validateBundledRendererDefinition(
       for (const [path, value, expected, message] of contracts) require(sameConfigValue(value, expected), `config.${path}`, message);
     }
   }
-  const supported = new Map<string, Set<string>>();
-  for (const curve of capability.curves) {
-    const fields = supported.get(curve.sourceId) ?? new Set<string>();
-    fields.add(curve.field);
-    supported.set(curve.sourceId, fields);
-  }
+  const supported = rendererCurveIndex(capability);
   for (const [index, series] of definition.series.entries()) {
     const sourceId = sources.get(series.y.sourceBindingId);
     const prefix = `config.series.${index}`;
@@ -243,6 +238,21 @@ export function validateBundledRendererDefinition(
   return errors;
 }
 
+function rendererCurveIndex(capability: BundledRendererCapability) {
+  const supported = new Map<string, Set<string>>();
+  for (const { sourceId, field } of capability.curves) {
+    const fields = supported.get(sourceId);
+    if (fields) fields.add(field);
+    else supported.set(sourceId, new Set([field]));
+  }
+  return supported;
+}
+
+const SERIES_DISPLAY_MODES = new Map<string, NonNullable<DashboardChartDefinition['mode']>>([
+  ['area', 'area'],
+  ['bar', 'bar'],
+  ['scatter', 'scatter'],
+]);
 const { definitions, definitionById } = compileChartCatalog(BUNDLED_CHART_DEFINITIONS);
 
 export function getChartDefinitions(page?: DashboardChartPage): DashboardChartDefinition[] {
@@ -354,10 +364,8 @@ function isDashboardChartPage(value: string): value is DashboardChartPage {
 function seriesMode(
   series: ChartDefinitionV1['series'][number] | undefined
 ): NonNullable<DashboardChartDefinition['mode']> {
-  if (!series) return 'line';
-  if (series.mark === 'area' || series.fill) return 'area';
-  if (series.mark === 'bar' || series.mark === 'scatter') return series.mark;
-  return 'line';
+  const mark = series?.fill ? 'area' : series?.mark;
+  return SERIES_DISPLAY_MODES.get(mark ?? 'line') ?? 'line';
 }
 
 function fixedRange(

@@ -51,6 +51,11 @@ only their declared keys. Object prototype names cannot select a route,
 trigger mileage normalization, or resolve to a non-string icon value.
 Legacy trip-stat normalization indexes metric IDs separately from stat aliases,
 preserves metric precedence, and leaves unknown aliases untouched.
+Chart permissions start from the readable, duplicable baseline, apply the
+personal or system-administrator action grants, then revoke editing for locked
+records. Curve support queries and validation use the same source-to-field
+index. Series presentation selects its mode from the mark vocabulary after
+applying the fill override.
 
 `WidgetHost` resolves the registry component, composes its optional keyed
 presentation, then assembles title/content slots and frame attributes. Title

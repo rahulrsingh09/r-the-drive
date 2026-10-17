@@ -10,18 +10,25 @@ export function chartOrigin(record: ChartRecord, systemBase?: ChartRecord): Char
   return systemBase ? 'override' : 'personal';
 }
 
+const OWNED_CHART_GRANTS = ['edit', 'delete'] as const;
+const SYSTEM_CHART_ADMIN_GRANTS = ['edit', 'restore', 'lock'] as const;
+
 export function defaultChartPermissions(record: ChartRecord, isAdmin = false): ChartPermissions {
-  const isSystem = record.ownerId == null;
-  const editable = isSystem ? isAdmin : true;
-  return {
+  const permissions: ChartPermissions = {
     read: true,
-    edit: editable && !record.isLocked,
+    edit: false,
     duplicate: true,
     reset: false,
-    restore: isSystem && isAdmin,
-    delete: !isSystem,
-    lock: isSystem && isAdmin,
+    restore: false,
+    delete: false,
+    lock: false,
   };
+  const grants = record.ownerId != null
+    ? OWNED_CHART_GRANTS
+    : isAdmin ? SYSTEM_CHART_ADMIN_GRANTS : [];
+  for (const permission of grants) permissions[permission] = true;
+  if (record.isLocked) permissions.edit = false;
+  return permissions;
 }
 
 export function buildChartManagerEntries(
