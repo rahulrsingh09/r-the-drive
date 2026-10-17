@@ -78,8 +78,9 @@ impl Fixture {
                 .fetch_all(&state.pool)
                 .await
                 .unwrap();
-        assert_eq!(ledger.len(), 32);
+        assert_eq!(ledger.len(), 33);
         assert!(ledger.contains(&1000031));
+        assert!(ledger.contains(&1000032));
         assert!(!crate::private_deployment::outbound::optional_traffic_allowed());
         Self {
             state,

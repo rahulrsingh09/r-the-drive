@@ -194,6 +194,12 @@
           "description": "durable charge checkpoints",
           "success": true,
           "version": 1000031
+        },
+        {
+          "checksum": "\\x25c4f170e0846ad2dcacad08175ffd4119e0f1f61827fdbfa2e2f3f1436baed2cade7f4ae375acda93f1ab4afbf93994",
+          "description": "stored function implementations",
+          "success": true,
+          "version": 1000032
         }
       ],
       "optional_traffic": false,
@@ -6456,6 +6462,12 @@
           "description": "durable charge checkpoints",
           "success": true,
           "version": 1000031
+        },
+        {
+          "checksum": "\\x25c4f170e0846ad2dcacad08175ffd4119e0f1f61827fdbfa2e2f3f1436baed2cade7f4ae375acda93f1ab4afbf93994",
+          "description": "stored function implementations",
+          "success": true,
+          "version": 1000032
         }
       ],
       "optional_traffic": false,

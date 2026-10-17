@@ -159,8 +159,9 @@ async fn live_projection_http_database_contract() {
             .fetch_all(&f.pool)
             .await
             .unwrap();
-    assert_eq!(versions.len(), 32);
+    assert_eq!(versions.len(), 33);
     assert!(versions.contains(&1000031));
+    assert!(versions.contains(&1000032));
     let protected: bool = sqlx::query_scalar("SELECT NOT rolsuper AND NOT rolbypassrls AND NOT has_table_privilege(current_user,'panda.trips','DELETE') AND NOT has_table_privilege(current_user,'timeseries.telemetry','TRUNCATE') FROM pg_roles WHERE rolname=current_user")
         .fetch_one(&f.pool).await.unwrap();
     assert!(protected);
