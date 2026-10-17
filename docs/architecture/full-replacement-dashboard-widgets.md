@@ -89,10 +89,11 @@ chart definition. `scatterProjection.ts` indexes numeric samples into the six
 established power buckets and prepares their color ramp once. The regression keeps
 its original accumulation order and weighted least-squares expressions; changing
 expression grouping would change floating-point results. `weightedRegression.ts`
-prepares five ordered moment columns and classifies the fit as absent, constant,
-or linear before evaluating it. The determinant, slope, intercept, and clamp
-equations remain individually retained; the preparation and solver structure
-are replacements.
+keeps five bounded accumulators and classifies the fit as absent, constant, or
+linear before evaluating it. Ordered accumulation, determinant, weighted mean,
+slope, intercept, and clamp are individually retained mathematical primitives.
+Separating fit classification from evaluation is an ownership boundary, not a
+claim that these regression algorithms were independently replaced.
 
 `tableControls.ts` shares pagination boundary rules and builds distinct clear,
 add, and replace tag commands. `schedulePresentation.ts` prepares schedule display
@@ -107,7 +108,9 @@ matching vehicle and preserves explicit demo flags ahead of legacy identity
 prefixes. Overhead artwork is rendered from a layer plan: fallback reports change
 the active layers independently for each theme, suppressing door overlays only
 while that theme uses fallback art. Existing coordinates and fallback transforms
-are unchanged.
+are unchanged. The charging glyph truth table and side-image transform assembly
+are fixed presentation contracts, regardless of their source expression form;
+they are not counted as independent algorithm replacements.
 
 Efficiency tag sources derive an explicit error, onboarding, or chart state.
 Catalog errors take precedence over stale data, and an empty loaded catalog takes

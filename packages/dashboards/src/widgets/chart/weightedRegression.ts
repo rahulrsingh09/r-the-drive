@@ -5,18 +5,20 @@ type LineFit =
   | { kind: 'line'; intercept: number; slope: number };
 
 function fitWeightedLine(points: WeightedPoint[]): LineFit {
-  const columns: [number[], number[], number[], number[], number[]] = [[], [], [], [], []];
-  for (const { x, y, weight } of points) {
-    const weightedX = weight * x;
-    columns[0].push(weight);
-    columns[1].push(weightedX);
-    columns[2].push(weight * y);
-    columns[3].push(weightedX * x);
-    columns[4].push(weightedX * y);
+  // Retained weighted-moment primitive: source order and left-associated
+  // products are required for exact floating-point compatibility.
+  let weight = 0;
+  let x = 0;
+  let y = 0;
+  let xx = 0;
+  let xy = 0;
+  for (const point of points) {
+    weight += point.weight;
+    x += point.weight * point.x;
+    y += point.weight * point.y;
+    xx += point.weight * point.x * point.x;
+    xy += point.weight * point.x * point.y;
   }
-  // Each moment retains source order and left-associated weighted products.
-  const totals = columns.map((column) => column.reduce((sum, value) => sum + value, 0));
-  const [weight, x, y, xx, xy] = totals as [number, number, number, number, number];
   if (weight === 0) return { kind: 'empty' };
   const determinant = weight * xx - x ** 2;
   if (Math.abs(determinant) < Number.EPSILON) return { kind: 'constant', value: y / weight };
