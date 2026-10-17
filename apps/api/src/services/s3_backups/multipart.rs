@@ -37,14 +37,19 @@ impl<'a> Multipart<'a> {
     async fn send_parts(&mut self, path: &Path) -> Result<()> {
         let mut file = File::open(path).await?;
         loop {
-            let mut bytes = Vec::with_capacity(MULTIPART_PART_SIZE);
-            (&mut file)
-                .take(MULTIPART_PART_SIZE as u64)
-                .read_to_end(&mut bytes)
-                .await?;
-            if bytes.is_empty() {
+            let mut bytes = vec![0; MULTIPART_PART_SIZE];
+            let mut filled = 0;
+            while filled < bytes.len() {
+                let count = file.read(&mut bytes[filled..]).await?;
+                if count == 0 {
+                    break;
+                }
+                filled += count;
+            }
+            if filled == 0 {
                 return Ok(());
             }
+            bytes.truncate(filled);
             let number = self.parts.len() as i32 + 1;
             let result = self
                 .client

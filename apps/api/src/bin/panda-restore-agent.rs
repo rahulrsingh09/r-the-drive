@@ -33,10 +33,6 @@ mod activation;
 #[path = "restore_execution/rollback.rs"]
 mod rollback;
 
-#[cfg(test)]
-#[path = "__tests__/restore_execution_contracts.rs"]
-mod execution_contracts;
-
 #[derive(Clone)]
 struct AgentState {
     config: Config,
@@ -49,56 +45,44 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     cleanup_restore_roles(&config).await?;
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    if let Some(command) = arguments.first().map(String::as_str) {
-        match command {
-            "host-restore" => {
-                let package = arguments
-                    .get(1)
-                    .ok_or_else(|| anyhow::anyhow!("host-restore requires a package path"))?;
-                host_restore(
-                    &config,
-                    Path::new(package),
-                    arguments.iter().any(|arg| arg == "--force"),
-                )
-                .await?;
-                return Ok(());
-            }
-            "host-finalize" => {
-                finalize_host_restore(&config).await?;
-                return Ok(());
-            }
-            "host-activate" => {
-                activate_host_restore(&config).await?;
-                return Ok(());
-            }
-            "host-rollback" => {
-                rollback_host_restore(&config).await?;
-                return Ok(());
-            }
-            _ => {}
+    match arguments.first().map(String::as_str) {
+        Some("host-restore") => {
+            let package = arguments
+                .get(1)
+                .context("host-restore requires a package path")?;
+            host_restore(
+                &config,
+                Path::new(package),
+                arguments.iter().any(|value| value == "--force"),
+            )
+            .await
+        }
+        Some("host-finalize") => finalize_host_restore(&config).await,
+        Some("host-activate") => activate_host_restore(&config).await,
+        Some("host-rollback") => rollback_host_restore(&config).await,
+        _ => {
+            let key = fs::read_to_string(restore_jobs::agent_key_path(&config)).await?;
+            let state = AgentState {
+                config,
+                agent_key: key.trim().into(),
+            };
+            let port = std::env::var("RESTORE_AGENT_PORT").unwrap_or_else(|_| "3002".into());
+            let address: SocketAddr = format!("127.0.0.1:{port}").parse()?;
+            let listener = TcpListener::bind(address).await?;
+            let recovery = state.clone();
+            let router = Router::new()
+                .route("/health", get(|| async { StatusCode::OK }))
+                .route("/v1/restore-runtime/jobs/{job_id}", get(get_job))
+                .route("/internal/jobs/{job_id}/execute", post(execute_job))
+                .with_state(state);
+            tokio::spawn(async move {
+                if let Err(error) = retry_interrupted_restore(&recovery).await {
+                    tracing::error!(error = ?error, "interrupted restore retry failed");
+                }
+            });
+            Ok(axum::serve(listener, router).await?)
         }
     }
-    let agent_key = fs::read_to_string(restore_jobs::agent_key_path(&config)).await?;
-    let state = AgentState {
-        config,
-        agent_key: agent_key.trim().into(),
-    };
-    let recovery_state = state.clone();
-    let app = Router::new()
-        .route("/health", get(|| async { StatusCode::OK }))
-        .route("/v1/restore-runtime/jobs/{job_id}", get(get_job))
-        .route("/internal/jobs/{job_id}/execute", post(execute_job))
-        .with_state(state);
-    let port = std::env::var("RESTORE_AGENT_PORT").unwrap_or_else(|_| "3002".into());
-    let address: SocketAddr = format!("127.0.0.1:{port}").parse()?;
-    let listener = TcpListener::bind(address).await?;
-    tokio::spawn(async move {
-        if let Err(error) = retry_interrupted_restore(&recovery_state).await {
-            tracing::error!(error = ?error, "interrupted restore retry failed");
-        }
-    });
-    axum::serve(listener, app).await?;
-    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -146,140 +130,75 @@ async fn host_restore_inner(
     force: bool,
     job_id: Uuid,
 ) -> anyhow::Result<()> {
-    let state_path = host_restore_state_path(config);
-    if fs::try_exists(&state_path).await.unwrap_or(false) {
-        anyhow::bail!("a host restore is already awaiting finalize or rollback");
-    }
-    let validated =
+    let checkpoint_path = host_restore_state_path(config);
+    anyhow::ensure!(
+        !fs::try_exists(&checkpoint_path).await.unwrap_or(false),
+        "a host restore is already awaiting finalize or rollback"
+    );
+    let package_info =
         backups::validate_recovery_package_with_limits(package, &config.recovery).await?;
-    let dump_inspection = restore_compatibility::inspect_recovery_dump(
+    let inspection = restore_compatibility::inspect_recovery_dump(
         package,
         Path::new(&config.backup_artifact_dir),
         &config.recovery,
     )
     .await?;
-    let current_pool = panda_api::db::pool::create_pool(&config.database_url).await?;
-    let mut users_table: bool = sqlx::query_scalar("SELECT to_regclass('panda.users') IS NOT NULL")
-        .fetch_one(&current_pool)
-        .await?;
-    if !users_table {
-        let mut migration_connection = current_pool.acquire().await?;
-        sqlx::query("SET search_path = public")
-            .execute(&mut *migration_connection)
-            .await?;
-        panda_api::db::migrations::MIGRATOR
-            .run_direct(None, &mut *migration_connection, false)
-            .await?;
-        drop(migration_connection);
-        users_table = true;
-    }
-    if users_table {
-        let has_users: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM panda.users)")
-            .fetch_one(&current_pool)
-            .await?;
-        if has_users && !force {
-            anyhow::bail!(
-                "target database contains users; pass --force to replace this installation"
-            );
-        }
-    }
-    // The standalone path may have just initialized a fresh database above;
-    // resolve persisted keys only after system_config is guaranteed to exist.
-    let config = config_with_active_keys(config, &current_pool).await?;
-    backups::reconcile_local_catalog(&current_pool, &config).await?;
+    let pool = panda_api::db::pool::create_pool(&config.database_url).await?;
+    initialize_host_target(&pool, force).await?;
+    let active = config_with_active_keys(config, &pool).await?;
+    backups::reconcile_local_catalog(&pool, &active).await?;
     let plan = restore_compatibility::plan_restore(
-        &validated.manifest,
-        &validated.checksum_sha256,
-        &current_pool,
-        Some(&dump_inspection),
+        &package_info.manifest,
+        &package_info.checksum_sha256,
+        &pool,
+        Some(&inspection),
     )
     .await?;
     if !plan.compatible {
-        anyhow::bail!(
-            "host restore compatibility preflight failed: {}",
-            plan.blocking_errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
+        let messages = plan
+            .blocking_errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        anyhow::bail!("host restore compatibility preflight failed: {messages}");
     }
-    let target_history = restore_jobs::snapshot_catalog(&current_pool).await.ok();
-
-    let staging = Path::new(&config.backup_artifact_dir)
+    let history = restore_jobs::snapshot_catalog(&pool).await.ok();
+    let staging = Path::new(&active.backup_artifact_dir)
         .join(".restore-staging")
         .join(format!("host-{job_id}"));
     fs::create_dir_all(&staging).await?;
-    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let staged_package = stage_recovery_package(&config, job_id, true, package).await?;
-    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let staged_validation =
-        backups::validate_recovery_package_with_limits(&staged_package, &config.recovery).await?;
-    if staged_validation.checksum_sha256 != validated.checksum_sha256 {
-        let _ = fs::remove_dir_all(&staging).await;
-        anyhow::bail!("recovery package changed while it was being staged");
-    }
-    extract_package(&config, &staged_package, &staging).await?;
-    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
-    let prepared = prepare_restore_database(
-        &config,
+    let staged = stage_host_package(
+        &active,
+        package,
         job_id,
-        &staging.join("database.dump"),
-        &validated.manifest,
-        &staging.join("backup-settings.json"),
-        Some(&staging.join("operational-history.json")),
-        target_history.as_ref(),
+        &staging,
+        &package_info.checksum_sha256,
     )
     .await?;
-    let planned_transforms = plan
-        .transforms
-        .iter()
-        .map(|transform| transform.id.as_str())
-        .collect::<Vec<_>>();
-    let applied_transforms = prepared
-        .validation_report
-        .applied_transforms
-        .iter()
-        .map(|transform| transform.id.as_str())
-        .collect::<Vec<_>>();
-    if planned_transforms != applied_transforms {
-        let _ = drop_database(&config, &prepared.candidate_database).await;
-        current_pool.close().await;
-        anyhow::bail!(
-            "candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}"
-        );
-    }
-    if prepared.validation_report.target_schema.schema_fingerprint
-        != plan.target.schema_fingerprint.clone().unwrap_or_default()
-    {
-        let _ = drop_database(&config, &prepared.candidate_database).await;
-        current_pool.close().await;
-        anyhow::bail!("candidate final schema contract differs from the preflight target contract");
-    }
-    let safety_and_merge = async {
-        backups::run_backup_now(
-            &current_pool,
-            &config,
-            None,
-            backups::BackupRunTrigger::PreRestore,
-        )
-        .await?;
-        backups::reconcile_local_catalog(&current_pool, &config).await?;
-        let final_target_history = restore_jobs::snapshot_catalog(&current_pool).await?;
-        let candidate_config = config_with_database(&config, &prepared.candidate_database)?;
-        let candidate_pool =
-            panda_api::db::pool::create_pool(&candidate_config.database_url).await?;
-        restore_jobs::merge_catalog_snapshot(&candidate_pool, &final_target_history).await?;
-        candidate_pool.close().await;
-        Ok::<(), anyhow::Error>(())
+    extract_package(&active, &staged, &staging).await?;
+    ensure_recovery_free_space(&staging, active.recovery.min_free_bytes)?;
+    let prepared = prepare_restore_database(
+        &active,
+        job_id,
+        &staging.join("database.dump"),
+        &package_info.manifest,
+        &staging.join("backup-settings.json"),
+        Some(&staging.join("operational-history.json")),
+        history.as_ref(),
+    )
+    .await?;
+    let approval = async {
+        verify_candidate_plan(Some(&plan), &prepared)?;
+        capture_host_safety(&active, &pool, &prepared.candidate_database).await
     }
     .await;
-    if let Err(error) = safety_and_merge {
-        let _ = drop_database(&config, &prepared.candidate_database).await;
-        current_pool.close().await;
+    if let Err(error) = approval {
+        let _ = drop_database(&active, &prepared.candidate_database).await;
+        pool.close().await;
         return Err(error);
     }
-    current_pool.close().await;
+    pool.close().await;
     let state = HostRestoreState {
         job_id,
         artifact_id: Uuid::new_v4(),
@@ -294,27 +213,27 @@ async fn host_restore_inner(
         plan,
         validation_report: prepared.validation_report,
     };
-    if let Err(error) = async {
-        fs::write(&state_path, serde_json::to_vec_pretty(&state)?).await?;
-        Ok::<(), anyhow::Error>(())
-    }
-    .await
-    {
-        let _ = drop_database(&config, &state.candidate_database).await;
+    let published = match serde_json::to_vec_pretty(&state) {
+        Ok(bytes) => fs::write(&checkpoint_path, bytes)
+            .await
+            .map_err(anyhow::Error::from),
+        Err(error) => Err(error.into()),
+    };
+    if let Err(error) = published {
+        let _ = drop_database(&active, &state.candidate_database).await;
         let _ = fs::remove_dir_all(&state.staging).await;
         return Err(error);
     }
     println!(
         "host restore candidate prepared and validated; state={}",
-        state_path.display()
+        checkpoint_path.display()
     );
     Ok(())
 }
 
 async fn read_host_restore_state(config: &Config) -> anyhow::Result<HostRestoreState> {
-    Ok(serde_json::from_slice(
-        &fs::read(host_restore_state_path(config)).await?,
-    )?)
+    let input = fs::read(host_restore_state_path(config)).await?;
+    serde_json::from_slice(&input).map_err(Into::into)
 }
 
 async fn activate_host_restore(config: &Config) -> anyhow::Result<()> {
@@ -322,46 +241,56 @@ async fn activate_host_restore(config: &Config) -> anyhow::Result<()> {
 }
 
 fn artwork_activation_from_state(state: &HostRestoreState) -> anyhow::Result<ArtworkActivation> {
-    Ok(ArtworkActivation {
-        destination: state
-            .artwork_destination
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("host restore artwork destination is unavailable"))?,
-        previous: state
-            .artwork_previous
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("host restore previous artwork path is unavailable"))?,
-    })
+    match (&state.artwork_destination, &state.artwork_previous) {
+        (None, _) => anyhow::bail!("host restore artwork destination is unavailable"),
+        (_, None) => anyhow::bail!("host restore previous artwork path is unavailable"),
+        (Some(destination), Some(previous)) => Ok(ArtworkActivation {
+            destination: destination.clone(),
+            previous: previous.clone(),
+        }),
+    }
 }
 
 async fn finalize_host_restore(config: &Config) -> anyhow::Result<()> {
     let state = read_host_restore_state(config).await?;
-    if !state.activated {
-        anyhow::bail!("host restore candidate has not been activated");
+    match state.activated {
+        false => anyhow::bail!("host restore candidate has not been activated"),
+        true => {
+            record_host_restore_history(config, &state, "completed", None).await?;
+            drop_database(config, &state.previous_database).await?;
+            let artwork = artwork_activation_from_state(&state)?;
+            finalize_artwork(&artwork).await;
+            let _ = fs::remove_dir_all(&state.staging).await;
+            write_host_restore_report(config, &state, "completed", None).await?;
+            fs::remove_file(host_restore_state_path(config)).await?;
+            Ok(())
+        }
     }
-    record_host_restore_history(config, &state, "completed", None).await?;
-    drop_database(config, &state.previous_database).await?;
-    finalize_artwork(&artwork_activation_from_state(&state)?).await;
-    let _ = fs::remove_dir_all(&state.staging).await;
-    write_host_restore_report(config, &state, "completed", None).await?;
-    fs::remove_file(host_restore_state_path(config)).await?;
-    Ok(())
 }
 
 async fn rollback_host_restore(config: &Config) -> anyhow::Result<()> {
     let state = read_host_restore_state(config).await?;
-    if state.activated
-        || (state.activation_started
-            && database_exists(config, &state.previous_database)
-                .await
-                .unwrap_or(false))
-    {
-        rollback_databases(config, &state.previous_database, &state.candidate_database).await?;
-        if state.artwork_destination.is_some() && state.artwork_previous.is_some() {
-            rollback_artwork(&artwork_activation_from_state(&state)?).await?;
+    let swapped = match (state.activated, state.activation_started) {
+        (true, _) => true,
+        (false, false) => false,
+        (false, true) => database_exists(config, &state.previous_database)
+            .await
+            .unwrap_or(false),
+    };
+    match swapped {
+        false => drop_database(config, &state.candidate_database).await?,
+        true => {
+            rollback_databases(config, &state.previous_database, &state.candidate_database).await?;
+            if let (Some(destination), Some(previous)) =
+                (&state.artwork_destination, &state.artwork_previous)
+            {
+                rollback_artwork(&ArtworkActivation {
+                    destination: destination.clone(),
+                    previous: previous.clone(),
+                })
+                .await?;
+            }
         }
-    } else {
-        drop_database(config, &state.candidate_database).await?;
     }
     record_host_restore_history(
         config,
@@ -378,8 +307,7 @@ async fn rollback_host_restore(config: &Config) -> anyhow::Result<()> {
         Some("Application verification failed after candidate activation"),
     )
     .await?;
-    fs::remove_file(host_restore_state_path(config)).await?;
-    Ok(())
+    Ok(fs::remove_file(host_restore_state_path(config)).await?)
 }
 
 async fn record_host_restore_history(
@@ -388,60 +316,48 @@ async fn record_host_restore_history(
     status: &str,
     error: Option<&str>,
 ) -> anyhow::Result<()> {
+    let completed = status == "completed";
+    let run = json!({
+        "id":state.job_id,"status":if completed {"succeeded"} else {"failed"},
+        "phase":if completed {"completed"} else {"failed"},"progress":if completed {100_i16} else {0_i16},
+        "artifact_key":format!("restore:{}",state.plan.package_checksum_sha256),"error":error,
+    });
+    let artifact = json!({
+        "id":state.artifact_id,"run_id":state.job_id,
+        "path":format!("host-restore:{}",state.plan.package_checksum_sha256),"checksum":state.plan.package_checksum_sha256,
+        "manifest":{"artifact_kind":"recovery_package","format":state.plan.package_format,"restore_availability":"unavailable","plan_id":state.plan.plan_id},
+    });
+    let request = json!({"id":state.request_id,"artifact_id":state.artifact_id,"status":status,"error":error});
     let pool = panda_api::db::pool::create_pool(&config.database_url).await?;
-    sqlx::query(
-        r#"
-        INSERT INTO panda.backup_runs
-          (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
-        VALUES ($1, 'restore', $2, $5, $6, NULL, $3, now(), now(), $4, now(), now())
-        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,
-          phase = EXCLUDED.phase, progress_percent = EXCLUDED.progress_percent,
-          completed_at = EXCLUDED.completed_at, error_message = EXCLUDED.error_message, updated_at = now()
-        "#,
-    )
-    .bind(state.job_id)
-    .bind(if status == "completed" { "succeeded" } else { "failed" })
-    .bind(format!("restore:{}", state.plan.package_checksum_sha256))
-    .bind(error)
-    .bind(if status == "completed" { "completed" } else { "failed" })
-    .bind(if status == "completed" { 100_i16 } else { 0_i16 })
-    .execute(&pool)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO panda.backup_artifacts
-          (id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
-        VALUES ($1, $2, 'uploaded', 'host-restore-package.rma.tar.gz', $3, 0, $4, $5, now())
-        ON CONFLICT (id) DO NOTHING
-        "#,
-    )
-    .bind(state.artifact_id)
-    .bind(state.job_id)
-    .bind(format!("host-restore:{}", state.plan.package_checksum_sha256))
-    .bind(&state.plan.package_checksum_sha256)
-    .bind(json!({
-        "artifact_kind": "recovery_package",
-        "format": state.plan.package_format,
-        "restore_availability": "unavailable",
-        "plan_id": state.plan.plan_id,
-    }))
-    .execute(&pool)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO panda.backup_restore_requests
-          (id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at)
-        VALUES ($1, $2, NULL, $3, 'RESTORE', 'Host restore command', $4, now(), now())
-        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,
-          error_message = EXCLUDED.error_message, updated_at = now()
-        "#,
-    )
-    .bind(state.request_id)
-    .bind(state.artifact_id)
-    .bind(status)
-    .bind(error)
-    .execute(&pool)
-    .await?;
+    for (statement, record) in [
+        (
+            r#"INSERT INTO panda.backup_runs
+            (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
+            SELECT id, 'restore', status, phase, progress, NULL, artifact_key, now(), now(), error, now(), now()
+            FROM jsonb_to_record($1) AS row(id uuid, status text, phase text, progress smallint, artifact_key text, error text)
+            ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, phase=EXCLUDED.phase, progress_percent=EXCLUDED.progress_percent,
+                completed_at=EXCLUDED.completed_at, error_message=EXCLUDED.error_message, updated_at=now()"#,
+            run,
+        ),
+        (
+            r#"INSERT INTO panda.backup_artifacts
+            (id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
+            SELECT id, run_id, 'uploaded', 'host-restore-package.rma.tar.gz', path, 0, checksum, manifest, now()
+            FROM jsonb_to_record($1) AS row(id uuid, run_id uuid, path text, checksum text, manifest jsonb)
+            ON CONFLICT (id) DO NOTHING"#,
+            artifact,
+        ),
+        (
+            r#"INSERT INTO panda.backup_restore_requests
+            (id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at)
+            SELECT id, artifact_id, NULL, status, 'RESTORE', 'Host restore command', error, now(), now()
+            FROM jsonb_to_record($1) AS row(id uuid, artifact_id uuid, status text, error text)
+            ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, error_message=EXCLUDED.error_message, updated_at=now()"#,
+            request,
+        ),
+    ] {
+        sqlx::query(statement).bind(record).execute(&pool).await?;
+    }
     pool.close().await;
     Ok(())
 }
@@ -452,21 +368,28 @@ async fn write_host_restore_report(
     status: &str,
     error: Option<&str>,
 ) -> anyhow::Result<()> {
+    #[derive(serde::Serialize)]
+    struct Report<'a> {
+        job_id: Uuid,
+        status: &'a str,
+        completed_at: chrono::DateTime<Utc>,
+        plan: &'a restore_compatibility::RestorePlan,
+        validation_report: &'a restore_compatibility::CandidatePreparationReport,
+        error: Option<&'a str>,
+    }
+    let report = Report {
+        job_id: state.job_id,
+        status,
+        completed_at: Utc::now(),
+        plan: &state.plan,
+        validation_report: &state.validation_report,
+        error,
+    };
     let directory = Path::new(&config.backup_artifact_dir).join(".restore-reports");
     fs::create_dir_all(&directory).await?;
-    fs::write(
-        directory.join(format!("{}.json", state.job_id)),
-        serde_json::to_vec_pretty(&json!({
-            "job_id": state.job_id,
-            "status": status,
-            "completed_at": Utc::now(),
-            "plan": state.plan,
-            "validation_report": state.validation_report,
-            "error": error,
-        }))?,
-    )
-    .await?;
-    Ok(())
+    // Value retains the historical lexicographic JSON object ordering.
+    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(report)?)?;
+    Ok(fs::write(directory.join(format!("{}.json", state.job_id)), bytes).await?)
 }
 
 async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
@@ -476,41 +399,21 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
     }
     let mut entries = fs::read_dir(directory).await?;
     while let Some(entry) = entries.next_entry().await? {
-        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+        let path = entry.path();
+        let Some(id) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|name| name.parse::<Uuid>().ok())
+        else {
             continue;
-        }
-        let id = match entry
-            .path()
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .and_then(|value| value.parse().ok())
-        {
-            Some(id) => id,
-            None => continue,
         };
-        let job = match restore_jobs::read(&state.config, id).await {
-            Ok(job) => job,
-            Err(_) => continue,
+        let Ok(mut job) = restore_jobs::read(&state.config, id).await else {
+            continue;
         };
-        if matches!(job.phase, RestorePhase::Completed | RestorePhase::Queued)
-            || !job.retryable
-            || job.automatic_retry_count >= 2
-        {
+        if !retry_admitted(&state.config, &job).await {
             continue;
         }
-        let staging = Path::new(&state.config.backup_artifact_dir)
-            .join(".restore-staging")
-            .join(job.id.to_string());
-        if !fs::try_exists(staging.join("manifest.json"))
-            .await
-            .unwrap_or(false)
-            || !fs::try_exists(staging.join("database.dump"))
-                .await
-                .unwrap_or(false)
-        {
-            continue;
-        }
-
         if let Some(previous) = job.previous_database.as_deref() {
             if database_exists(&state.config, previous)
                 .await
@@ -527,21 +430,18 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
                 let _ = fs::remove_file(restore_marker_path()).await;
             }
         }
-
-        let next_retry_count = job.automatic_retry_count.saturating_add(1);
-        let mut retry = job;
-        retry.phase = RestorePhase::PreparingCandidate;
-        retry.progress_percent = 25;
-        retry.message = "Retrying interrupted restore with an isolated database".into();
-        retry.error_message = None;
-        retry.automatic_retry_count = next_retry_count;
-        retry.updated_at = Utc::now();
-        restore_jobs::write(&state.config, &retry).await?;
-        if let Err(error) = perform_restore(&state.config, retry.id).await {
+        job.automatic_retry_count = job.automatic_retry_count.saturating_add(1);
+        job.phase = RestorePhase::PreparingCandidate;
+        job.progress_percent = 25;
+        job.message = "Retrying interrupted restore with an isolated database".into();
+        job.error_message = None;
+        job.updated_at = Utc::now();
+        restore_jobs::write(&state.config, &job).await?;
+        if let Err(error) = perform_restore(&state.config, job.id).await {
             let _ = fs::remove_file(restore_marker_path()).await;
-            let _ = restore_jobs::fail(&state.config, retry.id, error).await;
+            let _ = restore_jobs::fail(&state.config, job.id, error).await;
         }
-        return Ok(());
+        break;
     }
     Ok(())
 }
@@ -551,20 +451,14 @@ async fn get_job(
     AxumPath(job_id): AxumPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<restore_jobs::RestoreJobPublic>, StatusCode> {
-    let token = headers
-        .get("x-panda-restore-token")
-        .and_then(|value| value.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    if token.is_empty() || token.len() > MAX_AUTH_HEADER_BYTES {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
+    let token = credential_header(&headers, "x-panda-restore-token")?;
     let job = restore_jobs::read(&state.config, job_id)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    if !restore_jobs::token_matches(&job, token) {
-        return Err(StatusCode::UNAUTHORIZED);
+    match restore_jobs::token_matches(&job, token) {
+        true => Ok(Json(job.public())),
+        false => Err(StatusCode::UNAUTHORIZED),
     }
-    Ok(Json(job.public()))
 }
 
 async fn execute_job(
@@ -572,37 +466,30 @@ async fn execute_job(
     AxumPath(job_id): AxumPath<Uuid>,
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let supplied = headers
-        .get("x-panda-agent-key")
-        .and_then(|value| value.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    if supplied.is_empty()
-        || supplied.len() > MAX_AUTH_HEADER_BYTES
-        || !restore_jobs::constant_time_equal(supplied.as_bytes(), state.agent_key.as_bytes())
-    {
+    let key = credential_header(&headers, "x-panda-agent-key")?;
+    if !restore_jobs::constant_time_equal(key.as_bytes(), state.agent_key.as_bytes()) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let job = restore_jobs::read(&state.config, job_id)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    if !matches!(job.phase, RestorePhase::PreparingCandidate) {
-        return Err(StatusCode::CONFLICT);
-    }
-    tokio::spawn(async move {
-        if let Err(error) = perform_restore(&state.config, job_id).await {
-            tracing::error!(
-                job_id = %job_id,
-                error = ?error,
-                "restore agent job failed"
-            );
-            let _ = restore_jobs::fail(&state.config, job_id, &error).await;
-            let _ = fs::remove_file(restore_marker_path()).await;
-            if let Ok(job) = restore_jobs::read(&state.config, job_id).await {
-                cleanup_remote_staging(&job.artifact_path).await;
-            }
+    match restore_jobs::read(&state.config, job_id).await {
+        Err(_) => Err(StatusCode::NOT_FOUND),
+        Ok(job) if !matches!(job.phase, RestorePhase::PreparingCandidate) => {
+            Err(StatusCode::CONFLICT)
         }
-    });
-    Ok((StatusCode::ACCEPTED, Json(json!({ "accepted": true }))))
+        Ok(_) => {
+            tokio::spawn(async move {
+                let Err(error) = perform_restore(&state.config, job_id).await else {
+                    return;
+                };
+                tracing::error!(job_id = %job_id, error = ?error, "restore agent job failed");
+                let _ = restore_jobs::fail(&state.config, job_id, &error).await;
+                let _ = fs::remove_file(restore_marker_path()).await;
+                if let Ok(job) = restore_jobs::read(&state.config, job_id).await {
+                    cleanup_remote_staging(&job.artifact_path).await;
+                }
+            });
+            Ok((StatusCode::ACCEPTED, Json(json!({"accepted": true}))))
+        }
+    }
 }
 
 async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
@@ -621,55 +508,41 @@ async fn with_restore_deadline<T>(
     job_id: Uuid,
     restore: impl std::future::Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    match tokio::time::timeout(
-        Duration::from_secs(config.recovery.restore_deadline_seconds),
-        restore,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            // Dropping the inner future skips its ordinary Err cleanup. This
-            // cleanup runs while the outer recovery lock remains held.
-            cleanup_failed_candidate(config, job_id)
-                .await
-                .context("restore deadline exceeded; candidate cleanup failed")?;
-            anyhow::bail!(
-                "restore exceeded the configured deadline; candidate and credentials cleaned up"
-            )
-        }
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(config.recovery.restore_deadline_seconds);
+    let result = tokio::time::timeout_at(deadline, restore).await;
+    if let Ok(completed) = result {
+        return completed;
     }
+    cleanup_failed_candidate(config, job_id)
+        .await
+        .context("restore deadline exceeded; candidate cleanup failed")?;
+    anyhow::bail!("restore exceeded the configured deadline; candidate and credentials cleaned up")
 }
 
 async fn cleanup_failed_candidate(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let maintenance = config_with_database(config, "postgres")?;
-    let role = format!("panda_restore_owner_{}", job_id.simple());
+    let owner = format!("panda_restore_owner_{}", job_id.simple());
     let pool = panda_api::db::pool::create_pool(&maintenance.database_url).await?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)")
-        .bind(&role)
-        .fetch_one(&pool)
-        .await?;
-    if exists {
-        // Stop the role's transaction first: it may hold the catalog lock
-        // needed by ALTER ROLE (including through an archive-defined function).
-        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1 AND pid <> pg_backend_pid()")
-            .bind(&role).execute(&pool).await?;
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "ALTER ROLE {} NOLOGIN PASSWORD NULL",
-            quote_identifier(&role)
-        )))
-        .execute(&pool)
-        .await?;
-        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1 AND pid <> pg_backend_pid()")
-            .bind(&role).execute(&pool).await?;
+    let present: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)")
+            .bind(&owner)
+            .fetch_one(&pool)
+            .await?;
+    if present {
+        for action in [
+            RoleCleanup::Terminate,
+            RoleCleanup::Revoke,
+            RoleCleanup::Terminate,
+        ] {
+            action.execute(&pool, &owner).await?;
+        }
     }
     pool.close().await;
-    let dropped = drop_database(&maintenance, &format!("panda_restore_{}", job_id.simple())).await;
-    // Also covers role creation which was still in flight when timeout fired:
-    // DROP DATABASE FORCE first terminates every candidate backend.
-    let roles = cleanup_restore_roles(&maintenance).await;
-    dropped?;
-    roles
+    let database_result =
+        drop_database(&maintenance, &format!("panda_restore_{}", job_id.simple())).await;
+    let roles_result = cleanup_restore_roles(&maintenance).await;
+    database_result.and(roles_result)
 }
 
 async fn config_with_active_keys(config: &Config, pool: &sqlx::PgPool) -> anyhow::Result<Config> {
@@ -740,44 +613,13 @@ async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<
             return Err(error);
         }
     };
-    let planned_transforms = job
-        .plan
-        .as_ref()
-        .map(|plan| {
-            plan.transforms
-                .iter()
-                .map(|transform| transform.id.as_str())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let applied_transforms = prepared
-        .validation_report
-        .applied_transforms
-        .iter()
-        .map(|transform| transform.id.as_str())
-        .collect::<Vec<_>>();
-    if planned_transforms != applied_transforms {
+    if let Err(error) = verify_candidate_plan(job.plan.as_ref(), &prepared) {
         let _ = drop_database(config, &prepared.candidate_database).await;
         let mut terminal = restore_jobs::read(config, job_id).await?;
         terminal.retryable = false;
         terminal.updated_at = Utc::now();
         restore_jobs::write(config, &terminal).await?;
-        anyhow::bail!(
-            "candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}"
-        );
-    }
-    let expected_target_contract = job
-        .plan
-        .as_ref()
-        .and_then(|plan| plan.target.schema_fingerprint.as_deref())
-        .unwrap_or_default();
-    if prepared.validation_report.target_schema.schema_fingerprint != expected_target_contract {
-        let _ = drop_database(config, &prepared.candidate_database).await;
-        let mut terminal = restore_jobs::read(config, job_id).await?;
-        terminal.retryable = false;
-        terminal.updated_at = Utc::now();
-        restore_jobs::write(config, &terminal).await?;
-        anyhow::bail!("candidate final schema contract differs from the preflight target contract");
+        return Err(error);
     }
     inject_restore_fault("candidate_validated")?;
 
@@ -861,14 +703,12 @@ fn inject_restore_fault(phase: &str) -> anyhow::Result<()> {
 }
 
 async fn cleanup_remote_staging(path: &str) {
-    let path = Path::new(path);
-    if path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        == Some(".remote-staging")
-    {
-        let _ = fs::remove_file(path).await;
+    let file = Path::new(path);
+    match file.parent().and_then(Path::file_name) {
+        Some(parent) if parent == ".remote-staging" => {
+            let _ = fs::remove_file(file).await;
+        }
+        _ => {}
     }
 }
 
@@ -887,34 +727,31 @@ fn restore_marker_path() -> PathBuf {
 #[cfg(not(windows))]
 async fn stop_api_process() -> anyhow::Result<()> {
     let pid = match fs::read_to_string(api_pid_path()).await {
-        Ok(pid) => pid,
+        Ok(value) => value
+            .trim()
+            .parse::<u32>()
+            .context("Panda API pid file is invalid")?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    let pid = pid
-        .trim()
-        .parse::<u32>()
-        .context("Panda API pid file is invalid")?;
-    if !Path::new(&format!("/proc/{pid}")).exists() {
+    let process = PathBuf::from(format!("/proc/{pid}"));
+    if !process.exists() {
         return Ok(());
     }
-    // The production image guarantees /bin/sh through its process supervisor,
-    // but intentionally does not install procps' external `kill` executable.
     let status = Command::new("/bin/sh")
         .args(["-c", "kill -TERM \"$1\"", "panda-restore-agent"])
         .arg(pid.to_string())
         .status()
         .await?;
-    if !status.success() {
-        anyhow::bail!("could not stop the Panda API process");
-    }
-    for _ in 0..300 {
-        if !Path::new(&format!("/proc/{pid}")).exists() {
-            return Ok(());
+    anyhow::ensure!(status.success(), "could not stop the Panda API process");
+    retry_operation(300, Duration::from_millis(100), || async {
+        if process.exists() {
+            Err(anyhow::anyhow!("Panda API did not stop before restore"))
+        } else {
+            Ok(())
         }
-        sleep(Duration::from_millis(100)).await;
-    }
-    anyhow::bail!("Panda API did not stop before restore")
+    })
+    .await
 }
 
 #[cfg(windows)]
@@ -924,22 +761,20 @@ async fn stop_api_process() -> anyhow::Result<()> {
         .args(["/PID", pid.trim(), "/T", "/F"])
         .status()
         .await?;
-    if !status.success() {
-        anyhow::bail!("could not stop the Panda API process");
-    }
-    for _ in 0..300 {
-        let still_running = Command::new("tasklist")
+    anyhow::ensure!(status.success(), "could not stop the Panda API process");
+    retry_operation(300, Duration::from_millis(100), || async {
+        let listing = Command::new("tasklist")
             .args(["/FI", &format!("PID eq {}", pid.trim()), "/NH"])
             .output()
-            .await
-            .map(|output| String::from_utf8_lossy(&output.stdout).contains(pid.trim()))
-            .unwrap_or(false);
-        if !still_running {
-            return Ok(());
+            .await;
+        match listing {
+            Ok(output) if String::from_utf8_lossy(&output.stdout).contains(pid.trim()) => {
+                Err(anyhow::anyhow!("Panda API did not stop before restore"))
+            }
+            _ => Ok(()),
         }
-        sleep(Duration::from_millis(100)).await;
-    }
-    anyhow::bail!("Panda API did not stop before restore")
+    })
+    .await
 }
 
 async fn extract_package(config: &Config, package: &Path, staging: &Path) -> anyhow::Result<()> {
@@ -965,14 +800,13 @@ async fn stage_recovery_package(
 }
 
 fn ensure_recovery_free_space(path: &Path, minimum: u64) -> anyhow::Result<()> {
-    let available = fs2::available_space(path)?;
-    if available < minimum {
-        anyhow::bail!(
+    match fs2::available_space(path)? >= minimum {
+        true => Ok(()),
+        false => anyhow::bail!(
             "recovery storage needs at least {} GiB free before continuing",
             minimum / 1024 / 1024 / 1024
-        );
+        ),
     }
-    Ok(())
 }
 
 async fn terminate_database_sessions(config: &Config) -> anyhow::Result<()> {
@@ -989,39 +823,33 @@ async fn build_restore_toc(dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
         .arg(dump)
         .output()
         .await?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "pg_restore could not inspect the recovery dump: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    let bytes = checked_output(output, "pg_restore could not inspect the recovery dump")?;
+    let mut filtered = String::new();
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        if !restore_policy::skip_toc_entry(line) {
+            filtered.push_str(line);
+            filtered.push('\n');
+        }
     }
-    let list = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|line| !restore_policy::skip_toc_entry(line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(toc_path, format!("{list}\n")).await?;
-    Ok(())
+    if filtered.is_empty() {
+        filtered.push('\n');
+    }
+    Ok(fs::write(toc_path, filtered).await?)
 }
 
 async fn run_pg_restore(config: &Config, dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
-    let mut command = postgres_command("pg_restore", config)?;
-    let output = command
-        .arg("--no-owner")
-        .arg("--no-privileges")
-        .arg("--exit-on-error")
-        .arg("--single-transaction")
+    let output = postgres_command("pg_restore", config)?
+        .args([
+            "--no-owner",
+            "--no-privileges",
+            "--exit-on-error",
+            "--single-transaction",
+        ])
         .arg(format!("--use-list={}", toc_path.display()))
         .arg(dump)
         .output()
         .await?;
-    if output.status.success() {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "pg_restore failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
+    checked_output(output, "pg_restore failed").map(|_| ())
 }
 
 struct PreparedDatabase {
@@ -1039,132 +867,74 @@ async fn prepare_restore_database(
     history: Option<&Path>,
     target_history: Option<&restore_jobs::BackupCatalogSnapshot>,
 ) -> anyhow::Result<PreparedDatabase> {
-    let restore_database = format!("panda_restore_{}", job_id.simple());
+    let candidate_name = format!("panda_restore_{}", job_id.simple());
     let previous_database = format!("panda_previous_{}", job_id.simple());
-    let restore_config = config_with_database(config, &restore_database)?;
-    let toc_path = dump.with_extension("restore-toc");
-
-    if database_exists(config, &restore_database).await? {
-        drop_database(config, &restore_database).await?;
+    let candidate = config_with_database(config, &candidate_name)?;
+    let toc = dump.with_extension("restore-toc");
+    if database_exists(config, &candidate_name).await? {
+        drop_database(config, &candidate_name).await?;
     }
-    create_database(config, &restore_database).await?;
-    let restore_role = format!("panda_restore_owner_{}", job_id.simple());
-    let mut role_password_bytes = [0_u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut role_password_bytes);
-    let role_password = hex::encode(role_password_bytes);
-    let mut archive_config = restore_config.clone();
-    let mut archive_url = url::Url::parse(&archive_config.database_url)?;
-    archive_url
-        .set_username(&restore_role)
-        .map_err(|_| anyhow::anyhow!("invalid restore role"))?;
-    archive_url
-        .set_password(Some(&role_password))
-        .map_err(|_| anyhow::anyhow!("invalid restore password"))?;
-    archive_config.database_url = archive_url.to_string();
-    let restore_result = async {
+    create_database(config, &candidate_name).await?;
+    let credentials = CandidateCredentials::new(&candidate, job_id)?;
+    let attempt = async {
         inject_restore_fault("timescale_pre_restore")?;
-        run_psql_with_retry(
-            &restore_config,
-            "CREATE SCHEMA IF NOT EXISTS panda; CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public; CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public; CREATE EXTENSION IF NOT EXISTS cube WITH SCHEMA panda; CREATE EXTENSION IF NOT EXISTS earthdistance WITH SCHEMA panda; SELECT timescaledb_pre_restore();",
-            30,
-        )
-        .await?;
-        let pool = panda_api::db::pool::create_pool(&restore_config.database_url).await?;
-        let valid_until = chrono::Utc::now() + chrono::Duration::seconds(config.recovery.restore_deadline_seconds as i64);
-        // No memberships, superuser privileges, cluster administration or file/
-        // program roles. Only this fresh candidate receives object privileges.
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE ROLE {} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4", quote_identifier(&restore_role), quote_literal(&role_password), quote_literal(&valid_until.to_rfc3339()))))
-            .execute(&pool).await?;
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("REVOKE CONNECT ON DATABASE {} FROM PUBLIC; GRANT CONNECT, CREATE, TEMPORARY ON DATABASE {} TO {}; GRANT USAGE, CREATE ON SCHEMA public, panda TO {}; ALTER SCHEMA panda OWNER TO {};", quote_identifier(&restore_database), quote_identifier(&restore_database), quote_identifier(&restore_role), quote_identifier(&restore_role), quote_identifier(&restore_role))))
-            .execute(&pool).await?;
-        // Timescale's installed extension owns its catalog tables. COPY needs
-        // data privileges, never extension ownership or a superuser fallback.
-        for schema in ["_timescaledb_catalog", "_timescaledb_config", "_timescaledb_internal"] {
-            if schema == "_timescaledb_internal" {
-                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("GRANT CREATE ON SCHEMA _timescaledb_internal TO {};", quote_identifier(&restore_role)))).execute(&pool).await?;
-            }
-            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("GRANT USAGE ON SCHEMA {} TO {}; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {} TO {};", quote_identifier(schema), quote_identifier(&restore_role), quote_identifier(schema), quote_identifier(&restore_role), quote_identifier(schema), quote_identifier(&restore_role)))).execute(&pool).await?;
-        }
-        pool.close().await;
-        build_restore_toc(dump, &toc_path).await?;
-        run_pg_restore(&archive_config, dump, &toc_path).await?;
+        run_psql_with_retry(&candidate,
+            "CREATE SCHEMA IF NOT EXISTS panda; CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public; CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public; CREATE EXTENSION IF NOT EXISTS cube WITH SCHEMA panda; CREATE EXTENSION IF NOT EXISTS earthdistance WITH SCHEMA panda; SELECT timescaledb_pre_restore();", 30).await?;
+        credentials.provision(&candidate, &candidate_name, config.recovery.restore_deadline_seconds).await?;
+        build_restore_toc(dump, &toc).await?;
+        run_pg_restore(&credentials.archive, dump, &toc).await?;
         inject_restore_fault("dump_restored")?;
-        let pool = panda_api::db::pool::create_pool(&archive_config.database_url).await?;
-        let validation_report = restore_compatibility::prepare_candidate_schema(
-            &pool,
-            &config.database_url,
-            manifest,
-        )
-        .await?;
-        if let Some(history) = history {
-            if fs::try_exists(history).await.unwrap_or(false) {
-                restore_history::merge(&pool, history, config.recovery.max_history_bytes).await?;
+        let pool = panda_api::db::pool::create_pool(&credentials.archive.database_url).await?;
+        let report = restore_compatibility::prepare_candidate_schema(&pool, &config.database_url, manifest).await?;
+        for source in [history].into_iter().flatten() {
+            if fs::try_exists(source).await.unwrap_or(false) {
+                restore_history::merge(&pool, source, config.recovery.max_history_bytes).await?;
             }
         }
-        if let Some(target_history) = target_history {
-            restore_jobs::merge_catalog_snapshot(&pool, target_history).await?;
-        }
+        if let Some(snapshot) = target_history { restore_jobs::merge_catalog_snapshot(&pool, snapshot).await?; }
         pool.close().await;
-        run_psql(&restore_config, "SELECT timescaledb_post_restore();").await?;
-        restore_backup_settings(&archive_config, settings).await?;
-        // Keep object ownership on this unprivileged role. Promoting archive
-        // functions to the bootstrap owner would undo the execution boundary.
-        run_psql(config, &format!("ALTER ROLE {} NOLOGIN PASSWORD NULL;", quote_identifier(&restore_role))).await?;
-        Ok::<_, anyhow::Error>(validation_report)
-    }
-    .await;
-    let validation_report = match restore_result {
-        Ok(report) => report,
-        Err(error) => {
-            if let Err(cleanup) = cleanup_failed_candidate(config, job_id).await {
-                tracing::error!(job_id = %job_id, ?cleanup, "failed candidate cleanup failed");
-            }
-            let _ = fs::remove_file(&toc_path).await;
-            return Err(error);
+        run_psql(&candidate, "SELECT timescaledb_post_restore();").await?;
+        restore_backup_settings(&credentials.archive, settings).await?;
+        run_psql(config, &format!("ALTER ROLE {} NOLOGIN PASSWORD NULL;", quote_identifier(&credentials.role))).await?;
+        Ok::<_, anyhow::Error>(report)
+    }.await;
+    if attempt.is_err() {
+        if let Err(cleanup) = cleanup_failed_candidate(config, job_id).await {
+            tracing::error!(job_id = %job_id, ?cleanup, "failed candidate cleanup failed");
         }
-    };
-    let _ = fs::remove_file(&toc_path).await;
-    Ok(PreparedDatabase {
-        candidate_database: restore_database,
+    }
+    let _ = fs::remove_file(&toc).await;
+    attempt.map(|validation_report| PreparedDatabase {
+        candidate_database: candidate_name,
         previous_database,
         validation_report,
     })
 }
 
 fn config_with_database(config: &Config, database: &str) -> anyhow::Result<Config> {
-    let mut cloned = config.clone();
-    let mut url = url::Url::parse(&config.database_url)?;
-    url.set_path(&format!("/{database}"));
-    cloned.database_url = url.to_string();
-    Ok(cloned)
+    let mut address = url::Url::parse(&config.database_url)?;
+    address.set_path(&format!("/{database}"));
+    Ok(Config {
+        database_url: address.into(),
+        ..config.clone()
+    })
 }
 
 /// Make interrupted credentials unusable at startup. Roles with live object
 /// dependencies remain NOLOGIN owners; orphan roles are removed after DB cleanup.
 async fn cleanup_restore_roles(config: &Config) -> anyhow::Result<()> {
-    // Application database names may be temporarily absent during a swap.
     let maintenance = config_with_database(config, "postgres")?;
     let pool = panda_api::db::pool::create_pool(&maintenance.database_url).await?;
-    let roles: Vec<String> = sqlx::query_scalar(
+    let owners: Vec<String> = sqlx::query_scalar(
         "SELECT rolname FROM pg_roles WHERE rolname ~ '^panda_restore_owner_[0-9a-f]{32}$'",
     )
     .fetch_all(&pool)
     .await?;
-    for role in roles {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "ALTER ROLE {} NOLOGIN PASSWORD NULL",
-            quote_identifier(&role)
-        )))
-        .execute(&pool)
-        .await?;
-        let dependent: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_shdepend WHERE refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = $1))").bind(&role).fetch_one(&pool).await?;
+    for owner in owners {
+        RoleCleanup::Revoke.execute(&pool, &owner).await?;
+        let dependent: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_shdepend WHERE refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = $1))").bind(&owner).fetch_one(&pool).await?;
         if !dependent {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DROP ROLE {}",
-                quote_identifier(&role)
-            )))
-            .execute(&pool)
-            .await?;
+            RoleCleanup::Drop.execute(&pool, &owner).await?;
         }
     }
     pool.close().await;
@@ -1184,20 +954,7 @@ async fn swap_databases(
     restore_database: &str,
     previous_database: &str,
 ) -> anyhow::Result<()> {
-    let sql = format!(
-        r#"
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname IN ('panda', {restore_database_literal})
-          AND pid <> pg_backend_pid();
-        ALTER DATABASE panda RENAME TO {previous_database};
-        ALTER DATABASE {restore_database} RENAME TO panda;
-        "#,
-        restore_database_literal = quote_literal(restore_database),
-        previous_database = quote_identifier(previous_database),
-        restore_database = quote_identifier(restore_database),
-    );
-    run_psql_on_database(config, "postgres", &sql).await
+    exchange_databases(config, restore_database, previous_database).await
 }
 
 async fn rollback_databases(
@@ -1205,20 +962,7 @@ async fn rollback_databases(
     previous_database: &str,
     failed_database: &str,
 ) -> anyhow::Result<()> {
-    let sql = format!(
-        r#"
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname IN ('panda', {previous_literal})
-          AND pid <> pg_backend_pid();
-        ALTER DATABASE panda RENAME TO {failed};
-        ALTER DATABASE {previous} RENAME TO panda;
-        "#,
-        previous_literal = quote_literal(previous_database),
-        failed = quote_identifier(failed_database),
-        previous = quote_identifier(previous_database),
-    );
-    run_psql_on_database(config, "postgres", &sql).await
+    exchange_databases(config, previous_database, failed_database).await
 }
 
 async fn drop_database(config: &Config, database: &str) -> anyhow::Result<()> {
@@ -1231,43 +975,24 @@ async fn drop_database(config: &Config, database: &str) -> anyhow::Result<()> {
 }
 
 async fn database_exists(config: &Config, database: &str) -> anyhow::Result<bool> {
-    let mut command = postgres_command_for_database("psql", config, "postgres")?;
-    let output = command
-        .arg("-At")
-        .arg("-v")
-        .arg("ON_ERROR_STOP=1")
-        .arg("-c")
-        .arg(format!(
-            "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = {});",
-            quote_literal(database)
-        ))
+    let query = format!(
+        "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = {});",
+        quote_literal(database)
+    );
+    let output = postgres_command_for_database("psql", config, "postgres")?
+        .args(["-At", "-v", "ON_ERROR_STOP=1", "-c", &query])
         .output()
         .await?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "could not inspect database state: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim() == "t")
+    let bytes = checked_output(output, "could not inspect database state")?;
+    Ok(String::from_utf8_lossy(&bytes).trim() == "t")
 }
 
 async fn run_psql_on_database(config: &Config, database: &str, sql: &str) -> anyhow::Result<()> {
-    let mut command = postgres_command_for_database("psql", config, database)?;
-    let output = command
-        .arg("-v")
-        .arg("ON_ERROR_STOP=1")
-        .arg("-c")
-        .arg(sql)
+    let output = postgres_command_for_database("psql", config, database)?
+        .args(["-v", "ON_ERROR_STOP=1", "-c", sql])
         .output()
         .await?;
-    if output.status.success() {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "psql failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
+    checked_output(output, "psql failed").map(|_| ())
 }
 
 async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
@@ -1279,23 +1004,16 @@ async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
 }
 
 async fn run_psql_with_retry(config: &Config, sql: &str, attempts: u32) -> anyhow::Result<()> {
-    let mut last_error = None;
-    for _ in 0..attempts.max(1) {
-        match run_psql(config, sql).await {
-            Ok(()) => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-        sleep(Duration::from_secs(1)).await;
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("PostgreSQL readiness retry failed")))
+    retry_operation(attempts, Duration::from_secs(1), || run_psql(config, sql)).await
 }
 
 fn postgres_command(program: &str, config: &Config) -> anyhow::Result<Command> {
-    let database = url::Url::parse(&config.database_url)?
-        .path()
-        .trim_start_matches('/')
-        .to_string();
-    postgres_command_for_database(program, config, &database)
+    let address = url::Url::parse(&config.database_url)?;
+    Ok(postgres_invocation(
+        program,
+        &address,
+        address.path().trim_start_matches('/'),
+    ))
 }
 
 fn postgres_command_for_database(
@@ -1303,33 +1021,16 @@ fn postgres_command_for_database(
     config: &Config,
     database: &str,
 ) -> anyhow::Result<Command> {
-    let url = url::Url::parse(&config.database_url)?;
-    let mut command = Command::new(program);
-    command.kill_on_drop(true);
-    if let Some(host) = url.host_str() {
-        command.arg(format!("--host={host}"));
-    }
-    if let Some(port) = url.port() {
-        command.arg(format!("--port={port}"));
-    }
-    if !url.username().is_empty() {
-        command.arg(format!("--username={}", url.username()));
-    }
-    if !database.is_empty() {
-        command.arg(format!("--dbname={database}"));
-    }
-    if let Some(password) = url.password() {
-        command.env("PGPASSWORD", password);
-    }
-    Ok(command)
+    let address = url::Url::parse(&config.database_url)?;
+    Ok(postgres_invocation(program, &address, database))
 }
 
 fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
+    quote_sql(value, '"')
 }
 
 fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+    quote_sql(value, '\'')
 }
 
 async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result<()> {
@@ -1350,6 +1051,13 @@ async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result
         ALTER TABLE panda.backup_settings
           ADD COLUMN IF NOT EXISTS local_enabled boolean NOT NULL DEFAULT true,
           ADD COLUMN IF NOT EXISTS s3_enabled boolean NOT NULL DEFAULT false;
+        WITH settings AS MATERIALIZED (
+          SELECT * FROM jsonb_to_record('{json_literal}'::jsonb) AS decoded(
+            present boolean, enabled boolean, frequency text, run_at text, timezone text,
+            day_of_week smallint, day_of_month smallint, retention_count integer, local_enabled boolean, s3_enabled boolean,
+            target_type text, endpoint text, region text, bucket text, prefix text, access_key text
+          )
+        ), saved AS (
         INSERT INTO panda.backup_settings (
           id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
           retention_count, local_enabled, s3_enabled, target_type, endpoint, region, bucket, prefix, access_key,
@@ -1358,11 +1066,7 @@ async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result
         SELECT TRUE, enabled, frequency, run_at::time, timezone, day_of_week, day_of_month,
           retention_count, COALESCE(local_enabled, TRUE), COALESCE(s3_enabled, FALSE), target_type, endpoint, region, bucket, prefix, access_key,
           NULL, now(), NULL
-        FROM jsonb_to_record('{json_literal}'::jsonb) AS settings(
-          present boolean, enabled boolean, frequency text, run_at text, timezone text,
-          day_of_week smallint, day_of_month smallint, retention_count integer, local_enabled boolean, s3_enabled boolean,
-          target_type text, endpoint text, region text, bucket text, prefix text, access_key text
-        )
+        FROM settings
         ON CONFLICT (id) DO UPDATE SET
           enabled = EXCLUDED.enabled, frequency = EXCLUDED.frequency, run_at = EXCLUDED.run_at,
           timezone = EXCLUDED.timezone, day_of_week = EXCLUDED.day_of_week,
@@ -1371,10 +1075,11 @@ async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result
           target_type = EXCLUDED.target_type, endpoint = EXCLUDED.endpoint,
           region = EXCLUDED.region, bucket = EXCLUDED.bucket, prefix = EXCLUDED.prefix,
           access_key = EXCLUDED.access_key, secret_key_encrypted = NULL,
-          updated_at = now(), updated_by = NULL;
+          updated_at = now(), updated_by = NULL
+        RETURNING id)
         INSERT INTO panda.system_config (key, value)
         SELECT 'app_timezone', timezone
-        FROM jsonb_to_record('{json_literal}'::jsonb) AS settings(timezone text)
+        FROM settings
         WHERE timezone IS NOT NULL AND btrim(timezone) <> ''
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
     "#
@@ -1392,104 +1097,431 @@ async fn activate_artwork(
     source: &Path,
     job_id: Uuid,
 ) -> anyhow::Result<ArtworkActivation> {
-    let destination = PathBuf::from(&config.vehicle_image_cache_dir);
-    let parent = destination
+    let activation = ArtworkActivation {
+        destination: PathBuf::from(&config.vehicle_image_cache_dir),
+        previous: Path::new(&config.vehicle_image_cache_dir)
+            .parent()
+            .context("invalid artwork path")?
+            .join(format!(".vehicle-images-before-{job_id}")),
+    };
+    let parent = activation
+        .destination
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("invalid artwork path"))?;
+        .context("invalid artwork path")?;
     fs::create_dir_all(parent).await?;
     let incoming = parent.join(format!(".vehicle-images-restore-{job_id}"));
-    if fs::try_exists(&incoming).await.unwrap_or(false) {
-        fs::remove_dir_all(&incoming).await?;
-    }
+    ArtworkStep::Remove(&incoming).execute().await?;
     copy_directory(source, &incoming).await?;
-    let previous = parent.join(format!(".vehicle-images-before-{job_id}"));
-    if fs::try_exists(&destination).await.unwrap_or(false) {
-        fs::rename(&destination, &previous).await?;
+    for operation in [
+        ArtworkStep::MoveIfPresent(&activation.destination, &activation.previous),
+        ArtworkStep::Move(&incoming, &activation.destination),
+    ] {
+        operation.execute().await?;
     }
-    fs::rename(&incoming, &destination).await?;
-    Ok(ArtworkActivation {
-        destination,
-        previous,
-    })
+    Ok(activation)
 }
 
 async fn rollback_artwork(activation: &ArtworkActivation) -> anyhow::Result<()> {
-    if fs::try_exists(&activation.destination)
-        .await
-        .unwrap_or(false)
-    {
-        fs::remove_dir_all(&activation.destination).await?;
-    }
-    if fs::try_exists(&activation.previous).await.unwrap_or(false) {
-        fs::rename(&activation.previous, &activation.destination).await?;
+    for operation in [
+        ArtworkStep::Remove(&activation.destination),
+        ArtworkStep::MoveIfPresent(&activation.previous, &activation.destination),
+    ] {
+        operation.execute().await?;
     }
     Ok(())
 }
 
 async fn finalize_artwork(activation: &ArtworkActivation) {
-    if fs::try_exists(&activation.previous).await.unwrap_or(false) {
-        let _ = fs::remove_dir_all(&activation.previous).await;
-    }
+    let _ = ArtworkStep::Remove(&activation.previous).execute().await;
 }
 
 async fn copy_directory(source: &Path, destination: &Path) -> anyhow::Result<()> {
-    let source = source.to_path_buf();
-    let destination = destination.to_path_buf();
+    let source = source.to_owned();
+    let destination = destination.to_owned();
     tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&destination)?;
-        for entry in walkdir::WalkDir::new(&source) {
-            let entry = entry?;
-            let relative = entry.path().strip_prefix(&source)?;
-            let target = destination.join(relative);
-            if entry.file_type().is_dir() {
-                std::fs::create_dir_all(target)?;
-            } else if entry.file_type().is_file() {
-                std::fs::copy(entry.path(), target)?;
+        let mut pending = vec![(source, destination, true)];
+        while let Some((input, output, root)) = pending.pop() {
+            let metadata = if root {
+                std::fs::metadata(&input)?
+            } else {
+                std::fs::symlink_metadata(&input)?
+            };
+            if metadata.is_dir() {
+                std::fs::create_dir_all(&output)?;
+                for entry in std::fs::read_dir(input)? {
+                    let entry = entry?;
+                    pending.push((entry.path(), output.join(entry.file_name()), false));
+                }
+            } else if metadata.is_file() {
+                std::fs::copy(input, output)?;
             }
         }
         Ok::<(), anyhow::Error>(())
     })
-    .await??;
-    Ok(())
+    .await?
 }
 
 async fn wait_for_api_health(config: &Config) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
-    let health_url = format!("http://127.0.0.1:{}/health", config.port);
-    for _ in 0..180 {
-        if client
-            .get(&health_url)
-            .send()
-            .await
-            .is_ok_and(|response| response.status().is_success())
-        {
-            return Ok(());
+    let endpoint = format!("http://127.0.0.1:{}/health", config.port);
+    let result = retry_operation(180, Duration::from_secs(1), || async {
+        match client.get(&endpoint).send().await {
+            Ok(response) if response.status().is_success() => Ok(()),
+            _ => Err(()),
         }
-        sleep(Duration::from_secs(1)).await;
-    }
-    anyhow::bail!("restored application did not become healthy within 180 seconds")
+    })
+    .await;
+    result.map_err(|_| {
+        anyhow::anyhow!("restored application did not become healthy within 180 seconds")
+    })
 }
 
 async fn verify_api_state(config: &Config) -> anyhow::Result<()> {
     wait_for_api_health(config).await?;
-    let setup_url = format!("http://127.0.0.1:{}/v1/auth/setup", config.port);
-    let response = reqwest::Client::new().get(setup_url).send().await?;
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "restored application setup-state check failed with {}",
-            response.status()
-        );
+    let response = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/v1/auth/setup", config.port))
+        .send()
+        .await?;
+    let status = response.status();
+    anyhow::ensure!(
+        status.is_success(),
+        "restored application setup-state check failed with {status}"
+    );
+    let payload = response.json::<serde_json::Value>().await?;
+    match payload.get("setup_required") {
+        Some(serde_json::Value::Bool(false)) => Ok(()),
+        _ => anyhow::bail!("restored application unexpectedly requires owner setup"),
     }
-    let payload: serde_json::Value = response.json().await?;
-    if payload
-        .get("setup_required")
-        .and_then(serde_json::Value::as_bool)
-        != Some(false)
-    {
-        anyhow::bail!("restored application unexpectedly requires owner setup");
+}
+
+fn credential_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, StatusCode> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= MAX_AUTH_HEADER_BYTES)
+        .ok_or(StatusCode::UNAUTHORIZED)
+}
+
+fn postgres_invocation(program: &str, url: &url::Url, database: &str) -> Command {
+    let mut command = Command::new(program);
+    command.kill_on_drop(true);
+    let port = url.port().map(|value| value.to_string());
+    for (flag, value) in [
+        ("host", url.host_str()),
+        ("port", port.as_deref()),
+        (
+            "username",
+            (!url.username().is_empty()).then_some(url.username()),
+        ),
+        ("dbname", (!database.is_empty()).then_some(database)),
+    ] {
+        if let Some(value) = value {
+            command.arg(format!("--{flag}={value}"));
+        }
     }
+    if let Some(password) = url.password() {
+        command.env("PGPASSWORD", password);
+    }
+    command
+}
+
+fn checked_output(output: std::process::Output, failure: &str) -> anyhow::Result<Vec<u8>> {
+    match output.status.success() {
+        true => Ok(output.stdout),
+        false => anyhow::bail!(
+            "{failure}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+fn quote_sql(value: &str, delimiter: char) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push(delimiter);
+    for character in value.chars() {
+        quoted.push(character);
+        if character == delimiter {
+            quoted.push(character);
+        }
+    }
+    quoted.push(delimiter);
+    quoted
+}
+
+async fn exchange_databases(
+    config: &Config,
+    incoming: &str,
+    displaced: &str,
+) -> anyhow::Result<()> {
+    let statements = [
+        format!("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('panda', {}) AND pid <> pg_backend_pid()", quote_literal(incoming)),
+        format!("ALTER DATABASE panda RENAME TO {}", quote_identifier(displaced)),
+        format!("ALTER DATABASE {} RENAME TO panda", quote_identifier(incoming)),
+    ];
+    run_psql_on_database(config, "postgres", &format!("{};", statements.join(";\n"))).await
+}
+
+async fn initialize_host_target(pool: &sqlx::PgPool, force: bool) -> anyhow::Result<()> {
+    let initialized: bool = sqlx::query_scalar("SELECT to_regclass('panda.users') IS NOT NULL")
+        .fetch_one(pool)
+        .await?;
+    if !initialized {
+        let mut connection = pool.acquire().await?;
+        sqlx::query("SET search_path = public")
+            .execute(&mut *connection)
+            .await?;
+        panda_api::db::migrations::MIGRATOR
+            .run_direct(None, &mut *connection, false)
+            .await?;
+    }
+    let populated: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM panda.users)")
+        .fetch_one(pool)
+        .await?;
+    anyhow::ensure!(
+        !populated || force,
+        "target database contains users; pass --force to replace this installation"
+    );
     Ok(())
 }
+
+async fn stage_host_package(
+    config: &Config,
+    package: &Path,
+    job_id: Uuid,
+    staging: &Path,
+    expected: &str,
+) -> anyhow::Result<PathBuf> {
+    ensure_recovery_free_space(staging, config.recovery.min_free_bytes)?;
+    let staged = stage_recovery_package(config, job_id, true, package).await?;
+    ensure_recovery_free_space(staging, config.recovery.min_free_bytes)?;
+    let validated =
+        backups::validate_recovery_package_with_limits(&staged, &config.recovery).await?;
+    match validated.checksum_sha256 == expected {
+        true => Ok(staged),
+        false => {
+            let _ = fs::remove_dir_all(staging).await;
+            anyhow::bail!("recovery package changed while it was being staged");
+        }
+    }
+}
+
+fn verify_candidate_plan(
+    plan: Option<&restore_compatibility::RestorePlan>,
+    prepared: &PreparedDatabase,
+) -> anyhow::Result<()> {
+    let planned_transforms: Vec<_> = plan
+        .into_iter()
+        .flat_map(|plan| &plan.transforms)
+        .map(|transform| transform.id.as_str())
+        .collect();
+    let applied_transforms: Vec<_> = prepared
+        .validation_report
+        .applied_transforms
+        .iter()
+        .map(|transform| transform.id.as_str())
+        .collect();
+    if planned_transforms != applied_transforms {
+        anyhow::bail!("candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}");
+    }
+    let expected = plan
+        .and_then(|plan| plan.target.schema_fingerprint.as_deref())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        prepared.validation_report.target_schema.schema_fingerprint == expected,
+        "candidate final schema contract differs from the preflight target contract"
+    );
+    Ok(())
+}
+
+async fn capture_host_safety(
+    config: &Config,
+    current: &sqlx::PgPool,
+    candidate_database: &str,
+) -> anyhow::Result<()> {
+    backups::run_backup_now(current, config, None, backups::BackupRunTrigger::PreRestore).await?;
+    backups::reconcile_local_catalog(current, config).await?;
+    let history = restore_jobs::snapshot_catalog(current).await?;
+    let candidate = config_with_database(config, candidate_database)?;
+    let pool = panda_api::db::pool::create_pool(&candidate.database_url).await?;
+    let result = restore_jobs::merge_catalog_snapshot(&pool, &history).await;
+    if result.is_ok() {
+        pool.close().await;
+    }
+    result.map_err(Into::into)
+}
+
+struct CandidateCredentials {
+    archive: Config,
+    role: String,
+    password: String,
+}
+
+impl CandidateCredentials {
+    fn new(candidate: &Config, job_id: Uuid) -> anyhow::Result<Self> {
+        let role = format!("panda_restore_owner_{}", job_id.simple());
+        let mut entropy = [0; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut entropy);
+        let password = hex::encode(entropy);
+        let mut url = url::Url::parse(&candidate.database_url)?;
+        url.set_username(&role)
+            .map_err(|_| anyhow::anyhow!("invalid restore role"))?;
+        url.set_password(Some(&password))
+            .map_err(|_| anyhow::anyhow!("invalid restore password"))?;
+        Ok(Self {
+            archive: Config {
+                database_url: url.into(),
+                ..candidate.clone()
+            },
+            role,
+            password,
+        })
+    }
+
+    async fn provision(
+        &self,
+        candidate: &Config,
+        database: &str,
+        deadline_seconds: u64,
+    ) -> anyhow::Result<()> {
+        let pool = panda_api::db::pool::create_pool(&candidate.database_url).await?;
+        let role = quote_identifier(&self.role);
+        let expiration = Utc::now() + chrono::Duration::seconds(deadline_seconds as i64);
+        let creation = format!("CREATE ROLE {role} LOGIN PASSWORD {} VALID UNTIL {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 4", quote_literal(&self.password), quote_literal(&expiration.to_rfc3339()));
+        sqlx::query(sqlx::AssertSqlSafe(creation))
+            .execute(&pool)
+            .await?;
+        let database = quote_identifier(database);
+        let grants = [
+            format!("REVOKE CONNECT ON DATABASE {database} FROM PUBLIC"),
+            format!("GRANT CONNECT, CREATE, TEMPORARY ON DATABASE {database} TO {role}"),
+            format!("GRANT USAGE, CREATE ON SCHEMA public, panda TO {role}"),
+            format!("ALTER SCHEMA panda OWNER TO {role}"),
+        ];
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("{};", grants.join(";"))))
+            .execute(&pool)
+            .await?;
+        for (schema, create) in [
+            ("_timescaledb_catalog", false),
+            ("_timescaledb_config", false),
+            ("_timescaledb_internal", true),
+        ] {
+            if create {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "GRANT CREATE ON SCHEMA _timescaledb_internal TO {role};"
+                )))
+                .execute(&pool)
+                .await?;
+            }
+            let schema = quote_identifier(schema);
+            let privileges = [
+                format!("GRANT USAGE ON SCHEMA {schema} TO {role}"),
+                format!("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO {role}"),
+                format!("GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {schema} TO {role}"),
+            ];
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("{};", privileges.join(";"))))
+                .execute(&pool)
+                .await?;
+        }
+        pool.close().await;
+        Ok(())
+    }
+}
+
+enum RoleCleanup {
+    Terminate,
+    Revoke,
+    Drop,
+}
+impl RoleCleanup {
+    async fn execute(self, pool: &sqlx::PgPool, role: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Terminate => {
+                sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1 AND pid <> pg_backend_pid()")
+                    .bind(role).execute(pool).await?;
+            }
+            action => {
+                let role = quote_identifier(role);
+                let statement = match action {
+                    Self::Revoke => format!("ALTER ROLE {role} NOLOGIN PASSWORD NULL"),
+                    Self::Drop => format!("DROP ROLE {role}"),
+                    Self::Terminate => unreachable!(),
+                };
+                sqlx::query(sqlx::AssertSqlSafe(statement))
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn retry_operation<T, E, F, Future>(
+    attempts: u32,
+    pause: Duration,
+    mut operation: F,
+) -> Result<T, E>
+where
+    F: FnMut() -> Future,
+    Future: std::future::Future<Output = Result<T, E>>,
+{
+    let mut remaining = attempts.max(1);
+    loop {
+        let result = operation().await;
+        if result.is_ok() {
+            return result;
+        }
+        sleep(pause).await;
+        remaining -= 1;
+        if remaining == 0 {
+            return result;
+        }
+    }
+}
+
+enum ArtworkStep<'a> {
+    Remove(&'a Path),
+    MoveIfPresent(&'a Path, &'a Path),
+    Move(&'a Path, &'a Path),
+}
+impl ArtworkStep<'_> {
+    async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            Self::Remove(path) if fs::try_exists(path).await.unwrap_or(false) => {
+                fs::remove_dir_all(path).await?
+            }
+            Self::MoveIfPresent(from, to) if fs::try_exists(from).await.unwrap_or(false) => {
+                fs::rename(from, to).await?
+            }
+            Self::Move(from, to) => fs::rename(from, to).await?,
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+async fn retry_admitted(config: &Config, job: &restore_jobs::RestoreJob) -> bool {
+    match (&job.phase, job.retryable, job.automatic_retry_count) {
+        (RestorePhase::Completed | RestorePhase::Queued, _, _) | (_, false, _) | (_, _, 2..) => {
+            false
+        }
+        _ => {
+            let staging = Path::new(&config.backup_artifact_dir)
+                .join(".restore-staging")
+                .join(job.id.to_string());
+            for file in ["manifest.json", "database.dump"] {
+                if !fs::try_exists(staging.join(file)).await.unwrap_or(false) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "__tests__/restore_execution_contracts.rs"]
+mod execution_contracts;
 
 #[cfg(test)]
 mod security_tests {
@@ -1715,5 +1747,49 @@ mod security_tests {
             "failed preparation removes candidate and credentials"
         );
         admin.close().await;
+    }
+}
+
+#[cfg(test)]
+mod full_replacement_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_keep_the_last_error_and_the_final_failure_pause() {
+        let started = tokio::time::Instant::now();
+        let mut calls = 0;
+        let result = retry_operation(3, Duration::from_secs(1), || {
+            calls += 1;
+            std::future::ready(Err::<(), _>(calls))
+        })
+        .await;
+        assert_eq!(result, Err(3));
+        assert_eq!(calls, 3);
+        assert_eq!(started.elapsed(), Duration::from_secs(3));
+        let result = retry_operation(0, Duration::from_secs(1), || {
+            std::future::ready(Ok::<_, ()>(7))
+        })
+        .await;
+        assert_eq!(result, Ok(7));
+        assert_eq!(started.elapsed(), Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn artwork_follows_a_root_link_and_skips_nested_links() {
+        let fixture = tempfile::tempdir().unwrap();
+        let source = fixture.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("image"), b"synthetic artwork").unwrap();
+        std::os::unix::fs::symlink("image", source.join("nested-link")).unwrap();
+        let root_link = fixture.path().join("root-link");
+        std::os::unix::fs::symlink(&source, &root_link).unwrap();
+        let destination = fixture.path().join("destination");
+        copy_directory(&root_link, &destination).await.unwrap();
+        assert_eq!(
+            std::fs::read(destination.join("image")).unwrap(),
+            b"synthetic artwork"
+        );
+        assert!(!destination.join("nested-link").exists());
     }
 }

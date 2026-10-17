@@ -25,81 +25,68 @@ pub struct S3Policy {
 }
 impl S3Policy {
     pub async fn validate_endpoint(&self, endpoint: &str) -> Result<(), AppError> {
-        if endpoint.trim().is_empty() {
-            return Ok(());
+        match endpoint.trim() {
+            "" => Ok(()),
+            endpoint => {
+                let url = Url::parse(endpoint)
+                    .map_err(|_| AppError::Validation("Invalid S3 endpoint".into()))?;
+                self.resolve(&url, false).await.map(|_| ())
+            }
         }
-        let url = Url::parse(endpoint.trim())
-            .map_err(|_| AppError::Validation("Invalid S3 endpoint".into()))?;
-        let host = url
-            .host_str()
-            .ok_or_else(|| AppError::Validation("S3 endpoint needs a host".into()))?
-            .trim_start_matches('[')
-            .trim_end_matches(']');
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| AppError::Validation("Invalid S3 endpoint scheme".into()))?;
-        let addresses: Vec<_> = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::lookup_host((host, port)),
-        )
-        .await
-        .map_err(|_| AppError::Validation("S3 endpoint DNS lookup timed out".into()))?
-        .map_err(|_| AppError::Validation("S3 endpoint DNS lookup failed".into()))?
-        .collect();
-        self.validate(&url, &addresses)
     }
     pub fn from_config(config: &Config) -> Result<Self, AppError> {
+        let allowlist =
+            outbound::operator_allowlist(&config.security.s3_private_network_allowlist)?;
+        let development_origin =
+            match (
+                config.is_production(),
+                config.security.s3_allow_development_garage,
+                config.s3_endpoint.as_deref(),
+            ) {
+                (false, true, Some(endpoint)) => Some(Url::parse(endpoint).map_err(|_| {
+                    AppError::Validation("Invalid development Garage endpoint".into())
+                })?),
+                _ => None,
+            };
         Ok(Self {
-            allowlist: outbound::operator_allowlist(&config.security.s3_private_network_allowlist)?,
+            allowlist,
+            development_origin,
             allow_private_http: config.security.s3_allow_insecure_private_http,
-            development_origin: if !config.is_production()
-                && config.security.s3_allow_development_garage
-            {
-                config
-                    .s3_endpoint
-                    .as_deref()
-                    .map(Url::parse)
-                    .transpose()
-                    .map_err(|_| {
-                        AppError::Validation("Invalid development Garage endpoint".into())
-                    })?
-            } else {
-                None
-            },
         })
     }
     pub fn validate(&self, url: &Url, addresses: &[SocketAddr]) -> Result<(), AppError> {
-        if !matches!(url.scheme(), "http" | "https")
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
+        let valid_shape = matches!(url.scheme(), "https" | "http")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none();
+        if !valid_shape {
             return Err(AppError::Validation("Invalid S3 endpoint".into()));
         }
-        if self
+        let development = self
             .development_origin
             .as_ref()
-            .is_some_and(|base| base.origin() == url.origin())
-        {
-            if !addresses.is_empty()
-                && addresses.iter().all(|a| {
-                    a.ip().is_loopback()
-                        || (outbound::is_private_ip(a.ip()) && !outbound::is_forbidden_ip(a.ip()))
-                })
-            {
-                return Ok(());
-            }
-            return Err(AppError::Validation(
-                "Development Garage must resolve to a local/private address".into(),
-            ));
+            .is_some_and(|base| base.origin() == url.origin());
+        if development {
+            return match addresses.split_first() {
+                Some(_)
+                    if addresses.iter().all(|address| {
+                        address.ip().is_loopback()
+                            || (outbound::is_private_ip(address.ip())
+                                && !outbound::is_forbidden_ip(address.ip()))
+                    }) =>
+                {
+                    Ok(())
+                }
+                _ => Err(AppError::Validation(
+                    "Development Garage must resolve to a local/private address".into(),
+                )),
+            };
         }
         let private = outbound::validate_addresses(addresses, &self.allowlist)?;
-        if url.scheme() != "https"
-            && !(private && self.allow_private_http && !self.allowlist.is_empty())
-        {
-            return Err(AppError::Validation("S3 requires HTTPS; trusted-LAN HTTP requires an operator exception and CIDR allowlist".into()));
+        match (url.scheme(), private, self.allow_private_http, self.allowlist.is_empty()) {
+            ("https", _, _, _) | ("http", true, true, false) => Ok(()),
+            _ => Err(AppError::Validation("S3 requires HTTPS; trusted-LAN HTTP requires an operator exception and CIDR allowlist".into())),
         }
-        Ok(())
     }
 }
 
@@ -145,48 +132,77 @@ struct S3Connector {
 }
 impl HttpConnector for S3Connector {
     fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
-        let this = self.clone();
+        let connector = self.clone();
         HttpConnectorFuture::new(async move {
-            let approved = async {
+            let target = async {
                 let url = Url::parse(request.uri())
                     .map_err(|_| AppError::Validation("Invalid S3 request URL".into()))?;
-                let host = url
-                    .host_str()
-                    .ok_or_else(|| AppError::Validation("S3 host required".into()))?
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_owned();
-                let port = url
-                    .port_or_known_default()
-                    .ok_or_else(|| AppError::Validation("S3 port required".into()))?;
-                let addresses: Vec<SocketAddr> = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    tokio::net::lookup_host((host.as_str(), port)),
-                )
-                .await
-                .map_err(|_| AppError::DependencyUnavailable("S3 DNS timed out".into()))?
-                .map_err(|_| AppError::DependencyUnavailable("S3 DNS failed".into()))?
-                .collect();
-                this.policy.validate(&url, &addresses)?;
-                Ok::<_, AppError>(PinnedDns {
-                    host,
-                    addresses: addresses.into_iter().map(|a| a.ip()).collect(),
-                })
+                connector.policy.resolve(&url, true).await
             }
             .await
             .map_err(|error| ConnectorError::other(Box::new(error), None))?;
-            // A request-specific connector pins these exact addresses while
-            // retaining the hostname for signing and TLS/SNI. Smithy's default
-            // proxy policy is disabled, so environment proxies cannot bypass it.
-            let client = aws_smithy_http_client::Builder::new()
+            let transport = aws_smithy_http_client::Builder::new()
                 .tls_provider(aws_smithy_http_client::tls::Provider::Rustls(
                     aws_smithy_http_client::tls::rustls_provider::CryptoMode::AwsLc,
                 ))
-                .build_with_resolver(approved);
-            client
-                .http_connector(&this.settings, &this.components)
+                .build_with_resolver(target);
+            transport
+                .http_connector(&connector.settings, &connector.components)
                 .call(request)
                 .await
+        })
+    }
+}
+
+impl S3Policy {
+    async fn resolve(&self, url: &Url, request: bool) -> Result<PinnedDns, AppError> {
+        let host = url
+            .host_str()
+            .ok_or_else(|| {
+                AppError::Validation(
+                    if request {
+                        "S3 host required"
+                    } else {
+                        "S3 endpoint needs a host"
+                    }
+                    .into(),
+                )
+            })?
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        let port = url.port_or_known_default().ok_or_else(|| {
+            AppError::Validation(
+                if request {
+                    "S3 port required"
+                } else {
+                    "Invalid S3 endpoint scheme"
+                }
+                .into(),
+            )
+        })?;
+        let lookup = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await;
+        let resolved = match lookup {
+            Ok(Ok(addresses)) => addresses.collect::<Vec<_>>(),
+            failure => {
+                let timed_out = failure.is_err();
+                return Err(match (request, timed_out) {
+                    (true, true) => AppError::DependencyUnavailable("S3 DNS timed out".into()),
+                    (true, false) => AppError::DependencyUnavailable("S3 DNS failed".into()),
+                    (false, true) => {
+                        AppError::Validation("S3 endpoint DNS lookup timed out".into())
+                    }
+                    (false, false) => AppError::Validation("S3 endpoint DNS lookup failed".into()),
+                });
+            }
+        };
+        self.validate(url, &resolved)?;
+        Ok(PinnedDns {
+            host: host.to_owned(),
+            addresses: resolved.into_iter().map(|address| address.ip()).collect(),
         })
     }
 }

@@ -119,34 +119,23 @@ pub use super::restore_dump_inspection::{inspect_recovery_dump, DumpInspection};
 pub use migrations::{compiled_migration_ledger, latest_migration_version};
 
 pub async fn runtime_database_profile(pool: &PgPool) -> Result<DatabaseProfile, AppError> {
-    let postgres_major: i32 =
-        sqlx::query_scalar("SELECT current_setting('server_version_num')::integer / 10000")
-            .fetch_one(pool)
-            .await?;
-    let timescale_version: Option<String> =
-        sqlx::query_scalar("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
-            .fetch_optional(pool)
-            .await?;
-    let ledger_rows = sqlx::query_as::<_, (i64, String, bool, String)>(
+    let (postgres_major, timescale_version): (i32, Option<String>) = sqlx::query_as(
+        "SELECT current_setting('server_version_num')::integer / 10000, (SELECT extversion FROM pg_extension WHERE extname = 'timescaledb')",
+    ).fetch_one(pool).await?;
+    let rows = sqlx::query_as::<_, (i64, String, bool, String)>(
         "SELECT version, description, success, encode(checksum, 'hex') FROM public._sqlx_migrations ORDER BY version",
-    )
-    .fetch_all(pool)
-    .await?;
-    let migration_ledger_successful = ledger_rows.iter().all(|row| row.2);
-    let migration_ledger = ledger_rows
-        .into_iter()
-        .map(
-            |(version, description, _success, checksum_sha384)| MigrationIdentity {
+    ).fetch_all(pool).await?;
+    let (migration_ledger, migration_version, migration_ledger_successful) = rows.into_iter().fold(
+        (Vec::new(), 0, true),
+        |(mut ledger, _, successful), (version, description, success, checksum_sha384)| {
+            ledger.push(MigrationIdentity {
                 version,
                 description,
                 checksum_sha384,
-            },
-        )
-        .collect::<Vec<_>>();
-    let migration_version = migration_ledger
-        .last()
-        .map(|migration| migration.version)
-        .unwrap_or(0);
+            });
+            (ledger, version, successful && success)
+        },
+    );
     Ok(DatabaseProfile {
         postgres_major: Some(postgres_major),
         timescale_version,
@@ -168,9 +157,9 @@ pub async fn schema_contract_description(pool: &PgPool) -> Result<Value, AppErro
     sqlx::query("SET LOCAL search_path = pg_catalog")
         .execute(&mut *transaction)
         .await?;
-    let description: Value = sqlx::query_scalar(
+    let items: Vec<Value> = sqlx::query_scalar(
         r#"
-        SELECT COALESCE(jsonb_agg(item ORDER BY category, identity), '[]'::jsonb)
+        SELECT item
         FROM (
             SELECT 'column' AS category,
                    format('%I.%I.%s', namespace.nspname, relation.relname, attribute.attnum) AS identity,
@@ -333,22 +322,31 @@ pub async fn schema_contract_description(pool: &PgPool) -> Result<Value, AppErro
                    )
             FROM timescaledb_information.jobs
             WHERE hypertable_schema IN ('panda', 'timeseries')
-        ) contract_items
+        ) contract_items ORDER BY category, identity
         "#,
     )
-    .fetch_one(&mut *transaction)
+    .fetch_all(&mut *transaction)
     .await?;
     transaction.rollback().await?;
-    Ok(description)
+    Ok(Value::Array(items))
 }
 
 pub async fn schema_fingerprint(pool: &PgPool) -> Result<String, AppError> {
-    let canonical = serde_json::to_vec(&serde_json::json!({
-        "version": SCHEMA_CONTRACT_VERSION,
-        "items": schema_contract_description(pool).await?,
-    }))
-    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-    Ok(hex::encode(Sha256::digest(canonical)))
+    struct DigestOutput(Sha256);
+    impl std::io::Write for DigestOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = DigestOutput(Sha256::new());
+    let contract = serde_json::json!({"version":SCHEMA_CONTRACT_VERSION,"items":schema_contract_description(pool).await?});
+    serde_json::to_writer(&mut output, &contract)
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    Ok(hex::encode(output.0.finalize()))
 }
 
 pub async fn validate_schema_contract(pool: &PgPool) -> Result<SchemaContractReport, AppError> {
@@ -359,32 +357,17 @@ async fn validate_schema_contract_for_source(
     pool: &PgPool,
     charts_required: bool,
 ) -> Result<SchemaContractReport, AppError> {
-    let mut missing_relations = Vec::new();
-    for relation in REQUIRED_SCHEMA_RELATIONS {
-        // Charts were added in migration 11, after the immutable baseline.
-        // Historical candidates still need their fingerprint/ledger verified
-        // before forward migrations; the final contract always requires charts.
-        if *relation == "panda.charts" && !charts_required {
-            continue;
-        }
-        let present: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
-            .bind(relation)
-            .fetch_one(pool)
-            .await?;
-        if !present {
-            missing_relations.push((*relation).to_string());
-        }
-    }
-    let telemetry_hypertable: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM timescaledb_information.hypertables WHERE hypertable_schema = 'timeseries' AND hypertable_name = 'telemetry')",
-    )
-    .fetch_one(pool)
-    .await?;
-    let foreign_keys_validated: bool = sqlx::query_scalar(
-        "SELECT COALESCE(bool_and(convalidated), TRUE) FROM pg_constraint WHERE contype = 'f' AND connamespace IN ('panda'::regnamespace, 'timeseries'::regnamespace)",
-    )
-    .fetch_one(pool)
-    .await?;
+    let required: Vec<&str> = REQUIRED_SCHEMA_RELATIONS
+        .iter()
+        .copied()
+        .filter(|relation| charts_required || *relation != "panda.charts")
+        .collect();
+    let missing_relations: Vec<String> = sqlx::query_scalar(
+        "SELECT relation FROM unnest($1::text[]) WITH ORDINALITY AS required(relation, position) WHERE to_regclass(relation) IS NULL ORDER BY position",
+    ).bind(required).fetch_all(pool).await?;
+    let (telemetry_hypertable, foreign_keys_validated): (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM timescaledb_information.hypertables WHERE hypertable_schema = 'timeseries' AND hypertable_name = 'telemetry'), (SELECT COALESCE(bool_and(convalidated), TRUE) FROM pg_constraint WHERE contype = 'f' AND connamespace IN ('panda'::regnamespace, 'timeseries'::regnamespace))",
+    ).fetch_one(pool).await?;
     Ok(SchemaContractReport {
         contract_version: SCHEMA_CONTRACT_VERSION.into(),
         schema_fingerprint: schema_fingerprint(pool).await?,
@@ -445,50 +428,71 @@ where
     W: std::future::Future<Output = ()> + Send + 'static,
 {
     let candidate_database_url = candidate_database_url.to_owned();
-    // The cleanup owner survives cancellation of the candidate's waiter.
-    tokio::spawn(async move {
+    let (waiter, mut cancelled) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
         let budget = std::time::Duration::from_secs(
             crate::config::RecoveryConfig::default().restore_deadline_seconds,
         );
         let cleanup_budget = std::time::Duration::from_secs(30);
         let mut admin_url = Url::parse(&candidate_database_url)?;
         admin_url.set_path("/postgres");
-        let admin_pool = PgPoolOptions::new().max_connections(2)
-            .connect(admin_url.as_str()).await?;
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(admin_url.as_str())
+            .await?;
         let database_name = format!("panda_restore_baseline_{}", Uuid::new_v4().simple());
         let mut scratch_url = Url::parse(&candidate_database_url)?;
         scratch_url.set_path(&format!("/{database_name}"));
-        let result = tokio::time::timeout(budget, async {
+        let verification = tokio::time::timeout(budget, async {
             sqlx::query(AssertSqlSafe(format!(
                 "CREATE DATABASE \"{database_name}\" TEMPLATE template0"
-            ))).execute(&admin_pool).await?;
+            )))
+            .execute(&admin_pool)
+            .await?;
             // A temporary schema proof must not start outbound telemetry jobs.
             sqlx::query(AssertSqlSafe(format!(
                 "ALTER DATABASE \"{database_name}\" SET timescaledb.telemetry_level = 'off'"
-            ))).execute(&admin_pool).await?;
+            )))
+            .execute(&admin_pool)
+            .await?;
             after_create(database_name.clone()).await;
-            let scratch_pool = PgPoolOptions::new().max_connections(2)
-                .connect(scratch_url.as_str()).await?;
+            let scratch_pool = PgPoolOptions::new()
+                .max_connections(2)
+                .connect(scratch_url.as_str())
+                .await?;
             let result = async {
                 migrations::apply_baseline_schema(&scratch_pool).await?;
                 Ok::<_, anyhow::Error>(schema_fingerprint(&scratch_pool).await?)
-            }.await;
+            }
+            .await;
             scratch_pool.close().await;
             result
-        }).await.map_err(|_| anyhow::anyhow!("recovery baseline verification deadline exceeded"))
-            .and_then(|result| result);
+        });
+        let result = tokio::select! {
+            biased;
+            _ = &mut cancelled => Err(anyhow::anyhow!("recovery baseline verification cancelled")),
+            result = verification => result.map_err(|_| anyhow::anyhow!("recovery baseline verification deadline exceeded")).and_then(|result| result),
+        };
         let cleanup_deadline = tokio::time::Instant::now() + cleanup_budget;
-        let cleanup = tokio::time::timeout_at(cleanup_deadline,
-            drop_baseline_scratch_database(&admin_pool, &database_name)).await
-            .map_err(|_| anyhow::anyhow!("recovery baseline cleanup deadline exceeded"))
-            .and_then(|result| result.map_err(anyhow::Error::from));
+        let cleanup = tokio::time::timeout_at(
+            cleanup_deadline,
+            drop_baseline_scratch_database(&admin_pool, &database_name),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("recovery baseline cleanup deadline exceeded"))
+        .and_then(|result| result.map_err(anyhow::Error::from));
         let _ = tokio::time::timeout_at(cleanup_deadline, admin_pool.close()).await;
         if let Err(error) = &cleanup {
             tracing::error!(database = %database_name, error = %error, "recovery.baseline.cleanup_failed");
         }
         cleanup?;
         result
-    }).await.map_err(|error| anyhow::anyhow!("recovery baseline task failed: {error}"))?
+    });
+    let result = task
+        .await
+        .map_err(|error| anyhow::anyhow!("recovery baseline task failed: {error}"))?;
+    drop(waiter);
+    result
 }
 
 async fn drop_baseline_scratch_database(
@@ -548,33 +552,106 @@ fn blocking_from_ledger_error(
     target: bool,
     error: migrations::LedgerValidationError,
 ) -> RestoreBlockingError {
-    let code = if error.kind == LedgerValidationKind::Checksum {
-        RestoreBlockingCode::MigrationChecksumMismatch
-    } else if target {
-        RestoreBlockingCode::TargetMigrationDrift
-    } else {
-        RestoreBlockingCode::SourceLedgerInvalid
+    let (fallback, prefix) = match target {
+        true => (
+            RestoreBlockingCode::TargetMigrationDrift,
+            "Target migration ledger is not compatible with this release",
+        ),
+        false => (
+            RestoreBlockingCode::SourceLedgerInvalid,
+            "Recovery package migration ledger is invalid",
+        ),
     };
     RestoreBlockingError {
-        code,
-        message: if target {
-            format!("Target migration ledger is not compatible with this release: {error}")
-        } else {
-            format!("Recovery package migration ledger is invalid: {error}")
+        code: match error.kind {
+            LedgerValidationKind::Checksum => RestoreBlockingCode::MigrationChecksumMismatch,
+            _ => fallback,
         },
+        message: format!("{prefix}: {error}"),
     }
 }
 
 fn validate_source_schema_metadata(source: &DatabaseProfile) -> Result<(), RestoreBlockingError> {
-    if source.schema_contract_version.as_deref() != Some(SCHEMA_CONTRACT_VERSION)
-        || source.schema_fingerprint.is_none()
-    {
-        return Err(RestoreBlockingError {
+    match (
+        source.schema_contract_version.as_deref(),
+        source.schema_fingerprint.as_ref(),
+    ) {
+        (Some(SCHEMA_CONTRACT_VERSION), Some(_)) => Ok(()),
+        _ => Err(RestoreBlockingError {
             code: RestoreBlockingCode::SchemaContractMismatch,
             message: "The package is missing the supported versioned schema contract.".into(),
-        });
+        }),
     }
-    Ok(())
+}
+
+pub async fn plan_restore(
+    manifest: &Value,
+    package_checksum_sha256: &str,
+    target_pool: &PgPool,
+    dump: Option<&DumpInspection>,
+) -> Result<RestorePlan, AppError> {
+    let format = manifest
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let source = source_profile_from_manifest(manifest)?;
+    let target = runtime_database_profile(target_pool).await?;
+    recovery_stages::PlanInput {
+        format,
+        source,
+        target,
+    }
+    .build(package_checksum_sha256, dump)
+}
+
+fn source_profile_from_manifest(manifest: &Value) -> Result<DatabaseProfile, AppError> {
+    let source = &manifest["source"];
+    let string = |field: &str| source.get(field).and_then(Value::as_str).map(str::to_owned);
+    let ledger = match source.get("migration_ledger") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|error| AppError::Validation(format!("Invalid migration ledger: {error}")))?,
+    };
+    let postgres_major = source
+        .get("postgres_major")
+        .and_then(Value::as_i64)
+        .and_then(|major| i32::try_from(major).ok());
+    Ok(DatabaseProfile {
+        postgres_major,
+        timescale_version: string("timescale_version"),
+        migration_version: source
+            .get("migration_version")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        migration_ledger: ledger,
+        migration_ledger_successful: true,
+        migration_chain_id: string("migration_chain_id"),
+        migration_catalog_digest: string("migration_catalog_digest"),
+        schema_contract_version: string("schema_contract_version"),
+        schema_fingerprint: string("schema_fingerprint"),
+    })
+}
+
+fn timescale_versions_compatible(source: Option<&str>, target: Option<&str>) -> bool {
+    match (
+        source.and_then(parse_version_triplet),
+        target.and_then(parse_version_triplet),
+    ) {
+        (Some(from), Some(to)) => from.0 == to.0 && from <= to,
+        _ => false,
+    }
+}
+
+fn parse_version_triplet(value: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().unwrap_or("0");
+    let end = patch
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(patch.len());
+    Some((major, minor, patch[..end].parse().ok()?))
 }
 
 #[cfg(test)]
@@ -605,96 +682,6 @@ fn validate_source_identity(source: &DatabaseProfile) -> Result<(), RestoreBlock
         });
     }
     Ok(())
-}
-
-pub async fn plan_restore(
-    manifest: &Value,
-    package_checksum_sha256: &str,
-    target_pool: &PgPool,
-    dump: Option<&DumpInspection>,
-) -> Result<RestorePlan, AppError> {
-    let format = manifest
-        .get("format")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let source = source_profile_from_manifest(manifest)?;
-    let target = runtime_database_profile(target_pool).await?;
-    recovery_stages::PlanInput {
-        format,
-        source,
-        target,
-    }
-    .build(package_checksum_sha256, dump)
-}
-
-fn source_profile_from_manifest(manifest: &Value) -> Result<DatabaseProfile, AppError> {
-    let empty_source = Value::Null;
-    let source = manifest.get("source").unwrap_or(&empty_source);
-    let migration_ledger = source
-        .get("migration_ledger")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| AppError::Validation(format!("Invalid migration ledger: {error}")))?
-        .unwrap_or_default();
-    Ok(DatabaseProfile {
-        postgres_major: source
-            .get("postgres_major")
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok()),
-        timescale_version: source
-            .get("timescale_version")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        migration_version: source
-            .get("migration_version")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        migration_ledger,
-        migration_ledger_successful: true,
-        migration_chain_id: source
-            .get("migration_chain_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        migration_catalog_digest: source
-            .get("migration_catalog_digest")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        schema_contract_version: source
-            .get("schema_contract_version")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        schema_fingerprint: source
-            .get("schema_fingerprint")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
-fn timescale_versions_compatible(source: Option<&str>, target: Option<&str>) -> bool {
-    let Some(source) = source.and_then(parse_version_triplet) else {
-        return false;
-    };
-    let Some(target) = target.and_then(parse_version_triplet) else {
-        return false;
-    };
-    source.0 == target.0 && target >= source
-}
-
-fn parse_version_triplet(value: &str) -> Option<(u32, u32, u32)> {
-    let mut components = value.split('.');
-    Some((
-        components.next()?.parse().ok()?,
-        components.next()?.parse().ok()?,
-        components
-            .next()
-            .unwrap_or("0")
-            .split(|character: char| !character.is_ascii_digit())
-            .next()?
-            .parse()
-            .ok()?,
-    ))
 }
 
 #[cfg(test)]

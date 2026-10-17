@@ -6,8 +6,6 @@ use std::{
     time::Duration as StdDuration,
 };
 
-#[cfg(test)]
-use chrono::Duration;
 use chrono::{DateTime, NaiveTime, Utc};
 use chrono_tz::Tz;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
@@ -85,106 +83,100 @@ pub struct BackupExecutionResult {
     pub artifact_ids: Vec<Uuid>,
 }
 
-struct BackupLock {
+struct AdvisorySession {
     connection: Option<PoolConnection<Postgres>>,
+    key: i64,
 }
+
+impl AdvisorySession {
+    async fn try_acquire(pool: &PgPool, key: i64) -> Result<Option<Self>, AppError> {
+        let mut session = Self {
+            connection: Some(pool.acquire().await?),
+            key,
+        };
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(key)
+            .fetch_one(session.connection.as_deref_mut().expect("owned session"))
+            .await?;
+        if acquired {
+            Ok(Some(session))
+        } else {
+            session.connection.take();
+            Ok(None)
+        }
+    }
+
+    async fn unlock(&mut self) -> Result<bool, sqlx::Error> {
+        let Some(connection) = self.connection.as_deref_mut() else {
+            return Ok(true);
+        };
+        let released: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+            .bind(self.key)
+            .fetch_one(connection)
+            .await?;
+        if released {
+            self.connection.take();
+        }
+        Ok(released)
+    }
+}
+
+impl Drop for AdvisorySession {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            drop(connection.detach());
+        }
+    }
+}
+
+struct BackupLock(AdvisorySession);
 
 impl BackupLock {
     async fn acquire(pool: &PgPool) -> Result<Self, AppError> {
-        let mut guard = Self {
-            connection: Some(pool.acquire().await?),
-        };
-        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-            .bind(BACKUP_ADVISORY_LOCK_ID)
-            .fetch_one(guard.connection.as_deref_mut().expect("owned connection"))
-            .await?;
-        if !locked {
-            drop(guard.connection.take());
-            return Err(AppError::Conflict(
-                "A backup job is already running.".into(),
-            ));
-        }
-        Ok(guard)
+        AdvisorySession::try_acquire(pool, BACKUP_ADVISORY_LOCK_ID)
+            .await?
+            .map(Self)
+            .ok_or_else(|| AppError::Conflict("A backup job is already running.".into()))
     }
 
     async fn release(mut self) {
-        if self.connection.is_some() {
-            match sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-                .bind(BACKUP_ADVISORY_LOCK_ID)
-                .fetch_one(self.connection.as_deref_mut().expect("owned connection"))
-                .await
-            {
-                Ok(true) => {
-                    drop(self.connection.take());
-                }
-                Ok(false) => tracing::error!("backup.lock.release_not_owned"),
-                Err(error) => tracing::error!(error = %error, "backup.lock.release_failed"),
-            }
+        match self.0.unlock().await {
+            Ok(true) => {}
+            Ok(false) => tracing::error!("backup.lock.release_not_owned"),
+            Err(error) => tracing::error!(error = %error, "backup.lock.release_failed"),
         }
     }
 }
 
-impl Drop for BackupLock {
-    fn drop(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            drop(connection.detach());
-        }
-    }
-}
-
-/// Session-scoped recovery lock. It deliberately owns the PostgreSQL
-/// connection because advisory locks are tied to a backend session, not a
-/// pool. Call `release` on every normal path; dropping a failed connection is
-/// also safe because PostgreSQL releases the session lock when it closes.
-pub struct RecoveryMutationLock {
-    connection: Option<PoolConnection<Postgres>>,
-}
+/// Holds a physical PostgreSQL session until unlock is confirmed or it closes.
+pub struct RecoveryMutationLock(AdvisorySession);
 
 impl RecoveryMutationLock {
     pub async fn release(mut self) {
-        if self.connection.is_some() {
-            let result: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-                .bind(RECOVERY_MUTATION_ADVISORY_LOCK_ID)
-                .fetch_one(self.connection.as_deref_mut().expect("owned connection"))
-                .await;
-            if matches!(result, Ok(true)) {
-                drop(self.connection.take());
-            }
-        }
+        let _ = self.0.unlock().await;
     }
-}
 
-impl Drop for RecoveryMutationLock {
-    fn drop(&mut self) {
-        // A guard dropped on an early error must never return a session that
-        // still owns an advisory lock to the pool. Detaching drops the physical
-        // connection, and PostgreSQL releases the session lock with it.
-        if let Some(connection) = self.connection.take() {
-            drop(connection.detach());
-        }
+    async fn run<T>(
+        self,
+        operation: impl std::future::Future<Output = Result<T, AppError>>,
+    ) -> Result<T, AppError> {
+        let result = operation.await;
+        self.release().await;
+        result
     }
 }
 
 pub async fn acquire_recovery_mutation_lock(
     pool: &PgPool,
 ) -> Result<RecoveryMutationLock, AppError> {
-    // Own the connection before the lock query: cancellation can occur after
-    // PostgreSQL acquires the lock but before its result reaches this future.
-    let mut guard = RecoveryMutationLock {
-        connection: Some(pool.acquire().await?),
-    };
-    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(RECOVERY_MUTATION_ADVISORY_LOCK_ID)
-        .fetch_one(guard.connection.as_deref_mut().expect("owned connection"))
-        .await?;
-    if !locked {
-        // A completed false result guarantees this session acquired no lock.
-        drop(guard.connection.take());
-        return Err(AppError::RecoveryConflict(
-            "Another recovery upload or restore is already running.".into(),
-        ));
-    }
-    Ok(guard)
+    AdvisorySession::try_acquire(pool, RECOVERY_MUTATION_ADVISORY_LOCK_ID)
+        .await?
+        .map(RecoveryMutationLock)
+        .ok_or_else(|| {
+            AppError::RecoveryConflict(
+                "Another recovery upload or restore is already running.".into(),
+            )
+        })
 }
 
 /// Once admitted, bounded recovery work owns its lifetime independently of
@@ -195,14 +187,15 @@ where
     F: std::future::Future<Output = Result<T, AppError>> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::spawn(async move {
-        let guard = acquire_recovery_mutation_lock(&pool).await?;
-        let result = operation.await;
-        guard.release().await;
-        result
-    })
-    .await
-    .map_err(|error| AppError::Internal(anyhow::anyhow!("recovery operation failed: {error}")))?
+    let worker = tokio::spawn(async move {
+        acquire_recovery_mutation_lock(&pool)
+            .await?
+            .run(operation)
+            .await
+    });
+    worker.await.map_err(|error| {
+        AppError::Internal(anyhow::anyhow!("recovery operation failed: {error}"))
+    })?
 }
 
 #[derive(Debug, Clone)]
@@ -299,21 +292,18 @@ struct PrunableArtifactRow {
 
 pub fn start_backup_scheduler(pool: PgPool, config: Config) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let interval_secs = config.backup_poll_interval_seconds.max(30);
-        let mut interval = tokio::time::interval(StdDuration::from_secs(interval_secs));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut last_failure_signature: Option<String> = None;
-
+        let cadence = StdDuration::from_secs(config.backup_poll_interval_seconds.max(30));
+        let mut ticks = tokio::time::interval(cadence);
+        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut failure = None;
         loop {
-            interval.tick().await;
-            if let Err(error) = maybe_run_scheduled_backup(&pool, &config).await {
-                if should_log_scheduler_failure(&mut last_failure_signature, &error) {
-                    tracing::error!(error = ?error, "backup.scheduler.tick_failed");
-                } else {
-                    tracing::debug!(error = ?error, "backup.scheduler.tick_failed_repeat");
-                }
-            } else {
-                last_failure_signature = None;
+            ticks.tick().await;
+            match maybe_run_scheduled_backup(&pool, &config).await {
+                Ok(_) => failure = None,
+                Err(error) => match should_log_scheduler_failure(&mut failure, &error) {
+                    true => tracing::error!(error = ?error, "backup.scheduler.tick_failed"),
+                    false => tracing::debug!(error = ?error, "backup.scheduler.tick_failed_repeat"),
+                },
             }
         }
     })
@@ -326,10 +316,10 @@ pub async fn run_backup_now(
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
     ensure_backup_runtime_available(config).await?;
-    let lock = BackupLock::acquire(pool).await?;
-    let result = run_backup_inner(pool, config, requested_by, trigger).await;
-    lock.release().await;
-    result
+    BackupLock::acquire(pool)
+        .await?
+        .run(run_backup_inner(pool, config, requested_by, trigger))
+        .await
 }
 
 /// Starts a backup without holding the HTTP request open. The advisory lock is
@@ -345,17 +335,14 @@ pub async fn start_backup_now(
     ensure_backup_runtime_available(config).await?;
     let lock = BackupLock::acquire(pool).await?;
     let run_id = insert_running_backup(pool, requested_by, trigger).await?;
-    let pool = pool.clone();
-    let config = config.clone();
-
-    tokio::spawn(async move {
-        let result = run_backup_inner_for_run(&pool, &config, run_id, trigger).await;
-        if let Err(error) = result {
+    let owned = (pool.clone(), config.clone());
+    tokio::spawn(lock.run(async move {
+        let result = run_backup_inner_for_run(&owned.0, &owned.1, run_id, trigger).await;
+        if let Err(error) = &result {
             tracing::error!(run_id = %run_id, error = ?error, "backup.async_job_failed");
         }
-        lock.release().await;
-    });
-
+        result
+    }));
     Ok(run_id)
 }
 
@@ -366,62 +353,31 @@ pub async fn create_restore_request(
     confirmation_phrase: &str,
     notes: Option<String>,
 ) -> Result<Uuid, AppError> {
-    if confirmation_phrase.trim() != RESTORE_CONFIRMATION_PHRASE {
+    let confirmation = confirmation_phrase.trim();
+    if confirmation != RESTORE_CONFIRMATION_PHRASE {
         return Err(AppError::Validation(format!(
             "Type {RESTORE_CONFIRMATION_PHRASE} to request a restore"
         )));
     }
-
-    let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM panda.backup_artifacts WHERE id = $1")
-            .bind(artifact_id)
-            .fetch_optional(pool)
-            .await?;
-
-    if exists.is_none() {
-        return Err(AppError::NotFound);
+    let (exists, pending): (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM panda.backup_artifacts WHERE id = $1), EXISTS(SELECT 1 FROM panda.backup_restore_requests WHERE artifact_id = $1 AND status IN ('pending', 'approved', 'running'))",
+    ).bind(artifact_id).fetch_one(pool).await?;
+    match (exists, pending) {
+        (false, _) => return Err(AppError::NotFound),
+        (true, true) => {
+            return Err(AppError::Conflict(
+                "A restore request for this artifact is already pending.".into(),
+            ))
+        }
+        _ => {}
     }
-
-    let pending: Option<Uuid> = sqlx::query_scalar(
-        r#"
-        SELECT id
-        FROM panda.backup_restore_requests
-        WHERE artifact_id = $1
-          AND status IN ('pending', 'approved', 'running')
-        ORDER BY requested_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(artifact_id)
-    .fetch_optional(pool)
-    .await?;
-
-    if pending.is_some() {
-        return Err(AppError::Conflict(
-            "A restore request for this artifact is already pending.".into(),
-        ));
-    }
-
-    let request_id = sqlx::query_scalar(
-        r#"
-        INSERT INTO panda.backup_restore_requests (
-            artifact_id, requested_by, status, confirmation_phrase, notes, updated_at
-        )
-        VALUES ($1, $2, 'pending', $3, $4, now())
-        RETURNING id
-        "#,
-    )
-    .bind(artifact_id)
-    .bind(requested_by)
-    .bind(confirmation_phrase.trim())
-    .bind(notes.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    }))
-    .fetch_one(pool)
-    .await?;
-
-    Ok(request_id)
+    let notes = notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    Ok(sqlx::query_scalar(
+        "INSERT INTO panda.backup_restore_requests (artifact_id, requested_by, status, confirmation_phrase, notes, updated_at) VALUES ($1, $2, 'pending', $3, $4, now()) RETURNING id",
+    ).bind(artifact_id).bind(requested_by).bind(confirmation).bind(notes).fetch_one(pool).await?)
 }
 
 async fn run_backup_inner(
@@ -524,96 +480,62 @@ async fn maybe_run_scheduled_backup(
     pool: &PgPool,
     config: &Config,
 ) -> Result<Option<Uuid>, AppError> {
+    let readiness = runtime_readiness(config).await;
     if config.backup_driver.trim().eq_ignore_ascii_case("json") {
         return Ok(None);
     }
-
-    if BackupDriver::from_config(&config.backup_driver) == BackupDriver::PgDump {
-        if !is_pg_dump_available().await {
-            if !PG_DUMP_UNAVAILABLE_LOGGED.swap(true, Ordering::Relaxed) {
-                tracing::warn!(
-                    "backup.scheduler.skipped_pg_dump_unavailable: {}",
-                    PG_DUMP_UNAVAILABLE_MESSAGE
-                );
-            }
-            return Ok(None);
+    if !readiness.pg_dump_available {
+        if !PG_DUMP_UNAVAILABLE_LOGGED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "backup.scheduler.skipped_pg_dump_unavailable: {}",
+                PG_DUMP_UNAVAILABLE_MESSAGE
+            );
         }
-        PG_DUMP_UNAVAILABLE_LOGGED.store(false, Ordering::Relaxed);
+        return Ok(None);
     }
-
+    PG_DUMP_UNAVAILABLE_LOGGED.store(false, Ordering::Relaxed);
     let settings = load_settings(pool, config).await?;
     if !settings.enabled {
         return Ok(None);
     }
-
-    let due_at = compute_due_run_at(&settings, Utc::now())?;
-    let existing = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id
-        FROM panda.backup_runs
-        WHERE trigger IN ('manual', 'scheduled')
-          AND status IN ('pending', 'running', 'succeeded', 'failed')
-          AND created_at >= $1
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(due_at)
-    .fetch_optional(pool)
-    .await?;
-
-    if existing.is_some() {
-        return Ok(None);
+    let due = compute_due_run_at(&settings, Utc::now())?;
+    let covered: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM panda.backup_runs WHERE trigger IN ('manual', 'scheduled') AND status IN ('pending', 'running', 'succeeded', 'failed') AND created_at >= $1)",
+    ).bind(due).fetch_one(pool).await?;
+    match covered {
+        true => Ok(None),
+        false => start_backup_now(pool, config, None, BackupRunTrigger::Scheduled)
+            .await
+            .map(Some),
     }
-
-    let run_id = start_backup_now(pool, config, None, BackupRunTrigger::Scheduled).await?;
-    Ok(Some(run_id))
 }
 
 async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings, AppError> {
-    let app_timezone = app_settings::load_app_timezone(pool).await?;
+    let timezone = app_settings::load_app_timezone(pool).await?;
     let row = sqlx::query_as::<_, BackupSettingsRow>(
-        r#"
-        SELECT enabled, frequency, run_at, day_of_week, day_of_month, retention_count, prefix,
-               local_enabled, s3_enabled, endpoint, region, bucket, access_key, secret_key_encrypted
-        FROM panda.backup_settings
-        WHERE id = TRUE
-        "#,
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    match row {
-        Some(row) => {
-            let s3 = resolve_s3_settings(&row, config)?;
-            Ok(BackupSettings {
-                enabled: row.enabled,
-                frequency: BackupFrequency::try_from(row.frequency.as_str())?,
-                run_at: row.run_at,
-                timezone: app_timezone,
-                day_of_week: row.day_of_week,
-                day_of_month: row.day_of_month,
-                retention_count: row.retention_count.max(1),
-                prefix: normalize_prefix(&row.prefix)?,
-                local_enabled: row.local_enabled,
-                s3_enabled: row.s3_enabled,
-                s3,
-            })
-        }
-        None => Ok(BackupSettings {
-            enabled: false,
-            frequency: BackupFrequency::Weekly,
-            run_at: NaiveTime::from_hms_opt(3, 0, 0).expect("valid default time"),
-            timezone: app_timezone,
-            day_of_week: Some(0),
-            day_of_month: Some(1),
-            retention_count: 8,
-            prefix: "panda".into(),
-            local_enabled: true,
-            s3_enabled: false,
-            s3: None,
-        }),
-    }
+        "SELECT enabled, frequency, run_at, day_of_week, day_of_month, retention_count, prefix, local_enabled, s3_enabled, endpoint, region, bucket, access_key, secret_key_encrypted FROM panda.backup_settings WHERE id = TRUE",
+    ).fetch_optional(pool).await?.unwrap_or_else(|| BackupSettingsRow {
+        enabled: false, frequency: "weekly".into(), run_at: NaiveTime::from_hms_opt(3, 0, 0).expect("valid default time"),
+        day_of_week: Some(0), day_of_month: Some(1), retention_count: 8, prefix: "panda".into(),
+        local_enabled: true, s3_enabled: false, endpoint: String::new(), region: None, bucket: String::new(),
+        access_key: None, secret_key_encrypted: None,
+    });
+    let s3 = resolve_s3_settings(&row, config)?;
+    let frequency = BackupFrequency::try_from(row.frequency.as_str())?;
+    let prefix = normalize_prefix(&row.prefix)?;
+    Ok(BackupSettings {
+        enabled: row.enabled,
+        frequency,
+        run_at: row.run_at,
+        timezone,
+        day_of_week: row.day_of_week,
+        day_of_month: row.day_of_month,
+        retention_count: row.retention_count.max(1),
+        prefix,
+        local_enabled: row.local_enabled,
+        s3_enabled: row.s3_enabled,
+        s3,
+    })
 }
 
 fn resolve_s3_settings(
@@ -623,47 +545,49 @@ fn resolve_s3_settings(
     if !row.s3_enabled {
         return Ok(None);
     }
-    let saved_secret = match row.secret_key_encrypted.as_deref() {
-        Some(ciphertext) => {
-            let identity = config
-                .age_encryption_key
-                .as_deref()
-                .ok_or_else(|| {
-                    AppError::Internal(anyhow::anyhow!("age encryption key is unavailable"))
-                })?
+    let saved_secret = row
+        .secret_key_encrypted
+        .as_deref()
+        .map(|ciphertext| {
+            let key = config.age_encryption_key.as_deref().ok_or_else(|| {
+                AppError::Internal(anyhow::anyhow!("age encryption key is unavailable"))
+            })?;
+            let identity = key
                 .parse::<age::x25519::Identity>()
                 .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age encryption key")))?;
-            Some(decrypt_json::<String>(ciphertext, &identity).map_err(AppError::Internal)?)
-        }
-        None => None,
-    };
-    let saved_pair = row.access_key.clone().zip(saved_secret);
-    let env_pair = config
-        .s3_access_key
-        .clone()
-        .zip(config.s3_secret_key.clone());
-    let (access_key, secret_key) = saved_pair
-        .or(env_pair)
-        .ok_or_else(|| AppError::Validation("S3 access key and secret key are required".into()))?;
-    let endpoint = if row.endpoint.trim().is_empty() {
-        config.s3_endpoint.clone().unwrap_or_default()
-    } else {
-        row.endpoint.clone()
-    };
+            decrypt_json::<String>(ciphertext, &identity).map_err(AppError::Internal)
+        })
+        .transpose()?;
+    let credentials = [
+        row.access_key.clone().zip(saved_secret),
+        config
+            .s3_access_key
+            .clone()
+            .zip(config.s3_secret_key.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    .next()
+    .ok_or_else(|| AppError::Validation("S3 access key and secret key are required".into()))?;
     if row.bucket.trim().is_empty() {
         return Err(AppError::Validation("S3 bucket is required".into()));
     }
+    let endpoint = match row.endpoint.trim() {
+        "" => config.s3_endpoint.clone().unwrap_or_default(),
+        _ => row.endpoint.clone(),
+    };
     Ok(Some(S3Settings {
         endpoint,
         region: row
             .region
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "us-east-1".into()),
+            .as_deref()
+            .filter(|region| !region.trim().is_empty())
+            .unwrap_or("us-east-1")
+            .to_owned(),
         bucket: row.bucket.clone(),
         prefix: row.prefix.clone(),
-        access_key,
-        secret_key,
+        access_key: credentials.0,
+        secret_key: credentials.1,
         policy: crate::services::s3_transport::S3Policy::from_config(config)?,
     }))
 }
@@ -682,18 +606,16 @@ fn build_artifact_path(
     run_id: Uuid,
 ) -> Result<PathBuf, AppError> {
     let prefix = crate::services::artifact_files::validate_prefix(prefix)?;
-    let mut path = PathBuf::from(&config.backup_artifact_dir);
-    for segment in prefix.split('/').filter(|segment| !segment.is_empty()) {
-        path.push(segment);
-    }
-    path.push(created_at.format("%Y").to_string());
-    path.push(created_at.format("%m").to_string());
-    path.push(format!(
-        "backup-{}-{}.rma.tar.gz",
+    let suffix = format!(
+        "{}/{}/backup-{}-{}.rma.tar.gz",
+        created_at.format("%Y"),
+        created_at.format("%m"),
         created_at.format("%Y%m%dT%H%M%SZ"),
-        run_id.simple(),
-    ));
-    Ok(path)
+        run_id.simple()
+    );
+    Ok(Path::new(&config.backup_artifact_dir)
+        .join(prefix)
+        .join(suffix))
 }
 
 async fn execute_recovery_package(
@@ -704,55 +626,57 @@ async fn execute_recovery_package(
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
 ) -> Result<serde_json::Value, AppError> {
+    enum Stage {
+        Dump,
+        Snapshot,
+        Package,
+        Validate,
+    }
     let workspace = crate::services::recovery_workspace::RecoveryWorkspace::new(
         Path::new(&config.backup_artifact_dir),
         &config.recovery,
     )?;
-    let temp_root = workspace.path();
-    let dump_path = temp_root.join("database.dump");
-    let settings_path = temp_root.join("backup-settings.json");
-    let history_path = temp_root.join("operational-history.json");
-    let cache_root = PathBuf::from(&config.vehicle_image_cache_dir);
-
-    let result = async {
-        update_backup_progress(pool, run_id, "dumping", 10).await?;
-        execute_pg_dump(config, &dump_path).await?;
-        update_backup_progress(pool, run_id, "snapshotting", 45).await?;
-        write_sanitized_backup_settings(pool, &settings_path).await?;
-        write_operational_history(pool, &history_path).await?;
-        update_backup_progress(pool, run_id, "packaging", 65).await?;
-        let manifest = build_recovery_manifest(
-            pool,
-            &dump_path,
-            &settings_path,
-            &history_path,
-            &cache_root,
-            trigger,
-            created_at,
-        )
-        .await?;
-        let manifest_bytes = serde_json::to_vec_pretty(&manifest)
-            .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-        let output = crate::services::artifact_files::create(
-            Path::new(&config.backup_artifact_dir),
-            artifact_path,
-        )?;
-        write_recovery_archive_to_file(
-            output,
-            &dump_path,
-            &settings_path,
-            &history_path,
-            &cache_root,
-            &manifest_bytes,
-        )
-        .await?;
-        update_backup_progress(pool, run_id, "validating", 90).await?;
-        validate_recovery_package_with_limits(artifact_path, &config.recovery).await?;
-        Ok::<serde_json::Value, AppError>(manifest)
+    let [dump, settings, history] = [
+        "database.dump",
+        "backup-settings.json",
+        "operational-history.json",
+    ]
+    .map(|name| workspace.path().join(name));
+    let cache = Path::new(&config.vehicle_image_cache_dir);
+    let mut manifest = serde_json::Value::Null;
+    for (stage, phase, percent) in [
+        (Stage::Dump, "dumping", 10),
+        (Stage::Snapshot, "snapshotting", 45),
+        (Stage::Package, "packaging", 65),
+        (Stage::Validate, "validating", 90),
+    ] {
+        update_backup_progress(pool, run_id, phase, percent).await?;
+        match stage {
+            Stage::Dump => execute_pg_dump(config, &dump).await?,
+            Stage::Snapshot => {
+                write_sanitized_backup_settings(pool, &settings).await?;
+                write_operational_history(pool, &history).await?;
+            }
+            Stage::Package => {
+                manifest = build_recovery_manifest(
+                    pool, &dump, &settings, &history, cache, trigger, created_at,
+                )
+                .await?;
+                let bytes = serde_json::to_vec_pretty(&manifest)
+                    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+                let output = crate::services::artifact_files::create(
+                    Path::new(&config.backup_artifact_dir),
+                    artifact_path,
+                )?;
+                write_recovery_archive_to_file(output, &dump, &settings, &history, cache, &bytes)
+                    .await?;
+            }
+            Stage::Validate => {
+                validate_recovery_package_with_limits(artifact_path, &config.recovery).await?;
+            }
+        }
     }
-    .await;
-
-    result
+    Ok(manifest)
 }
 
 pub async fn validate_recovery_package(
@@ -821,32 +745,37 @@ pub async fn extract_recovery_package_with_limits(
 }
 
 pub(crate) fn metadata_limit(name: &str, limits: &RecoveryConfig) -> u64 {
-    match name {
-        "manifest.json" => limits.max_manifest_bytes.min(limits.max_member_bytes),
-        "backup-settings.json" => limits.max_settings_bytes.min(limits.max_member_bytes),
-        "operational-history.json" => limits.max_history_bytes.min(limits.max_member_bytes),
-        _ => limits.max_member_bytes,
-    }
+    let ceiling = [
+        ("manifest.json", limits.max_manifest_bytes),
+        ("backup-settings.json", limits.max_settings_bytes),
+        ("operational-history.json", limits.max_history_bytes),
+    ]
+    .into_iter()
+    .find_map(|(member, maximum)| (name == member).then_some(maximum));
+    ceiling
+        .unwrap_or(limits.max_member_bytes)
+        .min(limits.max_member_bytes)
 }
 
 pub(crate) fn classify_recovery_error(error: AppError) -> AppError {
     match error {
-        AppError::Validation(message) => {
-            let too_large = message.contains("exceeds")
-                || message.contains("too many archive members")
-                || message.contains("expanded size overflowed")
-                || message.contains("size overflowed");
-            if too_large {
-                AppError::RecoveryTooLarge(message)
-            } else {
-                AppError::RecoveryInvalid(message)
-            }
-        }
+        AppError::Validation(message) => match [
+            "exceeds",
+            "too many archive members",
+            "expanded size overflowed",
+            "size overflowed",
+        ]
+        .iter()
+        .any(|pattern| message.contains(pattern))
+        {
+            true => AppError::RecoveryTooLarge(message),
+            false => AppError::RecoveryInvalid(message),
+        },
         AppError::Io(error) => AppError::RecoveryInvalid(format!(
             "Recovery package could not be read safely: {error}"
         )),
         AppError::Conflict(message) => AppError::RecoveryConflict(message),
-        error => error,
+        other => other,
     }
 }
 
@@ -872,13 +801,6 @@ pub async fn reconcile_running_runs(pool: &PgPool) -> Result<u64, AppError> {
 
 /// Rebuild missing local catalog rows from the persistent backup directory.
 pub use crate::services::backup_catalog::reconcile_local_catalog;
-
-#[cfg(test)]
-fn validate_recovery_package_sync(
-    package_path: &Path,
-) -> Result<ValidatedRecoveryPackage, AppError> {
-    validate_recovery_package_sync_with_limits(package_path, &RecoveryConfig::default())
-}
 
 pub(crate) fn validate_recovery_package_sync_with_limits(
     package_path: &Path,
@@ -1094,46 +1016,47 @@ fn verify_manifest_component(
     component: &str,
     expected_path: &str,
 ) -> Result<(), AppError> {
-    let component = manifest
+    let declaration = manifest
         .pointer(&format!("/components/{component}"))
         .ok_or_else(|| {
             AppError::Validation(format!("Recovery manifest is missing {component}."))
         })?;
-    let path = component
+    let path = declaration
         .get("path")
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .unwrap_or(expected_path);
-    let expected = component
+    let checksum = declaration
         .get("sha256")
-        .and_then(|value| value.as_str())
+        .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
             AppError::Validation(format!(
-                "Recovery manifest is missing the checksum for {component}."
+                "Recovery manifest is missing the checksum for {declaration}."
             ))
         })?;
-    if path != expected_path || inventory.checksum(path) != Some(expected) {
-        return Err(AppError::Validation(format!(
-            "Recovery package checksum mismatch for {expected_path}."
-        )));
+    match (path == expected_path, inventory.checksum(path)) {
+        (true, Some(actual)) if actual == checksum => {}
+        _ => {
+            return Err(AppError::Validation(format!(
+                "Recovery package checksum mismatch for {expected_path}."
+            )))
+        }
     }
-    let expected_size = component
+    match declaration
         .get("size_bytes")
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| {
-            AppError::Validation(format!(
-                "Recovery manifest is missing the size for {expected_path}."
-            ))
-        })?;
-    if inventory.size(path) != Some(expected_size) {
-        return Err(AppError::Validation(format!(
+    {
+        None => Err(AppError::Validation(format!(
+            "Recovery manifest is missing the size for {expected_path}."
+        ))),
+        Some(size) if inventory.size(path) == Some(size) => Ok(()),
+        _ => Err(AppError::Validation(format!(
             "Recovery package size mismatch for {expected_path}."
-        )));
+        ))),
     }
-    Ok(())
 }
 
 fn validate_migration_ledger_shape(manifest: &serde_json::Value) -> Result<(), AppError> {
-    let migration_version = manifest
+    let declared = manifest
         .pointer("/source/migration_version")
         .and_then(serde_json::Value::as_i64)
         .unwrap_or_default();
@@ -1141,31 +1064,28 @@ fn validate_migration_ledger_shape(manifest: &serde_json::Value) -> Result<(), A
         .pointer("/source/migration_ledger")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| AppError::Validation("Recovery migration ledger is invalid.".into()))?;
-    if migration_version < 1 || ledger.is_empty() {
+    if declared < 1 || ledger.is_empty() {
         return Err(AppError::Validation(
             "Recovery migration ledger is incomplete.".into(),
         ));
     }
-    let mut previous_version = None;
-    for migration in ledger {
-        let version = migration
+    let last = ledger.iter().try_fold(0, |previous, row| {
+        let version = row
             .get("version")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or_default();
-        if version < 1
-            || previous_version.is_some_and(|previous| version <= previous)
-            || migration
-                .get("checksum_sha384")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(str::is_empty)
-        {
-            return Err(AppError::Validation(format!(
+        match (
+            version > previous,
+            row.get("checksum_sha384")
+                .and_then(serde_json::Value::as_str),
+        ) {
+            (true, Some(checksum)) if !checksum.is_empty() => Ok(version),
+            _ => Err(AppError::Validation(format!(
                 "Recovery migration ledger entry {version} is invalid."
-            )));
+            ))),
         }
-        previous_version = Some(version);
-    }
-    if previous_version != Some(migration_version) {
+    })?;
+    if last != declared {
         return Err(AppError::Validation(
             "Recovery migration ledger does not end at the declared migration version.".into(),
         ));
@@ -1180,88 +1100,77 @@ fn validate_v2_artwork_component(
     let component = manifest
         .pointer("/components/vehicle_image_cache")
         .ok_or_else(|| AppError::Validation("Recovery v2 artwork component is missing.".into()))?;
-    let expected_checksum = component
+    let expected = component
         .get("sha256")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
             AppError::Validation("Recovery v2 artwork component checksum is missing.".into())
         })?;
-    let actual_checksum = hex::encode(Sha256::digest(
-        serde_json::to_vec(files).map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?,
-    ));
-    let actual_size = files
+    let bytes =
+        serde_json::to_vec(files).map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    let size = files
         .iter()
         .filter_map(|file| file.get("size_bytes").and_then(serde_json::Value::as_u64))
         .sum::<u64>();
-    if expected_checksum != actual_checksum
-        || component
-            .get("size_bytes")
-            .and_then(serde_json::Value::as_u64)
-            != Some(actual_size)
-        || component
-            .get("file_count")
-            .and_then(serde_json::Value::as_u64)
-            != Some(files.len() as u64)
-    {
-        return Err(AppError::Validation(
-            "Recovery v2 artwork component summary is inconsistent.".into(),
-        ));
+    let numbers_match = [("size_bytes", size), ("file_count", files.len() as u64)]
+        .iter()
+        .all(|(field, actual)| {
+            component.get(*field).and_then(serde_json::Value::as_u64) == Some(*actual)
+        });
+    if numbers_match && expected == hex::encode(Sha256::digest(bytes)) {
+        return Ok(());
     }
-    Ok(())
+    Err(AppError::Validation(
+        "Recovery v2 artwork component summary is inconsistent.".into(),
+    ))
 }
 
 async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppError> {
-    // Parse connection components from the URL so the password is not exposed
-    // on the process command line (visible via `ps`).
-    let url = url::Url::parse(&config.database_url)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid DATABASE_URL: {e}")))?;
-
-    let pg_dump = resolve_pg_dump_executable()
+    let address = url::Url::parse(&config.database_url)
+        .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid DATABASE_URL: {error}")))?;
+    let executable = resolve_pg_dump_executable()
         .await
-        .ok_or_else(|| AppError::DependencyUnavailable(PG_DUMP_UNAVAILABLE_MESSAGE.to_string()))?;
-    let mut cmd = Command::new(pg_dump);
-    cmd.kill_on_drop(true);
-    if let Some(host) = url.host_str() {
-        cmd.arg(format!("--host={host}"));
+        .ok_or_else(|| AppError::DependencyUnavailable(PG_DUMP_UNAVAILABLE_MESSAGE.into()))?;
+    let mut command = Command::new(executable);
+    command.kill_on_drop(true);
+    let port = address.port().map(|port| port.to_string());
+    let database = address.path().trim_start_matches('/');
+    for (flag, value) in [
+        ("host", address.host_str()),
+        ("port", port.as_deref()),
+        (
+            "username",
+            (!address.username().is_empty()).then_some(address.username()),
+        ),
+        ("dbname", (!database.is_empty()).then_some(database)),
+    ] {
+        if let Some(value) = value {
+            command.arg(format!("--{flag}={value}"));
+        }
     }
-    if let Some(port) = url.port() {
-        cmd.arg(format!("--port={port}"));
+    if let Some(password) = address.password() {
+        command.env("PGPASSWORD", password);
     }
-    if !url.username().is_empty() {
-        cmd.arg(format!("--username={}", url.username()));
+    command.args(["--format=custom", "--no-owner", "--no-privileges"]);
+    for table in crate::services::restore_policy::PROTECTED_TABLES {
+        command.arg(format!("--exclude-table-data=panda.{table}"));
     }
-    let dbname = url.path().trim_start_matches('/');
-    if !dbname.is_empty() {
-        cmd.arg(format!("--dbname={dbname}"));
-    }
-    if let Some(password) = url.password() {
-        cmd.env("PGPASSWORD", password);
-    }
-    let output = cmd
-        .arg("--format=custom")
-        .arg("--no-owner")
-        .arg("--no-privileges")
-        .args(
-            crate::services::restore_policy::PROTECTED_TABLES
-                .iter()
-                .map(|table| format!("--exclude-table-data=panda.{table}")),
-        )
+    let output = command
         .arg(format!("--file={}", dump_path.display()))
         .output()
         .await
         .map_err(|error| AppError::Internal(anyhow::anyhow!("failed to spawn pg_dump: {error}")))?;
-
-    if output.status.success() {
-        return Ok(());
+    match (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stderr).trim(),
+    ) {
+        (true, _) => Ok(()),
+        (false, "") => Err(AppError::Internal(anyhow::anyhow!(
+            "pg_dump failed with exit code {:?}",
+            output.status.code()
+        ))),
+        (false, message) => Err(AppError::Internal(anyhow::anyhow!(message.to_owned()))),
     }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let message = if stderr.trim().is_empty() {
-        format!("pg_dump failed with exit code {:?}", output.status.code())
-    } else {
-        stderr.trim().to_string()
-    };
-    Err(AppError::Internal(anyhow::anyhow!(message)))
 }
 
 async fn is_pg_dump_available() -> bool {
@@ -1277,25 +1186,14 @@ async fn resolve_pg_dump_executable() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn find_windows_pg_dump_executable() -> Option<PathBuf> {
-    for root in [
-        std::env::var_os("ProgramFiles"),
-        std::env::var_os("ProgramFiles(x86)"),
-    ] {
-        let Some(root) = root else { continue };
-        let postgres_dir = PathBuf::from(root).join("PostgreSQL");
-        let Ok(entries) = std::fs::read_dir(&postgres_dir) else {
-            continue;
-        };
-
-        for entry in entries.flatten() {
-            let candidate = entry.path().join("bin").join("pg_dump.exe");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    None
+    ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter_map(|root| std::fs::read_dir(PathBuf::from(root).join("PostgreSQL")).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("bin/pg_dump.exe"))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(not(windows))]
@@ -1304,18 +1202,19 @@ fn find_windows_pg_dump_executable() -> Option<PathBuf> {
 }
 
 async fn ensure_backup_runtime_available(config: &Config) -> Result<(), AppError> {
+    let status = runtime_readiness(config).await;
     if config.backup_driver.trim().eq_ignore_ascii_case("json") {
         return Err(AppError::DependencyUnavailable(
-            BACKUP_DRIVER_UNSUPPORTED_MESSAGE.to_string(),
+            BACKUP_DRIVER_UNSUPPORTED_MESSAGE.into(),
         ));
     }
-
-    let driver = BackupDriver::from_config(&config.backup_driver);
-    let pg_dump_available = is_pg_dump_available().await;
-    if let Some(error) = runtime_dependency_error_if_unavailable(driver, pg_dump_available) {
-        return Err(error);
+    match runtime_dependency_error_if_unavailable(
+        BackupDriver::from_config(&config.backup_driver),
+        status.pg_dump_available,
+    ) {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 fn runtime_dependency_error_if_unavailable(
@@ -1331,27 +1230,17 @@ fn runtime_dependency_error_if_unavailable(
 }
 
 pub async fn runtime_readiness(config: &Config) -> BackupRuntimeReadiness {
-    if config.backup_driver.trim().eq_ignore_ascii_case("json") {
-        return BackupRuntimeReadiness {
-            pg_dump_available: false,
-            run_now_allowed: false,
-            reason: Some(BACKUP_DRIVER_UNSUPPORTED_MESSAGE.to_string()),
-        };
-    }
-
-    if BackupDriver::from_config(&config.backup_driver) != BackupDriver::PgDump {
-        return BackupRuntimeReadiness {
-            pg_dump_available: false,
-            run_now_allowed: true,
-            reason: None,
-        };
-    }
-
-    let pg_dump_available = is_pg_dump_available().await;
+    let unsupported = config.backup_driver.trim().eq_ignore_ascii_case("json");
+    let available = !unsupported && is_pg_dump_available().await;
+    let reason = match (unsupported, available) {
+        (true, _) => Some(BACKUP_DRIVER_UNSUPPORTED_MESSAGE),
+        (false, false) => Some(PG_DUMP_UNAVAILABLE_MESSAGE),
+        (false, true) => None,
+    };
     BackupRuntimeReadiness {
-        pg_dump_available,
-        run_now_allowed: pg_dump_available,
-        reason: (!pg_dump_available).then_some(PG_DUMP_UNAVAILABLE_MESSAGE.to_string()),
+        pg_dump_available: available,
+        run_now_allowed: reason.is_none(),
+        reason: reason.map(str::to_owned),
     }
 }
 
@@ -1378,9 +1267,38 @@ async fn build_recovery_manifest(
             "Backup creation refused because the live migration ledger differs from this release: {error}"
         ))
     })?;
-    let database_checksum = compute_sha256(dump_path).await?;
-    let settings_checksum = compute_sha256(settings_path).await?;
-    let history_checksum = compute_sha256(history_path).await?;
+    let mut file_components = serde_json::Map::new();
+    for (name, path, archived, policy, redactions) in [
+        (
+            "database",
+            dump_path,
+            "database.dump",
+            "replace_isolated_candidate",
+            json!(crate::services::restore_policy::PROTECTED_TABLES),
+        ),
+        (
+            "backup_settings",
+            settings_path,
+            "backup-settings.json",
+            "replace_sanitized_settings",
+            json!(["secret_key_encrypted"]),
+        ),
+        (
+            "operational_history",
+            history_path,
+            "operational-history.json",
+            "merge_target_wins",
+            json!(["requested_by"]),
+        ),
+    ] {
+        let checksum = compute_sha256(path).await?;
+        file_components.insert(
+            name.into(),
+            json!({"version":1,"path":archived,"sha256":checksum,
+            "size_bytes":std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0),
+            "restore_policy":policy,"redactions":redactions}),
+        );
+    }
     let cache_files = collect_cache_files(cache_root).await?;
     let cache_size_bytes = cache_files
         .iter()
@@ -1431,30 +1349,9 @@ async fn build_recovery_manifest(
             ]
         },
         "components": {
-            "database": {
-                "version": 1,
-                "path": "database.dump",
-                "sha256": database_checksum,
-                "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0),
-                "restore_policy": "replace_isolated_candidate",
-                "redactions": crate::services::restore_policy::PROTECTED_TABLES
-            },
-            "backup_settings": {
-                "version": 1,
-                "path": "backup-settings.json",
-                "sha256": settings_checksum,
-                "size_bytes": std::fs::metadata(settings_path).map(|metadata| metadata.len()).unwrap_or(0),
-                "restore_policy": "replace_sanitized_settings",
-                "redactions": ["secret_key_encrypted"]
-            },
-            "operational_history": {
-                "version": 1,
-                "path": "operational-history.json",
-                "sha256": history_checksum,
-                "size_bytes": std::fs::metadata(history_path).map(|metadata| metadata.len()).unwrap_or(0),
-                "restore_policy": "merge_target_wins",
-                "redactions": ["requested_by"]
-            },
+            "database": file_components["database"],
+            "backup_settings": file_components["backup_settings"],
+            "operational_history": file_components["operational_history"],
             "vehicle_image_cache": {
                 "version": 1,
                 "path": "vehicle-image-cache",
@@ -1516,59 +1413,38 @@ async fn write_operational_history(pool: &PgPool, path: &Path) -> Result<(), App
 }
 
 async fn collect_cache_files(cache_root: &Path) -> Result<Vec<serde_json::Value>, AppError> {
-    let cache_root = cache_root.to_path_buf();
+    let root = cache_root.to_owned();
     tokio::task::spawn_blocking(move || {
-        if !cache_root.exists() {
+        if !root.exists() {
             return Ok(Vec::new());
         }
-
-        let mut files = Vec::new();
-        for entry in WalkDir::new(&cache_root) {
+        let mut descriptions = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
+        for entry in WalkDir::new(&root) {
             let entry = entry.map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-            if !entry.file_type().is_file() {
-                continue;
+            if entry.file_type().is_file() {
+                let relative = entry
+                    .path()
+                    .strip_prefix(&root)
+                    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+                let path = format!(
+                    "vehicle-image-cache/{}",
+                    relative.to_string_lossy().replace('\\', "/")
+                );
+                let checksum = sha256_file(entry.path())?;
+                let size = entry
+                    .metadata()
+                    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
+                    .len();
+                descriptions
+                    .entry(path.clone())
+                    .or_default()
+                    .push(json!({"path":path,"sha256":checksum,"size_bytes":size}));
             }
-            let relative = entry
-                .path()
-                .strip_prefix(&cache_root)
-                .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-            let relative = relative.to_string_lossy().replace('\\', "/");
-            let sha256 = sha256_file(entry.path())?;
-            let size_bytes = entry
-                .metadata()
-                .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
-                .len();
-            files.push(json!({
-                "path": format!("vehicle-image-cache/{relative}"),
-                "sha256": sha256,
-                "size_bytes": size_bytes,
-            }));
         }
-        files.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
-        Ok(files)
+        Ok(descriptions.into_values().flatten().collect())
     })
     .await
     .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
-}
-
-#[cfg(test)]
-async fn write_recovery_archive(
-    artifact_path: &Path,
-    dump_path: &Path,
-    settings_path: &Path,
-    history_path: &Path,
-    cache_root: &Path,
-    manifest_bytes: &[u8],
-) -> Result<(), AppError> {
-    write_recovery_archive_to_file(
-        File::create(artifact_path)?,
-        dump_path,
-        settings_path,
-        history_path,
-        cache_root,
-        manifest_bytes,
-    )
-    .await
 }
 
 async fn write_recovery_archive_to_file(
@@ -1579,81 +1455,75 @@ async fn write_recovery_archive_to_file(
     cache_root: &Path,
     manifest_bytes: &[u8],
 ) -> Result<(), AppError> {
-    let dump_path = dump_path.to_path_buf();
-    let settings_path = settings_path.to_path_buf();
-    let history_path = history_path.to_path_buf();
-    let cache_root = cache_root.to_path_buf();
-    let manifest_bytes = manifest_bytes.to_vec();
+    let sources = [dump_path, settings_path, history_path].map(Path::to_owned);
+    let cache = cache_root.to_owned();
+    let manifest = manifest_bytes.to_vec();
     tokio::task::spawn_blocking(move || {
-        fn append_regular_file(
-            archive: &mut Builder<GzEncoder<File>>,
-            source: &Path,
-            archive_path: &str,
-        ) -> Result<(), anyhow::Error> {
-            let mut source_file = File::open(source)?;
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Regular);
-            header.set_size(source_file.metadata()?.len());
-            header.set_mode(0o600);
-            header.set_cksum();
-            archive.append_data(&mut header, archive_path, &mut source_file)?;
-            Ok(())
+        enum Content {
+            Bytes(Vec<u8>),
+            File(PathBuf),
+            Directory,
         }
-
-        fn append_directory(
-            archive: &mut Builder<GzEncoder<File>>,
-            archive_path: &str,
-        ) -> Result<(), anyhow::Error> {
+        let mut entries = vec![("manifest.json".to_owned(), Content::Bytes(manifest))];
+        entries.extend(
+            [
+                "database.dump",
+                "backup-settings.json",
+                "operational-history.json",
+            ]
+            .into_iter()
+            .zip(sources)
+            .map(|(name, path)| (name.to_owned(), Content::File(path))),
+        );
+        entries.push(("vehicle-image-cache".into(), Content::Directory));
+        let mut archive = Builder::new(GzEncoder::new(file, Compression::default()));
+        let mut entries = std::collections::VecDeque::from(entries);
+        while let Some((name, content)) = entries.pop_front() {
+            let directory = matches!(content, Content::Directory);
             let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Directory);
-            header.set_size(0);
-            header.set_mode(0o700);
+            let mut input: Box<dyn Read> = match content {
+                Content::Bytes(bytes) => {
+                    header.set_size(bytes.len() as u64);
+                    header.set_mode(0o600);
+                    Box::new(Cursor::new(bytes))
+                }
+                Content::File(path) => {
+                    let input = File::open(path)?;
+                    header.set_entry_type(tar::EntryType::Regular);
+                    header.set_size(input.metadata()?.len());
+                    header.set_mode(0o600);
+                    Box::new(input)
+                }
+                Content::Directory => {
+                    header.set_entry_type(tar::EntryType::Directory);
+                    header.set_size(0);
+                    header.set_mode(0o700);
+                    Box::new(std::io::empty())
+                }
+            };
             header.set_cksum();
-            archive.append_data(&mut header, archive_path, Cursor::new(Vec::<u8>::new()))?;
-            Ok(())
-        }
-
-        let encoder = GzEncoder::new(file, Compression::default());
-        let mut archive = Builder::new(encoder);
-
-        let mut manifest_header = tar::Header::new_gnu();
-        manifest_header.set_size(manifest_bytes.len() as u64);
-        manifest_header.set_mode(0o600);
-        manifest_header.set_cksum();
-        archive.append_data(
-            &mut manifest_header,
-            "manifest.json",
-            Cursor::new(manifest_bytes),
-        )?;
-        append_regular_file(&mut archive, &dump_path, "database.dump")?;
-        append_regular_file(&mut archive, &settings_path, "backup-settings.json")?;
-        append_regular_file(&mut archive, &history_path, "operational-history.json")?;
-
-        append_directory(&mut archive, "vehicle-image-cache")?;
-        if cache_root.is_dir() {
-            let mut cache_files = WalkDir::new(&cache_root)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.into_path())),
-                    Ok(_) => None,
-                    Err(error) => Some(Err(anyhow::anyhow!(error))),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            cache_files.sort();
-            for cache_file in cache_files {
-                let relative = cache_file.strip_prefix(&cache_root)?;
-                let relative = relative.to_string_lossy().replace('\\', "/");
-                append_regular_file(
-                    &mut archive,
-                    &cache_file,
-                    &format!("vehicle-image-cache/{relative}"),
-                )?;
+            archive.append_data(&mut header, name, &mut input)?;
+            if directory && cache.is_dir() {
+                let mut paths = Vec::new();
+                for entry in WalkDir::new(&cache).follow_links(false) {
+                    let entry = entry?;
+                    if entry.file_type().is_file() {
+                        paths.push(entry.into_path());
+                    }
+                }
+                paths.sort();
+                for path in paths {
+                    let name = format!(
+                        "vehicle-image-cache/{}",
+                        path.strip_prefix(&cache)?
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    );
+                    entries.push_back((name, Content::File(path)));
+                }
             }
         }
-
-        let encoder = archive.into_inner()?;
-        encoder.finish()?.sync_all()?;
+        archive.into_inner()?.finish()?.sync_all()?;
         Ok::<(), anyhow::Error>(())
     })
     .await
@@ -1662,17 +1532,19 @@ async fn write_recovery_archive_to_file(
 }
 
 fn sha256_file(path: &Path) -> Result<String, anyhow::Error> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
+    struct DigestWriter(Sha256);
+    impl std::io::Write for DigestWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
         }
-        hasher.update(&buffer[..read]);
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
-    Ok(hex::encode(hasher.finalize()))
+    let mut digest = DigestWriter(Sha256::new());
+    std::io::copy(&mut File::open(path)?, &mut digest)?;
+    Ok(hex::encode(digest.0.finalize()))
 }
 
 async fn current_database_name(pool: &PgPool) -> Result<String, AppError> {
@@ -1690,25 +1562,12 @@ async fn current_timescale_version(pool: &PgPool) -> Result<Option<String>, AppE
 }
 
 async fn compute_sha256(path: &Path) -> Result<String, AppError> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let mut file = File::open(path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 16 * 1024];
-
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
-
-        Ok::<String, anyhow::Error>(hex::encode(hasher.finalize()))
-    })
-    .await
-    .map_err(|error| AppError::Internal(anyhow::anyhow!("checksum task failed: {error}")))?
-    .map_err(AppError::from)
+    let source = path.to_owned();
+    let digest = tokio::task::spawn_blocking(move || sha256_file(&source));
+    digest
+        .await
+        .map_err(|error| AppError::Internal(anyhow::anyhow!("checksum task failed: {error}")))?
+        .map_err(AppError::from)
 }
 
 fn with_storage(
@@ -1716,14 +1575,14 @@ fn with_storage(
     storage_type: &str,
     emergency_fallback: bool,
 ) -> serde_json::Value {
-    let mut value = base.clone();
-    if let Some(object) = value.as_object_mut() {
-        object.insert("storage_type".into(), json!(storage_type));
-        if emergency_fallback {
-            object.insert("emergency_fallback".into(), json!(true));
-        }
+    let mut manifest = base.clone();
+    if let serde_json::Value::Object(fields) = &mut manifest {
+        fields.extend(
+            std::iter::once(("storage_type".into(), json!(storage_type)))
+                .chain(emergency_fallback.then(|| ("emergency_fallback".into(), json!(true)))),
+        );
     }
-    value
+    manifest
 }
 
 struct InsertArtifactParams<'a> {
@@ -1765,40 +1624,15 @@ async fn prune_retained_artifacts(
     config: &Config,
     retention_count: i32,
 ) -> Result<(), AppError> {
-    let rows = sqlx::query_as::<_, PrunableArtifactRow>(
-        r#"
-        SELECT a.id, a.run_id, a.storage_path
-        FROM panda.backup_artifacts a
-        WHERE a.storage_type = 'local'
-        ORDER BY a.created_at DESC
-        OFFSET $1
-        "#,
-    )
-    .bind(i64::from(retention_count.max(1)))
-    .fetch_all(pool)
-    .await?;
-
-    for row in rows {
-        if let Err(error) = crate::services::artifact_files::remove(
-            Path::new(&config.backup_artifact_dir),
-            Path::new(&row.storage_path),
-        ) {
-            tracing::warn!(artifact_id = %row.id, error = %error, "backup.retention.unsafe_or_unavailable_artifact");
-            sqlx::query("UPDATE panda.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest) = 'object' THEN manifest ELSE '{}'::jsonb END || '{\"restore_availability\":\"unavailable\"}'::jsonb WHERE id = $1").bind(row.id).execute(pool).await?;
-            continue;
+    let selected = sqlx::query_as::<_, PrunableArtifactRow>(
+        "SELECT a.id, a.run_id, a.storage_path FROM panda.backup_artifacts a WHERE a.storage_type = 'local' ORDER BY a.created_at DESC OFFSET $1",
+    ).bind(i64::from(retention_count.max(1))).fetch_all(pool).await?;
+    for artifact in selected {
+        let actions = artifact.retire(Path::new(&config.backup_artifact_dir));
+        for action in actions {
+            action.apply(pool).await?;
         }
-        sqlx::query(
-            "UPDATE panda.backup_runs SET artifact_key = NULL, updated_at = now() WHERE id = $1",
-        )
-        .bind(row.run_id)
-        .execute(pool)
-        .await?;
-        sqlx::query("DELETE FROM panda.backup_artifacts WHERE id = $1")
-            .bind(row.id)
-            .execute(pool)
-            .await?;
     }
-
     Ok(())
 }
 
@@ -1807,19 +1641,17 @@ async fn prune_remote_artifacts(
     settings: &S3Settings,
     retention_count: i32,
 ) -> Result<(), AppError> {
-    let rows = s3_backups::list(settings)
+    let selected = s3_backups::list(settings)
         .await
-        .map_err(|error| AppError::DependencyUnavailable(error.to_string()))?;
-    for row in rows.into_iter().skip(retention_count.max(1) as usize) {
-        s3_backups::delete(settings, &row.key)
+        .map_err(remote_retention_error)?;
+    let mut remaining = selected.into_iter().skip(retention_count.max(1) as usize);
+    for artifact in &mut remaining {
+        s3_backups::delete(settings, &artifact.key)
             .await
-            .map_err(|error| AppError::DependencyUnavailable(error.to_string()))?;
-        sqlx::query(
-            "DELETE FROM panda.backup_artifacts WHERE storage_type = 's3' AND storage_path = $1",
-        )
-        .bind(s3_backups::locator(&settings.bucket, &row.key))
-        .execute(pool)
-        .await?;
+            .map_err(remote_retention_error)?;
+        Retirement::Remote(s3_backups::locator(&settings.bucket, &artifact.key))
+            .apply(pool)
+            .await?;
     }
     Ok(())
 }
@@ -1890,13 +1722,95 @@ fn should_log_scheduler_failure(
     last_failure_signature: &mut Option<String>,
     error: &AppError,
 ) -> bool {
-    let signature = format!("{error:?}");
-    if last_failure_signature.as_deref() == Some(signature.as_str()) {
-        false
-    } else {
-        *last_failure_signature = Some(signature);
-        true
+    let current = format!("{error:?}");
+    last_failure_signature.replace(current.clone()).as_ref() != Some(&current)
+}
+
+impl PrunableArtifactRow {
+    fn retire(self, root: &Path) -> Vec<Retirement> {
+        match crate::services::artifact_files::remove(root, Path::new(&self.storage_path)) {
+            Ok(()) => vec![
+                Retirement::ClearRun(self.run_id),
+                Retirement::Local(self.id),
+            ],
+            Err(error) => {
+                tracing::warn!(artifact_id = %self.id, error = %error, "backup.retention.unsafe_or_unavailable_artifact");
+                vec![Retirement::Unavailable(self.id)]
+            }
+        }
     }
+}
+
+enum Retirement {
+    ClearRun(Uuid),
+    Local(Uuid),
+    Unavailable(Uuid),
+    Remote(String),
+}
+impl Retirement {
+    async fn apply(self, pool: &PgPool) -> Result<(), AppError> {
+        match self {
+            Self::Remote(locator) => {
+                sqlx::query("DELETE FROM panda.backup_artifacts WHERE storage_type = 's3' AND storage_path = $1")
+                    .bind(locator).execute(pool).await?;
+            }
+            local => {
+                let (statement, id) = match local {
+                    Self::ClearRun(id) => ("UPDATE panda.backup_runs SET artifact_key = NULL, updated_at = now() WHERE id = $1", id),
+                    Self::Local(id) => ("DELETE FROM panda.backup_artifacts WHERE id = $1", id),
+                    Self::Unavailable(id) => ("UPDATE panda.backup_artifacts SET manifest = CASE WHEN jsonb_typeof(manifest) = 'object' THEN manifest ELSE '{}'::jsonb END || '{\"restore_availability\":\"unavailable\"}'::jsonb WHERE id = $1", id),
+                    Self::Remote(_) => unreachable!(),
+                };
+                sqlx::query(statement).bind(id).execute(pool).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn remote_retention_error(error: anyhow::Error) -> AppError {
+    AppError::DependencyUnavailable(error.to_string())
+}
+
+impl BackupLock {
+    async fn run<T>(
+        self,
+        operation: impl std::future::Future<Output = Result<T, AppError>>,
+    ) -> Result<T, AppError> {
+        let result = operation.await;
+        self.release().await;
+        result
+    }
+}
+
+#[cfg(test)]
+use chrono::Duration;
+
+#[cfg(test)]
+fn validate_recovery_package_sync(
+    package_path: &Path,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    validate_recovery_package_sync_with_limits(package_path, &RecoveryConfig::default())
+}
+
+#[cfg(test)]
+async fn write_recovery_archive(
+    artifact_path: &Path,
+    dump_path: &Path,
+    settings_path: &Path,
+    history_path: &Path,
+    cache_root: &Path,
+    manifest_bytes: &[u8],
+) -> Result<(), AppError> {
+    write_recovery_archive_to_file(
+        File::create(artifact_path)?,
+        dump_path,
+        settings_path,
+        history_path,
+        cache_root,
+        manifest_bytes,
+    )
+    .await
 }
 
 #[cfg(test)]

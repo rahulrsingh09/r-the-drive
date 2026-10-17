@@ -87,31 +87,25 @@ struct VerifiedLocalPackage {
 
 impl LocalCandidate {
     async fn admit(pool: &PgPool, path: PathBuf) -> Result<Option<Self>, AppError> {
-        if let Some(run_id) = backup_run_id_from_artifact_path(&path) {
-            let active: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM panda.backup_runs WHERE id = $1 AND status IN ('pending', 'running'))",
-            ).bind(run_id).fetch_one(pool).await?;
+        if let Some(run) = backup_run_id_from_artifact_path(&path) {
+            let active: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM panda.backup_runs WHERE id = $1 AND status IN ('pending', 'running'))")
+                .bind(run).fetch_one(pool).await?;
             if active {
                 return Ok(None);
             }
         }
         let storage_path = path.to_string_lossy().into_owned();
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM panda.backup_artifacts WHERE storage_type <> 's3' AND storage_path = $1)",
+        let (exists, unavailable): (bool, bool) = sqlx::query_as(
+            "SELECT count(*) > 0, COALESCE(bool_or(manifest->>'restore_availability'='unavailable'), false) FROM panda.backup_artifacts WHERE storage_type <> 's3' AND storage_path=$1",
         ).bind(&storage_path).fetch_one(pool).await?;
-        if exists {
-            let unavailable: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM panda.backup_artifacts WHERE storage_type <> 's3' AND storage_path=$1 AND manifest->>'restore_availability'='unavailable')",
-            ).bind(&storage_path).fetch_one(pool).await?;
-            if !unavailable {
-                return Ok(None);
-            }
+        match (exists, unavailable) {
+            (true, false) => Ok(None),
+            _ => Ok(Some(Self {
+                path,
+                storage_path,
+                repair: exists,
+            })),
         }
-        Ok(Some(Self {
-            path,
-            storage_path,
-            repair: exists,
-        }))
     }
 
     async fn verify(self, config: &Config) -> Option<VerifiedLocalPackage> {
@@ -203,9 +197,9 @@ impl VerifiedLocalPackage {
 }
 
 fn backup_run_id_from_artifact_path(path: &Path) -> Option<Uuid> {
-    let file_name = path.file_name()?.to_str()?.strip_suffix(".rma.tar.gz")?;
-    let (_, run_id) = file_name.rsplit_once('-')?;
-    Uuid::parse_str(run_id).ok()
+    let name = path.file_name()?.to_str()?.strip_suffix(".rma.tar.gz")?;
+    name.rsplit_once('-')
+        .and_then(|(_, id)| Uuid::parse_str(id).ok())
 }
 
 #[cfg(test)]

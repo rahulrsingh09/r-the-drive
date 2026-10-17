@@ -162,32 +162,64 @@ async fn probe_pg_restore(mut command: Command) -> bool {
 
 #[cfg(windows)]
 fn find_windows_pg_restore() -> Option<PathBuf> {
-    for root in [
-        std::env::var_os("ProgramFiles"),
-        std::env::var_os("ProgramFiles(x86)"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let postgres = PathBuf::from(root).join("PostgreSQL");
-        let Ok(entries) = std::fs::read_dir(postgres) else {
-            continue;
-        };
-        let mut versions = entries.filter_map(Result::ok).collect::<Vec<_>>();
-        versions.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
-        for version in versions {
-            let candidate = version.path().join("bin").join("pg_restore.exe");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    postgres_restore_installation(
+        ["ProgramFiles", "ProgramFiles(x86)"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn postgres_restore_installation(roots: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    roots.into_iter().find_map(|root| {
+        let entries = std::fs::read_dir(root.join("PostgreSQL")).ok()?;
+        let candidates = entries.filter_map(Result::ok).filter_map(|entry| {
+            let path = entry.path().join("bin").join("pg_restore.exe");
+            path.is_file().then(|| (entry.file_name(), path))
+        });
+        candidates
+            .max_by(|left, right| left.0.cmp(&right.0))
+            .map(|(_, path)| path)
+    })
 }
 
 #[cfg(not(windows))]
 fn find_windows_pg_restore() -> Option<PathBuf> {
     None
+}
+
+#[cfg(test)]
+mod full_replacement_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn installation_selection_preserves_root_priority_and_lexical_versions() {
+        let directory = tempfile::tempdir().unwrap();
+        let roots = ["primary", "fallback"].map(|name| directory.path().join(name));
+        let expected = [
+            roots[0].join("PostgreSQL/9/bin/pg_restore.exe"),
+            roots[0].join("PostgreSQL/17/bin/pg_restore.exe"),
+            roots[1].join("PostgreSQL/99/bin/pg_restore.exe"),
+        ];
+        for path in &expected {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"synthetic").unwrap();
+        }
+        std::fs::create_dir_all(roots[0].join("PostgreSQL/zz/bin")).unwrap();
+        for path in expected {
+            assert_eq!(
+                postgres_restore_installation(roots.clone()),
+                Some(path.clone())
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+        assert_eq!(postgres_restore_installation(roots), None);
+        assert_eq!(
+            postgres_restore_installation([directory.path().join("missing")]),
+            None
+        );
+    }
 }
 
 #[cfg(test)]

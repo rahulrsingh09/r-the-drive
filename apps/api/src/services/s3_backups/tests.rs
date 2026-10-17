@@ -72,3 +72,34 @@ async fn garage_upload_list_download_delete_round_trip() {
         .any(|row| row.key == key));
     let _ = fs::remove_dir_all(directory).await;
 }
+
+
+#[test]
+fn full_replacement_locator_and_prefix_contract() {
+    assert_eq!(
+        super::locator(" bucket ", "///one/two"),
+        "s3://bucket/one/two"
+    );
+    assert_eq!(
+        super::key_from_locator(" bucket ", "s3://bucket/a"),
+        Some("a")
+    );
+    assert_eq!(
+        super::key_from_locator("bucket", "s3://bucket-other/a"),
+        None
+    );
+    for (prefix, key, allowed) in [
+        ("a", "a/x.rma.tar.gz", true),
+        ("a", "ab/x.rma.tar.gz", false),
+        ("a", "a.rma.tar.gz", false),
+        ("", "x.rma.tar.gz", true),
+        ("", "a/../x.rma.tar.gz", false),
+        ("", "a/.x.rma.tar.gz", false),
+    ] {
+        assert_eq!(
+            super::key_belongs_to_prefix(prefix, key),
+            allowed,
+            "{prefix}/{key}"
+        );
+    }
+}

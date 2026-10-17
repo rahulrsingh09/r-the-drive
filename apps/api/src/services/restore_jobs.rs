@@ -98,7 +98,7 @@ pub struct BackupCatalogSnapshot {
     pub restore_requests: Vec<BackupRestoreRequestSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct BackupRunSnapshot {
     pub id: Uuid,
     pub trigger: String,
@@ -115,7 +115,7 @@ pub struct BackupRunSnapshot {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct BackupArtifactSnapshot {
     pub id: Uuid,
     pub run_id: Option<Uuid>,
@@ -128,7 +128,7 @@ pub struct BackupArtifactSnapshot {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct BackupRestoreRequestSnapshot {
     pub id: Uuid,
     pub artifact_id: Uuid,
@@ -229,42 +229,15 @@ pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, Ap
             "Recovery catalog snapshot exceeds the operational history budget.".into(),
         ));
     }
-    let runs = sqlx::query_as::<_, (Uuid, String, String, String, i16, Option<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
+    let runs = sqlx::query_as::<_, BackupRunSnapshot>(
         "SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at FROM panda.backup_runs ORDER BY created_at",
-    )
-    .fetch_all(&mut *transaction)
-    .await?
-    .into_iter()
-    .map(|row| BackupRunSnapshot {
-        id: row.0,
-        trigger: row.1,
-        status: row.2,
-        phase: row.3,
-        progress_percent: row.4,
-        artifact_key: row.5,
-        started_at: row.6,
-        completed_at: row.7,
-        error_message: row.8,
-        created_at: row.9,
-        updated_at: row.10,
-    })
-    .collect();
-    let artifacts = sqlx::query_as::<_, (Uuid, Option<Uuid>, String, String, String, i64, String, Value, DateTime<Utc>)>(
+    ).fetch_all(&mut *transaction).await?;
+    let artifacts = sqlx::query_as::<_, BackupArtifactSnapshot>(
         "SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at FROM panda.backup_artifacts ORDER BY created_at",
-    )
-    .fetch_all(&mut *transaction)
-    .await?
-    .into_iter()
-    .map(|row| BackupArtifactSnapshot { id: row.0, run_id: row.1, storage_type: row.2, file_name: row.3, storage_path: row.4, size_bytes: row.5, checksum_sha256: row.6, manifest: row.7, created_at: row.8 })
-    .collect();
-    let restore_requests = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
+    ).fetch_all(&mut *transaction).await?;
+    let restore_requests = sqlx::query_as::<_, BackupRestoreRequestSnapshot>(
         "SELECT id, artifact_id, status, confirmation_phrase, notes, error_message, requested_at, updated_at FROM panda.backup_restore_requests ORDER BY requested_at",
-    )
-    .fetch_all(&mut *transaction)
-    .await?
-    .into_iter()
-    .map(|row| BackupRestoreRequestSnapshot { id: row.0, artifact_id: row.1, status: row.2, confirmation_phrase: row.3, notes: row.4, error_message: row.5, requested_at: row.6, updated_at: row.7 })
-    .collect();
+    ).fetch_all(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(BackupCatalogSnapshot {
         runs,
@@ -320,14 +293,19 @@ pub fn token_matches(job: &RestoreJob, token: &str) -> bool {
 /// reveal how many leading bytes were correct. Length is folded into the
 /// accumulator so malformed tokens do not get a shorter comparison path.
 pub fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
-    let mut difference = u8::from(left.len() != right.len());
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_byte = left.get(index).copied().unwrap_or(0);
-        let right_byte = right.get(index).copied().unwrap_or(0);
-        difference |= left_byte ^ right_byte;
-    }
-    difference == 0
+    let width = left.len().max(right.len());
+    let padded_left = left.iter().copied().chain(std::iter::repeat(0)).take(width);
+    let padded_right = right
+        .iter()
+        .copied()
+        .chain(std::iter::repeat(0))
+        .take(width);
+    padded_left
+        .zip(padded_right)
+        .fold(u8::from(left.len() != right.len()), |difference, (a, b)| {
+            difference | (a ^ b)
+        })
+        == 0
 }
 
 pub fn agent_key_path(config: &Config) -> PathBuf {
@@ -338,20 +316,25 @@ pub async fn agent_readiness(config: &Config) -> Result<(), String> {
     let key = fs::read_to_string(agent_key_path(config))
         .await
         .map_err(|error| format!("restore supervisor key is unavailable: {error}"))?;
-    if key.trim().is_empty() {
-        return Err("restore supervisor key is empty".into());
+    match key.trim() {
+        "" => Err("restore supervisor key is empty".into()),
+        _ => {
+            let request = reqwest::Client::new()
+                .get(format!(
+                    "{}/health",
+                    config.restore_agent_url.trim_end_matches('/')
+                ))
+                .timeout(std::time::Duration::from_secs(2));
+            let response = request
+                .send()
+                .await
+                .map_err(|error| format!("restore supervisor is not reachable: {error}"))?;
+            response
+                .error_for_status()
+                .map(|_| ())
+                .map_err(|error| format!("restore supervisor health check failed: {error}"))
+        }
     }
-
-    let health_url = format!("{}/health", config.restore_agent_url.trim_end_matches('/'));
-    reqwest::Client::new()
-        .get(health_url)
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await
-        .map_err(|error| format!("restore supervisor is not reachable: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("restore supervisor health check failed: {error}"))?;
-    Ok(())
 }
 
 pub async fn agent_is_ready(config: &Config) -> bool {
@@ -560,30 +543,33 @@ async fn merge_catalog_snapshot_in(
 }
 
 fn normalized_backup_run_progress(run: &BackupRunSnapshot) -> (&str, i16) {
-    if !run.phase.is_empty() {
-        return (run.phase.as_str(), run.progress_percent.clamp(0, 100));
-    }
-
-    match run.status.as_str() {
-        "succeeded" => ("completed", 100),
-        "failed" | "canceled" => ("failed", run.progress_percent.clamp(0, 99)),
-        _ => ("queued", run.progress_percent.clamp(0, 99)),
-    }
+    let (phase, ceiling, fixed) = match (run.phase.as_str(), run.status.as_str()) {
+        ("", "succeeded") => ("completed", 100, Some(100)),
+        ("", "failed" | "canceled") => ("failed", 99, None),
+        ("", _) => ("queued", 99, None),
+        (phase, _) => (phase, 100, None),
+    };
+    (
+        phase,
+        fixed.unwrap_or_else(|| run.progress_percent.clamp(0, ceiling)),
+    )
 }
 
 pub fn mark_source_artifact_availability(
     source: &mut BackupCatalogSnapshot,
     target: Option<&BackupCatalogSnapshot>,
 ) {
-    let _ = target; // Source claims never authorize access. Verified target rows merge last.
+    let _ = target;
     for artifact in &mut source.artifacts {
-        if !artifact.manifest.is_object() {
-            artifact.manifest = serde_json::json!({});
-        }
-        artifact.manifest.as_object_mut().unwrap().insert(
+        let mut fields = match std::mem::take(&mut artifact.manifest) {
+            Value::Object(fields) => fields,
+            _ => serde_json::Map::new(),
+        };
+        fields.insert(
             "restore_availability".into(),
             Value::String("unavailable".into()),
         );
+        artifact.manifest = Value::Object(fields);
     }
 }
 
@@ -612,47 +598,23 @@ async fn insert_reconciled_artifact(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("recovery-package.rma.tar.gz");
-    let package_format = validated
-        .manifest
-        .get("format")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    sqlx::query(
-        r#"
-        INSERT INTO panda.backup_runs (
-            id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, created_at, updated_at
-        ) VALUES ($1, $2, 'succeeded', 'completed', 100, NULL, $3, now(), now(), now(), now())
+    let manifest = serde_json::json!({
+        "artifact_kind":"recovery_package", "format":validated.manifest.get("format").and_then(Value::as_str).unwrap_or("unknown"),
+        "package":validated.manifest,
+    });
+    sqlx::query(r#"
+        WITH restored_run AS (
+            INSERT INTO panda.backup_runs
+                (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, created_at, updated_at)
+            VALUES ($1, $2, 'succeeded', 'completed', 100, NULL, $3, now(), now(), now(), now())
+            ON CONFLICT (id) DO NOTHING RETURNING id
+        )
+        INSERT INTO panda.backup_artifacts
+            (id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest)
+        SELECT $4, $1, $5, $6, $3, $7, $8, $9 FROM (SELECT count(*) FROM restored_run) AS applied
         ON CONFLICT (id) DO NOTHING
-        "#,
-    )
-    .bind(run_id)
-    .bind(trigger)
-    .bind(path)
-    .execute(&mut *connection)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO panda.backup_artifacts (
-            id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (id) DO NOTHING
-        "#,
-    )
-    .bind(artifact_id)
-    .bind(run_id)
-    .bind(storage_type)
-    .bind(file_name)
-    .bind(path)
-    .bind(validated.size_bytes)
-    .bind(&validated.checksum_sha256)
-    .bind(serde_json::json!({
-        "artifact_kind": "recovery_package",
-        "format": package_format,
-        "package": validated.manifest,
-    }))
-    .execute(&mut *connection)
-    .await?;
+    "#).bind(run_id).bind(trigger).bind(path).bind(artifact_id).bind(storage_type).bind(file_name)
+        .bind(validated.size_bytes).bind(&validated.checksum_sha256).bind(manifest).execute(connection).await?;
     Ok(())
 }
 
@@ -660,13 +622,13 @@ pub fn jobs_dir(config: &Config) -> PathBuf {
     Path::new(&config.backup_artifact_dir).join(".restore-jobs")
 }
 
+fn token_hash(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
 #[cfg(test)]
 fn job_path(config: &Config, id: Uuid) -> PathBuf {
     jobs_dir(config).join(format!("{id}.json"))
-}
-
-fn token_hash(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
 }
 
 #[cfg(test)]

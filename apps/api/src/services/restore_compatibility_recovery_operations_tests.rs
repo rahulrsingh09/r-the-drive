@@ -468,3 +468,76 @@ async fn baseline_probe_disables_telemetry_only_in_its_scratch_database() {
     assert_eq!(before, after);
     db.close().await;
 }
+
+
+#[test]
+fn full_replacement_version_suffix_and_missing_component_contract() {
+    for (version, expected) in [
+        ("2.28", Some((2, 28, 0))),
+        ("2.28.3-dev.1", Some((2, 28, 3))),
+        ("2.28.03suffix", Some((2, 28, 3))),
+        ("2.28.", None),
+        ("2.28.preview", None),
+        ("2", None),
+        (" 2.28.3", None),
+        ("2.28.3.ignored", Some((2, 28, 3))),
+    ] {
+        assert_eq!(super::parse_version_triplet(version), expected, "{version}");
+    }
+    let empty = super::source_profile_from_manifest(&serde_json::json!({})).unwrap();
+    assert_eq!(empty.postgres_major, None);
+    assert_eq!(empty.migration_version, 0);
+    assert!(empty.migration_ledger.is_empty());
+    assert!(empty.migration_ledger_successful);
+    assert!(super::source_profile_from_manifest(
+        &serde_json::json!({"source":{"migration_ledger":null}})
+    )
+    .is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires the uniquely named disposable recovery operations database"]
+async fn full_replacement_cancellation_does_not_wait_for_the_proof_callback() {
+    let db = SyntheticDatabase::new().await;
+    let url = db.url.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (finish, wait) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        baseline_schema_fingerprint_after_create(&url, |name| async move {
+            started.send(name).unwrap();
+            let _ = wait.await;
+        })
+        .await
+    });
+    let name = ready.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    let removed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)")
+                    .bind(&name)
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+            if !exists {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let _ = finish.send(());
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"
+    )))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    db.close().await;
+    assert!(
+        removed,
+        "cancelled proof waited for its blocked proof callback"
+    );
+}

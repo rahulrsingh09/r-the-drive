@@ -439,3 +439,142 @@ fn admission_truncation_and_input_growth_fail_closed() {
         Err(AppError::RecoveryTooLarge(_))
     ));
 }
+
+
+#[tokio::test]
+async fn full_replacement_archive_bytes_and_headers() {
+    use std::io::Read;
+    let root = tempfile::tempdir().unwrap();
+    let dump = root.path().join("database.dump");
+    let settings = root.path().join("settings.json");
+    let history = root.path().join("history.json");
+    let cache = root.path().join("cache");
+    std::fs::create_dir_all(cache.join("nested")).unwrap();
+    for (path, bytes) in [
+        (dump.clone(), &b"PGDMP\0\x01synthetic"[..]),
+        (settings.clone(), &b"{\"present\":false}"[..]),
+        (
+            history.clone(),
+            &b"{\"runs\":[],\"artifacts\":[],\"restore_requests\":[]}"[..],
+        ),
+        (cache.join("z.png"), &b"z-artwork"[..]),
+        (cache.join("nested/a.png"), &b"a-artwork"[..]),
+    ] {
+        std::fs::write(path, bytes).unwrap();
+    }
+    let destination = root.path().join("archive.rma.tar.gz");
+    super::write_recovery_archive(
+        &destination,
+        &dump,
+        &settings,
+        &history,
+        &cache,
+        b"{\"format\":\"fixture\"}",
+    )
+    .await
+    .unwrap();
+    let compressed = std::fs::read(&destination).unwrap();
+    let checksum = hex::encode(sha2::Sha256::digest(&compressed));
+    assert_eq!(
+        checksum,
+        "aadf817de0f96fac9f0a1514defd93f2111a44e4b5def9c939f2cc4e3478af5f"
+    );
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(compressed.as_slice()));
+    let mut entries = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        entries.push((
+            entry.path().unwrap().to_string_lossy().into_owned(),
+            entry.header().mode().unwrap(),
+            [
+                &entry.header().as_bytes()[108..124],
+                &entry.header().as_bytes()[136..148],
+            ]
+            .concat(),
+            entry.header().as_bytes()[156],
+            bytes,
+        ));
+    }
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "manifest.json".into(),
+                0o600,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                0,
+                b"{\"format\":\"fixture\"}".to_vec()
+            ),
+            (
+                "database.dump".into(),
+                0o600,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                b'0',
+                b"PGDMP\0\x01synthetic".to_vec()
+            ),
+            (
+                "backup-settings.json".into(),
+                0o600,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                b'0',
+                b"{\"present\":false}".to_vec()
+            ),
+            (
+                "operational-history.json".into(),
+                0o600,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                b'0',
+                b"{\"runs\":[],\"artifacts\":[],\"restore_requests\":[]}".to_vec()
+            ),
+            (
+                "vehicle-image-cache".into(),
+                0o700,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                b'5',
+                vec![]
+            ),
+            (
+                "vehicle-image-cache/nested/a.png".into(),
+                0o600,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                b'0',
+                b"a-artwork".to_vec()
+            ),
+            (
+                "vehicle-image-cache/z.png".into(),
+                0o600,
+                [&[0_u8; 16][..], &b"00000000000\0"[..]].concat(),
+                b'0',
+                b"z-artwork".to_vec()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn full_replacement_ledger_failure_precedence() {
+    for (source, message) in [
+        (
+            serde_json::json!({}),
+            "Recovery migration ledger is invalid.",
+        ),
+        (
+            serde_json::json!({"migration_ledger":[]}),
+            "Recovery migration ledger is incomplete.",
+        ),
+        (
+            serde_json::json!({"migration_version":2,"migration_ledger":[{"version":1,"checksum_sha384":"x"},{"version":1,"checksum_sha384":"y"}]}),
+            "Recovery migration ledger entry 1 is invalid.",
+        ),
+        (
+            serde_json::json!({"migration_version":2,"migration_ledger":[{"version":1,"checksum_sha384":"x"}]}),
+            "Recovery migration ledger does not end at the declared migration version.",
+        ),
+    ] {
+        let error = super::validate_migration_ledger_shape(&serde_json::json!({"source":source}))
+            .unwrap_err();
+        assert!(matches!(error, crate::errors::AppError::Validation(actual) if actual == message));
+    }
+}

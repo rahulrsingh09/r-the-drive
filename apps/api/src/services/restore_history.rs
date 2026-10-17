@@ -18,15 +18,14 @@ struct BoundedRead {
 }
 impl Read for BoundedRead {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let length = buffer.len().min(self.remaining.saturating_add(1) as usize);
-        let read = self.file.read(&mut buffer[..length])?;
-        if read as u64 > self.remaining {
-            return Err(std::io::Error::other(
-                "recovery metadata exceeds its byte limit",
-            ));
-        }
-        self.remaining -= read as u64;
-        Ok(read)
+        let allowance = usize::try_from(self.remaining).unwrap_or(usize::MAX);
+        let request = buffer.len().min(allowance.saturating_add(1));
+        let count = self.file.read(&mut buffer[..request])?;
+        self.remaining = self
+            .remaining
+            .checked_sub(count as u64)
+            .ok_or_else(|| std::io::Error::other("recovery metadata exceeds its byte limit"))?;
+        Ok(count)
     }
 }
 pub fn read_bounded_json<T: serde::de::DeserializeOwned>(
@@ -34,14 +33,19 @@ pub fn read_bounded_json<T: serde::de::DeserializeOwned>(
     maximum: u64,
 ) -> anyhow::Result<T> {
     let file = File::open(path)?;
-    anyhow::ensure!(
-        file.metadata()?.len() <= maximum,
-        "recovery metadata exceeds its byte limit"
-    );
-    Ok(serde_json::from_reader(BufReader::new(BoundedRead {
-        file,
-        remaining: maximum,
-    }))?)
+    match file.metadata()?.len() > maximum {
+        true => anyhow::bail!("recovery metadata exceeds its byte limit"),
+        false => {
+            let input = BoundedRead {
+                file,
+                remaining: maximum,
+            };
+            let mut decoder = serde_json::Deserializer::from_reader(BufReader::new(input));
+            let value = T::deserialize(&mut decoder)?;
+            decoder.end()?;
+            Ok(value)
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -66,45 +70,56 @@ impl<'de> Visitor<'de> for CatalogSeed<'_> {
         f.write_str("a recovery catalog object")
     }
     fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<(), M::Error> {
-        let mut found = false;
+        let mut selected = None;
         while let Some(key) = map.next_key::<String>()? {
-            if key == self.field {
-                if found {
-                    return Err(M::Error::custom("duplicate catalog field"));
+            match key.as_str() == self.field {
+                false => {
+                    map.next_value::<IgnoredAny>()?;
                 }
-                found = true;
-                map.next_value_seed(ArraySeed(self))?;
-            } else {
-                map.next_value::<IgnoredAny>()?;
+                true => {
+                    if selected.replace(()).is_some() {
+                        return Err(M::Error::custom("duplicate catalog field"));
+                    }
+                    map.next_value_seed(ArraySeed(self))?;
+                }
             }
         }
         Ok(())
     }
     fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<(), S::Error> {
         loop {
-            let mut record = BackupCatalogSnapshot::default();
-            match self.field {
-                "runs" => match seq.next_element::<BackupRunSnapshot>()? {
-                    Some(row) => record.runs.push(row),
-                    None => break,
-                },
-                "artifacts" => match seq.next_element::<BackupArtifactSnapshot>()? {
-                    Some(row) => record.artifacts.push(row),
-                    None => break,
-                },
-                "restore_requests" => match seq.next_element::<BackupRestoreRequestSnapshot>()? {
-                    Some(row) => record.restore_requests.push(row),
-                    None => break,
-                },
+            let next = match self.field {
+                "runs" => {
+                    seq.next_element::<BackupRunSnapshot>()?
+                        .map(|row| BackupCatalogSnapshot {
+                            runs: vec![row],
+                            ..Default::default()
+                        })
+                }
+                "artifacts" => {
+                    seq.next_element::<BackupArtifactSnapshot>()?
+                        .map(|row| BackupCatalogSnapshot {
+                            artifacts: vec![row],
+                            ..Default::default()
+                        })
+                }
+                "restore_requests" => {
+                    seq.next_element::<BackupRestoreRequestSnapshot>()?
+                        .map(|row| BackupCatalogSnapshot {
+                            restore_requests: vec![row],
+                            ..Default::default()
+                        })
+                }
                 _ => unreachable!(),
-            }
-            // An archive's availability claim is inert. The target catalog is
-            // merged last and access independently verifies the actual object.
-            restore_jobs::mark_source_artifact_availability(&mut record, None);
+            };
+            let Some(mut snapshot) = next else {
+                return Ok(());
+            };
+            restore_jobs::mark_source_artifact_availability(&mut snapshot, None);
             let (committed, receipt) = tokio::sync::oneshot::channel();
             self.sender
                 .blocking_send(ReplayRecord {
-                    snapshot: record,
+                    snapshot,
                     committed,
                 })
                 .map_err(|_| S::Error::custom("catalog import cancelled"))?;
@@ -112,7 +127,6 @@ impl<'de> Visitor<'de> for CatalogSeed<'_> {
                 .blocking_recv()
                 .map_err(|_| S::Error::custom("catalog import cancelled"))?;
         }
-        Ok(())
     }
 }
 

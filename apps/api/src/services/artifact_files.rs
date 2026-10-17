@@ -12,81 +12,72 @@ use std::{
 };
 
 pub fn validate_prefix(value: &str) -> Result<String, AppError> {
-    if value.chars().any(char::is_control) {
-        return Err(AppError::Validation(
+    let trimmed = value.trim().trim_end_matches('/');
+    let mut components = trimmed.split('/').filter(|_| !trimmed.is_empty());
+    match value.chars().find(|character| character.is_control()) {
+        Some(_) => Err(AppError::Validation(
             "Backup paths cannot contain control characters.".into(),
-        ));
+        )),
+        None => {
+            components.try_for_each(validate_component)?;
+            Ok(trimmed.to_owned())
+        }
     }
-    let value = value.trim().trim_end_matches('/');
-    if value.is_empty() {
-        return Ok(String::new());
-    }
-    for part in value.split('/') {
-        validate_component(part)?;
-    }
-    Ok(value.to_owned())
 }
 
 fn validate_component(part: &str) -> Result<(), AppError> {
-    let stem = part
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
-    if part.is_empty()
-        || part.starts_with('.')
-        || part.ends_with(['.', ' '])
-        || part.chars().any(|c| {
-            c.is_control() || matches!(c, '\\' | ':' | '/' | '<' | '>' | '"' | '|' | '?' | '*')
-        })
-        || reserved
-    {
-        return Err(AppError::Validation(
-            "Backup paths must contain ordinary relative path components.".into(),
-        ));
+    let invalid_name = || {
+        AppError::Validation("Backup paths must contain ordinary relative path components.".into())
+    };
+    match (part.as_bytes().first(), part.as_bytes().last()) {
+        (None | Some(b'.'), _) | (_, Some(b'.' | b' ')) => return Err(invalid_name()),
+        _ => {}
+    }
+    for character in part.chars() {
+        if character.is_control() || "\\:/<>\"|?*".contains(character) {
+            return Err(invalid_name());
+        }
+    }
+    let stem = part.split('.').next().unwrap_or_default();
+    let named_device = ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|name| stem.eq_ignore_ascii_case(name));
+    let numbered_device = stem.as_bytes().split_last().is_some_and(|(digit, family)| {
+        matches!(digit, b'1'..=b'9')
+            && (family.eq_ignore_ascii_case(b"COM") || family.eq_ignore_ascii_case(b"LPT"))
+    });
+    if named_device || numbered_device {
+        return Err(invalid_name());
     }
     Ok(())
 }
 
 fn relative_path(root: &Path, path: &Path) -> Result<PathBuf, AppError> {
-    // Path::components normalizes interior `.` segments. Reject them before
-    // normalization so imported catalog paths have one unambiguous spelling.
-    if path
-        .to_string_lossy()
-        .split(['/', '\\'])
-        .any(|part| part == "." || part == ".." || part.chars().any(char::is_control))
-    {
-        return Err(AppError::Validation("Unsafe backup artifact path.".into()));
+    let unsafe_path = || AppError::Validation("Unsafe backup artifact path.".into());
+    for spelling in path.to_string_lossy().split(['/', '\\']) {
+        if matches!(spelling, "." | "..") || spelling.chars().any(char::is_control) {
+            return Err(unsafe_path());
+        }
     }
-    let root = if root.is_absolute() {
-        root.to_owned()
-    } else {
-        std::env::current_dir()?.join(root)
+    let absolute_root = match root.is_absolute() {
+        true => root.to_owned(),
+        false => std::env::current_dir()?.join(root),
     };
-    let path = if path.is_absolute() {
-        path.strip_prefix(&root)
-            .map_err(|_| {
-                AppError::Validation("Backup artifact is outside the configured directory.".into())
-            })?
-            .to_owned()
-    } else if let Ok(relative) =
-        path.strip_prefix(root.strip_prefix(std::env::current_dir()?).unwrap_or(&root))
-    {
-        relative.to_owned()
-    } else {
-        path.to_owned()
+    let relative = match path.is_absolute() {
+        true => path.strip_prefix(&absolute_root).map_err(|_| {
+            AppError::Validation("Backup artifact is outside the configured directory.".into())
+        })?,
+        false => {
+            let cwd = std::env::current_dir()?;
+            let prefix = absolute_root.strip_prefix(cwd).unwrap_or(&absolute_root);
+            path.strip_prefix(prefix).unwrap_or(path)
+        }
     };
-    if path
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_)))
-    {
-        return Err(AppError::Validation("Unsafe backup artifact path.".into()));
-    }
-    Ok(path)
+    relative.components().try_for_each(|part| match part {
+        Component::Normal(_) => Ok(()),
+        _ => Err(unsafe_path()),
+    })?;
+    Ok(relative.to_owned())
 }
 
 struct ArtifactLocation {

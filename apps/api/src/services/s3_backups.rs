@@ -49,21 +49,21 @@ pub fn normalize_prefix(value: &str) -> Result<String> {
 }
 
 pub fn object_key(prefix: &str, created_at: DateTime<Utc>, run_id: Uuid) -> Result<String> {
-    let name = format!(
+    let prefix = normalize_prefix(prefix)?;
+    let mut components = Vec::with_capacity(4);
+    if !prefix.is_empty() {
+        components.extend([
+            prefix,
+            created_at.format("%Y").to_string(),
+            created_at.format("%m").to_string(),
+        ]);
+    }
+    components.push(format!(
         "backup-{}-{}.rma.tar.gz",
         created_at.format("%Y%m%dT%H%M%SZ"),
         run_id.simple()
-    );
-    let prefix = normalize_prefix(prefix)?;
-    Ok(if prefix.is_empty() {
-        name
-    } else {
-        format!(
-            "{prefix}/{}/{}/{name}",
-            created_at.format("%Y"),
-            created_at.format("%m")
-        )
-    })
+    ));
+    Ok(components.join("/"))
 }
 
 pub fn locator(bucket: &str, key: &str) -> String {
@@ -75,12 +75,16 @@ pub fn key_from_locator<'a>(bucket: &str, value: &'a str) -> Option<&'a str> {
 }
 
 pub fn key_belongs_to_prefix(prefix: &str, key: &str) -> bool {
-    let Ok(prefix) = normalize_prefix(prefix) else {
-        return false;
-    };
-    crate::services::artifact_files::validate_prefix(key).is_ok()
-        && key.ends_with(".rma.tar.gz")
-        && (prefix.is_empty() || key.starts_with(&format!("{prefix}/")))
+    match normalize_prefix(prefix) {
+        Ok(prefix) if key.ends_with(".rma.tar.gz") => {
+            let belongs = prefix.is_empty()
+                || key
+                    .strip_prefix(&prefix)
+                    .is_some_and(|suffix| suffix.starts_with('/'));
+            belongs && crate::services::artifact_files::validate_prefix(key).is_ok()
+        }
+        _ => false,
+    }
 }
 
 fn client(settings: &S3Settings) -> Result<Client> {
@@ -152,26 +156,25 @@ pub async fn test_connection(settings: &S3Settings) -> Result<()> {
                 .any(|object| object.key() == Some(key.as_str())),
             "S3 list probe did not return the written object"
         );
-        let mut stream = client
+        let response = client
             .get_object()
             .bucket(&settings.bucket)
             .key(&key)
             .send()
             .await
-            .context("S3 read probe failed")?
-            .body;
+            .context("S3 read probe failed")?;
+        let mut body = response
+            .body
+            .into_async_read()
+            .take(payload.len() as u64 + 1);
         let mut downloaded = Vec::with_capacity(payload.len());
-        while let Some(bytes) = stream
-            .try_next()
+        body.read_to_end(&mut downloaded)
             .await
-            .context("S3 read probe body failed")?
-        {
-            anyhow::ensure!(
-                downloaded.len().saturating_add(bytes.len()) <= payload.len(),
-                "S3 read probe returned an oversized body"
-            );
-            downloaded.extend_from_slice(&bytes);
-        }
+            .context("S3 read probe body failed")?;
+        anyhow::ensure!(
+            downloaded.len() <= payload.len(),
+            "S3 read probe returned an oversized body"
+        );
         anyhow::ensure!(
             downloaded == payload.as_bytes(),
             "S3 read probe returned different bytes"
@@ -241,36 +244,37 @@ pub async fn download(
         key_belongs_to_prefix(&settings.prefix, key),
         "S3 object is outside the configured package prefix"
     );
-    tokio::time::timeout(
-        std::time::Duration::from_secs(limits.restore_deadline_seconds),
-        async {
-            let output = client(settings)?
-                .get_object()
-                .bucket(&settings.bucket)
-                .key(key)
-                .send()
-                .await
-                .context("S3 download failed")?;
-            if let Some(length) = output.content_length() {
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(limits.restore_deadline_seconds);
+    let transfer = async {
+        let response = client(settings)?
+            .get_object()
+            .bucket(&settings.bucket)
+            .key(key)
+            .send()
+            .await
+            .context("S3 download failed")?;
+        match response.content_length() {
+            None => {}
+            Some(length) if length < 0 || length as u64 > limits.max_upload_bytes => {
+                anyhow::bail!("S3 package exceeds the compressed byte limit");
+            }
+            Some(length) => {
+                let required = limits.min_free_bytes.saturating_add(length as u64);
                 anyhow::ensure!(
-                    length >= 0 && length as u64 <= limits.max_upload_bytes,
-                    "S3 package exceeds the compressed byte limit"
-                );
-                anyhow::ensure!(
-                    fs2::available_space(root)?
-                        >= limits.min_free_bytes.saturating_add(length as u64),
+                    fs2::available_space(root)? >= required,
                     "insufficient free space for S3 package"
                 );
             }
-            let mut reader = output.body.into_async_read();
-            Ok::<_, anyhow::Error>(
-                crate::services::artifact_files::stage_reader(root, id, &mut reader, limits)
-                    .await?,
-            )
-        },
-    )
-    .await
-    .context("S3 download deadline exceeded")?
+        }
+        let mut body = response.body.into_async_read();
+        crate::services::artifact_files::stage_reader(root, id, &mut body, limits)
+            .await
+            .map_err(anyhow::Error::from)
+    };
+    tokio::time::timeout_at(deadline, transfer)
+        .await
+        .context("S3 download deadline exceeded")?
 }
 
 pub async fn download_stream(settings: &S3Settings, key: &str) -> Result<ByteStream> {
