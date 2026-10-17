@@ -40,6 +40,7 @@ output/
 *.log
 *.tmp
 *.tsbuildinfo
+__pycache__/
 test_output.txt
 compose/resolv.conf
 .codex_tmp/

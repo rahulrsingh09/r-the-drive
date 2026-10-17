@@ -18,6 +18,7 @@
     "test:packages": "turbo test",
     "test:scripts": "node --test scripts/*.test.mjs",
     "test:build-tools": "node --test tools/build-config.contract.test.mjs && python3 tools/test_container_build.py",
+    "test:sql-contracts": "python3 tools/test_sql_contracts.py",
     "test:api": "cargo test --manifest-path apps/api/Cargo.toml --all --all-features",
     "test:e2e": "pnpm --filter @panda/web test:e2e",
     "test:coverage": "pnpm --filter @panda/web test:coverage",
