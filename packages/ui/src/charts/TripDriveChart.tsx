@@ -1,3 +1,4 @@
+import { tripTooltipFormatter } from './chartFormatters';
 import * as React from 'react';
 import {
   ResponsiveContainer,
@@ -12,8 +13,8 @@ import {
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
-import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
-import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
+import { useTripMeasurements } from './tripMeasurements';
+
 
 export interface TripDrivePoint {
   elapsed_s: number;
@@ -36,6 +37,14 @@ function formatElapsed(seconds: number) {
   return `${min}:${String(sec).padStart(2, '0')}`;
 }
 
+const formatTooltip = tripTooltipFormatter('drive');
+
+const MARKERS = {
+  power_kw: { r: 2.1, strokeWidth: 0, fill: CHART_COLORS.accent },
+  regen_kw: { r: 2.1, strokeWidth: 0, fill: CHART_COLORS.sky },
+  speed_mph: { r: 2, strokeWidth: 0, fill: CHART_COLORS.warning },
+};
+
 export function TripDriveChart({
   data,
   loading = false,
@@ -43,31 +52,7 @@ export function TripDriveChart({
   activeElapsedS = null,
   onActiveElapsedSChange,
 }: TripDriveChartProps) {
-  const measuredData = React.useMemo(
-    () => data.filter((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null),
-    [data],
-  );
-  const powerDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.power_kw != null),
-      { r: 2.1, strokeWidth: 0, fill: CHART_COLORS.accent },
-    ),
-    [data],
-  );
-  const regenDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.regen_kw != null),
-      { r: 2.1, strokeWidth: 0, fill: CHART_COLORS.sky },
-    ),
-    [data],
-  );
-  const speedDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.speed_mph != null),
-      { r: 2, strokeWidth: 0, fill: CHART_COLORS.warning },
-    ),
-    [data],
-  );
+  const measurements = useTripMeasurements(data, MARKERS, activeElapsedS, onActiveElapsedSChange);
 
   if (loading) {
     return (
@@ -85,8 +70,7 @@ export function TripDriveChart({
     );
   }
 
-  const hasAnyData = data.some((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null);
-  if (!hasAnyData) {
+  if (!measurements.measured.length) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
         No power samples were captured for this trip.
@@ -101,15 +85,8 @@ export function TripDriveChart({
         syncId="trip-timeline-sync"
         syncMethod="value"
         margin={CHART_MARGINS.withYAxis}
-        onMouseMove={(state) => {
-          const nextElapsed = getActiveElapsedSFromChartState<TripDrivePoint>(
-            state as TripChartMouseState<TripDrivePoint>,
-            measuredData,
-            activeElapsedS,
-          );
-          onActiveElapsedSChange?.(nextElapsed);
-        }}
-        onMouseLeave={() => onActiveElapsedSChange?.(null)}
+        onMouseMove={measurements.onMouseMove}
+        onMouseLeave={measurements.onMouseLeave}
       >
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
         <XAxis
@@ -141,12 +118,7 @@ export function TripDriveChart({
         <Tooltip
           content={<ChartTooltip
             labelFormatter={(value) => formatElapsed(Number(value))}
-            formatter={(value, name) => {
-              if (name === 'power_kw') return [`${Number(value).toFixed(1)} kW`, 'Power'];
-              if (name === 'regen_kw') return [`${Number(value).toFixed(1)} kW`, 'Regen'];
-              if (name === 'speed_mph') return [`${Math.round(Number(value))} mph`, 'Speed'];
-              return [String(value), String(name)];
-            }}
+            formatter={formatTooltip}
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
@@ -163,7 +135,7 @@ export function TripDriveChart({
           name="Power"
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
-          dot={powerDot}
+          dot={measurements.dots.power_kw}
           activeDot={{ r: 4.2, fill: CHART_COLORS.accent, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -175,7 +147,7 @@ export function TripDriveChart({
           name="Regen"
           stroke={CHART_COLORS.sky}
           strokeWidth={1.6}
-          dot={regenDot}
+          dot={measurements.dots.regen_kw}
           activeDot={{ r: 4.2, fill: CHART_COLORS.sky, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -188,7 +160,7 @@ export function TripDriveChart({
           stroke={CHART_COLORS.warning}
           strokeWidth={1.4}
           strokeDasharray="4 4"
-          dot={speedDot}
+          dot={measurements.dots.speed_mph}
           activeDot={{ r: 4, fill: CHART_COLORS.warning, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls

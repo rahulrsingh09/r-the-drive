@@ -1,87 +1,49 @@
-type ChartPayloadLike = {
-  elapsed_s?: number | null;
-};
-
+type ChartPayloadLike = { elapsed_s?: number | null };
 export type TripChartMouseState<T> = {
   activePayload?: Array<{ payload?: T }>;
   activeLabel?: string | number | null;
   activeTooltipIndex?: number | null;
 };
-
 type HasElapsed = { elapsed_s: number };
 
-function toValidNumber(value: unknown): number | null {
+function finiteElapsed(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function floorToMeasuredSample(
-  sampleData: readonly HasElapsed[],
-  candidateElapsed: number,
-): number | null {
-  if (sampleData.length === 0) return null;
-
-  let start = 0;
-  let end = sampleData.length - 1;
-  let candidate: number | null = null;
-
-  while (start <= end) {
-    const mid = Math.floor((start + end) / 2);
-    const point = sampleData[mid];
+function measuredFloor(samples: readonly HasElapsed[], elapsed: number) {
+  let offset = 0;
+  let remaining = samples.length;
+  let found: number | null = null;
+  while (remaining > 0) {
+    const half = Math.floor((remaining - 1) / 2);
+    const index = offset + half;
+    const point = samples[index];
     if (!point) break;
-
-    const elapsed = toValidNumber(point.elapsed_s);
-    if (elapsed == null) {
-      start = mid + 1;
-      continue;
-    }
-
-    if (elapsed <= candidateElapsed) {
-      candidate = elapsed;
-      start = mid + 1;
+    const value = finiteElapsed(point.elapsed_s);
+    if (value == null || value <= elapsed) {
+      if (value != null) found = value;
+      offset = index + 1;
+      remaining -= half + 1;
     } else {
-      end = mid - 1;
+      remaining = half;
     }
   }
-
-  if (candidate != null) return candidate;
-
-  return toValidNumber(sampleData[0]?.elapsed_s) ?? null;
+  return found ?? finiteElapsed(samples[0]?.elapsed_s);
 }
 
-/**
- * Resolve the active elapsed second from Recharts hover state, preferring the most
- * recent measured sample at or before the hovered coordinate and keeping the prior
- * hover point when no resolvable sample is present.
- */
+/** Resolve hover coordinates before attempting the ordinal fallback. */
 export function getActiveElapsedSFromChartState<T extends object>(
   state: TripChartMouseState<T> | null | undefined,
   fallbackData?: readonly HasElapsed[],
   previousElapsed?: number | null,
 ) {
-  const payload = state?.activePayload?.[0]?.payload as (T & ChartPayloadLike) | undefined;
-  const payloadElapsed = toValidNumber(payload?.elapsed_s);
-  if (payloadElapsed != null) {
-    if (fallbackData?.length) {
-      return floorToMeasuredSample(fallbackData, payloadElapsed);
-    }
-    return payloadElapsed;
-  }
-
+  const payload = state?.activePayload?.[0]?.payload as ChartPayloadLike | undefined;
   const label = state?.activeLabel;
-  const labelElapsed = toValidNumber(typeof label === 'string' ? Number(label) : label);
-  if (labelElapsed != null) {
-    if (fallbackData?.length) {
-      return floorToMeasuredSample(fallbackData, labelElapsed);
-    }
-    return labelElapsed;
-  }
-
-  const tooltipIndex = toValidNumber(state?.activeTooltipIndex);
-  if (tooltipIndex != null && fallbackData?.length) {
-    const fallbackPoint = fallbackData[Math.round(tooltipIndex)] as HasElapsed | undefined;
-    const fallbackElapsed = toValidNumber(fallbackPoint?.elapsed_s);
-    if (fallbackElapsed != null) return fallbackElapsed;
-  }
-
-  return previousElapsed ?? null;
+  const coordinate = finiteElapsed(payload?.elapsed_s)
+    ?? finiteElapsed(typeof label === 'string' ? Number(label) : label);
+  const samples = fallbackData ?? [];
+  if (coordinate != null) return samples.length ? measuredFloor(samples, coordinate) : coordinate;
+  const ordinal = finiteElapsed(state?.activeTooltipIndex);
+  const sample = ordinal == null ? undefined : samples[Math.round(ordinal)];
+  return finiteElapsed(sample?.elapsed_s) ?? previousElapsed ?? null;
 }

@@ -30,22 +30,21 @@ export function ChartTooltip({
 }: RechartTooltipRenderProps & ChartTooltipProps) {
   if (!active || !payload?.length) return null;
 
-  const displayLabel = labelFormatter && typeof label === 'string'
-    ? labelFormatter(label)
-    : (title ?? label);
+  const heading = typeof label === 'string' && labelFormatter ? labelFormatter(label) : title ?? label;
+  const rows = payload.map(entry => {
+    const formatted = formatter?.(entry.value, entry.name);
+    return { key: entry.name, color: entry.color, value: formatted?.[0] ?? `${entry.value ?? ''}`, name: formatted?.[1] ?? entry.name };
+  });
 
   return (
     <div className="rounded-xl border border-border bg-bg-elevated/95 backdrop-blur-md shadow-lg px-3 py-2.5 text-xs min-w-[120px]">
-      {displayLabel !== undefined && displayLabel !== '' && (
-        <p className="text-fg-tertiary mb-1.5 font-medium">{displayLabel}</p>
+      {heading !== undefined && heading !== '' && (
+        <p className="text-fg-tertiary mb-1.5 font-medium">{heading}</p>
       )}
-      {payload.map((entry) => {
-        const [fmtValue, fmtName] = formatter
-          ? formatter(entry.value, entry.name)
-          : [`${entry.value ?? ''}`, entry.name];
+      {rows.map((entry) => {
 
         return (
-          <div key={entry.name} className={`flex items-center justify-between gap-4 ${multiLine ? 'mb-0.5' : ''}`}>
+          <div key={entry.key} className={`flex items-center justify-between gap-4 ${multiLine ? 'mb-0.5' : ''}`}>
             <span className="flex items-center gap-1.5">
               {entry.color && (
                 <span
@@ -53,9 +52,9 @@ export function ChartTooltip({
                   style={{ backgroundColor: entry.color }}
                 />
               )}
-              <span className="text-fg-secondary">{fmtName}</span>
+              <span className="text-fg-secondary">{entry.name}</span>
             </span>
-            <span className="font-mono font-medium text-fg tabular-nums">{fmtValue}</span>
+            <span className="font-mono font-medium text-fg tabular-nums">{entry.value}</span>
           </div>
         );
       })}

@@ -85,24 +85,19 @@ export const CHART_COLOR_OPTIONS = [
 
 export type ChartColorKey = (typeof CHART_COLOR_OPTIONS)[number]['value'];
 
-function chartVariable(value: string) {
-  return `var(--rm-chart-${value})`;
+const SERIES_COLOR_VARIABLES = new Map(CHART_SERIES_TOKENS.map(token => [token as string, `var(--rm-${token})`]));
+const SEMANTIC_COLOR_VARIABLES = new Map(Object.keys(CHART_PALETTES.classic).map(key => [key, `var(--rm-chart-${key})`]));
+
+export function getChartColor(value: string | null | undefined, palette?: ThemePalette) {
+  const key = value as ChartPaletteKey;
+  const series = SERIES_COLOR_VARIABLES.get(key);
+  if (series) return series;
+  const colors = palette ? CHART_PALETTES[palette] : undefined;
+  if (colors && key in colors) return colors[key];
+  if (SEMANTIC_COLOR_VARIABLES.has(key)) return SEMANTIC_COLOR_VARIABLES.get(key)!;
+  return key in CHART_PALETTES.classic ? `var(--rm-chart-${key})` : SEMANTIC_COLOR_VARIABLES.get('accent')!;
 }
 
-export function getChartColor(
-  value: string | null | undefined,
-  palette?: ThemePalette,
-) {
-  const key = value as ChartPaletteKey;
-  if (typeof value === 'string' && /^series-(0[1-9]|1[0-6])$/.test(value)) {
-    return `var(--rm-${value})`;
-  }
-  if (palette && key in CHART_PALETTES[palette]) {
-    return CHART_PALETTES[palette][key];
-  }
-  if (key in CHART_PALETTES.classic) return chartVariable(key);
-  return chartVariable('accent');
-}
 
 export function resolveChartColor(
   value: string,

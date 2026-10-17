@@ -23,20 +23,8 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function roundDown(value: number, step: number) {
-  return Math.floor(value / step) * step;
-}
-
-function roundUp(value: number, step: number) {
-  return Math.ceil(value / step) * step;
-}
-
-function toDisplayTemperature(celsius: number, temperatureUnit: 'fahrenheit' | 'celsius') {
-  return temperatureUnit === 'fahrenheit' ? celsius * 9 / 5 + 32 : celsius;
-}
-
-function fromDisplayTemperature(value: number, temperatureUnit: 'fahrenheit' | 'celsius') {
-  return temperatureUnit === 'fahrenheit' ? (value - 32) * 5 / 9 : value;
+function displayTemperature(celsius: number, fahrenheit: boolean) {
+  return fahrenheit ? celsius * 9 / 5 + 32 : celsius;
 }
 
 export function getVisibleSampleElapsedSet<T extends HasElapsed>(
@@ -45,37 +33,24 @@ export function getVisibleSampleElapsedSet<T extends HasElapsed>(
   fullMarkerThreshold = TRIP_MARKER_FULL_THRESHOLD,
   targetMarkerCount = TRIP_MARKER_TARGET_COUNT,
 ) {
-  const measured = data.filter(hasValue);
-  if (measured.length === 0) return new Set<number>();
-  if (measured.length <= fullMarkerThreshold) {
-    return new Set(measured.map((point) => point.elapsed_s));
-  }
-
-  const stride = Math.max(1, Math.ceil(measured.length / targetMarkerCount));
-  return new Set(
-    measured
-      .filter((_, index) => index === 0 || index === measured.length - 1 || index % stride === 0)
-      .map((point) => point.elapsed_s),
-  );
+  const elapsed: number[] = [];
+  data.forEach(point => { if (hasValue(point)) elapsed.push(point.elapsed_s); });
+  const count = elapsed.length;
+  const stride = count <= fullMarkerThreshold ? 1 : Math.max(1, Math.ceil(count / targetMarkerCount));
+  const selected = new Set<number>();
+  for (let index = 0; index < count; index += stride) selected.add(elapsed[index]!);
+  if (count) selected.add(elapsed[count - 1]!);
+  return selected;
 }
 
 export function createSampleDotRenderer(
   visibleElapsedSet: ReadonlySet<number>,
   style: SampleDotStyle,
 ) {
-  return function SampleDot({ cx, cy, payload, value }: SampleDotProps) {
-    if (!isFiniteNumber(cx) || !isFiniteNumber(cy) || !isFiniteNumber(value)) return null;
-
-    const elapsed = payload?.elapsed_s;
-    if (!isFiniteNumber(elapsed) || !visibleElapsedSet.has(elapsed)) return null;
-
-    return React.createElement('circle', {
-      cx,
-      cy,
-      fill: style.fill,
-      r: style.r,
-      strokeWidth: style.strokeWidth,
-    });
+  return function SampleDot(props: SampleDotProps) {
+    const coordinates = [props.cx, props.cy, props.value, props.payload?.elapsed_s];
+    if (!coordinates.every(isFiniteNumber) || !visibleElapsedSet.has(coordinates[3]!)) return null;
+    return React.createElement('circle', { cx: props.cx, cy: props.cy, fill: style.fill, r: style.r, strokeWidth: style.strokeWidth });
   };
 }
 
@@ -83,23 +58,23 @@ export function getTripTemperatureDomain(
   valuesCelsius: readonly (number | null | undefined)[],
   temperatureUnit: 'fahrenheit' | 'celsius' = getUnitPreferences().temperature_unit,
 ) {
-  const measuredValues = valuesCelsius.filter(isFiniteNumber);
-  if (measuredValues.length === 0) return null;
-
-  const displayValues = measuredValues.map((value) => toDisplayTemperature(value, temperatureUnit));
-  const minDisplay = Math.min(...displayValues);
-  const maxDisplay = Math.max(...displayValues);
-  const displaySpan = Math.max(1, maxDisplay - minDisplay);
-  const displayStep = temperatureUnit === 'fahrenheit' ? 5 : 2;
-
-  const lowerDisplayBound = roundDown(minDisplay, displayStep);
-  const upperDisplayBound = roundUp(
-    maxDisplay + Math.max(displaySpan * 0.15, displayStep),
-    displayStep,
-  );
-
+  const fahrenheit = temperatureUnit === 'fahrenheit';
+  let minimum = Infinity;
+  let maximum = -Infinity;
+  let measured = false;
+  for (const value of valuesCelsius) {
+    if (!isFiniteNumber(value)) continue;
+    measured = true;
+    const display = displayTemperature(value, fahrenheit);
+    minimum = Math.min(minimum, display);
+    maximum = Math.max(maximum, display);
+  }
+  if (!measured) return null;
+  const step = fahrenheit ? 5 : 2;
+  const headroom = Math.max(Math.max(1, maximum - minimum) * 0.15, step);
+  const bounds = [Math.floor(minimum / step) * step, Math.ceil((maximum + headroom) / step) * step];
   return [
-    fromDisplayTemperature(lowerDisplayBound, temperatureUnit),
-    fromDisplayTemperature(upperDisplayBound, temperatureUnit),
+    fahrenheit ? (bounds[0]! - 32) * 5 / 9 : bounds[0]!,
+    fahrenheit ? (bounds[1]! - 32) * 5 / 9 : bounds[1]!,
   ] as const;
 }

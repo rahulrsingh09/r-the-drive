@@ -47,10 +47,19 @@ export function EfficiencyPillBarChart({
   wideLabels = false,
   seriesColor,
 }: EfficiencyPillBarChartProps) {
-  const [selectedLabel, setSelectedLabel] = React.useState<string | null>(null);
+  const [selectedLabel, selectLabel] = React.useReducer((active: string | null, selected: string) => active === selected ? null : selected, null);
   if (loading) return <ChartSkeleton height={height} />;
 
-  const rows = data.filter((item) => Number.isFinite(item.value));
+  const metadata = { maxValue: 1, hasDistance: false, hasSpeed: false, hasCoverage: false };
+  const rows: EfficiencyPillBarDatum[] = [];
+  for (const item of data) {
+    if (!Number.isFinite(item.value)) continue;
+    rows.push(item);
+    metadata.maxValue = Math.max(metadata.maxValue, item.value);
+    metadata.hasDistance ||= item.distance != null;
+    metadata.hasSpeed ||= item.speed != null;
+    metadata.hasCoverage ||= item.coverage != null;
+  }
   if (rows.length === 0) {
     return (
       <div
@@ -62,10 +71,7 @@ export function EfficiencyPillBarChart({
     );
   }
 
-  const maxValue = Math.max(1, ...rows.map((item) => item.value));
-  const hasDistance = rows.some((item) => item.distance != null);
-  const hasSpeed = rows.some((item) => item.speed != null);
-  const hasCoverage = rows.some((item) => item.coverage != null);
+  const { maxValue, hasDistance, hasSpeed, hasCoverage } = metadata;
   const cols = hasDistance || hasSpeed
     ? wideLabels ? COLS_FULL_WIDE_LABELS : COLS_FULL
     : wideLabels ? COLS_BASIC_WIDE_LABELS : COLS_BASIC;
@@ -119,7 +125,7 @@ export function EfficiencyPillBarChart({
 
               <button
                 type="button"
-                onClick={() => setSelectedLabel((current) => current === item.label ? null : item.label)}
+                onClick={() => selectLabel(item.label)}
                 aria-pressed={selectedLabel === item.label}
                 className={`grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-sm text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent sm:hidden ${selectedLabel === item.label ? 'bg-accent/10' : ''}`}
                 aria-label={`${item.label}, ${formattedValue}${meta.length ? `, ${meta.join(', ')}` : ''}`}

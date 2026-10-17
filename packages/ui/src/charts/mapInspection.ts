@@ -12,85 +12,86 @@ interface InspectionState {
 }
 
 export function nearestPointIndex(points: Array<{ lat: number | null; lng: number | null }>, target: Point) {
-  let nearest: number | null = null;
-  let distance = Infinity;
-  const longitudeScale = Math.cos(target.lat * Math.PI / 180);
-  points.forEach((point, index) => {
-    if (point.lat == null || point.lng == null || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
-    const delta = ((point.lng - target.lng + 540) % 360 - 180) * longitudeScale;
-    const candidate = (point.lat - target.lat) ** 2 + delta ** 2;
-    if (candidate < distance) { distance = candidate; nearest = index; }
-  });
-  return nearest;
+  const scale = Math.cos(target.lat * Math.PI / 180);
+  let best: { index: number | null; distance: number } = { index: null, distance: Infinity };
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index]!;
+    if (point.lat == null || point.lng == null || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) continue;
+    const latitudeDistance = (point.lat - target.lat) ** 2;
+    if (latitudeDistance >= best.distance) continue;
+    const longitude = ((point.lng - target.lng + 540) % 360 - 180) * scale;
+    const distance = latitudeDistance + longitude ** 2;
+    if (distance < best.distance) best = { index, distance };
+  }
+  return best.index;
 }
+
 
 export function installMapInspection(map: InspectionMap, state: () => InspectionState) {
   const canvas = map.getCanvas();
   if (!(canvas instanceof HTMLCanvasElement) || !map.unproject || !state().onPointSelect) {
     return Object.assign(() => {}, { setEnabled: (_enabled: boolean) => {} });
   }
-  const old = { label: canvas.getAttribute('aria-label'), touch: canvas.style.touchAction, cursor: canvas.style.cursor };
+  const attributes = { label: canvas.getAttribute('aria-label'), touch: canvas.style.touchAction, cursor: canvas.style.cursor };
   let enabled = true;
+  let pointer: { id: number; x: number; y: number } | null = null;
   const setEnabled = (next: boolean) => {
     enabled = next;
-    canvas.setAttribute('aria-label', next
-      ? 'Inspect trip route. Tap or drag to select a point; arrow keys move along the route.' : 'Pan trip map');
-    canvas.style.touchAction = next ? 'pan-y pinch-zoom' : old.touch;
-    canvas.style.cursor = next ? 'crosshair' : old.cursor;
-    if (next) map.dragPan?.disable(); else map.dragPan?.enable();
+    const appearance = next
+      ? { label: 'Inspect trip route. Tap or drag to select a point; arrow keys move along the route.', touch: 'pan-y pinch-zoom', cursor: 'crosshair' }
+      : { label: 'Pan trip map', touch: attributes.touch, cursor: attributes.cursor };
+    canvas.setAttribute('aria-label', appearance.label);
+    canvas.style.touchAction = appearance.touch;
+    canvas.style.cursor = appearance.cursor;
+    map.dragPan?.[next ? 'disable' : 'enable']();
   };
-  setEnabled(true);
-  let pointer: { id: number; x: number; y: number } | null = null;
-  const select = (event: PointerEvent) => {
-    const bounds = canvas.getBoundingClientRect();
-    const point = map.unproject!([event.clientX - bounds.left, event.clientY - bounds.top]);
-    if (Number.isFinite(point.lat) && Number.isFinite(point.lng)) state().onPointSelect?.(point);
-  };
-  const down = (event: PointerEvent) => {
-    if (!enabled || !event.isPrimary || event.button !== 0) return;
-    pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
-    canvas.setPointerCapture(event.pointerId);
-    select(event);
-  };
-  const move = (event: PointerEvent) => {
-    if (!enabled || !pointer || pointer.id !== event.pointerId) return;
-    if (event.pointerType === 'touch' && Math.abs(event.clientY - pointer.y) > Math.abs(event.clientX - pointer.x) + 6) {
-      up(event); return;
-    }
-    select(event);
-  };
-  const up = (event: PointerEvent) => {
-    if (pointer?.id !== event.pointerId) return;
+  const release = (id: number) => {
+    if (pointer?.id !== id) return;
     pointer = null;
-    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+  };
+  const dispatchPointer = (event: PointerEvent) => {
+    if (event.type === 'pointerup' || event.type === 'pointercancel') { release(event.pointerId); return; }
+    if (!enabled) return;
+    if (event.type === 'pointerdown') {
+      if (!event.isPrimary || event.button !== 0) return;
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      canvas.setPointerCapture(event.pointerId);
+    } else {
+      if (!pointer || pointer.id !== event.pointerId) return;
+      const scroll = Math.abs(event.clientY - pointer.y) > Math.abs(event.clientX - pointer.x) + 6;
+      if (event.pointerType === 'touch' && scroll) { release(event.pointerId); return; }
+    }
+    const rect = canvas.getBoundingClientRect();
+    const position = map.unproject!([event.clientX - rect.left, event.clientY - rect.top]);
+    if (Number.isFinite(position.lat) && Number.isFinite(position.lng)) state().onPointSelect?.(position);
   };
   const key = (event: KeyboardEvent) => {
-    const { track, activePoint, activePointIndex, onPointSelect } = state();
-    if (!enabled || !track.length) return;
-    const current = activePointIndex != null && activePointIndex >= 0
-      ? activePointIndex : activePoint ? nearestPointIndex(track, activePoint) ?? 0 : 0;
-    const next = event.key === 'ArrowRight' ? current + 1 : event.key === 'ArrowLeft' ? current - 1
-      : event.key === 'Home' ? 0 : event.key === 'End' ? track.length - 1 : null;
-    if (next == null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const index = Math.max(0, Math.min(track.length - 1, next));
-    onPointSelect?.(track[index]!, index);
+    const current = state();
+    if (!enabled || !current.track.length) return;
+    let index = current.activePointIndex != null && current.activePointIndex >= 0
+      ? current.activePointIndex : current.activePoint ? nearestPointIndex(current.track, current.activePoint) ?? 0 : 0;
+    switch (event.key) {
+      case 'ArrowRight': index += 1; break;
+      case 'ArrowLeft': index -= 1; break;
+      case 'Home': index = 0; break;
+      case 'End': index = current.track.length - 1; break;
+      default: return;
+    }
+    event.preventDefault(); event.stopPropagation();
+    index = Math.max(0, Math.min(current.track.length - 1, index));
+    current.onPointSelect?.(current.track[index]!, index);
   };
-  canvas.addEventListener('pointerdown', down);
-  canvas.addEventListener('pointermove', move);
-  canvas.addEventListener('pointerup', up);
-  canvas.addEventListener('pointercancel', up);
+  const events = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const;
+  setEnabled(true);
+  events.forEach(event => canvas.addEventListener(event, dispatchPointer));
   canvas.addEventListener('keydown', key, true);
   return Object.assign(() => {
-    canvas.removeEventListener('pointerdown', down);
-    canvas.removeEventListener('pointermove', move);
-    canvas.removeEventListener('pointerup', up);
-    canvas.removeEventListener('pointercancel', up);
+    events.forEach(event => canvas.removeEventListener(event, dispatchPointer));
     canvas.removeEventListener('keydown', key, true);
-    if (old.label == null) canvas.removeAttribute('aria-label'); else canvas.setAttribute('aria-label', old.label);
-    canvas.style.touchAction = old.touch;
-    canvas.style.cursor = old.cursor;
+    if (attributes.label == null) canvas.removeAttribute('aria-label'); else canvas.setAttribute('aria-label', attributes.label);
+    canvas.style.touchAction = attributes.touch;
+    canvas.style.cursor = attributes.cursor;
     map.dragPan?.enable();
   }, { setEnabled });
 }

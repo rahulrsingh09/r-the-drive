@@ -11,8 +11,8 @@ import {
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
-import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
-import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
+import { useTripMeasurements } from './tripMeasurements';
+
 
 export interface TripElevationPoint {
   elapsed_s: number;
@@ -35,6 +35,10 @@ function formatElapsed(seconds: number) {
   return `${min}:${String(sec).padStart(2, '0')}`;
 }
 
+const MARKERS = {
+  altitude_m: { r: 2, strokeWidth: 0, fill: CHART_COLORS.teal },
+};
+
 export function TripElevationChart({
   data,
   loading = false,
@@ -46,17 +50,7 @@ export function TripElevationChart({
     elapsed_s: point.elapsed_s,
     altitude_ft: point.altitude_m != null ? point.altitude_m * M_TO_FT : null,
   }));
-  const measuredData = React.useMemo(
-    () => data.filter((point) => point.altitude_m != null),
-    [data],
-  );
-  const elevationDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.altitude_m != null),
-      { r: 2, strokeWidth: 0, fill: CHART_COLORS.teal },
-    ),
-    [data],
-  );
+  const measurements = useTripMeasurements(data, MARKERS, activeElapsedS, onActiveElapsedSChange);
 
   if (loading) {
     return (
@@ -66,8 +60,7 @@ export function TripElevationChart({
     );
   }
 
-  const hasAnyData = chartData.some((point) => point.altitude_ft != null);
-  if (!hasAnyData) {
+  if (!measurements.measured.length) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
         No elevation profile data for this trip.
@@ -82,15 +75,8 @@ export function TripElevationChart({
         syncId="trip-timeline-sync"
         syncMethod="value"
         margin={CHART_MARGINS.withYAxis}
-        onMouseMove={(state) => {
-          const nextElapsed = getActiveElapsedSFromChartState<TripElevationPoint>(
-            state as TripChartMouseState<TripElevationPoint>,
-            measuredData,
-            activeElapsedS,
-          );
-          onActiveElapsedSChange?.(nextElapsed);
-        }}
-        onMouseLeave={() => onActiveElapsedSChange?.(null)}
+        onMouseMove={measurements.onMouseMove}
+        onMouseLeave={measurements.onMouseLeave}
       >
         <defs>
           <linearGradient id="tripElevationGradient" x1="0" y1="0" x2="0" y2="1">
@@ -136,7 +122,7 @@ export function TripElevationChart({
           stroke={CHART_COLORS.teal}
           strokeWidth={1.8}
           fill="url(#tripElevationGradient)"
-          dot={elevationDot}
+          dot={measurements.dots.altitude_m}
           activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg-surface)', fill: CHART_COLORS.teal }}
           isAnimationActive={false}
           connectNulls

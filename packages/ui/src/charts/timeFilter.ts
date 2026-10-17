@@ -13,8 +13,12 @@ export type TimeFilterWindow = (typeof TIME_FILTER_OPTIONS)[number]['value'];
 export const DEFAULT_SPRITE_TIME_FILTER: TimeFilterWindow = '24h';
 export const DEFAULT_CHART_TIME_FILTER: TimeFilterWindow = '15m';
 
+const FILTERS = new Map<string, (typeof TIME_FILTER_OPTIONS)[number]>(
+  TIME_FILTER_OPTIONS.map(option => [option.value, option]),
+);
+
 export function isTimeFilterWindow(value: unknown): value is TimeFilterWindow {
-  return typeof value === 'string' && TIME_FILTER_OPTIONS.some((option) => option.value === value);
+  return typeof value === 'string' && FILTERS.has(value);
 }
 
 export function normalizeTimeFilter(value: unknown, fallback: TimeFilterWindow): TimeFilterWindow {
@@ -22,8 +26,9 @@ export function normalizeTimeFilter(value: unknown, fallback: TimeFilterWindow):
 }
 
 export function timeFilterMilliseconds(window: TimeFilterWindow): number {
-  return TIME_FILTER_OPTIONS.find((option) => option.value === window)?.milliseconds ?? 0;
+  return FILTERS.get(window)?.milliseconds ?? 0;
 }
+
 
 /**
  * Largest interval a compact sparkline will render as one visual observation.
@@ -35,17 +40,18 @@ export function maximumContinuousTimeGapMilliseconds(window: TimeFilterWindow): 
 }
 
 export function timeFilterLabel(window: TimeFilterWindow): string {
-  return TIME_FILTER_OPTIONS.find((option) => option.value === window)?.label ?? 'Raw';
+  return FILTERS.get(window)?.label ?? 'Raw';
 }
 
 function toMilliseconds(value: string | number | Date): number | null {
-  const milliseconds = value instanceof Date
-    ? value.getTime()
-    : typeof value === 'number'
-      ? value
-      : Date.parse(value);
-  return Number.isFinite(milliseconds) ? milliseconds : null;
+  const time = typeof value === 'string' ? Date.parse(value) : Number(value);
+  return Number.isFinite(time) ? time : null;
 }
+
+function validReading(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 
 /**
  * Filters contiguous finite samples with a centered, timestamp-aware moving
@@ -56,55 +62,34 @@ export function filterTimeSeriesValues(
   values: Array<number | null | undefined>,
   window: TimeFilterWindow,
 ): Array<number | null> {
-  const result = values.map((value) => (
-    typeof value === 'number' && Number.isFinite(value) ? value : null
-  ));
-  const windowMilliseconds = timeFilterMilliseconds(window);
-  if (windowMilliseconds === 0 || timestamps.length !== values.length) return result;
-
-  const timeValues = timestamps.map(toMilliseconds);
-  const halfWindow = windowMilliseconds / 2;
-  let segmentStart = 0;
-
-  while (segmentStart < result.length) {
-    while (segmentStart < result.length && (result[segmentStart] == null || timeValues[segmentStart] == null)) {
-      segmentStart += 1;
-    }
-    if (segmentStart >= result.length) break;
-
-    let segmentEnd = segmentStart + 1;
-    while (
-      segmentEnd < result.length &&
-      result[segmentEnd] != null &&
-      timeValues[segmentEnd] != null &&
-      timeValues[segmentEnd]! >= timeValues[segmentEnd - 1]!
-    ) {
-      segmentEnd += 1;
-    }
-
-    let left = segmentStart;
-    let right = segmentStart;
-    let sum = 0;
-    let count = 0;
-    for (let index = segmentStart; index < segmentEnd; index += 1) {
-      const center = timeValues[index]!;
-      while (right < segmentEnd && timeValues[right]! <= center + halfWindow) {
-        sum += result[right]!;
-        count += 1;
-        right += 1;
-      }
-      while (left < right && timeValues[left]! < center - halfWindow) {
-        sum -= result[left]!;
-        count -= 1;
-        left += 1;
-      }
-      result[index] = count > 0 ? sum / count : result[index] ?? null;
-    }
-    segmentStart = segmentEnd;
+  const result = values.map(value => validReading(value) ? value : null);
+  const radius = timeFilterMilliseconds(window) / 2;
+  if (!radius || timestamps.length !== values.length) return result;
+  const times = timestamps.map(toMilliseconds);
+  const runs: Array<[number, number]> = [];
+  let start: number | null = null;
+  for (let index = 0; index <= values.length; index += 1) {
+    const valid = index < values.length && result[index] != null && times[index] != null;
+    const decreases = start != null && valid && times[index]! < times[index - 1]!;
+    if (start != null && (!valid || decreases)) { runs.push([start, index]); start = null; }
+    if (valid && start == null) start = index;
   }
-
+  for (const [first, end] of runs) {
+    let entered = first;
+    let departed = first;
+    let total = 0;
+    for (let index = first; index < end; index += 1) {
+      const lower = times[index]! - radius;
+      const upper = times[index]! + radius;
+      while (entered < end && times[entered]! <= upper) total += result[entered++]!;
+      // Departures use the emitted reading, preserving the established filter recurrence.
+      while (departed < entered && times[departed]! < lower) total -= result[departed++]!;
+      if (entered > departed) result[index] = total / (entered - departed);
+    }
+  }
   return result;
 }
+
 
 export interface TimeBucketPoint {
   timestamp: string | number | Date;
@@ -122,25 +107,24 @@ export function bucketTimeSeriesValues(
   values: Array<number | null | undefined>,
   window: TimeFilterWindow,
 ): TimeBucketPoint[] {
-  const samples = timestamps.flatMap((timestamp, index) => {
-    const value = values[index];
-    return typeof value === 'number' && Number.isFinite(value)
-      ? [{ timestamp, value }]
-      : [];
-  });
-  const windowMilliseconds = timeFilterMilliseconds(window);
-  if (windowMilliseconds === 0 || timestamps.length !== values.length) return samples;
-
-  const datedSamples = samples.map((sample) => ({ ...sample, milliseconds: toMilliseconds(sample.timestamp) }));
-  if (datedSamples.some((sample) => sample.milliseconds == null)) return samples;
-
+  const samples: TimeBucketPoint[] = [];
+  const width = timeFilterMilliseconds(window);
   const buckets = new Map<number, number>();
-  for (const sample of datedSamples) {
-    const bucketStart = Math.floor(sample.milliseconds! / windowMilliseconds) * windowMilliseconds;
-    buckets.set(bucketStart, (buckets.get(bucketStart) ?? 0) + sample.value);
+  let dated = true;
+  for (let index = 0; index < timestamps.length; index += 1) {
+    if (!(index in timestamps)) continue;
+    const value = values[index];
+    if (!validReading(value)) continue;
+    const timestamp = timestamps[index]!;
+    samples.push({ timestamp, value });
+    if (!width) continue;
+    const time = toMilliseconds(timestamp);
+    if (time == null) { dated = false; continue; }
+    const start = Math.floor(time / width) * width;
+    buckets.set(start, (buckets.get(start) ?? 0) + value);
   }
-
-  return [...buckets.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([timestamp, value]) => ({ timestamp: new Date(timestamp).toISOString(), value }));
+  if (!width || timestamps.length !== values.length || !dated) return samples;
+  return Array.from(buckets.keys()).sort((a, b) => a - b).map(start => ({
+    timestamp: new Date(start).toISOString(), value: buckets.get(start)!,
+  }));
 }

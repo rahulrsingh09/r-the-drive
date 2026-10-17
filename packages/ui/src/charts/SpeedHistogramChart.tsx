@@ -71,13 +71,14 @@ export function SpeedHistogramChart({
     );
   }
 
-  const maxDuration = Math.max(...bins.map((bin) => bin.duration_seconds));
-  const minDuration = Math.min(...bins.map((bin) => bin.duration_seconds));
-  const durationRange = Math.max(1, maxDuration - minDuration);
-  const displayBins = bins.map(bin => ({
-    ...bin,
-    displayLabel: speedUnit === 'km/h' ? `${Math.round(bin.min * 1.609344)}-${Math.round(bin.max * 1.609344)}` : bin.label,
-  }));
+  const durationDomain = bins.reduce((domain, bin) => ({ min: Math.min(domain.min, bin.duration_seconds), max: Math.max(domain.max, bin.duration_seconds) }), { min: Infinity, max: -Infinity });
+  const durationRange = Math.max(1, durationDomain.max - durationDomain.min);
+  const fills = new Map<SpeedHistogramBin, string>();
+  const displayBins = bins.map(bin => {
+    fills.set(bin, blendColor(successColor, accentColor, (bin.duration_seconds - durationDomain.min) / durationRange));
+    const displayLabel = speedUnit === 'km/h' ? [bin.min, bin.max].map(value => Math.round(value * 1.609344)).join('-') : bin.label;
+    return { ...bin, displayLabel };
+  });
 
   return (
     <div>
@@ -128,8 +129,7 @@ export function SpeedHistogramChart({
           </>
         ) : <Bar dataKey="duration_seconds" radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}>
           {bins.map((bin) => {
-            const intensity = (bin.duration_seconds - minDuration) / durationRange;
-            const fill = blendColor(successColor, accentColor, intensity);
+            const fill = fills.get(bin)!;
             return (
               <Cell
                 key={bin.label}

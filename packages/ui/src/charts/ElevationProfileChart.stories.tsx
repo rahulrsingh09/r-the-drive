@@ -1,3 +1,4 @@
+import { storyTimeline } from './chartStoryTimeline';
 import type { Meta, StoryObj } from '@storybook/react';
 import { ElevationProfileChart } from './ElevationProfileChart';
 
@@ -12,14 +13,15 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 function makeTrack(points = 120) {
-  let elev = 300;
-  return Array.from({ length: points }, (_, i) => {
-    elev = elev + Math.sin(i / 10) * 8 + (Math.random() - 0.5) * 5;
-    const d = new Date('2024-03-10T09:00:00Z');
-    d.setSeconds(d.getSeconds() + i * 30);
-    return { ts: d.toISOString(), value: +elev.toFixed(1) };
+  const timeline = storyTimeline('2024-03-10T09:00:00Z', points, 'second', 30);
+  const increments = timeline.map((_, index) => [Math.sin(index / 10) * 8, (Math.random() - 0.5) * 5]);
+  let altitude = 300;
+  return timeline.map((ts, index) => {
+    for (const increment of increments[index]!) altitude += increment;
+    return { ts, value: Number(altitude.toFixed(1)) };
   });
 }
+
 
 export const Default: Story = {
   args: { data: makeTrack() },
@@ -31,12 +33,9 @@ export const Metric: Story = {
 
 export const Hilly: Story = {
   args: {
-    data: Array.from({ length: 200 }, (_, i) => {
-      const elev = 250 + Math.sin(i / 8) * 120 + i * 0.5;
-      const d = new Date('2024-03-10T09:00:00Z');
-      d.setSeconds(d.getSeconds() + i * 20);
-      return { ts: d.toISOString(), value: +elev.toFixed(1) };
-    }),
+    data: storyTimeline('2024-03-10T09:00:00Z', 200, 'second', 20).map((ts, index) => ({
+      ts, value: Number((250 + Math.sin(index / 8) * 120 + index * 0.5).toFixed(1)),
+    })),
   },
 };
 

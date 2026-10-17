@@ -7,7 +7,7 @@ import { SelectPicker } from '../primitives/SelectPicker';
 import { useThemeRuntime } from '../lib/themeRuntime';
 import { useChartColorPairs } from '../hooks/useDocumentPalette';
 import { cn } from '../lib/utils';
-import { CHART_SERIES_TOKENS, getChartColor } from './ChartProvider';
+import { CHART_SERIES_TOKENS, getChartColor, resolveChartColor } from './ChartProvider';
 
 const SEMANTIC_COLORS: Array<{ token: ChartColorToken; label: string }> = [
   { token: 'accent', label: 'Accent' },
@@ -32,27 +32,11 @@ function seriesSwatch(token: SeriesColorToken) {
   return <span aria-hidden="true" className="h-3.5 w-3.5 rounded-full border border-border" style={{ backgroundColor: getChartColor(token) }} />;
 }
 
-const pickerSwatches: ColorPickerSwatch[] = CHART_SERIES_TOKENS.map((token, index) => ({
-  id: token,
-  label: seriesLabel(index),
-  light: getChartColor(token),
-  dark: getChartColor(token),
-}));
-
-const seriesOptions: Array<{
-  value: SeriesColorToken | '';
-  label: string;
-  description?: string;
-  leading?: React.ReactNode;
-  disabled?: boolean;
-}> = [
+const accents = CHART_SERIES_TOKENS.map((token, index) => ({ token, label: seriesLabel(index), color: getChartColor(token) }));
+const pickerSwatches: ColorPickerSwatch[] = accents.map(accent => ({ id: accent.token, label: accent.label, light: accent.color, dark: accent.color }));
+const seriesOptions: Array<{ value: SeriesColorToken | ''; label: string; description?: string; leading?: React.ReactNode; disabled?: boolean }> = [
   { value: '', label: 'Choose a theme accent', disabled: true },
-  ...CHART_SERIES_TOKENS.map((token, index) => ({
-    value: token,
-    label: seriesLabel(index),
-    description: token,
-    leading: seriesSwatch(token),
-  })),
+  ...accents.map(accent => ({ value: accent.token, label: accent.label, description: accent.token, leading: seriesSwatch(accent.token) })),
 ];
 
 export interface ChartColorFieldProps {
@@ -74,16 +58,21 @@ export function ChartColorField({ value, onChange, label = 'Color', className, a
   const isDark = runtime.effectiveMode === 'dark';
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const automaticActive = automatic?.active === true;
-  const current = automaticActive
-    ? automatic.color
-    : value.mode === 'token'
-      ? getChartColor(value.token)
-      : isDark
-        ? value.dark
-        : value.light;
-  const customPair: ThemeColorPair = value.mode === 'custom'
-    ? { light: value.light, dark: value.dark }
-    : chartColorPairs[value.token] ?? { light: concreteToken(value.token, runtime.chartColors.accent!), dark: concreteToken(value.token, runtime.chartColors.accent!) };
+  let customPair: ThemeColorPair;
+  let current: string;
+  switch (value.mode) {
+    case 'custom': customPair = { light: value.light, dark: value.dark }; current = isDark ? value.dark : value.light; break;
+    case 'token': {
+      const configuredPair = chartColorPairs[value.token];
+      if (configuredPair) customPair = configuredPair;
+      else {
+        const color = concreteToken(value.token, runtime.chartColors.accent!);
+        customPair = { light: color, dark: color };
+      }
+      current = getChartColor(value.token);
+    }
+  }
+  if (automaticActive) current = automatic.color;
 
   return <div className={cn('grid gap-2', className)}>
     <span className="text-xs font-medium text-fg-secondary">{label}</span>
@@ -154,8 +143,5 @@ function isSeriesColorToken(value: ChartColorToken): value is SeriesColorToken {
 
 function concreteToken(token: ChartColorToken, fallback: string) {
   if (typeof window === 'undefined') return fallback;
-  const variable = getChartColor(token).match(/^var\((--[^)]+)\)$/)?.[1];
-  if (!variable) return fallback;
-  const root = document.documentElement;
-  return window.getComputedStyle(root).getPropertyValue(variable).trim() || fallback;
+  return resolveChartColor(getChartColor(token), document.documentElement, fallback);
 }

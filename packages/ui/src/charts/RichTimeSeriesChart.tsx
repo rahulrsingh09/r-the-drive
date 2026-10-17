@@ -1,3 +1,4 @@
+import { createRichCursorController, observeChartFrame } from './richCursor';
 import * as React from 'react';
 import uPlot from 'uplot';
 import { RotateCcw } from 'lucide-react';
@@ -110,19 +111,24 @@ export function getRichTimeIntervalBandGeometry(
 
 /** Assign overlapping intervals to the smallest available horizontal lane. */
 export function packRichTimeIntervals(intervals: RichTimeInterval[]): PackedRichTimeInterval[] {
-  const laneEnds: number[] = [];
-  return [...intervals]
-    .map((interval, index) => ({ interval, index, start: toSeconds(interval.start), end: toSeconds(interval.end) }))
-    .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start)
-    .sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index)
-    .map(({ interval, start, end }) => {
-      const lane = laneEnds.findIndex((lastEnd) => lastEnd <= start);
-      const resolvedLane = lane === -1 ? laneEnds.length : lane;
-      laneEnds[resolvedLane] = end;
-      return { ...interval, lane: resolvedLane };
-    })
-    .sort((a, b) => toSeconds(a.start) - toSeconds(b.start) || a.lane - b.lane);
+  const ordered: Array<{ interval: RichTimeInterval; start: number; end: number; index: number }> = [];
+  intervals.forEach((interval, index) => {
+    const start = toSeconds(interval.start);
+    const end = toSeconds(interval.end);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) ordered.push({ interval, start, end, index });
+  });
+  ordered.sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index);
+  const lanes: Array<{ end: number; intervals: PackedRichTimeInterval[] }> = [];
+  for (const entry of ordered) {
+    let lane = 0;
+    while (lane < lanes.length && lanes[lane]!.end > entry.start) lane += 1;
+    const packed = { ...entry.interval, lane };
+    if (lanes[lane]) { lanes[lane]!.end = entry.end; lanes[lane]!.intervals.push(packed); }
+    else lanes.push({ end: entry.end, intervals: [packed] });
+  }
+  return lanes.flatMap(lane => lane.intervals).sort((a, b) => toSeconds(a.start) - toSeconds(b.start) || a.lane - b.lane);
 }
+
 
 export interface RichTimeSeriesChartProps {
   /** Stable production renderer identity for compatibility tests and diagnostics. */
@@ -192,41 +198,33 @@ export function buildRichTimeSeriesAlignedData(
   timeFilter: TimeFilterWindow = 'raw',
   xTime = true,
 ): AlignedData {
-  const entries = points
-    .map((point, index) => ({ index, x: xTime ? toSeconds(point.ts) : Number(point.ts) }))
-    .filter((entry) => Number.isFinite(entry.x))
-    .sort((a, b) => a.x - b.x || a.index - b.index);
-  const values = series.map((item) => {
+  const timestamps = points.map(point => point.ts);
+  const x = timestamps.map(value => xTime ? toSeconds(value) : Number(value));
+  const permutation = Array.from(x.keys()).filter(index => Number.isFinite(x[index]));
+  permutation.sort((a, b) => x[a]! - x[b]! || a - b);
+  const aligned: Array<Array<number | null>> = [permutation.map(index => x[index]!)];
+  for (const item of series) {
     const source = xTime && item.filterable !== false
-      ? filterTimeSeriesValues(points.map((point) => point.ts), item.values, timeFilter)
-      : item.values.map((value) => value ?? null);
-    return entries.map(({ index }) => source[index] ?? null);
-  });
-  return [entries.map((entry) => entry.x), ...values] as AlignedData;
+      ? filterTimeSeriesValues(timestamps, item.values, timeFilter) : item.values;
+    aligned.push(permutation.map(index => source[index] ?? null));
+  }
+  return aligned as AlignedData;
 }
+
 
 export function clampExplorationRange(
   proposed: [number, number],
   bounds: [number, number],
   minimumSpan: number,
 ): [number, number] {
-  const [boundMin, boundMax] = bounds;
-  const maxSpan = boundMax - boundMin;
-  if (maxSpan <= 0) return bounds;
-
-  const span = Math.min(maxSpan, Math.max(minimumSpan, proposed[1] - proposed[0]));
-  let min = proposed[0];
-  let max = min + span;
-  if (min < boundMin) {
-    min = boundMin;
-    max = min + span;
-  }
-  if (max > boundMax) {
-    max = boundMax;
-    min = max - span;
-  }
-  return [min, max];
+  const capacity = bounds[1] - bounds[0];
+  if (capacity <= 0) return bounds;
+  const span = Math.min(capacity, Math.max(minimumSpan, proposed[1] - proposed[0]));
+  const left = proposed[0] < bounds[0] ? bounds[0] : proposed[0];
+  const right = left + span;
+  return right > bounds[1] ? [bounds[1] - span, bounds[1]] : [left, right];
 }
+
 
 export function isZoomedXRange(current: [number, number], full: [number, number]) {
   const tolerance = Math.max(1e-9, Math.abs(full[1] - full[0]) * 1e-6);
@@ -234,104 +232,72 @@ export function isZoomedXRange(current: [number, number], full: [number, number]
 }
 
 function attachTouchExploration(root: HTMLDivElement, chart: uPlot, bounds: [number, number]) {
-  const pointers = new Map<number, { x: number; y: number }>();
+  type Point = { x: number; y: number };
+  const contacts = new Map<number, Point>();
   const minimumSpan = Math.max((bounds[1] - bounds[0]) / 500, Number.EPSILON);
-  let startRange: [number, number] = bounds;
-  let startPoint: { x: number; y: number } | null = null;
-  let pinch: { distance: number; centerX: number; range: [number, number] } | null = null;
-  let lastTapAt = 0;
-  const previousTouchAction = root.style.touchAction;
+  const savedTouchAction = root.style.touchAction;
   root.style.touchAction = 'none';
-
-  const currentRange = (): [number, number] => {
-    const scale = chart.scales.x;
-    return [scale?.min ?? bounds[0], scale?.max ?? bounds[1]];
+  let tapTime = 0;
+  let pan: { point: Point; range: [number, number] } | null = null;
+  let pinch: { distance: number; center: number; range: [number, number] } | null = null;
+  const range = (): [number, number] => [chart.scales.x?.min ?? bounds[0], chart.scales.x?.max ?? bounds[1]];
+  const contactPair = () => {
+    const iterator = contacts.values();
+    const a = iterator.next().value!;
+    const b = iterator.next().value!;
+    return { distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)), center: (a.x + b.x) / 2 };
   };
-  const reset = () => chart.setScale('x', { min: bounds[0], max: bounds[1] });
-  const firstTwoPoints = () => Array.from(pointers.values()).slice(0, 2) as [{ x: number; y: number }, { x: number; y: number }];
-
-  const startPinch = () => {
-    if (pointers.size < 2) return;
-    const [left, right] = firstTwoPoints();
-    pinch = {
-      distance: Math.max(1, Math.hypot(right.x - left.x, right.y - left.y)),
-      centerX: (left.x + right.x) / 2,
-      range: currentRange(),
-    };
-  };
-
-  const onPointerDown = (event: PointerEvent) => {
-    if (event.pointerType !== 'touch') return;
-    const now = Date.now();
-    if (pointers.size === 0 && now - lastTapAt < 300) {
-      reset();
-      lastTapAt = 0;
-    } else if (pointers.size === 0) {
-      lastTapAt = now;
-    }
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    root.setPointerCapture?.(event.pointerId);
-    startRange = currentRange();
-    startPoint = { x: event.clientX, y: event.clientY };
-    startPinch();
-  };
-
-  const onPointerMove = (event: PointerEvent) => {
-    if (!pointers.has(event.pointerId)) return;
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const rect = root.getBoundingClientRect();
-    if (rect.width <= 0) return;
-
-    if (pointers.size >= 2) {
-      if (!pinch) startPinch();
-      if (!pinch) return;
-      const [left, right] = firstTwoPoints();
-      const distance = Math.max(1, Math.hypot(right.x - left.x, right.y - left.y));
-      const nextSpan = (pinch.range[1] - pinch.range[0]) * (pinch.distance / distance);
-      const focusRatio = Math.min(1, Math.max(0, (pinch.centerX - rect.left) / rect.width));
-      const focus = pinch.range[0] + (pinch.range[1] - pinch.range[0]) * focusRatio;
-      const nextRange = clampExplorationRange(
-        [focus - nextSpan * focusRatio, focus + nextSpan * (1 - focusRatio)],
-        bounds,
-        minimumSpan,
-      );
-      chart.setScale('x', { min: nextRange[0], max: nextRange[1] });
-      event.preventDefault();
+  const dispatch = (event: PointerEvent) => {
+    const point = { x: event.clientX, y: event.clientY };
+    if (event.type === 'pointerdown') {
+      if (event.pointerType !== 'touch') return;
+      if (!contacts.size) {
+        const now = Date.now();
+        if (now - tapTime < 300) { chart.setScale('x', { min: bounds[0], max: bounds[1] }); tapTime = 0; }
+        else tapTime = now;
+      }
+      contacts.set(event.pointerId, point);
+      root.setPointerCapture?.(event.pointerId);
+      pan = { point, range: range() };
+      if (contacts.size > 1) pinch = { ...contactPair(), range: range() };
       return;
     }
-
-    if (!startPoint) return;
-    const span = startRange[1] - startRange[0];
-    const delta = ((event.clientX - startPoint.x) / rect.width) * span;
-    const nextRange = clampExplorationRange([startRange[0] - delta, startRange[1] - delta], bounds, minimumSpan);
-    chart.setScale('x', { min: nextRange[0], max: nextRange[1] });
+    if (event.type !== 'pointermove') {
+      contacts.delete(event.pointerId);
+      if (contacts.size < 2) pinch = null;
+      pan = contacts.size === 1 ? { point: contacts.values().next().value!, range: range() } : null;
+      return;
+    }
+    if (!contacts.has(event.pointerId)) return;
+    contacts.set(event.pointerId, point);
+    const rect = root.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    let proposed: [number, number];
+    if (contacts.size > 1) {
+      const pair = contactPair();
+      pinch ??= { ...pair, range: range() };
+      const span = pinch.range[1] - pinch.range[0];
+      const nextSpan = span * (pinch.distance / pair.distance);
+      const ratio = Math.min(1, Math.max(0, (pinch.center - rect.left) / rect.width));
+      const focus = pinch.range[0] + span * ratio;
+      proposed = [focus - nextSpan * ratio, focus + nextSpan * (1 - ratio)];
+    } else {
+      if (!pan) return;
+      const delta = ((point.x - pan.point.x) / rect.width) * (pan.range[1] - pan.range[0]);
+      proposed = [pan.range[0] - delta, pan.range[1] - delta];
+    }
+    const [min, max] = clampExplorationRange(proposed, bounds, minimumSpan);
+    chart.setScale('x', { min, max });
     event.preventDefault();
   };
-
-  const onPointerEnd = (event: PointerEvent) => {
-    pointers.delete(event.pointerId);
-    if (pointers.size < 2) pinch = null;
-    if (pointers.size === 1) {
-      const [point] = pointers.values();
-      startPoint = point ?? null;
-      startRange = currentRange();
-    } else {
-      startPoint = null;
-    }
-  };
-
-  root.addEventListener('pointerdown', onPointerDown, { passive: false });
-  root.addEventListener('pointermove', onPointerMove, { passive: false });
-  root.addEventListener('pointerup', onPointerEnd);
-  root.addEventListener('pointercancel', onPointerEnd);
+  const events = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const;
+  events.forEach(event => root.addEventListener(event, dispatch, { passive: false }));
   return () => {
-    root.style.touchAction = previousTouchAction;
-    root.removeEventListener('pointerdown', onPointerDown);
-    root.removeEventListener('pointermove', onPointerMove);
-    root.removeEventListener('pointerup', onPointerEnd);
-    root.removeEventListener('pointercancel', onPointerEnd);
+    root.style.touchAction = savedTouchAction;
+    events.forEach(event => root.removeEventListener(event, dispatch));
   };
 }
+
 
 function toSeconds(value: string | number | Date) {
   if (typeof value === 'number') return value > 10_000_000_000 ? value / 1000 : value;
@@ -355,32 +321,25 @@ function formatDateForSpan(seconds: number, spanSeconds: number) {
 }
 
 export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) {
-  const finiteValues = values
-    .filter((value) => Number.isFinite(value))
-    .map((value) => Math.abs(value) < 1e-12 ? 0 : value)
-    .sort((a, b) => a - b);
-
-  if (finiteValues.length < 2) return 0;
-
-  let minStep = Number.POSITIVE_INFINITY;
-  for (let index = 1; index < finiteValues.length; index += 1) {
-    const step = Math.abs(finiteValues[index]! - finiteValues[index - 1]!);
-    if (step > 1e-9 && step < minStep) {
-      minStep = step;
-    }
+  const unique = new Set<number>();
+  for (const value of values) if (Number.isFinite(value)) unique.add(Math.abs(value) < 1e-12 ? 0 : value);
+  const ordered = Array.from(unique).sort((a, b) => a - b);
+  let step = Infinity;
+  for (let index = 1; index < ordered.length; index += 1) {
+    const difference = Math.abs(ordered[index]! - ordered[index - 1]!);
+    if (difference > 1e-9) step = Math.min(step, difference);
   }
-
-  if (!Number.isFinite(minStep)) return 0;
-
+  if (!Number.isFinite(step)) return 0;
+  const scaledSteps = [step];
   let precision = 0;
-  let scaled = minStep;
-  while (precision < maxPrecision && Math.abs(scaled - Math.round(scaled)) > 1e-6) {
-    precision += 1;
-    scaled *= 10;
+  for (; precision < maxPrecision; precision += 1) {
+    const scaled = scaledSteps[precision]!;
+    if (!(Math.abs(scaled - Math.round(scaled)) > 1e-6)) return precision;
+    scaledSteps.push(scaled * 10);
   }
-
   return precision;
 }
+
 
 /** Axis labels intentionally become calendar dates for multi-day views. */
 export function formatAxisDateForSpan(seconds: number, spanSeconds: number) {
@@ -416,16 +375,12 @@ export function formatAxisDateValuesForScale(
   scaleMax: number | undefined,
   fallbackSpan: number
 ) {
-  const visibleSpan =
-    scaleMin != null &&
-    scaleMax != null &&
-    Number.isFinite(scaleMin) &&
-    Number.isFinite(scaleMax) &&
-    scaleMax > scaleMin
-      ? scaleMax - scaleMin
-      : fallbackSpan;
-  return values.map((value) => formatAxisDateForSpan(value, visibleSpan));
+  const endpoints = [scaleMin, scaleMax];
+  const valid = endpoints.every(value => value != null && Number.isFinite(value)) && scaleMax! > scaleMin!;
+  const span = valid ? scaleMax! - scaleMin! : fallbackSpan;
+  return Array.from(values, value => formatAxisDateForSpan(value, span));
 }
+
 
 /** Keep calendar labels readable as the plot narrows or gains a second Y axis. */
 export function getResponsiveCalendarTickMaximum(plotWidth: number) {
@@ -441,14 +396,20 @@ export function formatChartNumber(value: number | null | undefined, unit?: strin
 
 /** Carry the most recent finite reading across missing samples for tooltip display. */
 export function carryForwardTooltipValues(values: Array<number | null | undefined>) {
-  let lastValue: number | null = null;
-  return values.map((value) => {
-    if (value != null && Number.isFinite(value)) {
-      lastValue = value;
-    }
-    return lastValue;
-  });
+  const result: Array<number | null> = Array(values.length).fill(null);
+  let start = 0;
+  while (start < values.length) {
+    const reading = values[start];
+    if (reading == null || !Number.isFinite(reading)) { start += 1; continue; }
+    let end = start + 1;
+    while (end < values.length && (values[end] == null || !Number.isFinite(values[end]))) end += 1;
+    result.fill(reading, start, end);
+    start = end;
+  }
+  for (let index = 0; index < values.length; index += 1) if (!(index in values)) delete result[index];
+  return result;
 }
+
 
 export function buildRichTooltipValues(data: AlignedData, series: RichSeries[], connectGaps: boolean) {
   return data.slice(1).map((values, index) => (
@@ -472,57 +433,43 @@ export function getUPlotBarRadius(maxBarPx: number): [number, number] {
 }
 
 function buildStackedBarPaths(
-  priorStackIndices: number[],
-  followingStackIndices: number[],
-  maxBarPx: number,
+  priorStackIndices: number[], followingStackIndices: number[], maxBarPx: number,
 ): uPlot.Series.PathBuilder {
-  return (self, seriesIndex, idx0, idx1) => uPlot.orient(
-    self,
-    seriesIndex,
-    (series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim) => {
-      // RichTimeSeriesChart is an ordinary horizontal time/value chart. Keep a
-      // safe fallback for a future vertical series rather than drawing it wrong.
-      if (scaleX.ori !== 0) {
-        return uPlot.paths.bars!({
-          size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
-          radius: 0,
-        })(self, seriesIndex, idx0, idx1);
+  const fallback = uPlot.paths.bars!({ size: [CHART_BAR_STYLE.slotRatio, maxBarPx], radius: 0 });
+  return (self, seriesIndex, idx0, idx1) => uPlot.orient(self, seriesIndex,
+    (_series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim) => {
+      if (scaleX.ori !== 0) return fallback(self, seriesIndex, idx0, idx1);
+      const positions = dataX.map(value => Math.round(valToPosX(value, scaleX, xDim, xOff)));
+      const spacings = positions.slice(1).map((x, index) => Math.abs(x - positions[index]!)).filter(distance => distance > 0);
+      const spacing = spacings.reduce((minimum, value) => Math.min(minimum, value), Infinity);
+      const width = Math.max(1, Math.min(maxBarPx, Number.isFinite(spacing) ? spacing * CHART_BAR_STYLE.slotRatio : maxBarPx));
+      const bases = new Float64Array(dataY.length);
+      const covered = new Uint8Array(dataY.length);
+      for (const index of priorStackIndices) {
+        const values = self.data[index]!;
+        for (let point = idx0; point <= idx1; point += 1) {
+          const value = values[point];
+          if (value != null && Number.isFinite(value)) bases[point]! += value;
+        }
       }
-
-      const xPositions = dataX.map((value) => Math.round(valToPosX(value, scaleX, xDim, xOff)));
-      let minimumSpacing = Number.POSITIVE_INFINITY;
-      for (let index = 1; index < xPositions.length; index += 1) {
-        const spacing = Math.abs(xPositions[index]! - xPositions[index - 1]!);
-        if (spacing > 0 && spacing < minimumSpacing) minimumSpacing = spacing;
+      for (const index of followingStackIndices) {
+        const values = self.data[index]!;
+        for (let point = idx0; point <= idx1; point += 1) {
+          const value = values[point];
+          if (value != null && Number.isFinite(value)) covered[point] = 1;
+        }
       }
-      const barWidth = Math.max(1, Math.min(maxBarPx, Number.isFinite(minimumSpacing) ? minimumSpacing * CHART_BAR_STYLE.slotRatio : maxBarPx));
-      const halfWidth = barWidth / 2;
       const fill = new Path2D();
-
-      const stackBaseAt = (pointIndex: number) => priorStackIndices.reduce((total, priorIndex) => {
-        const value = (self.data[priorIndex] as Array<number | null | undefined>)[pointIndex];
-        return total + (value != null && Number.isFinite(value) ? value : 0);
-      }, 0);
-      const isTopOfStack = (pointIndex: number) => followingStackIndices.every((followingIndex) => {
-        const value = (self.data[followingIndex] as Array<number | null | undefined>)[pointIndex];
-        return value == null || !Number.isFinite(value);
-      });
-
-      for (let pointIndex = idx0; pointIndex <= idx1; pointIndex += 1) {
-        const value = dataY[pointIndex];
+      for (let index = idx0; index <= idx1; index += 1) {
+        const value = dataY[index];
         if (value == null || !Number.isFinite(value)) continue;
-
-        const base = stackBaseAt(pointIndex);
-        const left = xPositions[pointIndex]! - halfWidth;
-        const right = xPositions[pointIndex]! + halfWidth;
-        const yTop = Math.round(valToPosY(base + value, scaleY, yDim, yOff));
-        const yBottom = Math.round(valToPosY(base, scaleY, yDim, yOff));
-        const top = Math.min(yTop, yBottom);
-        const bottom = Math.max(yTop, yBottom);
-        const radius = isTopOfStack(pointIndex)
-          ? Math.min(CHART_BAR_STYLE.radius, halfWidth, (bottom - top) / 2)
-          : 0;
-
+        const start = Math.round(valToPosY(bases[index]! + value, scaleY, yDim, yOff));
+        const end = Math.round(valToPosY(bases[index]!, scaleY, yDim, yOff));
+        const top = Math.min(start, end);
+        const bottom = Math.max(start, end);
+        const left = positions[index]! - width / 2;
+        const right = positions[index]! + width / 2;
+        const radius = covered[index] ? 0 : Math.min(CHART_BAR_STYLE.radius, width / 2, (bottom - top) / 2);
         fill.moveTo(left, bottom);
         fill.lineTo(left, top + radius);
         if (radius > 0) fill.quadraticCurveTo(left, top, left + radius, top);
@@ -531,11 +478,10 @@ function buildStackedBarPaths(
         fill.lineTo(right, bottom);
         fill.closePath();
       }
-
       return { fill, stroke: null };
-    },
-  );
+    });
 }
+
 
 function estimateYLabelWidth(labels: string[]): number {
   let maxLen = 4;
@@ -568,99 +514,48 @@ export function buildRichTimeSeriesUPlotSeries(
     resolveColor?: (color: string) => string;
   } = {},
 ): Series[] {
-  return [
-    {},
-    ...items.map((item, index) => {
-      const color = (resolveColor ?? ((value: string) => value))(
-        item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald),
-      );
-      const seriesMode = item.mode ?? mode;
-      const hidden = hiddenKeys.has(item.key) || item.tooltipOnly === true;
-      const next: Series = {
-        label: item.label,
-        show: !hidden,
-        stroke: color,
-        scale: item.yScale ?? 'y',
-        width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : item.strokeWidth ?? 2,
-        points: {
-          show: seriesMode === 'scatter' || showPoints,
-          size: item.pointSize ?? 6,
-          stroke: color,
-          fill: color,
-        },
-      };
-      if (item.dash) next.dash = item.dash;
-      if (seriesMode === 'area') next.fill = `${color}22`;
-      if ((item.connectGaps ?? connectGaps) && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
-      if (seriesMode === 'bar') {
-        const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
+  const stacks = new Map<string, number[]>();
+  items.forEach((item, index) => {
+    if (!item.stackId || (item.mode ?? mode) !== 'bar') return;
+    const stack = stacks.get(item.stackId);
+    if (stack) stack.push(index + 1); else stacks.set(item.stackId, [index + 1]);
+  });
+  const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
+  const curved = normalizeCurveSmoothness(smoothness) !== 'straight';
+  const configured: Series[] = [{}];
+  for (const [index, item] of items.entries()) {
+    const token = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
+    const color = resolveColor ? resolveColor(token) : token;
+    const kind = item.mode ?? mode;
+    const next: Series = {
+      label: item.label,
+      show: !(hiddenKeys.has(item.key) || item.tooltipOnly === true),
+      stroke: color,
+      scale: item.yScale ?? 'y',
+      width: kind === 'scatter' ? 0 : kind === 'bar' ? 1 : item.strokeWidth ?? 2,
+      points: { show: kind === 'scatter' || showPoints, size: item.pointSize ?? 6, stroke: color, fill: color },
+    };
+    if (item.dash) next.dash = item.dash;
+    switch (kind) {
+      case 'bar': {
         next.fill = color;
-        const priorStackIndices = item.stackId
-          ? items.flatMap((candidate, candidateIndex) => (
-            candidateIndex < index && candidate.stackId === item.stackId && (candidate.mode ?? mode) === 'bar'
-              ? [candidateIndex + 1]
-              : []
-          ))
-          : [];
-        const followingStackIndices = item.stackId
-          ? items.flatMap((candidate, candidateIndex) => (
-            candidateIndex > index && candidate.stackId === item.stackId && (candidate.mode ?? mode) === 'bar'
-              ? [candidateIndex + 1]
-              : []
-          ))
-          : [];
-        const stackBaseAt = (self: uPlot, seriesIndex: number, pointIndex: number) => {
-          const ownValue = (self.data[seriesIndex] as Array<number | null | undefined>)[pointIndex];
-          if (ownValue == null || !Number.isFinite(ownValue)) return null;
-          return priorStackIndices.reduce((total, priorIndex) => {
-            const value = (self.data[priorIndex] as Array<number | null | undefined>)[pointIndex];
-            return total + (value != null && Number.isFinite(value) ? value : 0);
-          }, 0);
-        };
-        const barOptions: uPlot.Series.BarsPathBuilderOpts = {
-          size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
-          radius: item.stackId ? 0 : getUPlotBarRadius(maxBarPx),
-        };
-        if (item.stackId) {
-          barOptions.disp = {
-            y0: {
-              unit: 1,
-              values: (self, seriesIndex, idx0, idx1) => Array.from(
-                { length: idx1 - idx0 + 1 },
-                (_, offset) => stackBaseAt(self, seriesIndex, idx0 + offset),
-              ),
-            },
-            y1: {
-              unit: 1,
-              values: (self, seriesIndex, idx0, idx1) => Array.from(
-                { length: idx1 - idx0 + 1 },
-                (_, offset) => {
-                  const pointIndex = idx0 + offset;
-                  const base = stackBaseAt(self, seriesIndex, pointIndex);
-                  const value = (self.data[seriesIndex] as Array<number | null | undefined>)[pointIndex];
-                  return base == null || value == null || !Number.isFinite(value) ? null : base + value;
-                },
-              ),
-            },
-          };
-        }
-        next.paths = item.stackId
-          ? buildStackedBarPaths(priorStackIndices, followingStackIndices, maxBarPx)
-          : uPlot.paths.bars!(barOptions);
+        const stack = item.stackId ? stacks.get(item.stackId) : undefined;
+        const position = stack?.indexOf(index + 1) ?? -1;
+        next.paths = stack
+          ? buildStackedBarPaths(stack.slice(0, position), stack.slice(position + 1), maxBarPx)
+          : uPlot.paths.bars!({ size: [CHART_BAR_STYLE.slotRatio, maxBarPx], radius: getUPlotBarRadius(maxBarPx) });
+        break;
       }
-      if (seriesMode === 'scatter') next.paths = () => null;
-      if ((item.interpolation === 'step' || stepInterpolation) && (seriesMode === 'line' || seriesMode === 'area')) {
-        next.paths = uPlot.paths.stepped!({ align: 1 });
-      } else if (
-        normalizeCurveSmoothness(smoothness) !== 'straight'
-        && item.smoothable !== false
-        && (seriesMode === 'line' || seriesMode === 'area')
-      ) {
-        next.paths = NATIVE_SPLINE_PATH;
-      }
-      return next;
-    }),
-  ];
+      case 'scatter': next.paths = () => null; break;
+      default:
+        if (kind === 'area') next.fill = `${color}22`;
+        if (item.connectGaps ?? connectGaps) next.spanGaps = true;
+        if (item.interpolation === 'step' || stepInterpolation) next.paths = uPlot.paths.stepped!({ align: 1 });
+        else if (curved && item.smoothable !== false) next.paths = NATIVE_SPLINE_PATH;
+    }
+    configured.push(next);
+  }
+  return configured;
 }
 
 export function RichTimeSeriesChart({
@@ -718,7 +613,18 @@ export function RichTimeSeriesChart({
     lines: Array<RichReferenceLine & { left: number; top: number; width: number }>;
     intervalBand: { top: number; height: number } | null;
   }>({ bars: [], lines: [], intervalBand: null });
-  const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
+  const [hiddenKeys, changeHiddenKeys] = React.useReducer((current: Set<string>, action: { toggle: string } | { valid: Set<string> }) => {
+    if ('toggle' in action) {
+      const next = new Set(current);
+      if (next.has(action.toggle)) next.delete(action.toggle); else next.add(action.toggle);
+      return next;
+    }
+    const obsolete = [...current].filter(key => !action.valid.has(key));
+    if (!obsolete.length) return current;
+    const next = new Set(current);
+    obsolete.forEach(key => next.delete(key));
+    return next;
+  }, new Set<string>());
   const [isZoomed, setIsZoomed] = React.useState(false);
   const palette = useDocumentPalette();
   const isDark = useDocumentTheme();
@@ -782,15 +688,9 @@ export function RichTimeSeriesChart({
   React.useEffect(() => {
     const legend = legendRef.current;
     if (!legend) return;
-    let frame = 0;
     const measure = () => setLegendHeight(legend.getBoundingClientRect().height);
     measure();
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(measure);
-    });
-    observer.observe(legend);
-    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+    return observeChartFrame(legend, measure);
   }, [legendVisible, loading, hasData]);
   const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
 
@@ -809,11 +709,7 @@ export function RichTimeSeriesChart({
   );
 
   React.useEffect(() => {
-    setHiddenKeys((current) => {
-      const validKeys = new Set(series.map((item) => item.key));
-      const next = new Set([...current].filter((key) => validKeys.has(key)));
-      return next.size === current.size ? current : next;
-    });
+    changeHiddenKeys({ valid: new Set(series.map(item => item.key)) });
   }, [series]);
 
   React.useEffect(() => {
@@ -902,6 +798,15 @@ export function RichTimeSeriesChart({
         }
       : null;
 
+    const axisValues = (side: 'y' | 'y2', values: number[]) => {
+      const precision = getAdaptiveDecimalPrecision(values);
+      const right = side === 'y2';
+      (right ? yRightPrecisionRef : yPrecisionRef).current = precision;
+      const unit = (right ? yRightUnitRef : yUnitRef).current;
+      const format = (right ? yRightAxisValueFormatterRef : yAxisValueFormatterRef).current ?? yValueFormatterRef.current;
+      return values.map(value => format ? format(value, unit) : formatChartNumber(value, unit, precision));
+    };
+
     const yAxisConfig: uPlot.Axis = {
       stroke: chartMuted,
       grid: showGrid ? { stroke: chartGrid, width: 1 } : { show: false },
@@ -912,19 +817,7 @@ export function RichTimeSeriesChart({
       },
       gap: 8,
       ...(yAxisLabel ? { label: yAxisLabel, labelSize: 24, labelGap: 4 } : {}),
-      values: (_u, vals) => {
-        const precision = getAdaptiveDecimalPrecision(vals);
-        yPrecisionRef.current = precision;
-        return vals.map((v) => {
-          if (yAxisValueFormatterRef.current) {
-            return yAxisValueFormatterRef.current(v, yUnitRef.current);
-          }
-          if (yValueFormatterRef.current) {
-            return yValueFormatterRef.current(v, yUnitRef.current);
-          }
-          return formatChartNumber(v, yUnitRef.current, precision);
-        });
-      },
+      values: (_u, vals) => axisValues('y', vals),
     };
 
     // Right Y axis — only added when at least one series uses scale 'y2'.
@@ -940,19 +833,7 @@ export function RichTimeSeriesChart({
           size: 86,
           gap: 8,
           ...(yRightAxisLabel ? { label: yRightAxisLabel, labelSize: 24, labelGap: 4 } : {}),
-          values: (_u, vals) => {
-            const precision = getAdaptiveDecimalPrecision(vals);
-            yRightPrecisionRef.current = precision;
-            return vals.map((v) => {
-              if (yRightAxisValueFormatterRef.current) {
-                return yRightAxisValueFormatterRef.current(v, yRightUnitRef.current);
-              }
-              if (yValueFormatterRef.current) {
-                return yValueFormatterRef.current(v, yRightUnitRef.current);
-              }
-              return formatChartNumber(v, yRightUnitRef.current, precision);
-            });
-          },
+          values: (_u, vals) => axisValues('y2', vals),
         }
       : null;
 
@@ -971,37 +852,22 @@ export function RichTimeSeriesChart({
       const plotTop = chart.bbox.top;
       const plotWidth = chart.bbox.width;
       const plotHeight = chart.bbox.height;
-      const xPosition = (value: number) => plotLeft + chart.valToPos(value, 'x');
-      const primaryYPosition = (value: number) => plotTop + chart.valToPos(value, 'y');
-      const intervalBand = packedIntervals.length > 0
-        ? getRichTimeIntervalBandGeometry(0, laneCount, plotTop, plotHeight, intervalBandRatio)
-        : null;
-      const bars = packedIntervals.map((interval) => {
-        const left = xPosition(toSeconds(interval.start));
-        const right = xPosition(toSeconds(interval.end));
-        const geometry = getRichTimeIntervalBandGeometry(
-          interval.lane,
-          laneCount,
-          plotTop,
-          plotHeight,
-          intervalBandRatio,
-        );
-        return {
-          ...interval,
-          left: Math.min(left, right),
-          top: geometry.top,
-          width: Math.max(2, Math.abs(right - left)),
-          height: geometry.height,
-          hitTop: geometry.hitTop,
-          hitHeight: geometry.hitHeight,
-        };
-      });
-      const lines = referenceLines.map((line) => ({
-        ...line,
-        left: plotLeft,
-        top: primaryYPosition(line.value),
-        width: plotWidth,
-      }));
+      const lanes = new Map<number, RichTimeIntervalBandGeometry>();
+      if (packedIntervals.length) lanes.set(0, getRichTimeIntervalBandGeometry(0, laneCount, plotTop, plotHeight, intervalBandRatio));
+      const bars = [];
+      for (const interval of packedIntervals) {
+        let geometry = lanes.get(interval.lane);
+        if (!geometry) {
+          geometry = getRichTimeIntervalBandGeometry(interval.lane, laneCount, plotTop, plotHeight, intervalBandRatio);
+          lanes.set(interval.lane, geometry);
+        }
+        const left = plotLeft + chart.valToPos(toSeconds(interval.start), 'x');
+        const right = plotLeft + chart.valToPos(toSeconds(interval.end), 'x');
+        bars.push({ ...interval, left: Math.min(left, right), width: Math.max(2, Math.abs(right - left)),
+          top: geometry.top, height: geometry.height, hitTop: geometry.hitTop, hitHeight: geometry.hitHeight });
+      }
+      const intervalBand = lanes.get(0);
+      const lines = referenceLines.map(line => ({ ...line, left: plotLeft, top: plotTop + chart.valToPos(line.value, 'y'), width: plotWidth }));
       setOverlay({
         bars,
         lines,
@@ -1009,7 +875,59 @@ export function RichTimeSeriesChart({
       });
     };
 
-    let applyingSelection = false;
+    const cursorController = createRichCursorController({
+      controlled: controlledCursor, showTooltip,
+      selectedValue: () => {
+        const index = activeCursorIndexRef.current;
+        return index == null ? undefined : alignedDataRef.current[0]?.[index];
+      },
+      onIndex: index => onCursorIndexChangeRef.current?.(index),
+      clear: () => setTooltip(null),
+      render: (u, idx) => {
+            const data = alignedDataRef.current;
+            const currentSeries = seriesRef.current;
+            const timestamp = data[0]?.[idx];
+            const rows: string[] = [];
+            const axes = {
+              y: { unit: yUnitRef.current, precision: yPrecisionRef.current },
+              y2: { unit: yRightUnitRef.current, precision: yRightPrecisionRef.current },
+            };
+            for (const [seriesIndex, item] of currentSeries.entries()) {
+              if (hiddenKeys.has(item.key)) continue;
+              const value = tooltipValuesRef.current[seriesIndex]?.[idx] ?? null;
+              const axis = axes[item.yScale ?? 'y'];
+              const format = yValueFormatterRef.current;
+              const text = item.tooltipFormatter ? item.tooltipFormatter(value) : format ? format(value, axis.unit) : formatChartNumber(value, axis.unit, axis.precision);
+              const detail = tooltipDetailsRef.current[seriesIndex]?.[idx];
+              rows.push(`${item.label}: ${text}${detail ? ` (${detail})` : ''}`);
+            }
+
+            let tooltipHeader = '';
+            let tooltipSubHeader = '';
+            if (timestamp != null) {
+              if (xValueFormatterRef.current) {
+                tooltipHeader = xValueFormatterRef.current(timestamp as number);
+              } else if (xTimeRef.current) {
+                // Use actual data span so tooltip granularity matches axis labels.
+                const xs = u.data[0] as number[];
+                const span = xs.length > 1 ? xs[xs.length - 1]! - xs[0]! : 86400;
+                tooltipHeader = formatDateForSpan(timestamp as number, span);
+              } else {
+                tooltipHeader = formatChartNumber(timestamp as number, xUnitRef.current, 0);
+              }
+              if (xSecondaryFormatterRef.current) {
+                tooltipSubHeader = xSecondaryFormatterRef.current(timestamp as number);
+              }
+            }
+
+            const tooltipLineCount = rows.length + (tooltipHeader ? 1 : 0) + (tooltipSubHeader ? 1 : 0);
+            setTooltip({
+              left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
+              top: Math.max(12, Math.min((u.cursor.top ?? 0) + 12, u.height - tooltipLineCount * 18 - 16)),
+              text: [tooltipHeader, tooltipSubHeader, ...rows].filter(Boolean).join('\n'),
+            });
+      },
+    });
     const opts: Options = {
       width,
       height: chartHeight,
@@ -1055,68 +973,7 @@ export function RichTimeSeriesChart({
             requestAnimationFrame(updateOverlay);
           },
         ],
-        setCursor: [
-          (u) => {
-            if (!showTooltip) {
-              setTooltip(null);
-              return;
-            }
-            const idx = u.cursor.idx;
-            if (idx == null || idx < 0) {
-              if (controlledCursor && !applyingSelection) return;
-              if (!applyingSelection) onCursorIndexChangeRef.current?.(null);
-              setTooltip(null);
-              return;
-            }
-            if (!controlledCursor && !applyingSelection) onCursorIndexChangeRef.current?.(idx);
-            const data = alignedDataRef.current;
-            const currentSeries = seriesRef.current;
-            const timestamp = data[0]?.[idx];
-            const rows = currentSeries
-              .map((item, seriesIndex) => {
-                if (hiddenKeys.has(item.key)) return null;
-                const value = tooltipValuesRef.current[seriesIndex]?.[idx] ?? null;
-                const detail = tooltipDetailsRef.current[seriesIndex]?.[idx];
-                const withDetail = (text: string) => detail ? `${text} (${detail})` : text;
-                if (item.tooltipFormatter) {
-                  return withDetail(`${item.label}: ${item.tooltipFormatter(value)}`);
-                }
-                // Use the right-axis unit for y2 series, primary unit for y series.
-                const unit = item.yScale === 'y2' ? yRightUnitRef.current : yUnitRef.current;
-                const precision = item.yScale === 'y2' ? yRightPrecisionRef.current : yPrecisionRef.current;
-                if (yValueFormatterRef.current) {
-                  return withDetail(`${item.label}: ${yValueFormatterRef.current(value, unit)}`);
-                }
-                return withDetail(`${item.label}: ${formatChartNumber(value, unit, precision)}`);
-              })
-              .filter((row): row is string => Boolean(row));
-
-            let tooltipHeader = '';
-            let tooltipSubHeader = '';
-            if (timestamp != null) {
-              if (xValueFormatterRef.current) {
-                tooltipHeader = xValueFormatterRef.current(timestamp as number);
-              } else if (xTimeRef.current) {
-                // Use actual data span so tooltip granularity matches axis labels.
-                const xs = u.data[0] as number[];
-                const span = xs.length > 1 ? xs[xs.length - 1]! - xs[0]! : 86400;
-                tooltipHeader = formatDateForSpan(timestamp as number, span);
-              } else {
-                tooltipHeader = formatChartNumber(timestamp as number, xUnitRef.current, 0);
-              }
-              if (xSecondaryFormatterRef.current) {
-                tooltipSubHeader = xSecondaryFormatterRef.current(timestamp as number);
-              }
-            }
-
-            const tooltipLineCount = rows.length + (tooltipHeader ? 1 : 0) + (tooltipSubHeader ? 1 : 0);
-            setTooltip({
-              left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
-              top: Math.max(12, Math.min((u.cursor.top ?? 0) + 12, u.height - tooltipLineCount * 18 - 16)),
-              text: [tooltipHeader, tooltipSubHeader, ...rows].filter(Boolean).join('\n'),
-            });
-          },
-        ],
+        setCursor: [cursorController.read],
       },
     };
 
@@ -1124,19 +981,7 @@ export function RichTimeSeriesChart({
     setIsZoomed(false);
 
     const chart = chartRef.current;
-    applyCursorSelectionRef.current = () => {
-      if (!controlledCursor) return;
-      const index = activeCursorIndexRef.current;
-      const value = index == null ? undefined : alignedDataRef.current[0]?.[index];
-      applyingSelection = true;
-      try {
-        chart.setCursor(value == null
-          ? { left: -10, top: -10 }
-          : { left: chart.valToPos(value, 'x'), top: 12 });
-      } finally {
-        applyingSelection = false;
-      }
-    };
+    applyCursorSelectionRef.current = () => cursorController.apply(chart);
     const rangeFromScale = (scale: uPlot.Scale | undefined): [number, number] | undefined => (
       scale?.min != null && scale.max != null && Number.isFinite(scale.min) && Number.isFinite(scale.max)
         ? [scale.min, scale.max]
@@ -1153,26 +998,17 @@ export function RichTimeSeriesChart({
       ? attachTouchExploration(root, chart, fullXRange)
       : attachChartScrubbing(chart, () => {}, true);
 
-    let resizeFrame = 0;
-    const observer =
-      typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => {
-            cancelAnimationFrame(resizeFrame);
-            resizeFrame = requestAnimationFrame(() => {
-              chartRef.current?.setSize({ width: Math.max(1, root.clientWidth || 320), height: chartHeight });
-              applyCursorSelectionRef.current?.();
-              updateOverlay();
-            });
-          })
-        : null;
-    observer?.observe(root);
+    const stopObserving = typeof ResizeObserver === 'undefined' ? undefined : observeChartFrame(root, () => {
+      chart.setSize({ width: Math.max(1, root.clientWidth || 320), height: chartHeight });
+      cursorController.apply(chart);
+      updateOverlay();
+    });
 
     return () => {
-      observer?.disconnect();
-      cancelAnimationFrame(resizeFrame);
+      stopObserving?.();
       touchCleanup?.();
       applyCursorSelectionRef.current = null;
-      chartRef.current?.destroy();
+      chart.destroy();
       chartRef.current = null;
       setTooltip(null);
       setIntervalHover(null);
@@ -1356,12 +1192,7 @@ export function RichTimeSeriesChart({
                 key={item.key}
                 type="button"
                 onClick={() => {
-                  setHiddenKeys((current) => {
-                    const next = new Set(current);
-                    if (next.has(item.key)) next.delete(item.key);
-                    else next.add(item.key);
-                    return next;
-                  });
+                  changeHiddenKeys({ toggle: item.key });
                 }}
                 className={cn(
                   'flex min-h-11 sm:min-h-[32px] max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-bg',

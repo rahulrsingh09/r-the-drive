@@ -1,3 +1,4 @@
+import { storyTimeline } from './chartStoryTimeline';
 import type { Meta, StoryObj } from '@storybook/react';
 import { DegradationChart } from './DegradationChart';
 
@@ -12,21 +13,11 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 function makeData(points: number, startPct = 100, endPct = 93) {
-  return Array.from({ length: points }, (_, i) => {
-    const t = i / (points - 1);
-    const pct = startPct - (startPct - endPct) * t + (Math.random() - 0.5) * 0.4;
-    const rated = 135;
-    const usable = (pct / 100) * rated;
-    const d = new Date('2022-01-01');
-    d.setMonth(d.getMonth() + i * 2);
-    return {
-      ts: d.toISOString(),
-      usable_kwh: +usable.toFixed(2),
-      rated_kwh: rated,
-      capacity_pct: +pct.toFixed(2),
-    };
-  });
+  const timeline = storyTimeline('2022-01-01', points, 'month', 2);
+  const percentages = timeline.map((_, index) => startPct - (startPct - endPct) * (index / (points - 1)) + (Math.random() - 0.5) * 0.4);
+  return timeline.map((ts, index) => ({ ts, usable_kwh: Number(((percentages[index]! / 100) * 135).toFixed(2)), rated_kwh: 135, capacity_pct: Number(percentages[index]!.toFixed(2)) }));
 }
+
 
 export const Healthy: Story = {
   args: { data: makeData(18, 100, 96) },

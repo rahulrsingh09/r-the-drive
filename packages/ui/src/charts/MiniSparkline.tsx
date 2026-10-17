@@ -1,3 +1,4 @@
+import { prepareSparklineGeometry, paintSparkline } from './sparklineGeometry';
 import React from 'react';
 import { CHART_COLORS, getChartColor, resolveChartColor } from './ChartProvider';
 import { useDocumentPalette } from '../hooks/useDocumentPalette';
@@ -7,16 +8,12 @@ import {
   bucketTimeSeriesValues,
   DEFAULT_SPRITE_TIME_FILTER,
   filterTimeSeriesValues,
-  maximumContinuousTimeGapMilliseconds,
   normalizeTimeFilter,
   type TimeFilterWindow,
 } from './timeFilter';
 import {
-  clampedControlPoints,
   DEFAULT_CURVE_SMOOTHNESS,
   normalizeCurveSmoothness,
-  splitCurveSegments,
-  type CurvePoint,
   type CurveSmoothness,
 } from './curveSmoothness';
 
@@ -46,57 +43,24 @@ export function MiniSparkline({
 }: MiniSparklineProps) {
   if (type === 'none') return null;
 
-  const chartData = data.map((point, index) => ({
-    x: point.ts ?? String(index),
-    value: Number.isFinite(point.value) ? (point.value as number) : null,
-  }));
-
-  if (!chartData.some((point) => point.value != null)) {
-    return showFallback ? <EmptySparkline height={height} color={color} /> : null;
+  const timestamps: string[] = [];
+  const values: Array<number | null> = [];
+  let hasValue = false;
+  for (const [index, point] of data.entries()) {
+    timestamps.push(point.ts ?? String(index));
+    const value = Number.isFinite(point.value) ? point.value as number : null;
+    values.push(value);
+    hasValue ||= value != null;
   }
-
+  if (!hasValue) return showFallback ? <EmptySparkline height={height} color={color} /> : null;
   const resolvedFilter = normalizeTimeFilter(timeFilter, DEFAULT_SPRITE_TIME_FILTER);
-  const filteredValues = filterTimeSeriesValues(
-    chartData.map((point) => point.x),
-    chartData.map((point) => point.value),
-    resolvedFilter
-  );
-  const filteredData = chartData.map((point, index) => ({
-    ...point,
-    value: filteredValues[index]!,
-  }));
+  const samples = type === 'bar'
+    ? bucketTimeSeriesValues(timestamps, values, resolvedFilter).map(point => ({ x: String(point.timestamp), value: point.value }))
+    : filterTimeSeriesValues(timestamps, values, resolvedFilter).map((value, index) => ({ x: timestamps[index]!, value }));
+  return <CanvasSparkline data={samples} type={type === 'bar' ? 'bar' : 'line'} height={height} color={color}
+    {...(type !== 'bar' ? { fill: type === 'area' } : {})}
+    timeFilter={resolvedFilter} smoothness={normalizeCurveSmoothness(smoothness)} yDomain={yDomain} />;
 
-  if (type === 'bar') {
-    const bucketedData = bucketTimeSeriesValues(
-      chartData.map((point) => point.x),
-      chartData.map((point) => point.value),
-      resolvedFilter
-    ).map((point) => ({ x: String(point.timestamp), value: point.value }));
-    return (
-      <CanvasSparkline
-        data={bucketedData}
-        type="bar"
-        height={height}
-        color={color}
-        timeFilter={resolvedFilter}
-        smoothness={normalizeCurveSmoothness(smoothness)}
-        yDomain={yDomain}
-      />
-    );
-  }
-
-  return (
-    <CanvasSparkline
-      data={filteredData}
-      type="line"
-      height={height}
-      color={color}
-      fill={type === 'area'}
-      timeFilter={resolvedFilter}
-      smoothness={normalizeCurveSmoothness(smoothness)}
-      yDomain={yDomain}
-    />
-  );
 }
 
 function EmptySparkline({ height, color }: { height: number; color: string }) {
@@ -169,153 +133,8 @@ function CanvasSparkline({
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, width, height);
 
-      const values = data
-        .map((point) => point.value)
-        .filter((value): value is number => value != null);
-      let min = Number.POSITIVE_INFINITY;
-      let max = Number.NEGATIVE_INFINITY;
-      for (const value of values) {
-        min = Math.min(min, value);
-        max = Math.max(max, value);
-      }
-      const hasYDomain =
-        yDomain != null &&
-        Number.isFinite(yDomain.min) &&
-        Number.isFinite(yDomain.max) &&
-        yDomain.max > yDomain.min;
-      const domainMin = hasYDomain ? yDomain.min : min;
-      const domainMax = hasYDomain ? yDomain.max : max;
-      const span = domainMax - domainMin;
-      const parsedTimes = data.map((point) => Date.parse(point.x));
-      const usesTime =
-        parsedTimes.every(Number.isFinite) &&
-        parsedTimes.length > 1 &&
-        parsedTimes[0] !== parsedTimes[parsedTimes.length - 1];
-      const start = usesTime ? parsedTimes[0]! : 0;
-      const end = usesTime ? parsedTimes[parsedTimes.length - 1]! : Math.max(1, data.length - 1);
-      const pointAt = (point: { value: number }, index: number) => ({
-        x: usesTime
-          ? ((parsedTimes[index]! - start) / (end - start)) * width
-          : (index / Math.max(1, data.length - 1)) * width,
-        y:
-          span === 0
-            ? height * 0.62
-            : height - 4 - ((point.value - domainMin) / span) * Math.max(1, height - 8),
-      });
-
-      if (type === 'bar') {
-        const maxValue = Math.max(0, max);
-        const barWidth = Math.max(1, width / data.length);
-        context.fillStyle = canvasColor;
-        for (let index = 0; index < data.length; index += 1) {
-          const value = data[index]!.value ?? 0;
-          const normalized = maxValue > 0 ? value / maxValue : 0;
-          const barHeight = normalized > 0 ? Math.max(2, normalized * (height - 6)) : 1;
-          context.globalAlpha = normalized > 0 ? 0.72 : 0.26;
-          context.fillRect(
-            index * barWidth + barWidth * 0.18,
-            height - 2 - barHeight,
-            Math.max(1, barWidth * 0.64),
-            barHeight
-          );
-        }
-        context.globalAlpha = 1;
-        return;
-      }
-
-      const maximumGap = maximumContinuousTimeGapMilliseconds(timeFilter);
-      const points: Array<CurvePoint | null> = [];
-      let previousTimestamp: number | null = null;
-      for (let index = 0; index < data.length; index += 1) {
-        const point = data[index]!;
-        const timestamp = parsedTimes[index]!;
-        if (point.value == null) {
-          points.push(null);
-          previousTimestamp = null;
-          continue;
-        }
-        if (usesTime && previousTimestamp != null && timestamp - previousTimestamp > maximumGap) {
-          points.push(null);
-        }
-        points.push(pointAt({ value: point.value }, index));
-        previousTimestamp = usesTime ? timestamp : null;
-      }
-      const drawLinePaths = () => {
-        for (const segment of splitCurveSegments(points)) {
-          context.moveTo(segment[0]!.x, segment[0]!.y);
-          if (smoothness === 'straight' || segment.length < 2) {
-            for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
-            continue;
-          }
-          for (let index = 0; index < segment.length - 1; index += 1) {
-            const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
-            const point = segment[index + 1]!;
-            if (typeof context.bezierCurveTo === 'function') {
-              context.bezierCurveTo(
-                controlOne.x,
-                controlOne.y,
-                controlTwo.x,
-                controlTwo.y,
-                point.x,
-                point.y
-              );
-            } else {
-              context.lineTo(point.x, point.y);
-            }
-          }
-        }
-      };
-      context.strokeStyle = canvasColor;
-      context.lineWidth = 1.6;
-      context.lineJoin = 'round';
-      context.lineCap = 'round';
-
-      if (fill) {
-        context.beginPath();
-        for (const segment of splitCurveSegments(points)) {
-          const first = segment[0]!;
-          const last = segment[segment.length - 1]!;
-          context.moveTo(first.x, height);
-          context.lineTo(first.x, first.y);
-          if (smoothness === 'straight' || segment.length < 2) {
-            for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
-          } else {
-            for (let index = 0; index < segment.length - 1; index += 1) {
-              const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
-              const point = segment[index + 1]!;
-              if (typeof context.bezierCurveTo === 'function') {
-                context.bezierCurveTo(
-                  controlOne.x,
-                  controlOne.y,
-                  controlTwo.x,
-                  controlTwo.y,
-                  point.x,
-                  point.y
-                );
-              } else {
-                context.lineTo(point.x, point.y);
-              }
-            }
-          }
-          context.lineTo(last.x, height);
-          context.closePath();
-        }
-        context.globalAlpha = 0.16;
-        context.fillStyle = canvasColor;
-        context.fill();
-        context.globalAlpha = 1;
-      }
-      context.beginPath();
-      drawLinePaths();
-      context.stroke();
-      for (const segment of splitCurveSegments(points)) {
-        if (segment.length !== 1) continue;
-        const point = segment[0]!;
-        context.beginPath();
-        context.arc(point.x, point.y, 1.6, 0, Math.PI * 2);
-        context.fillStyle = canvasColor;
-        context.fill();
-      }
+      const geometry = prepareSparklineGeometry(data, width, height, type, timeFilter, smoothness, yDomain);
+      paintSparkline(context, geometry, canvasColor, height, fill === true);
     };
 
     draw();

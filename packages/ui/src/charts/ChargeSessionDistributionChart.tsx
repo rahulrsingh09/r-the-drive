@@ -35,8 +35,7 @@ export function ChargeSessionDistributionChart({
     return <ChartSkeleton height={height} />;
   }
 
-  const populatedBands = bands.filter((band) => band.count > 0 || band.averageRateKw != null);
-  if (populatedBands.length === 0) {
+  if (!bands.some(band => band.count > 0 || band.averageRateKw != null)) {
     return (
       <div
         className="flex items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary"
@@ -52,37 +51,21 @@ export function ChargeSessionDistributionChart({
   const margin = { top: 18, right: 96, bottom: 64, left: 96 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = chartHeight - margin.top - margin.bottom;
-  const maxCount = Math.max(1, ...bands.map((band) => band.count));
-  const maxRate = Math.max(1, ...bands.map((band) => band.averageRateKw ?? 0));
+  const domain = bands.reduce((range, band) => ({ count: Math.max(range.count, band.count), rate: Math.max(range.rate, band.averageRateKw ?? 0) }), { count: 1, rate: 1 });
+  const maxCount = domain.count;
+  const maxRate = domain.rate;
   const bandWidth = innerWidth / Math.max(1, bands.length);
   const barWidth = Math.min(72, bandWidth * 0.56);
-
-  const countY = (value: number) => margin.top + innerHeight - (value / maxCount) * innerHeight;
-  const rateY = (value: number) => margin.top + innerHeight - (value / maxRate) * innerHeight;
-  const linePoints = bands
-    .map((band, index) => {
-      if (band.averageRateKw == null) return null;
-      const x = margin.left + bandWidth * index + bandWidth / 2;
-      return `${x},${rateY(band.averageRateKw)}`;
-    })
-    .filter((point): point is string => point != null)
-    .join(' ');
-
+  const geometry = bands.map((band, index) => {
+    const centerX = margin.left + bandWidth * index + bandWidth / 2;
+    const barTop = margin.top + innerHeight - (band.count / maxCount) * innerHeight;
+    return { band, centerX, barTop, barHeight: Math.max(0, margin.top + innerHeight - barTop),
+      ratePointY: band.averageRateKw == null ? null : margin.top + innerHeight - (band.averageRateKw / maxRate) * innerHeight };
+  });
+  const linePoints = geometry.flatMap(row => row.ratePointY == null ? [] : [`${row.centerX},${row.ratePointY}`]).join(' ');
   const tickFractions = [0, 0.25, 0.5, 0.75, 1];
-  const labelPositions = bands.map((_, index) => margin.left + bandWidth * index + bandWidth / 2);
-  const axisLabelIndices = new Set(selectAdaptiveAxisLabelIndices(
-    bands.map((band) => band.label),
-    labelPositions,
-  ));
-  const valueLabelIndices = new Set(selectValueLabelIndices(
-    bands.map((band, index) => ({
-      index,
-      value: band.count,
-      x: labelPositions[index] ?? margin.left,
-      y: countY(band.count) - 8,
-      width: measureChartText(formatCount(band.count)),
-    })),
-  ));
+  const axisLabelIndices = new Set(selectAdaptiveAxisLabelIndices(bands.map(band => band.label), geometry.map(row => row.centerX)));
+  const valueLabelIndices = new Set(selectValueLabelIndices(geometry.map((row, index) => ({ index, value: row.band.count, x: row.centerX, y: row.barTop - 8, width: measureChartText(formatCount(row.band.count)) }))));
 
   return (
     <div className="rounded-lg border border-border bg-surface-1 p-3">
@@ -108,11 +91,7 @@ export function ChargeSessionDistributionChart({
           );
         })}
 
-        {bands.map((band, index) => {
-          const centerX = margin.left + bandWidth * index + bandWidth / 2;
-          const barTop = countY(band.count);
-          const barHeight = Math.max(0, margin.top + innerHeight - barTop);
-          const ratePointY = band.averageRateKw == null ? null : rateY(band.averageRateKw);
+        {geometry.map(({ band, centerX, barTop, barHeight, ratePointY }, index) => {
 
           return (
             <g key={band.label}>

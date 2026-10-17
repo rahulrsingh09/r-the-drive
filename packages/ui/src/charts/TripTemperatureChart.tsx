@@ -1,3 +1,4 @@
+import { tripTooltipFormatter } from './chartFormatters';
 import * as React from 'react';
 import {
   ResponsiveContainer,
@@ -14,8 +15,8 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatTemp } from '../lib/utils';
-import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
-import { createSampleDotRenderer, getTripTemperatureDomain, getVisibleSampleElapsedSet } from './TripChartRendering';
+import { useTripMeasurements } from './tripMeasurements';
+import { getTripTemperatureDomain } from './TripChartRendering';
 
 export interface TripTemperaturePoint {
   elapsed_s: number;
@@ -39,6 +40,14 @@ function formatElapsed(seconds: number) {
   return `${min}:${String(sec).padStart(2, '0')}`;
 }
 
+const formatTooltip = tripTooltipFormatter('temperature');
+
+const MARKERS = {
+  outside_temp_c: { r: 2, strokeWidth: 0, fill: CHART_COLORS.emerald },
+  cabin_temp_c: { r: 2, strokeWidth: 0, fill: CHART_COLORS.orange },
+  driver_temp_c: { r: 2, strokeWidth: 0, fill: CHART_COLORS.yellow },
+};
+
 export function TripTemperatureChart({
   data,
   loading = false,
@@ -50,35 +59,12 @@ export function TripTemperatureChart({
     ...point,
     hvac_on: point.hvac_active ? 1 : 0,
   }));
-  const measuredData = React.useMemo(
-    () => data.filter((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null),
-    [data],
-  );
-  const temperatureDomain = React.useMemo(
-    () => getTripTemperatureDomain(data.flatMap((point) => [point.outside_temp_c, point.cabin_temp_c, point.driver_temp_c])),
-    [data],
-  );
-  const outsideTempDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.outside_temp_c != null),
-      { r: 2, strokeWidth: 0, fill: CHART_COLORS.emerald },
-    ),
-    [data],
-  );
-  const cabinTempDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.cabin_temp_c != null),
-      { r: 2, strokeWidth: 0, fill: CHART_COLORS.orange },
-    ),
-    [data],
-  );
-  const driverSetpointDot = React.useMemo(
-    () => createSampleDotRenderer(
-      getVisibleSampleElapsedSet(data, (point) => point.driver_temp_c != null),
-      { r: 2, strokeWidth: 0, fill: CHART_COLORS.yellow },
-    ),
-    [data],
-  );
+  const measurements = useTripMeasurements(data, MARKERS, activeElapsedS, onActiveElapsedSChange);
+  const temperatureDomain = React.useMemo(() => {
+    const readings: Array<number | null | undefined> = [];
+    for (const point of data) readings.push(point.outside_temp_c, point.cabin_temp_c, point.driver_temp_c);
+    return getTripTemperatureDomain(readings);
+  }, [data]);
 
   if (loading) {
     return (
@@ -88,8 +74,7 @@ export function TripTemperatureChart({
     );
   }
 
-  const hasAnyData = data.some((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null);
-  if (!hasAnyData) {
+  if (!measurements.measured.length) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
         Outside temp unavailable for this trip.
@@ -104,15 +89,8 @@ export function TripTemperatureChart({
         syncId="trip-timeline-sync"
         syncMethod="value"
         margin={CHART_MARGINS.withYAxis}
-        onMouseMove={(state) => {
-          const nextElapsed = getActiveElapsedSFromChartState<TripTemperaturePoint>(
-            state as TripChartMouseState<TripTemperaturePoint>,
-            measuredData,
-            activeElapsedS,
-          );
-          onActiveElapsedSChange?.(nextElapsed);
-        }}
-        onMouseLeave={() => onActiveElapsedSChange?.(null)}
+        onMouseMove={measurements.onMouseMove}
+        onMouseLeave={measurements.onMouseLeave}
       >
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
         <XAxis
@@ -136,13 +114,7 @@ export function TripTemperatureChart({
         <Tooltip
           content={<ChartTooltip
             labelFormatter={(value) => formatElapsed(Number(value))}
-            formatter={(value, name) => {
-              if (name === 'outside_temp_c' || name === 'Outside Temp') return [formatTemp(Number(value)), 'Outside'];
-              if (name === 'cabin_temp_c' || name === 'Cabin Temp') return [formatTemp(Number(value)), 'Cabin'];
-              if (name === 'driver_temp_c' || name === 'Driver Setpoint') return [formatTemp(Number(value)), 'Driver Set'];
-              if (name === 'hvac_on' || name === 'Climate On') return [Number(value) > 0 ? 'On' : 'Off', 'Climate'];
-              return [String(value), String(name)];
-            }}
+            formatter={formatTooltip}
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
@@ -171,7 +143,7 @@ export function TripTemperatureChart({
           name="Outside Temp"
           stroke={CHART_COLORS.emerald}
           strokeWidth={1.8}
-          dot={outsideTempDot}
+          dot={measurements.dots.outside_temp_c}
           activeDot={{ r: 3.8, fill: CHART_COLORS.emerald, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -182,7 +154,7 @@ export function TripTemperatureChart({
           name="Cabin Temp"
           stroke={CHART_COLORS.orange}
           strokeWidth={1.8}
-          dot={cabinTempDot}
+          dot={measurements.dots.cabin_temp_c}
           activeDot={{ r: 3.8, fill: CHART_COLORS.orange, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -194,7 +166,7 @@ export function TripTemperatureChart({
           stroke={CHART_COLORS.yellow}
           strokeWidth={1.6}
           strokeDasharray="4 4"
-          dot={driverSetpointDot}
+          dot={measurements.dots.driver_temp_c}
           activeDot={{ r: 3.8, fill: CHART_COLORS.yellow, stroke: 'var(--rm-bg-surface)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls

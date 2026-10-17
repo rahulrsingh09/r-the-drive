@@ -83,37 +83,25 @@ export function TirePressureTripsChart({
   showPoints,
   yAxisLabel,
 }: TirePressureTripsChartProps) {
-  const points = React.useMemo(() => {
-    const timestamps = new Set<string>();
-    for (const sample of samples) timestamps.add(sample.ts);
-    for (const trip of trips) {
-      timestamps.add(trip.started_at);
-      timestamps.add(trip.ended_at);
-    }
-    return [...timestamps].sort((a, b) => Date.parse(a) - Date.parse(b)).map((ts) => ({ ts }));
-  }, [samples, trips]);
-
-  const samplesByTimestamp = React.useMemo(
-    () => new Map(samples.map((sample) => [sample.ts, sample])),
-    [samples],
-  );
-
-  const intervals = React.useMemo(() => trips.map((trip) => ({
-    id: trip.id,
-    start: trip.started_at,
-    end: trip.ended_at,
-    label: tripLabel(trip),
-    details: tripDetails(trip),
-    color: CHART_COLORS.violet,
-  })), [trips]);
-
-  const baseSeries: TirePressureSeriesStyle[] = seriesStyles ?? TIRE_SERIES.map((tire) => ({ ...tire, field: tire.key }));
-  const series = baseSeries.map((tire) => ({
-    ...tire,
-    strokeWidth: tire.strokeWidth ?? 2.5,
-    values: points.map((point) => convertedPressure(samplesByTimestamp.get(point.ts)?.[tire.field] ?? null, pressureFactor)),
-    tooltipFormatter: (value: number | null | undefined) => value == null ? '—' : `${formatNumber(value, 0)} ${pressureUnit}`,
-  }));
+  const { points, series, intervals } = React.useMemo(() => {
+    const events = new Map<string, { time: number; sample?: TirePressureTimelineSample }>();
+    for (const sample of samples) events.set(sample.ts, { time: Date.parse(sample.ts), sample });
+    const intervals = trips.map(trip => {
+      for (const ts of [trip.started_at, trip.ended_at]) if (!events.has(ts)) events.set(ts, { time: Date.parse(ts) });
+      return { id: trip.id, start: trip.started_at, end: trip.ended_at, label: tripLabel(trip), details: tripDetails(trip), color: CHART_COLORS.violet };
+    });
+    const timeline = [...events].sort((a, b) => a[1].time - b[1].time);
+    const styles: TirePressureSeriesStyle[] = seriesStyles ?? TIRE_SERIES.map(tire => ({ ...tire, field: tire.key }));
+    const columns = styles.map(() => [] as Array<number | null>);
+    const points = timeline.map(([ts, event]) => {
+      styles.forEach((style, column) => columns[column]!.push(convertedPressure(event.sample?.[style.field] ?? null, pressureFactor)));
+      return { ts };
+    });
+    const series = styles.map((tire, index) => ({ ...tire, strokeWidth: tire.strokeWidth ?? 2.5, values: columns[index]!,
+      tooltipFormatter: (value: number | null | undefined) => value == null ? '—' : `${formatNumber(value, 0)} ${pressureUnit}`,
+    }));
+    return { points, series, intervals };
+  }, [samples, trips, seriesStyles, pressureFactor, pressureUnit]);
 
   return (
     <RichTimeSeriesChart

@@ -1,3 +1,4 @@
+import { prepareChargingDays, chargingDayGeometry, GROUP_ORDER, GROUP_META, type ChargerGroupKey, type PreparedDay } from './dailyChargingModel';
 import * as React from 'react';
 import { RotateCcw } from 'lucide-react';
 import { ChartSkeleton } from '../primitives/Skeleton';
@@ -64,29 +65,6 @@ export interface DailyChargingBarChartProps extends Omit<
   yRange?: [number, number] | undefined;
 }
 
-type ChargerGroupKey = 'ac' | 'dc' | 'unknown';
-
-interface ChargerGroupMeta {
-  key: ChargerGroupKey;
-  label: string;
-  color: string;
-}
-
-interface ChargerGroup {
-  key: ChargerGroupKey;
-  label: string;
-  color: string;
-  energyKwh: number;
-  costUsd: number | null;
-  sessionCount: number;
-  sessions: DailyChargeSessionsSession[];
-}
-
-interface PreparedDay extends DailyChargeSessionsDay {
-  totalEnergyKwh: number;
-  groups: ChargerGroup[];
-}
-
 interface HoverState {
   dayLocal: string;
   x: number;
@@ -95,26 +73,6 @@ interface HoverState {
   containerHeight: number;
 }
 
-const GROUP_ORDER: ChargerGroupKey[] = ['ac', 'dc', 'unknown'];
-
-const GROUP_META: Record<ChargerGroupKey, ChargerGroupMeta> = {
-  ac: {
-    key: 'ac',
-    label: 'AC',
-    color: CHART_COLORS.emerald,
-  },
-  dc: {
-    key: 'dc',
-    label: 'DC',
-    color: CHART_COLORS.amber,
-  },
-  unknown: {
-    key: 'unknown',
-    label: 'Unknown',
-    color: CHART_COLORS.muted,
-  },
-};
-
 function formatDayLabel(dayLocal: string) {
   const formatted = formatAppCalendarDate(dayLocal);
   return formatted === 'Invalid date' ? dayLocal : formatted.replace(/, \d{4}$/, '');
@@ -122,13 +80,6 @@ function formatDayLabel(dayLocal: string) {
 
 function formatEnergy(value: number) {
   return `${formatSmartNumber(value, Math.abs(value) >= 100 ? 0 : 1)} kWh`;
-}
-
-function normalizeChargerType(chargerType: string | null | undefined): ChargerGroupKey {
-  const normalized = chargerType?.trim().toLowerCase();
-  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
-  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
-  return 'unknown';
 }
 
 function formatSessionCount(count: number) {
@@ -164,95 +115,31 @@ export function DailyChargingBarChart({
   );
   const suppressDayClickRef = React.useRef(false);
   const [hoverState, setHoverState] = React.useState<HoverState | null>(null);
-  const [zoomRange, setZoomRange] = React.useState<[number, number] | null>(null);
+  const [zoomRange, setZoomRange] = React.useReducer((current: [number, number] | null, action: [number, number] | number | null) => {
+    if (typeof action !== 'number') return action;
+    if (!current || action < 2) return null;
+    const end = Math.min(current[1], action - 1);
+    const start = Math.min(current[0], action - 1);
+    return start < end ? [start, end] as [number, number] : null;
+  }, null);
   const [selection, setSelection] = React.useState<[number, number] | null>(null);
   const clipPathPrefix = React.useId().replace(/:/g, '');
 
-  const days = React.useMemo<PreparedDay[]>(() => {
-    return daily
-      .map((day) => {
-        const sessions = dailySessions
-          .filter((session) => session.day_local === day.day_local)
-          .sort(
-            (left, right) =>
-              new Date(left.started_at).getTime() - new Date(right.started_at).getTime()
-          );
+  const days = React.useMemo<PreparedDay[]>(
+    () => prepareChargingDays(daily, dailySessions, seriesColor), [daily, dailySessions],
+  );
 
-        const totalEnergyKwh =
-          day.total_energy_kwh > 0
-            ? day.total_energy_kwh
-            : sessions.reduce(
-                (sum, session) => sum + Math.max(0, session.energy_added_kwh ?? 0),
-                0
-              );
-
-        const groupsByKey = new Map<ChargerGroupKey, ChargerGroup>();
-        for (const session of sessions) {
-          const groupKey = normalizeChargerType(session.charger_type);
-          const meta = GROUP_META[groupKey];
-          const current = groupsByKey.get(groupKey);
-          const energy = Math.max(0, session.energy_added_kwh ?? 0);
-          const cost = Number.isFinite(session.cost_usd) ? session.cost_usd : null;
-          if (current) {
-            current.energyKwh += energy;
-            if (cost != null) current.costUsd = (current.costUsd ?? 0) + cost;
-            current.sessionCount += 1;
-            current.sessions.push(session);
-          } else {
-            groupsByKey.set(groupKey, {
-              key: groupKey,
-              label: meta.label,
-              color: seriesColor ?? meta.color,
-              energyKwh: energy,
-              costUsd: cost,
-              sessionCount: 1,
-              sessions: [session],
-            });
-          }
-        }
-
-        const groups = GROUP_ORDER.map((key) => groupsByKey.get(key)).filter(
-          (group): group is ChargerGroup =>
-            group != null && (group.energyKwh > 0 || group.sessionCount > 0)
-        );
-
-        return {
-          ...day,
-          totalEnergyKwh,
-          groups,
-        };
-      })
-      .filter((day) => day.totalEnergyKwh > 0 || day.groups.length > 0);
-  }, [daily, dailySessions]);
-
-  React.useEffect(() => {
-    setZoomRange((current) => {
-      if (!current) return current;
-      const lastIndex = days.length - 1;
-      if (lastIndex < 1) return null;
-      const next: [number, number] = [
-        Math.min(current[0], lastIndex),
-        Math.min(current[1], lastIndex),
-      ];
-      return next[0] < next[1] ? next : null;
-    });
-  }, [days.length]);
+  React.useEffect(() => { setZoomRange(days.length); }, [days.length]);
 
   const visibleStartIndex = zoomRange?.[0] ?? 0;
   const visibleDays = zoomRange ? days.slice(zoomRange[0], zoomRange[1] + 1) : days;
   const isZoomed = zoomRange != null;
 
   const legendItems = React.useMemo(() => {
-    const presentKeys = new Set<ChargerGroupKey>();
-    for (const day of days) {
-      for (const group of day.groups) {
-        presentKeys.add(group.key);
-      }
-    }
-
     if (variant !== 'stacked') return [];
-
-    return GROUP_ORDER.filter((key) => presentKeys.has(key)).map((key) => GROUP_META[key]);
+    const counts = new Map<ChargerGroupKey, number>();
+    days.forEach(day => day.groups.forEach(group => counts.set(group.key, (counts.get(group.key) ?? 0) + 1)));
+    return GROUP_ORDER.flatMap(key => counts.has(key) ? [GROUP_META[key]] : []);
   }, [days, variant]);
 
   const activeDay = React.useMemo(
@@ -331,6 +218,7 @@ export function DailyChargingBarChart({
   const renderHeight = Math.max(1, innerHeight - topPaddingPx);
   const slotWidth = innerWidth / Math.max(visibleDays.length, 1);
   const barWidth = Math.min(CHART_BAR_STYLE.maxWidth, slotWidth * CHART_BAR_STYLE.slotRatio);
+  const geometry = chargingDayGeometry(visibleDays, margin.left, margin.top, innerHeight, slotWidth, barWidth, axisSpan, renderHeight);
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
   const tooltipHeight = activeDay
     ? variant === 'stacked'
@@ -381,35 +269,32 @@ export function DailyChargingBarChart({
   const valueLabelIndexSet = new Set(valueLabelIndices);
   const axisLabelIndexSet = new Set(axisLabelIndices);
 
-  const onChartPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (visibleDays.length < 2) return;
+  const chartPointer = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.type === 'pointercancel') { selectionRef.current = null; setSelection(null); return; }
     const index = getDayIndexFromEvent(event);
-    if (index == null) return;
-    selectionRef.current = { pointerId: event.pointerId, start: index, current: index };
-    setSelection([index, index]);
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  };
-  const onChartPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.type === 'pointerdown') {
+      if (visibleDays.length < 2 || index == null) return;
+      selectionRef.current = { pointerId: event.pointerId, start: index, current: index };
+      setSelection([index, index]);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      return;
+    }
     const active = selectionRef.current;
     if (!active || active.pointerId !== event.pointerId) return;
-    const index = getDayIndexFromEvent(event);
-    if (index == null || index === active.current) return;
-    active.current = index;
-    setSelection([active.start, index]);
-    event.preventDefault();
-  };
-  const finishChartSelection = (event: React.PointerEvent<SVGSVGElement>) => {
-    const active = selectionRef.current;
-    if (!active || active.pointerId !== event.pointerId) return;
+    if (event.type === 'pointermove') {
+      if (index == null || index === active.current) return;
+      selectionRef.current = { ...active, current: index };
+      setSelection([active.start, index]);
+      event.preventDefault();
+      return;
+    }
     selectionRef.current = null;
     setSelection(null);
-    const end = getDayIndexFromEvent(event) ?? active.current;
+    const end = index ?? active.current;
     if (Math.abs(end - active.start) < 1) return;
+    const selected: [number, number] = [Math.min(active.start, end), Math.max(active.start, end)];
     suppressDayClickRef.current = true;
-    setZoomRange([
-      visibleStartIndex + Math.min(active.start, end),
-      visibleStartIndex + Math.max(active.start, end),
-    ]);
+    setZoomRange([visibleStartIndex + selected[0], visibleStartIndex + selected[1]]);
   };
 
   return (
@@ -514,20 +399,15 @@ export function DailyChargingBarChart({
         height={chartHeight}
         data-testid={variant === 'stacked' ? 'daily-charge-sessions-chart' : 'daily-energy-chart'}
         className={interactionMode === 'touch-explore' ? 'touch-none' : undefined}
-        onPointerDown={onChartPointerDown}
-        onPointerMove={onChartPointerMove}
-        onPointerUp={finishChartSelection}
-        onPointerCancel={() => {
-          selectionRef.current = null;
-          setSelection(null);
-        }}
+        onPointerDown={chartPointer}
+        onPointerMove={chartPointer}
+        onPointerUp={chartPointer}
+        onPointerCancel={chartPointer}
       >
         <defs>
-          {visibleDays.map((day, dayIndex) => {
-            const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-            const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
+          {geometry.map((day, dayIndex) => {
+            const { x, y, barHeight } = day;
             if (barHeight <= 0) return null;
-            const y = margin.top + innerHeight - barHeight;
             const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
             return (
               <clipPath key={clipId} id={clipId}>
@@ -565,15 +445,10 @@ export function DailyChargingBarChart({
           );
         })}
 
-        {visibleDays.map((day, dayIndex) => {
-          const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-          const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
-          const clippedBarHeight = Math.max(0, barHeight);
+        {geometry.map((day, dayIndex) => {
+          const { x, clippedBarHeight, totalLabelY, sessionCount } = day;
           const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
           const isActive = hoverState?.dayLocal === day.day_local;
-          const totalLabelY =
-            margin.top + innerHeight - (day.totalEnergyKwh / axisSpan) * renderHeight - 8;
-          const sessionCount = day.groups.reduce((sum, group) => sum + group.sessionCount, 0);
           const isSelected = isDaySelected(day.day_local);
 
           return (
@@ -625,25 +500,8 @@ export function DailyChargingBarChart({
                   }
                 >
                   {variant === 'stacked' ? (
-                    day.groups.map((group, groupIndex) => {
-                      const segmentHeight =
-                        day.totalEnergyKwh > 0 ? (group.energyKwh / axisSpan) * renderHeight : 0;
+                    day.segments.map(({ group, y, height: segmentHeight }) => {
                       if (segmentHeight <= 0) return null;
-
-                      const y =
-                        margin.top +
-                        innerHeight -
-                        clippedBarHeight +
-                        day.groups
-                          .slice(0, groupIndex)
-                          .reduce(
-                            (sum, candidate) =>
-                              sum +
-                              (day.totalEnergyKwh > 0
-                                ? (candidate.energyKwh / axisSpan) * renderHeight
-                                : 0),
-                            0
-                          );
 
                       return (
                         <rect

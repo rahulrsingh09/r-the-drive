@@ -8,16 +8,22 @@ export const CURVE_SMOOTHNESS_OPTIONS: ReadonlyArray<{ value: CurveSmoothness; l
 
 export const DEFAULT_CURVE_SMOOTHNESS: CurveSmoothness = 'gentle';
 
+const CURVES = new Map<unknown, CurveSmoothness>([
+  ['straight', 'straight'], ['gentle', 'gentle'], ['smooth', 'smooth'],
+  [false, 'straight'], [0, 'straight'], [true, 'gentle'],
+]);
+const CURVE_LABELS = new Map(CURVE_SMOOTHNESS_OPTIONS.map(option => [option.value, option.label]));
+
 export function normalizeCurveSmoothness(value: unknown, fallback: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS): CurveSmoothness {
-  if (value === 'straight' || value === 'gentle' || value === 'smooth') return value;
-  if (value === false || value === 0) return 'straight';
-  if (value === true || (typeof value === 'number' && Number.isFinite(value) && value > 0)) return 'gentle';
-  return fallback;
+  const known = CURVES.get(value);
+  if (known) return known;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? 'gentle' : fallback;
 }
 
 export function curveSmoothnessLabel(value: CurveSmoothness): string {
-  return CURVE_SMOOTHNESS_OPTIONS.find((option) => option.value === value)?.label ?? 'Gentle';
+  return CURVE_LABELS.get(value) ?? 'Gentle';
 }
+
 
 export interface CurvePoint {
   x: number;
@@ -25,19 +31,18 @@ export interface CurvePoint {
 }
 
 export function splitCurveSegments(points: Array<CurvePoint | null>): CurvePoint[][] {
-  const segments: CurvePoint[][] = [];
-  let current: CurvePoint[] = [];
-  for (const point of points) {
-    if (!point) {
-      if (current.length > 0) segments.push(current);
-      current = [];
-    } else {
-      current.push(point);
-    }
+  const boundaries = [-1];
+  for (let index = 0; index < points.length; index += 1) if (!points[index]) boundaries.push(index);
+  boundaries.push(points.length);
+  const result: CurvePoint[][] = [];
+  for (let index = 1; index < boundaries.length; index += 1) {
+    const from = boundaries[index - 1]! + 1;
+    const to = boundaries[index]!;
+    if (from < to) result.push(points.slice(from, to) as CurvePoint[]);
   }
-  if (current.length > 0) segments.push(current);
-  return segments;
+  return result;
 }
+
 
 export function curveTension(smoothness: CurveSmoothness): number {
   return smoothness === 'smooth' ? 0.34 : 0.18;

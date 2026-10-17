@@ -50,31 +50,20 @@ export function selectAdaptiveAxisLabelIndices(
   options: AxisLabelLayoutOptions = {},
 ): number[] {
   const count = Math.min(labels.length, xPositions.length);
-  if (count === 0) return [];
+  if (!count) return [];
   const gap = options.minSpacing ?? 12;
-  const widths = measureChartLabels(labels.slice(0, count), options.font).map((item) => item.width);
-  const fits = (left: number, right: number) => Math.abs((xPositions[right] ?? 0) - (xPositions[left] ?? 0)) >= ((widths[left] ?? 0) + (widths[right] ?? 0)) / 2 + gap;
-
-  const selected: number[] = [0];
-  for (let index = 1; index < count; index += 1) {
-    const previous = selected[selected.length - 1];
-    if (previous !== undefined && fits(previous, index)) selected.push(index);
+  const boxes = labels.slice(0, count).map((label, index) => ({ center: xPositions[index] ?? 0, radius: measureChartText(label, options.font) / 2 }));
+  const compatible = (a: number, b: number) => Math.abs(boxes[a]!.center - boxes[b]!.center) >= boxes[a]!.radius + boxes[b]!.radius + gap;
+  const chosen = [0];
+  for (let index = 1; index < count - 1; index += 1) {
+    if (compatible(chosen[chosen.length - 1]!, index)) chosen.push(index);
   }
-  const previous = selected[selected.length - 1];
-  if (count > 1 && previous !== undefined && fits(previous, count - 1)) {
-    if (selected[selected.length - 1] !== count - 1) selected.push(count - 1);
-  } else if (count > 1 && selected[selected.length - 1] !== count - 1) {
-    // Prefer the endpoint over the nearest colliding interior label.
-    while (selected.length > 1) {
-      const current = selected[selected.length - 1];
-      if (current === undefined || fits(current, count - 1)) break;
-      selected.pop();
-    }
-    const current = selected[selected.length - 1];
-    if (current !== undefined && fits(current, count - 1)) selected.push(count - 1);
-  }
-  return selected;
+  const endpoint = count - 1;
+  while (chosen.length > 1 && !compatible(chosen[chosen.length - 1]!, endpoint)) chosen.pop();
+  if (endpoint && compatible(chosen[chosen.length - 1]!, endpoint)) chosen.push(endpoint);
+  return chosen;
 }
+
 
 export const selectAxisLabelIndices = selectAdaptiveAxisLabelIndices;
 
@@ -83,21 +72,25 @@ export function selectValueLabelIndices(
   candidates: ValueLabelCandidate[],
   padding = 6,
 ): number[] {
-  const accepted: ValueLabelCandidate[] = [];
-  const ordered = candidates
-    .map((candidate, order) => ({ candidate, order }))
-    .sort((left, right) => right.candidate.value - left.candidate.value || left.order - right.order);
-  for (const { candidate } of ordered) {
-    const height = candidate.height ?? CHART_FONT.fontSize;
-    const box = { left: candidate.x - candidate.width / 2 - padding, right: candidate.x + candidate.width / 2 + padding, top: candidate.y - height - padding, bottom: candidate.y + padding };
-    const overlaps = accepted.some((other) => {
-      const otherHeight = other.height ?? CHART_FONT.fontSize;
-      return box.left < other.x + other.width / 2 + padding && box.right > other.x - other.width / 2 - padding
-        && box.top < other.y + padding && box.bottom > other.y - otherHeight - padding;
-    });
-    if (!overlaps) accepted.push(candidate);
+  const boxes = candidates.map((candidate, order) => ({
+    index: candidate.index, order, value: candidate.value,
+    left: candidate.x - candidate.width / 2 - padding,
+    right: candidate.x + candidate.width / 2 + padding,
+    top: candidate.y - (candidate.height ?? CHART_FONT.fontSize) - padding,
+    bottom: candidate.y + padding,
+  }));
+  boxes.sort((a, b) => b.value - a.value || a.order - b.order);
+  const visible: typeof boxes = [];
+  const indices: number[] = [];
+  for (const box of boxes) {
+    let collision = false;
+    for (const occupied of visible) {
+      if (box.left < occupied.right && box.right > occupied.left && box.top < occupied.bottom && box.bottom > occupied.top) { collision = true; break; }
+    }
+    if (!collision) { visible.push(box); indices.push(box.index); }
   }
-  return accepted.map((candidate) => candidate.index).sort((left, right) => left - right);
+  return indices.sort((a, b) => a - b);
 }
+
 
 export const selectNonOverlappingValueLabels = selectValueLabelIndices;
