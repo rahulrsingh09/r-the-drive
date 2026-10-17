@@ -105,7 +105,7 @@ fn full_replacement_locator_and_prefix_contract() {
 }
 
 #[tokio::test]
-async fn full_replacement_probe_preserves_mismatch_error_and_deletes_oversized_response() {
+async fn full_replacement_probe_preserves_oversize_error_and_deletes_response() {
     use axum::{
         body::{to_bytes, Body},
         http::{Method, Request, Response},
@@ -177,5 +177,8 @@ async fn full_replacement_probe_preserves_mismatch_error_and_deletes_oversized_r
         cleanup.load(Ordering::SeqCst),
         "probe object must be deleted after mismatch"
     );
-    assert_eq!(error.to_string(), "S3 read probe returned different bytes");
+    assert_eq!(
+        error.to_string(),
+        "S3 read probe returned an oversized body"
+    );
 }
