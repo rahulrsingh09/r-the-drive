@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain, sourceRecords } from './lib/validation-files.mjs';
 
 const roots = [
   'apps/web/src',
@@ -26,41 +25,31 @@ const allowedOwners = new Set([
 const expressions = [
   /#[0-9a-f]{3,8}\b/i,
   /\brgba?\s*\(/i,
-  /\b(?:text|bg|border|ring|outline|decoration|shadow)-(?:white|black|blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)(?:\b|[/\-][\w.\[\]-]+)/i,
+  /\b(?:text|bg|border|ring|outline|decoration|shadow)-(?:white|black|blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)(?:\b|[/-][\w.[\]-]+)/i,
 ];
 
-function filesBelow(directory) {
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory).flatMap((entry) => {
-    if (ignoredDirectories.has(entry)) return [];
-    const path = join(directory, entry);
-    const details = statSync(path);
-    if (details.isDirectory()) return filesBelow(path);
-    if (!extensions.has(extname(path)) || /\.(?:test|spec|stories)\.[jt]sx?$/.test(entry)) return [];
-    return [path];
+export function colorTokenViolations(root) {
+  const files = sourceRecords(root, roots, {
+    extensions: [...extensions],
+    ignored: ignoredDirectories,
+    exclude: /\.(?:test|spec|stories)\.[jt]sx?$/,
+  });
+  return files.flatMap((file) => {
+    if (allowedOwners.has(file.path)) return [];
+    return file.source.split(/\r\n|\n|\r/).flatMap((line, index) => {
+      const matched = expressions.find((expression) => expression.exec(line));
+      return matched ? [`${file.path}:${index + 1}: ${line.trim()}`] : [];
+    });
   });
 }
 
-export function colorTokenViolations(root) {
-  const violations = [];
-  for (const file of roots.flatMap((directory) => filesBelow(join(root, directory)))) {
-    const path = relative(root, file).replaceAll('\\', '/');
-    if (allowedOwners.has(path)) continue;
-    const lines = readFileSync(file, 'utf8').split(/\r\n|\n|\r/);
-    lines.forEach((line, index) => {
-      if (expressions.some((expression) => expression.test(line))) violations.push(`${path}:${index + 1}: ${line.trim()}`);
-    });
+if (isMain(import.meta.url)) {
+  const violations = colorTokenViolations(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
+  if (violations.length === 0) console.log('Color-token guard passed.');
+  else {
+    console.error(
+      ['Color-token violations found:', ...violations.map((item) => `- ${item}`)].join('\n')
+    );
+    process.exitCode = 1;
   }
-  return violations;
-}
-
-const invoked = process.argv[1] ? resolve(process.argv[1]) : undefined;
-if (invoked === fileURLToPath(import.meta.url)) {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-  const violations = colorTokenViolations(root);
-  if (violations.length) {
-    console.error(`Color-token violations found:\n${violations.map((item) => `- ${item}`).join('\n')}`);
-    process.exit(1);
-  }
-  console.log('Color-token guard passed.');
 }

@@ -1,26 +1,7 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { isMain } from './lib/validation-files.mjs';
 
-const root = process.cwd();
-const routesDir = path.join(root, 'apps', 'api', 'src', 'routes');
-const routerSource = fs.readFileSync(path.join(routesDir, 'mod.rs'), 'utf8');
-
-const routeFiles = fs.readdirSync(routesDir)
-  .filter((file) => file.endsWith('.rs') && file !== 'mod.rs')
-  .map((file) => file.slice(0, -3));
-
-const protectedModules = new Set(
-  [...routerSource.matchAll(/\.merge\((\w+)::router\(\)\)/g)].map((match) => match[1]),
-);
-const metadataModules = new Set(
-  [...routerSource.matchAll(/\.merge\((\w+)::metadata_router\(\)\)/g)].map((match) => match[1]),
-);
-
-// This is intentionally a module-level authorization matrix: the router is
-// assembled from route modules, and each module must declare the strongest
-// policy family represented by its mounted routes. Endpoint-specific vehicle
-// checks stay in the Rust handlers and are protected below by the deprecated
-// helper ban.
 const authorizationMatrix = new Map([
   ['app_info', 'session'],
   ['api_keys', 'session_admin_or_vehicle_manager'],
@@ -55,44 +36,65 @@ const authorizationMatrix = new Map([
   ['vehicles', 'vehicle_read_and_session_mutation'],
 ]);
 
-const testOnlyFiles = new Set(routeFiles.flatMap((module) => {
-  const source = fs.readFileSync(path.join(routesDir, `${module}.rs`), 'utf8');
-  return [...source.matchAll(/#\[cfg\(test\)\]\s*#\[path = "([^"/]+)\.rs"\]\s*mod \w+;/g)]
-    .map((match) => match[1]);
-}));
-
-const missing = [];
-const missingMatrixEntries = [];
-const deprecatedOwnershipHelperUses = [];
-for (const module of routeFiles) {
-  const source = fs.readFileSync(path.join(routesDir, `${module}.rs`), 'utf8');
-  if (testOnlyFiles.has(module) || !source.includes('.route(')) continue;
-
-  const covered = module === 'auth'
-    ? routerSource.includes('.merge(auth::protected_router())') && routerSource.includes('.merge(auth::metadata_router())')
-    : protectedModules.has(module);
-  if (!covered) missing.push(module);
-  if (!authorizationMatrix.has(module)) missingMatrixEntries.push(module);
-  if (source.includes('require_vehicle_owned')) deprecatedOwnershipHelperUses.push(module);
-}
-
-if (missing.length) {
-  console.error(`API route modules are not mounted behind the protected router: ${missing.join(', ')}`);
-  process.exit(1);
-}
-
-if (missingMatrixEntries.length) {
-  console.error(
-    `Mounted API route modules missing authorization-matrix entries: ${missingMatrixEntries.join(', ')}`,
+export function routeSecurityInventory(root) {
+  const directory = join(root, 'apps/api/src/routes');
+  const assembly = readFileSync(join(directory, 'mod.rs'), 'utf8');
+  const modules = readdirSync(directory)
+    .filter((file) => file.endsWith('.rs') && file !== 'mod.rs')
+    .map((file) => ({
+      name: file.slice(0, -3),
+      source: readFileSync(join(directory, file), 'utf8'),
+    }));
+  const tests = new Set();
+  const mounted = new Map();
+  for (const match of assembly.matchAll(
+    /\.merge\((\w+)::(router|protected_router|metadata_router)\(\)\)/g
+  )) {
+    if (!mounted.has(match[1])) mounted.set(match[1], new Set());
+    mounted.get(match[1]).add(match[2]);
+  }
+  for (const module of modules) {
+    for (const match of module.source.matchAll(
+      /#\[cfg\(test\)\]\s*#\[path = "([^"/]+)\.rs"\]\s*mod \w+;/g
+    ))
+      tests.add(match[1]);
+  }
+  const active = modules.filter(
+    (module) => !tests.has(module.name) && module.source.includes('.route(')
   );
-  process.exit(1);
+  const rules = [
+    [
+      'API route modules are not mounted behind the protected router',
+      (module) => {
+        const entries = mounted.get(module.name);
+        return module.name === 'auth'
+          ? !(entries?.has('protected_router') && entries.has('metadata_router'))
+          : !entries?.has('router');
+      },
+    ],
+    [
+      'Mounted API route modules missing authorization-matrix entries',
+      (module) => !authorizationMatrix.has(module.name),
+    ],
+    [
+      'Deprecated require_vehicle_owned helper is forbidden in route modules',
+      (module) => module.source.includes('require_vehicle_owned'),
+    ],
+  ];
+  const failures = rules.flatMap(([message, violates]) => {
+    const offenders = active.filter(violates).map((module) => module.name);
+    return offenders.length ? [`${message}: ${offenders.join(', ')}`] : [];
+  });
+  return { failures, count: modules.length };
 }
 
-if (deprecatedOwnershipHelperUses.length) {
-  console.error(
-    `Deprecated require_vehicle_owned helper is forbidden in route modules: ${deprecatedOwnershipHelperUses.join(', ')}`,
-  );
-  process.exit(1);
+if (isMain(import.meta.url)) {
+  const { failures, count } = routeSecurityInventory(process.cwd());
+  if (failures.length) {
+    console.error(failures[0]);
+    process.exitCode = 1;
+  } else
+    console.log(
+      `API route security inventory and authorization matrix passed for ${count} route modules.`
+    );
 }
-
-console.log(`API route security inventory and authorization matrix passed for ${routeFiles.length} route modules.`);

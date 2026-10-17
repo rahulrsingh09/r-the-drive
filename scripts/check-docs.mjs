@@ -1,464 +1,298 @@
-import fs from "node:fs";
-import path from "node:path";
-
-const repoRoot = process.cwd();
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { isMain, walkFiles } from './lib/validation-files.mjs';
 
 const requiredFiles = [
-  "README.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "docs/index.md",
-  "docs/branding.md",
-  "docs/contributing.md",
-  "docs/decision-log.md",
-  "docs/security.md",
-  "docs/security-audit.md",
-  "docs/roadmap.md",
-  "docs/privacy.md",
-  "docs/environment-variables.md",
-  "docs/architecture/overview.md",
-  "docs/architecture/backend-data-flow.md",
-  "docs/development.md",
-  "docs/using-panda.md",
-  "docs/operations.md",
-  "docs/reference.md",
-  "docs/runbooks/README.md",
-  "docs/runbooks/documentation-maintenance.md",
-  "docs/guides/README.md",
-  "docs/guides/verify-installation.md",
-  "apps/docs/docusaurus.config.ts",
-  "apps/docs/sidebars.ts",
-  "apps/docs/src/pages/index.tsx",
-];
-
-function collectMarkdownFiles(relativeDir) {
-  const absoluteDir = path.join(repoRoot, relativeDir);
-  const found = [];
-  for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
-    const relativePath = path.join(relativeDir, entry.name).replaceAll(path.sep, "/");
-    if (entry.isDirectory()) {
-      found.push(...collectMarkdownFiles(relativePath));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      found.push(relativePath);
-    }
-  }
-  return found;
-}
-
-const docsFilesToCheck = [
-  "README.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  ...collectMarkdownFiles("docs"),
+  'README.md',
+  'AGENTS.md',
+  'CLAUDE.md',
+  'docs/index.md',
+  'docs/branding.md',
+  'docs/contributing.md',
+  'docs/decision-log.md',
+  'docs/security.md',
+  'docs/security-audit.md',
+  'docs/roadmap.md',
+  'docs/privacy.md',
+  'docs/environment-variables.md',
+  'docs/architecture/overview.md',
+  'docs/architecture/backend-data-flow.md',
+  'docs/development.md',
+  'docs/using-panda.md',
+  'docs/operations.md',
+  'docs/reference.md',
+  'docs/runbooks/README.md',
+  'docs/runbooks/documentation-maintenance.md',
+  'docs/guides/README.md',
+  'docs/guides/verify-installation.md',
+  'apps/docs/docusaurus.config.ts',
+  'apps/docs/sidebars.ts',
+  'apps/docs/src/pages/index.tsx',
 ];
 
 const routeSlugs = [
-  "index",
-  "battery",
-  "battery.phantom-drain",
-  "charging",
-  "charging.$sessionId",
-  "connect",
-  "connect.otp",
-  "d.$slug",
-  "efficiency",
-  "health",
-  "login",
-  "settings",
-  "trips",
-  "trips.$tripId",
-  "users",
+  'index',
+  'battery',
+  'battery.phantom-drain',
+  'charging',
+  'charging.$sessionId',
+  'connect',
+  'connect.otp',
+  'd.$slug',
+  'efficiency',
+  'health',
+  'login',
+  'settings',
+  'trips',
+  'trips.$tripId',
+  'users',
 ];
 
 const requiredApiRouteFiles = [
-  "auth.rs",
-  "vehicles.rs",
-  "battery.rs",
-  "trips.rs",
-  "charging.rs",
-  "efficiency.rs",
-  "health.rs",
+  'auth.rs',
+  'vehicles.rs',
+  'battery.rs',
+  'trips.rs',
+  'charging.rs',
+  'efficiency.rs',
+  'health.rs',
 ];
 
 const requiredGuides = [
-  "README.md",
-  "features.md",
-  "getting-started.md",
-  "prerequisites.md",
-  "configuration.md",
-  "deployment.md",
-  "rivian-account.md",
-  "backup-and-restore.md",
-  "secure-deployment.md",
-  "verify-installation.md",
-  "dashboard-customization.md",
-  "external-connections.md",
-  "synology.md",
+  'README.md',
+  'features.md',
+  'getting-started.md',
+  'prerequisites.md',
+  'configuration.md',
+  'deployment.md',
+  'rivian-account.md',
+  'backup-and-restore.md',
+  'secure-deployment.md',
+  'verify-installation.md',
+  'dashboard-customization.md',
+  'external-connections.md',
+  'synology.md',
 ];
 
-function fail(message) {
-  console.error(`docs:check failed: ${message}`);
-  process.exitCode = 1;
-}
-
-function readFile(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-}
-
-function fileExists(relativePath) {
-  return fs.existsSync(path.join(repoRoot, relativePath));
-}
-
-function collectEnvVars() {
-  const envFiles = [
-    "compose/.env.example",
-    "compose/.env.full.example",
-  ];
-  const names = new Set();
-
-  for (const relativePath of envFiles) {
-    if (!fileExists(relativePath)) {
-      continue;
-    }
-    const content = readFile(relativePath);
-    for (const match of content.matchAll(/([A-Z][A-Z0-9_]+)=/g)) {
-      names.add(match[1]);
-    }
-  }
-
-  const configContent = readFile("apps/api/src/config.rs");
-  for (const match of configContent.matchAll(/"([A-Z0-9_]+)"/g)) {
-    names.add(match[1]);
-  }
-
-  return names;
-}
-
-function checkRequiredFiles() {
-  for (const relativePath of requiredFiles) {
-    if (!fileExists(relativePath)) {
-      fail(`missing required file: ${relativePath}`);
-    }
-  }
-}
-
-function checkMarkdownLinks() {
-  const markdownLinkPattern = /\[[^\]]+\]\(([^)]+)\)/g;
-
-  for (const relativePath of docsFilesToCheck) {
-    const content = readFile(relativePath);
-    const baseDir = path.dirname(path.join(repoRoot, relativePath));
-
-    for (const match of content.matchAll(markdownLinkPattern)) {
+export function documentationFailures(root) {
+  const failures = [];
+  const cache = new Map();
+  const exists = (file) => existsSync(join(root, file));
+  const read = (file) => {
+    if (!cache.has(file)) cache.set(file, readFileSync(join(root, file), 'utf8'));
+    return cache.get(file);
+  };
+  const markdown = [
+    ...walkFiles(join(root, 'docs'), { accept: (file) => file.endsWith('.md') }),
+  ].map((file) => relative(root, file).replaceAll('\\', '/'));
+  const allDocs = ['README.md', 'AGENTS.md', 'CLAUDE.md', ...markdown];
+  const missing = (items, available, message) => {
+    for (const item of items) if (!available.has(item)) failures.push(message(item));
+  };
+  const snippets = (file, required, forbidden, requiredMessage, forbiddenMessage) => {
+    const text = read(file);
+    for (const snippet of required)
+      if (!text.includes(snippet)) failures.push(requiredMessage(snippet));
+    for (const snippet of forbidden)
+      if (text.includes(snippet)) failures.push(forbiddenMessage(snippet));
+  };
+  for (const file of requiredFiles)
+    if (!exists(file)) failures.push(`missing required file: ${file}`);
+  for (const file of allDocs) {
+    for (const match of read(file).matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
       const target = match[1].trim();
-      if (
-        !target ||
-        target.startsWith("http://") ||
-        target.startsWith("https://") ||
-        target.startsWith("mailto:") ||
-        target.startsWith("#")
-      ) {
-        continue;
-      }
-
-      const normalizedTarget = target.split("#")[0];
-      const resolved = path.resolve(baseDir, normalizedTarget);
-      if (!fs.existsSync(resolved)) {
-        fail(`broken markdown link in ${relativePath}: ${target}`);
-      }
+      if (!target || /^(?:https?:\/\/|mailto:|#)/.test(target)) continue;
+      const destination = resolve(root, dirname(file), target.split('#', 1)[0]);
+      if (!existsSync(destination)) failures.push(`broken markdown link in ${file}: ${target}`);
     }
   }
-}
-
-function checkGuides() {
-  const guidesDir = path.join(repoRoot, "docs/guides");
-  const existing = new Set(fs.readdirSync(guidesDir));
-  for (const fileName of requiredGuides) {
-    if (!existing.has(fileName)) {
-      fail(`missing required guide: docs/guides/${fileName}`);
-    }
-  }
-
-  const guideFiles = [...existing].filter((name) => name.endsWith(".md") && name !== "README.md");
-  const publishedNames = new Map();
-  for (const fileName of guideFiles) {
-    const publishedName = fileName;
-    const prior = publishedNames.get(publishedName);
-    if (prior) {
-      fail(`guide publish collision: ${prior} and ${fileName} both map to ${publishedName}`);
-    }
-    publishedNames.set(publishedName, fileName);
-  }
-}
-
-function checkDocusaurusContracts() {
-  const config = readFile("apps/docs/docusaurus.config.ts");
-  const sidebars = readFile("apps/docs/sidebars.ts");
-
-  for (const requiredSnippet of [
+  const guides = new Set(readdirSync(join(root, 'docs/guides')));
+  missing(requiredGuides, guides, (file) => `missing required guide: docs/guides/${file}`);
+  // Published names are the literal filenames; the filesystem enforces uniqueness.
+  const publishing = [
     "url: 'https://docs.r-the-drive.invalid'",
     "baseUrl: '/'",
     "path: '../../docs'",
     "routeBasePath: 'docs'",
     "onBrokenLinks: 'throw'",
     "onBrokenAnchors: 'throw'",
-    "@cmfcmf/docusaurus-search-local",
+    '@cmfcmf/docusaurus-search-local',
     "label: 'Using R:The Drive'",
     "label: 'Operations'",
     "label: 'Reference'",
-  ]) {
-    if (!config.includes(requiredSnippet)) {
-      fail(`Docusaurus config is missing required publishing contract: ${requiredSnippet}`);
-    }
-  }
-
-  for (const sidebarName of [
-    "overviewSidebar",
-    "gettingStartedSidebar",
-    "usingPandaSidebar",
-    "operationsSidebar",
-    "developmentSidebar",
-    "referenceSidebar",
-  ]) {
-    if (!sidebars.includes(sidebarName)) {
-      fail(`Docusaurus sidebars are missing required functional section: ${sidebarName}`);
-    }
-  }
-
-  for (const relativePath of collectMarkdownFiles("docs")) {
-    const docId = relativePath.replace(/^docs\//, "").replace(/\.md$/, "");
-    const quotedId = new RegExp(`[\"']${docId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\"']`, "g");
-    const occurrences = [...sidebars.matchAll(quotedId)].length;
-    if (occurrences !== 1) {
-      fail(`expected ${docId} to appear in exactly one Docusaurus sidebar; found ${occurrences}`);
-    }
-  }
-}
-
-function checkLegacyWikiReferences() {
-  const files = [
-    "README.md",
-    "AGENTS.md",
-    "CLAUDE.md",
-    ...collectMarkdownFiles("docs"),
   ];
-  const forbidden = [
-    "github.com/your-org/r-the-drive/wiki",
-    "scripts/publish-wiki.sh",
-    ".github/workflows/publish-wiki.yml",
-    "Wiki publishing",
-    "publish to the Wiki",
-    "publish through the Wiki",
-  ];
-
-  for (const relativePath of files) {
-    const content = readFile(relativePath);
-    for (const snippet of forbidden) {
-      if (content.includes(snippet)) {
-        fail(`legacy Wiki publishing reference in ${relativePath}: ${snippet}`);
-      }
-    }
-  }
-}
-
-function checkRouteContracts() {
-  const routeDir = path.join(repoRoot, "apps/web/src/routes");
-  const existing = new Set(
-    fs
-      .readdirSync(routeDir)
-      .filter((name) => name.endsWith(".tsx"))
-      .map((name) => name.replace(/\.tsx$/, "")),
+  snippets(
+    'apps/docs/docusaurus.config.ts',
+    publishing,
+    [],
+    (text) => `Docusaurus config is missing required publishing contract: ${text}`
   );
-
-  for (const slug of routeSlugs) {
-    if (!existing.has(slug)) {
-      fail(`expected route slug missing from apps/web/src/routes: ${slug}`);
+  const sidebars = read('apps/docs/sidebars.ts');
+  for (const section of [
+    'overviewSidebar',
+    'gettingStartedSidebar',
+    'usingPandaSidebar',
+    'operationsSidebar',
+    'developmentSidebar',
+    'referenceSidebar',
+  ]) {
+    if (!sidebars.includes(section))
+      failures.push(`Docusaurus sidebars are missing required functional section: ${section}`);
+  }
+  const sidebarReferences = new Map();
+  for (const match of sidebars.matchAll(/["']([^"']+)["']/g))
+    sidebarReferences.set(match[1], (sidebarReferences.get(match[1]) ?? 0) + 1);
+  for (const file of markdown) {
+    const id = file.slice(5, -3);
+    const count = sidebarReferences.get(id) ?? 0;
+    if (count !== 1)
+      failures.push(`expected ${id} to appear in exactly one Docusaurus sidebar; found ${count}`);
+  }
+  for (const file of allDocs)
+    snippets(
+      file,
+      [],
+      [
+        'github.com/your-org/r-the-drive/wiki',
+        'scripts/publish-wiki.sh',
+        '.github/workflows/publish-wiki.yml',
+        'Wiki publishing',
+        'publish to the Wiki',
+        'publish through the Wiki',
+      ],
+      undefined,
+      (text) => `legacy Wiki publishing reference in ${file}: ${text}`
+    );
+  const webRoutes = new Set(
+    readdirSync(join(root, 'apps/web/src/routes'))
+      .filter((file) => file.endsWith('.tsx'))
+      .map((file) => file.slice(0, -4))
+  );
+  const apiRoutes = new Set(
+    readdirSync(join(root, 'apps/api/src/routes')).filter((file) => file.endsWith('.rs'))
+  );
+  missing(
+    routeSlugs,
+    webRoutes,
+    (slug) => `expected route slug missing from apps/web/src/routes: ${slug}`
+  );
+  missing(
+    requiredApiRouteFiles,
+    apiRoutes,
+    (file) => `expected API route module missing from apps/api/src/routes: ${file}`
+  );
+  const config = read('apps/api/src/config.rs');
+  const knownEnv = new Set(['PATH', 'HOME', 'CI']);
+  for (const file of ['compose/.env.example', 'compose/.env.full.example']) {
+    if (exists(file))
+      for (const match of read(file).matchAll(/([A-Z][A-Z0-9_]+)=/g)) knownEnv.add(match[1]);
+  }
+  for (const match of config.matchAll(/"([A-Z0-9_]+)"/g)) knownEnv.add(match[1]);
+  for (const file of [
+    'README.md',
+    'AGENTS.md',
+    'CLAUDE.md',
+    'docs/index.md',
+    'docs/contributing.md',
+    'docs/runbooks/documentation-maintenance.md',
+    'docs/guides/configuration.md',
+    'docs/environment-variables.md',
+  ]) {
+    for (const match of read(file).matchAll(/`([A-Z][A-Z0-9_]+)`/g)) {
+      if (!knownEnv.has(match[1]))
+        failures.push(`unknown env var referenced in ${file}: ${match[1]}`);
     }
   }
-}
-
-function checkApiContracts() {
-  const routeDir = path.join(repoRoot, "apps/api/src/routes");
-  const routeFiles = new Set(fs.readdirSync(routeDir).filter((name) => name.endsWith(".rs")));
-
-  for (const routeFile of requiredApiRouteFiles) {
-    if (!routeFiles.has(routeFile)) {
-      fail(`expected API route module missing from apps/api/src/routes: ${routeFile}`);
-    }
-  }
-}
-
-function checkEnvVarReferences() {
-  const knownEnvVars = collectEnvVars();
-  const envReferencePattern = /`([A-Z][A-Z0-9_]+)`/g;
-  const docFiles = [
-    "README.md",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "docs/index.md",
-    "docs/contributing.md",
-    "docs/runbooks/documentation-maintenance.md",
-    "docs/guides/configuration.md",
-    "docs/environment-variables.md",
-  ];
-
-  for (const relativePath of docFiles) {
-    const content = readFile(relativePath);
-    for (const match of content.matchAll(envReferencePattern)) {
-      const name = match[1];
-      if (
-        name === "PATH" ||
-        name === "HOME" ||
-        name === "CI"
-      ) {
-        continue;
-      }
-      if (!knownEnvVars.has(name)) {
-        fail(`unknown env var referenced in ${relativePath}: ${name}`);
-      }
-    }
-  }
-}
-
-function checkEnvironmentReferenceCoverage() {
-  const fullTemplate = readFile("compose/.env.full.example");
-  const reference = readFile("docs/environment-variables.md");
   const supported = new Set(
-    [...fullTemplate.matchAll(/^#?\s*([A-Z][A-Z0-9_]+)=/gm)].map((match) => match[1]),
+    [...read('compose/.env.full.example').matchAll(/^#?\s*([A-Z][A-Z0-9_]+)=/gm)].map(
+      (match) => match[1]
+    )
   );
-
-  for (const name of supported) {
-    if (!reference.includes(`\`${name}\``)) {
-      fail(`environment reference is missing supported variable: ${name}`);
+  const reference = read('docs/environment-variables.md');
+  for (const variable of supported)
+    if (!reference.includes('`' + variable + '`'))
+      failures.push(`environment reference is missing supported variable: ${variable}`);
+  const sections = [
+    [
+      'pub struct Config',
+      'pub struct RateLimitConfig',
+      '',
+      new Set(['RATE_LIMIT', 'RECOVERY', 'ORIGIN_BIND', 'SECURITY']),
+    ],
+    ['pub struct SecurityConfig', 'impl Default for SecurityConfig', '', new Set()],
+    ['pub struct RateLimitConfig', 'pub struct RecoveryConfig', 'RATE_LIMIT_', new Set()],
+    ['pub struct RecoveryConfig', 'pub struct OriginBindConfig', 'RECOVERY_', new Set()],
+    ['pub struct OriginBindConfig', 'fn default_port', '', new Set()],
+  ];
+  const runtime = ['RIVIAN_GRAPHQL_GATEWAY_URL', 'RUST_LOG'];
+  for (const [start, end, prefix, ignored] of sections) {
+    const block = config.slice(config.indexOf(start), config.indexOf(end));
+    for (const match of block.matchAll(/pub ([a-z][a-z0-9_]+):/g)) {
+      const field = match[1].toUpperCase();
+      if (!ignored.has(field)) runtime.push(prefix + field);
     }
   }
-
-  const configContent = readFile("apps/api/src/config.rs");
-  const configBlock = configContent.slice(
-    configContent.indexOf("pub struct Config"),
-    configContent.indexOf("pub struct RateLimitConfig"),
+  missing(
+    runtime,
+    supported,
+    (variable) => `compose/.env.full.example is missing runtime variable: ${variable}`
   );
-  const runtimeFields = [...configBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
-    .map((match) => match[1].toUpperCase())
-    .filter((name) => !["RATE_LIMIT", "RECOVERY", "ORIGIN_BIND", "SECURITY"].includes(name));
-  const securityBlock = configContent.slice(
-    configContent.indexOf("pub struct SecurityConfig"),
-    configContent.indexOf("impl Default for SecurityConfig"),
+  for (const match of read('compose/docker-compose.yml').matchAll(/\$\{([A-Z][A-Z0-9_]+)/g)) {
+    if (!supported.has(match[1]))
+      failures.push(
+        `compose/.env.full.example is missing production Compose variable: ${match[1]}`
+      );
+  }
+  if (/^PANDA_SETUP_TOKEN=/m.test(read('compose/.env.example')))
+    failures.push('compact production env must not ship an active first-owner setup token');
+  snippets(
+    'compose/docker-compose.yml',
+    [
+      '"${PANDA_HOST_BIND_ADDRESS:-127.0.0.1}:${PANDA_ORIGIN_PORT:-8080}:8080"',
+      'PANDA_IMAGE:?Set PANDA_IMAGE',
+      'PANDA_DB_SOURCE',
+      'PANDA_BACKUPS_SOURCE',
+      'PANDA_CACHE_SOURCE',
+      'start_period: 300s',
+      'redis:',
+    ],
+    ['"80:80"', '"443:443"', 'COOKIE_INSECURE:', '  nginx:'],
+    (text) => `production compose is missing required secure-deployment contract: ${text}`,
+    (text) => `production compose must not include direct-public deployment setting: ${text}`
   );
-  const securityFields = [...securityBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
-    .map((match) => match[1].toUpperCase());
-  const rateBlock = configContent.slice(
-    configContent.indexOf("pub struct RateLimitConfig"),
-    configContent.indexOf("pub struct RecoveryConfig"),
+  snippets(
+    'compose/docker-compose.build.yml',
+    ['context: ..', 'dockerfile: compose/Dockerfile'],
+    [],
+    (text) => `build overlay is missing required source-build contract: ${text}`
   );
-  const rateFields = [...rateBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
-    .map((match) => `RATE_LIMIT_${match[1].toUpperCase()}`);
-  const recoveryBlock = configContent.slice(
-    configContent.indexOf("pub struct RecoveryConfig"),
-    configContent.indexOf("pub struct OriginBindConfig"),
+  if (read('compose/docker-compose.yml').includes('build:'))
+    failures.push('standard Compose must pull published images instead of defining build contexts');
+  snippets(
+    'compose/nginx/nginx.conf',
+    ['http://127.0.0.1:3001', 'listen 8080;'],
+    [],
+    (text) => `nginx must use the internal secure-deployment topology: ${text}`
   );
-  const recoveryFields = [...recoveryBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
-    .map((match) => `RECOVERY_${match[1].toUpperCase()}`);
-  const originBlock = configContent.slice(
-    configContent.indexOf("pub struct OriginBindConfig"),
-    configContent.indexOf("fn default_port"),
-  );
-  const originFields = [...originBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
-    .map((match) => match[1].toUpperCase());
-  const directRuntimeVars = ["RIVIAN_GRAPHQL_GATEWAY_URL", "RUST_LOG"];
-  for (const name of [
-    ...runtimeFields,
-    ...securityFields,
-    ...rateFields,
-    ...recoveryFields,
-    ...originFields,
-    ...directRuntimeVars,
-  ]) {
-    if (!supported.has(name)) {
-      fail(`compose/.env.full.example is missing runtime variable: ${name}`);
-    }
-  }
-
-  const productionCompose = readFile("compose/docker-compose.yml");
-  for (const match of productionCompose.matchAll(/\$\{([A-Z][A-Z0-9_]+)/g)) {
-    if (!supported.has(match[1])) {
-      fail(`compose/.env.full.example is missing production Compose variable: ${match[1]}`);
-    }
-  }
-}
-
-function checkProductionDeploymentContract() {
-  const productionCompose = readFile("compose/docker-compose.yml");
-  const buildCompose = readFile("compose/docker-compose.build.yml");
-  const nginxConfig = readFile("compose/nginx/nginx.conf");
-  const compactEnv = readFile("compose/.env.example");
-
-  if (/^PANDA_SETUP_TOKEN=/m.test(compactEnv)) {
-    fail("compact production env must not ship an active first-owner setup token");
-  }
-
-  for (const requiredSnippet of [
-    '"${PANDA_HOST_BIND_ADDRESS:-127.0.0.1}:${PANDA_ORIGIN_PORT:-8080}:8080"',
-    "PANDA_IMAGE:?Set PANDA_IMAGE",
-    "PANDA_DB_SOURCE",
-    "PANDA_BACKUPS_SOURCE",
-    "PANDA_CACHE_SOURCE",
-    "start_period: 300s",
-    "redis:",
-  ]) {
-    if (!productionCompose.includes(requiredSnippet)) {
-      fail(`production compose is missing required secure-deployment contract: ${requiredSnippet}`);
-    }
-  }
-
-  for (const forbiddenSnippet of ['"80:80"', '"443:443"', "COOKIE_INSECURE:", "  nginx:"]) {
-    if (productionCompose.includes(forbiddenSnippet)) {
-      fail(`production compose must not include direct-public deployment setting: ${forbiddenSnippet}`);
-    }
-  }
-
-  for (const requiredSnippet of ["context: ..", "dockerfile: compose/Dockerfile"]) {
-    if (!buildCompose.includes(requiredSnippet)) {
-      fail(`build overlay is missing required source-build contract: ${requiredSnippet}`);
-    }
-  }
-
-  if (productionCompose.includes("build:")) {
-    fail("standard Compose must pull published images instead of defining build contexts");
-  }
-
-  for (const requiredSnippet of ["http://127.0.0.1:3001", "listen 8080;"]) {
-    if (!nginxConfig.includes(requiredSnippet)) {
-      fail(`nginx must use the internal secure-deployment topology: ${requiredSnippet}`);
-    }
-  }
-}
-
-function checkUniversalSynologyContract() {
   if (
-    fileExists("compose/docker-compose.synology.yml") ||
-    fileExists("compose/.env.synology.example") ||
-    fileExists("compose/synology/docker-compose.yml") ||
-    fileExists("compose/synology/.env.synology.example")
-  ) {
-    fail("Synology must use the universal Compose file instead of a second deployment definition");
+    [
+      'compose/docker-compose.synology.yml',
+      'compose/.env.synology.example',
+      'compose/synology/docker-compose.yml',
+      'compose/synology/.env.synology.example',
+    ].some(exists)
+  )
+    failures.push(
+      'Synology must use the universal Compose file instead of a second deployment definition'
+    );
+  return failures;
+}
+
+if (isMain(import.meta.url)) {
+  const failures = documentationFailures(process.cwd());
+  if (!failures.length) console.log('docs:check passed');
+  else {
+    failures.forEach((message) => console.error(`docs:check failed: ${message}`));
+    process.exitCode = 1;
   }
 }
-
-checkRequiredFiles();
-checkMarkdownLinks();
-checkGuides();
-checkDocusaurusContracts();
-checkLegacyWikiReferences();
-checkRouteContracts();
-checkApiContracts();
-checkEnvVarReferences();
-checkEnvironmentReferenceCoverage();
-checkProductionDeploymentContract();
-checkUniversalSynologyContract();
-
-if (process.exitCode) {
-  process.exit(process.exitCode);
-}
-
-console.log("docs:check passed");

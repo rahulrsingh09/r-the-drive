@@ -1,273 +1,195 @@
 #!/usr/bin/env node
-
-import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain, sourceRecords } from './lib/validation-files.mjs';
 
 const sourceExtensions = ['.ts', '.tsx'];
-const ignoredPathSegment = new Set([
-  'node_modules',
-  'dist',
-  'coverage',
-  '.turbo',
-  '__tests__',
-  'test',
-]);
+const ignored = new Set(['node_modules', 'dist', 'coverage', '.turbo', '__tests__', 'test']);
 const packageRoots = new Map([
   ['@panda/ui', 'packages/ui/src'],
   ['@panda/hooks', 'packages/hooks/src'],
   ['@panda/dashboards', 'packages/dashboards/src'],
   ['@panda/types', 'packages/types/src'],
 ]);
+const transport =
+  /\bfetch\s*\(|new\s+(?:XMLHttpRequest|WebSocket|EventSource)\b|\baxios\s*(?:\.|\()/;
+const records = (root, paths, extensions = sourceExtensions) =>
+  sourceRecords(root, paths, { extensions, ignored, exclude: /\.(test|stories)\.[jt]sx?$/ });
+const size = (source) => ({
+  lines:
+    (source.match(/\r\n|\n|\r/g)?.length ?? 0) +
+    Number(source.length > 0 && !/[\r\n]$/.test(source)),
+  bytes: Buffer.byteLength(source.replace(/\r\n?/g, '\n')),
+});
 
-function sourceFiles(directory, extensions = sourceExtensions) {
-  const files = [];
-  for (const entry of readdirSync(directory)) {
-    if (ignoredPathSegment.has(entry)) continue;
-    const candidate = join(directory, entry);
-    const details = statSync(candidate);
-    if (details.isDirectory()) files.push(...sourceFiles(candidate, extensions));
-    else if (extensions.includes(extname(candidate)) && !/\.(test|stories)\.[jt]sx?$/.test(entry)) {
-      files.push(candidate);
-    }
-  }
-  return files;
-}
-
-function sourceFilesIn(root, directories, extensions = sourceExtensions) {
-  return directories.flatMap((directory) => {
-    const absolute = join(root, directory);
-    return existsSync(absolute) && statSync(absolute).isDirectory() ? sourceFiles(absolute, extensions) : [];
-  });
-}
-
-function relativePath(root, file) {
-  return relative(root, file).replaceAll('\\', '/');
-}
-
-function countLines(source) {
-  const lines = source.split(/\r\n|\n|\r/);
-  return lines.at(-1) === '' ? lines.length - 1 : lines.length;
-}
-
-function readArchitectureBudgets(root) {
-  const path = join(root, 'config/architecture-budgets.json');
-  if (!existsSync(path)) {
-    throw new Error(`Missing required architecture budget configuration: ${path}`);
-  }
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-function patternRuleFailures(root, patterns = {}) {
+function patternFailures(root, patterns = {}) {
   const failures = [];
   for (const [name, rule] of Object.entries(patterns)) {
     if (rule.enabled === false) continue;
     const flags = rule.flags ?? 'm';
-    const expression = new RegExp(rule.pattern, flags);
-    const countExpression = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
-    const allow = new Set(rule.allow ?? []);
-    const files = sourceFilesIn(root, rule.directories ?? [], rule.extensions ?? sourceExtensions);
-    const matches = files
-      .filter((file) => expression.test(readFileSync(file, 'utf8')))
-      .map((file) => relativePath(root, file));
-    const matchCount = files.reduce(
-      (count, file) => count + (readFileSync(file, 'utf8').match(countExpression)?.length ?? 0),
-      0,
-    );
-    const violations = matches.filter((file) => !allow.has(file));
-    if (violations.length) {
-      failures.push(`${rule.message ?? name} (${violations.join(', ')})`);
+    const allowed = new Set(rule.allow ?? []);
+    let total = 0;
+    const offenders = [];
+    for (const file of records(root, rule.directories ?? [], rule.extensions)) {
+      const expression = new RegExp(rule.pattern, flags.includes('g') ? flags : flags + 'g');
+      const count = [...file.source.matchAll(expression)].length;
+      total += count;
+      if (count && !allowed.has(file.path)) offenders.push(file.path);
     }
-    if (rule.maxMatches !== undefined && matchCount > rule.maxMatches) {
-      failures.push(`${rule.message ?? name} has ${matchCount} matches; budget is ${rule.maxMatches}`);
-    }
+    if (offenders.length) failures.push(`${rule.message ?? name} (${offenders.join(', ')})`);
+    if (rule.maxMatches !== undefined && total > rule.maxMatches)
+      failures.push(`${rule.message ?? name} has ${total} matches; budget is ${rule.maxMatches}`);
   }
   return failures;
 }
 
-function hotspotBudgetFailures(root, hotspots = {}) {
+function budgetFailures(root, budgets) {
   const failures = [];
-  for (const [path, budget] of Object.entries(hotspots)) {
-    const absolute = join(root, path);
-    if (!existsSync(absolute)) {
+  for (const [path, limit] of Object.entries(budgets.hotspots ?? {})) {
+    if (!existsSync(join(root, path))) {
       failures.push(`Architecture hotspot is missing from its budget: ${path}`);
       continue;
     }
-    const source = readFileSync(absolute, 'utf8');
-    const lines = countLines(source);
-    const bytes = Buffer.byteLength(source.replace(/\r\n?/g, '\n'));
-    if (budget.maxLines !== undefined && lines > budget.maxLines) {
-      failures.push(`${path} grew to ${lines} lines; budget is ${budget.maxLines}`);
+    const measured = size(readFileSync(join(root, path), 'utf8'));
+    for (const [key, setting] of [
+      ['lines', 'maxLines'],
+      ['bytes', 'maxBytes'],
+    ]) {
+      if (limit[setting] !== undefined && measured[key] > limit[setting])
+        failures.push(`${path} grew to ${measured[key]} ${key}; budget is ${limit[setting]}`);
     }
-    if (budget.maxBytes !== undefined && bytes > budget.maxBytes) {
-      failures.push(`${path} grew to ${bytes} bytes; budget is ${budget.maxBytes}`);
-    }
+  }
+  const orchestration = budgets.orchestration ?? {};
+  if (orchestration.maxLines && orchestration.roots?.length) {
+    const exceptions = new Set(Object.keys(orchestration.existingExceptions ?? {}));
+    const offenders = records(
+      root,
+      orchestration.roots,
+      orchestration.extensions ?? ['.ts', '.tsx', '.rs']
+    ).filter(
+      (file) => !exceptions.has(file.path) && size(file.source).lines > orchestration.maxLines
+    );
+    if (offenders.length)
+      failures.push(
+        `New orchestration files over ${orchestration.maxLines} lines require an architecture-budget exception: ${offenders.map((file) => file.path).join(', ')}`
+      );
   }
   return failures;
 }
 
-function orchestrationBudgetFailures(root, orchestration = {}) {
-  const maxLines = orchestration.maxLines;
-  if (!maxLines || !orchestration.roots?.length) return [];
-  const existingExceptions = new Set(Object.keys(orchestration.existingExceptions ?? {}));
-  const offenders = sourceFilesIn(root, orchestration.roots, orchestration.extensions ?? ['.ts', '.tsx', '.rs'])
-    .filter((file) => countLines(readFileSync(file, 'utf8')) > maxLines)
-    .map((file) => relativePath(root, file))
-    .filter((file) => !existingExceptions.has(file));
-  return offenders.length
-    ? [`New orchestration files over ${maxLines} lines require an architecture-budget exception: ${offenders.join(', ')}`]
-    : [];
-}
-
-function importSpecifiers(source) {
-  return [
-    ...source.matchAll(/(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g),
-  ].map((match) => match[1]);
-}
-
-function resolveCandidate(base) {
-  for (const extension of sourceExtensions) {
-    if (existsSync(`${base}${extension}`)) return `${base}${extension}`;
+function importTarget(root, file, specifier) {
+  let base;
+  if (specifier.startsWith('.')) base = resolve(dirname(file), specifier);
+  else {
+    const alias = [...packageRoots.keys()].find(
+      (name) => specifier === name || specifier.startsWith(name + '/')
+    );
+    if (!alias) return;
+    base = join(root, packageRoots.get(alias), specifier.slice(alias.length).replace(/^\//, ''));
   }
-  for (const extension of sourceExtensions) {
-    const index = join(base, `index${extension}`);
-    if (existsSync(index)) return index;
-  }
-  return undefined;
-}
-
-function resolveImport(root, fromFile, specifier) {
-  if (specifier.startsWith('.')) return resolveCandidate(resolve(dirname(fromFile), specifier));
-
-  for (const [packageName, packageRoot] of packageRoots) {
-    if (specifier === packageName || specifier.startsWith(`${packageName}/`)) {
-      const suffix = specifier.slice(packageName.length).replace(/^\//, '');
-      return resolveCandidate(join(root, packageRoot, suffix));
-    }
-  }
-
-  return undefined;
+  const candidates = [
+    ...sourceExtensions.map((extension) => base + extension),
+    ...sourceExtensions.map((extension) => join(base, 'index' + extension)),
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 export function findCircularDependencies(root) {
-  const roots = [
-    'apps/web/src',
-    'packages/ui/src',
-    'packages/hooks/src',
-    'packages/dashboards/src',
-    'packages/types/src',
-  ].map((path) => join(root, path));
-  const files = roots.flatMap((directory) => (existsSync(directory) ? sourceFiles(directory) : []));
-  const graph = new Map(
-    files.map((file) => [
-      file,
-      importSpecifiers(readFileSync(file, 'utf8'))
-        .map((specifier) => resolveImport(root, file, specifier))
-        .filter((target) => target && files.includes(target)),
-    ]),
-  );
-  const visiting = new Set();
-  const visited = new Set();
-  const stack = [];
-  const cycles = [];
-
-  function visit(file) {
-    if (visiting.has(file)) {
-      const start = stack.indexOf(file);
-      cycles.push(
-        [...stack.slice(start), file].map((entry) => relative(root, entry).replaceAll('\\', '/')),
-      );
-      return;
+  const files = records(root, ['apps/web/src', ...packageRoots.values()]);
+  const graph = new Map(files.map((file) => [file.file, []]));
+  for (const file of files) {
+    const edges = graph.get(file.file);
+    for (const match of file.source.matchAll(
+      /(?:import|export)\s+(?:type\s+)?(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g
+    )) {
+      const target = importTarget(root, file.file, match[1]);
+      if (graph.has(target)) edges.push(target);
     }
-    if (visited.has(file)) return;
-    visiting.add(file);
-    stack.push(file);
-    for (const target of graph.get(file) ?? []) visit(target);
-    stack.pop();
-    visiting.delete(file);
-    visited.add(file);
   }
-
-  for (const file of files) visit(file);
+  const complete = new Set();
+  const cycles = [];
+  for (const start of graph.keys()) {
+    if (complete.has(start)) continue;
+    const frames = [{ file: start, edge: 0 }];
+    const active = new Map([[start, 0]]);
+    while (frames.length) {
+      const frame = frames.at(-1);
+      const edges = graph.get(frame.file);
+      if (frame.edge === edges.length) {
+        complete.add(frame.file);
+        active.delete(frame.file);
+        frames.pop();
+        continue;
+      }
+      const target = edges[frame.edge++];
+      if (active.has(target)) {
+        cycles.push(
+          [...frames.slice(active.get(target)).map((entry) => entry.file), target].map((file) =>
+            relative(root, file).replaceAll('\\', '/')
+          )
+        );
+      } else if (!complete.has(target)) {
+        active.set(target, frames.length);
+        frames.push({ file: target, edge: 0 });
+      }
+    }
+  }
   return cycles;
 }
 
-function findMatches(root, directory, expression) {
-  const absolute = join(root, directory);
-  if (!existsSync(absolute)) return [];
-  return sourceFiles(absolute)
-    .filter((file) => expression.test(readFileSync(file, 'utf8')))
-    .map((file) => relative(root, file));
-}
-
 export function architectureGuardFailures(root) {
-  const failures = [];
   let budgets = {};
+  const failures = [];
+  const config = join(root, 'config/architecture-budgets.json');
   try {
-    budgets = readArchitectureBudgets(root);
+    if (!existsSync(config))
+      throw new Error(`Missing required architecture budget configuration: ${config}`);
+    budgets = JSON.parse(readFileSync(config, 'utf8'));
   } catch (error) {
     failures.push(`Architecture budget configuration is invalid: ${error.message}`);
   }
-
-  failures.push(...patternRuleFailures(root, budgets.patterns));
-  failures.push(...hotspotBudgetFailures(root, budgets.hotspots));
-  failures.push(...orchestrationBudgetFailures(root, budgets.orchestration));
-
-  const uiTransport = findMatches(
-    root,
-    'packages/ui/src',
-    /\bfetch\s*\(|new\s+(?:XMLHttpRequest|WebSocket|EventSource)\b|\baxios\s*(?:\.|\()/,
-  );
-  if (uiTransport.length) {
-    failures.push(`Shared UI must not create network transports: ${uiTransport.join(', ')}`);
+  failures.push(...patternFailures(root, budgets.patterns), ...budgetFailures(root, budgets));
+  for (const [directory, message] of [
+    ['packages/ui/src', 'Shared UI must not create network transports'],
+    ['apps/web/src/routes', 'Route modules must use hooks rather than raw transports'],
+  ]) {
+    const offenders = records(root, [directory])
+      .filter((file) => transport.test(file.source))
+      .map((file) => file.path);
+    if (offenders.length) failures.push(`${message}: ${offenders.join(', ')}`);
   }
-
-  const routeTransport = findMatches(
-    root,
-    'apps/web/src/routes',
-    /\bfetch\s*\(|new\s+(?:XMLHttpRequest|WebSocket|EventSource)\b|\baxios\s*(?:\.|\()/,
-  );
-  if (routeTransport.length) {
-    failures.push(`Route modules must use hooks rather than raw transports: ${routeTransport.join(', ')}`);
-  }
-
   const cycles = findCircularDependencies(root);
-  if (cycles.length) {
-    failures.push(`Circular source dependencies are forbidden:\n${cycles.map((cycle) => `  - ${cycle.join(' -> ')}`).join('\n')}`);
-  }
-
+  if (cycles.length)
+    failures.push(
+      `Circular source dependencies are forbidden:\n${cycles.map((cycle) => `  - ${cycle.join(' -> ')}`).join('\n')}`
+    );
   return failures;
 }
 
 export function runArchitectureGuards(root) {
   const failures = architectureGuardFailures(root);
-  try {
-    execFileSync(process.execPath, ['scripts/sync-dashboard-defaults.mjs', '--check'], {
-      cwd: root,
-      stdio: 'pipe',
-    });
-  } catch (error) {
-    failures.push(`Dashboard defaults are not in sync:\n${error.stderr?.toString().trim() || error.message}`);
-  }
-  try {
-    execFileSync(process.execPath, ['scripts/check-api-route-security.mjs'], {
-      cwd: root,
-      stdio: 'pipe',
-    });
-  } catch (error) {
-    failures.push(`API route security guard failed:\n${error.stderr?.toString().trim() || error.message}`);
+  for (const [args, message] of [
+    [['scripts/sync-dashboard-defaults.mjs', '--check'], 'Dashboard defaults are not in sync'],
+    [['scripts/check-api-route-security.mjs'], 'API route security guard failed'],
+  ]) {
+    const result = spawnSync(process.execPath, args, { cwd: root, encoding: 'utf8' });
+    if (result.error || result.status !== 0)
+      failures.push(
+        `${message}:\n${result.stderr?.trim() || result.error?.message || `Command failed: ${args.join(' ')}`}`
+      );
   }
   return failures;
 }
 
-const invokedPath = process.argv[1] ? resolve(process.argv[1]) : undefined;
-if (invokedPath === fileURLToPath(import.meta.url)) {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-  const failures = runArchitectureGuards(root);
+if (isMain(import.meta.url)) {
+  const failures = runArchitectureGuards(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
   if (failures.length) {
     console.error(failures.map((failure) => `- ${failure}`).join('\n'));
-    process.exit(1);
-  }
-  console.log('Architecture guards passed: budgets and duplicate-pattern ratchets are within limits, shared UI and routes own no raw transports, dashboard defaults are synced, route policy is current, and source dependencies are acyclic.');
+    process.exitCode = 1;
+  } else
+    console.log(
+      'Architecture guards passed: budgets and duplicate-pattern ratchets are within limits, shared UI and routes own no raw transports, dashboard defaults are synced, route policy is current, and source dependencies are acyclic.'
+    );
 }

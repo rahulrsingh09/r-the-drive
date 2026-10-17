@@ -1,199 +1,154 @@
 #!/usr/bin/env node
-
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
+import { isMain, walkFiles } from './lib/validation-files.mjs';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const catalogsOnly = process.argv.includes('--catalogs-only');
-const failures = [];
+const ignored = new Set([
+  '.agents',
+  '.claude',
+  '.codex',
+  '.git',
+  'node_modules',
+  'dist',
+  'coverage',
+  '.turbo',
+  'storybook-static',
+]);
 
-function readJson(path) {
-  return JSON.parse(readFileSync(resolve(root, path), 'utf8'));
-}
-
-function walk(directory, filename) {
-  const results = [];
-  for (const entry of readdirSync(directory)) {
-    if (
-      [
-        '.agents',
-        '.claude',
-        '.codex',
-        '.git',
-        'node_modules',
-        'dist',
-        'coverage',
-        '.turbo',
-        'storybook-static',
-      ].includes(entry)
-    ) {
-      continue;
-    }
-    const path = join(directory, entry);
-    const stats = statSync(path);
-    if (stats.isDirectory()) results.push(...walk(path, filename));
-    else if (entry === filename) results.push(path);
-  }
-  return results;
-}
-
-function walkExtensions(directory, extensions) {
-  const results = [];
-  for (const entry of readdirSync(directory)) {
-    if (
-      [
-        '.agents',
-        '.claude',
-        '.codex',
-        '.git',
-        'node_modules',
-        'dist',
-        'coverage',
-        '.turbo',
-        'storybook-static',
-      ].includes(entry)
-    ) {
-      continue;
-    }
-    const path = join(directory, entry);
-    const stats = statSync(path);
-    if (stats.isDirectory()) results.push(...walkExtensions(path, extensions));
-    else if (extensions.some((extension) => entry.endsWith(extension))) results.push(path);
-  }
-  return results;
-}
-
-const workspaceYaml = readFileSync(resolve(root, 'pnpm-workspace.yaml'), 'utf8');
-const catalogMatch = workspaceYaml.match(/^catalog:\r?\n((?:^[ ]{2}.+\r?\n?)*)/m);
-if (!catalogMatch) failures.push('pnpm-workspace.yaml must define a default catalog.');
-
-const catalogNames = new Set(
-  (catalogMatch?.[1] ?? '')
-    .split(/\r?\n/)
-    .map((line) => line.match(/^  ['\"]?([^'\"]+?)['\"]?:\s/)?.[1])
-    .filter(Boolean)
-);
-
-for (const manifestPath of walk(root, 'package.json')) {
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
-    for (const [name, version] of Object.entries(manifest[section] ?? {})) {
-      if (catalogNames.has(name) && version !== 'catalog:') {
-        failures.push(`${relative(root, manifestPath)}: ${name} must use catalog: in ${section}.`);
-      }
-    }
-  }
-}
-
-if (!catalogsOnly) {
-  const workspace = parse(workspaceYaml);
-  if (Object.keys(workspace.auditConfig ?? {}).length) {
-    failures.push(
-      'Native pnpm audit ignores hide findings; use config/dependency-audit-exceptions.json.'
-    );
-  }
-  if (
-    JSON.stringify(workspace.allowBuilds) !== JSON.stringify({ 'core-js': false, esbuild: true })
-  ) {
-    failures.push(
-      'Review dependency install scripts before changing the core-js/esbuild build allowlist.'
-    );
-  }
-  if (
-    workspace.patchedDependencies?.['image-size@2.0.2'] ||
-    workspace.overrides?.['image-size'] !== '2.0.4'
-  ) {
-    failures.push('Use the published image-size 2.0.4 fix, not the retired partial patch.');
-  }
-  const cargoLock = readFileSync(resolve(root, 'apps/api/Cargo.lock'), 'utf8');
-  if (/name = "proc-macro-error(?:2|-attr2)?"/.test(cargoLock)) {
-    failures.push('Unmaintained proc-macro-error returned; review the age/i18n dependency path.');
-  }
-  const today = new Date().toISOString().slice(0, 10);
-  for (const entry of readJson('config/dependency-audit-exceptions.json')) {
-    if (!entry.expires || today > entry.expires) {
+export function dependencyPolicyFailures(
+  root,
+  { catalogsOnly = false, today = new Date().toISOString().slice(0, 10) } = {}
+) {
+  const read = (path) => readFileSync(join(root, path), 'utf8');
+  const json = (path) => JSON.parse(read(path));
+  const workspaceText = read('pnpm-workspace.yaml');
+  const workspace = parse(workspaceText);
+  const failures = [];
+  const catalogMatch = workspaceText.match(/^catalog:\r?\n((?:^[ ]{2}.+\r?\n?)*)/m);
+  if (!catalogMatch) failures.push('pnpm-workspace.yaml must define a default catalog.');
+  const catalog = new Set(Object.keys(workspace.catalog ?? {}));
+  for (const file of walkFiles(root, {
+    ignored,
+    accept: (file) => basename(file) === 'package.json',
+  })) {
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      const violations = Object.entries(manifest[section] ?? {}).filter(
+        ([name, value]) => catalog.has(name) && value !== 'catalog:'
+      );
       failures.push(
-        `${entry.id}: audit exception expired ${entry.expires}; reassess applicability and upstream fixes.`
+        ...violations.map(
+          ([name]) => `${relative(root, file)}: ${name} must use catalog: in ${section}.`
+        )
       );
     }
   }
-  const baseline = readJson('config/dependency-baselines.json');
-  const rootPackage = readJson('package.json');
-  const packageManager = rootPackage.packageManager?.match(/^pnpm@([^+]+)/)?.[1];
-  if (packageManager !== baseline.pnpm) {
+  if (catalogsOnly) return failures;
+  const fixedPolicy = [
+    [
+      Object.keys(workspace.auditConfig ?? {}).length === 0,
+      'Native pnpm audit ignores hide findings; use config/dependency-audit-exceptions.json.',
+    ],
+    [
+      JSON.stringify(workspace.allowBuilds) === JSON.stringify({ 'core-js': false, esbuild: true }),
+      'Review dependency install scripts before changing the core-js/esbuild build allowlist.',
+    ],
+    [
+      !workspace.patchedDependencies?.['image-size@2.0.2'] &&
+        workspace.overrides?.['image-size'] === '2.0.4',
+      'Use the published image-size 2.0.4 fix, not the retired partial patch.',
+    ],
+    [
+      !/name = "proc-macro-error(?:2|-attr2)?"/.test(read('apps/api/Cargo.lock')),
+      'Unmaintained proc-macro-error returned; review the age/i18n dependency path.',
+    ],
+  ];
+  failures.push(...fixedPolicy.filter(([valid]) => !valid).map(([, message]) => message));
+  for (const exception of json('config/dependency-audit-exceptions.json')) {
+    if (!exception.expires || exception.expires < today)
+      failures.push(
+        `${exception.id}: audit exception expired ${exception.expires}; reassess applicability and upstream fixes.`
+      );
+  }
+  const baseline = json('config/dependency-baselines.json');
+  const manifest = json('package.json');
+  const pnpm = manifest.packageManager?.match(/^pnpm@([^+]+)/)?.[1];
+  if (pnpm !== baseline.pnpm)
+    failures.push(`packageManager pnpm ${pnpm ?? 'missing'} does not match ${baseline.pnpm}.`);
+  const nodePrefix = '>=' + baseline.node.split('.').slice(0, 2).join('.');
+  if (!manifest.engines?.node?.startsWith(nodePrefix))
+    failures.push(`Node engine must start with ${nodePrefix}.`);
+  const requirements = new Map([
+    ['rust-toolchain.toml', [`channel = "${baseline.rust}"`]],
+    ['apps/api/Cargo.toml', [`rust-version = "${baseline.rust.split('.').slice(0, 2).join('.')}"`]],
+    [
+      'compose/Dockerfile',
+      [
+        `rust:${baseline.rust}-slim`,
+        `node:${baseline.node}-alpine`,
+        `postgres:${baseline.postgres}-bookworm`,
+      ],
+    ],
+    [
+      'apps/api/Dockerfile',
+      [`rust:${baseline.rust}-slim`, `postgres:${baseline.postgres}-bookworm`],
+    ],
+    [
+      'compose/docker-compose.yml',
+      [`timescale/timescaledb:${baseline.timescaledb}`, `redis:${baseline.redis}`],
+    ],
+    [
+      'compose/docker-compose.dev.yml',
+      [
+        `timescale/timescaledb:${baseline.timescaledb}`,
+        `redis:${baseline.redis}`,
+        `dxflrs/garage:v${baseline.garage}`,
+      ],
+    ],
+  ]);
+  for (const [file, snippets] of requirements) {
+    const source = read(file);
     failures.push(
-      `packageManager pnpm ${packageManager ?? 'missing'} does not match ${baseline.pnpm}.`
+      ...snippets
+        .filter((text) => !source.includes(text))
+        .map((text) => `${file} must contain ${text}.`)
     );
   }
-  const requiredNodePrefix = `>=${baseline.node.split('.').slice(0, 2).join('.')}`;
-  if (!rootPackage.engines?.node?.startsWith(requiredNodePrefix)) {
-    failures.push(`Node engine must start with ${requiredNodePrefix}.`);
-  }
-
-  const expectedPatterns = [
-    ['rust-toolchain.toml', `channel = "${baseline.rust}"`],
-    ['apps/api/Cargo.toml', `rust-version = "${baseline.rust.split('.').slice(0, 2).join('.')}"`],
-    ['compose/Dockerfile', `rust:${baseline.rust}-slim`],
-    ['compose/Dockerfile', `node:${baseline.node}-alpine`],
-    ['compose/Dockerfile', `postgres:${baseline.postgres}-bookworm`],
-    ['apps/api/Dockerfile', `rust:${baseline.rust}-slim`],
-    ['apps/api/Dockerfile', `postgres:${baseline.postgres}-bookworm`],
-    ['compose/docker-compose.yml', `timescale/timescaledb:${baseline.timescaledb}`],
-    ['compose/docker-compose.yml', `redis:${baseline.redis}`],
-    ['compose/docker-compose.dev.yml', `timescale/timescaledb:${baseline.timescaledb}`],
-    ['compose/docker-compose.dev.yml', `redis:${baseline.redis}`],
-    ['compose/docker-compose.dev.yml', `dxflrs/garage:v${baseline.garage}`],
-  ];
-
-  for (const [path, expected] of expectedPatterns) {
-    const contents = readFileSync(resolve(root, path), 'utf8');
-    if (!contents.includes(expected)) failures.push(`${path} must contain ${expected}.`);
-  }
-
-  for (const workflow of walkExtensions(resolve(root, '.github', 'workflows'), ['.yml', '.yaml'])) {
-    const contents = readFileSync(workflow, 'utf8');
-    for (const match of contents.matchAll(
-      /NODE_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
+  for (const file of walkFiles(join(root, '.github/workflows'), {
+    ignored,
+    accept: (file) => /\.ya?ml$/.test(file),
+  })) {
+    const source = readFileSync(file, 'utf8');
+    const name = relative(root, file);
+    for (const match of source.matchAll(
+      /(NODE|PNPM|RUST)_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
     )) {
-      if (match[1] !== baseline.node) {
-        failures.push(
-          `${relative(root, workflow)} pins NODE_VERSION ${match[1]}; expected ${baseline.node}.`
-        );
-      }
+      const expected = baseline[match[1].toLowerCase()];
+      if (match[2] !== expected)
+        failures.push(`${name} pins ${match[1]}_VERSION ${match[2]}; expected ${expected}.`);
     }
-    for (const match of contents.matchAll(
-      /PNPM_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
-    )) {
-      if (match[1] !== baseline.pnpm) {
-        failures.push(
-          `${relative(root, workflow)} pins PNPM_VERSION ${match[1]}; expected ${baseline.pnpm}.`
-        );
-      }
-    }
-    for (const match of contents.matchAll(
-      /RUST_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
-    )) {
-      if (match[1] !== baseline.rust) {
-        failures.push(
-          `${relative(root, workflow)} pins RUST_VERSION ${match[1]}; expected ${baseline.rust}.`
-        );
-      }
-    }
-    for (const match of contents.matchAll(/^\s*-\s+uses:\s+[^@\s]+@([^\s#]+)/gm)) {
-      if (!/^[a-f0-9]{40}$/i.test(match[1])) {
-        failures.push(`${relative(root, workflow)} uses a mutable action reference: ${match[1]}.`);
-      }
+    for (const match of source.matchAll(/^\s*-\s+uses:\s+[^@\s]+@([^\s#]+)/gm)) {
+      if (!/^[a-f0-9]{40}$/i.test(match[1]))
+        failures.push(`${name} uses a mutable action reference: ${match[1]}.`);
     }
   }
+  return failures;
 }
 
-if (failures.length) {
-  console.error(failures.map((failure) => `- ${failure}`).join('\n'));
-  process.exit(1);
+if (isMain(import.meta.url)) {
+  const catalogsOnly = process.argv.slice(2).includes('--catalogs-only');
+  const failures = dependencyPolicyFailures(
+    resolve(dirname(fileURLToPath(import.meta.url)), '..'),
+    { catalogsOnly }
+  );
+  if (!failures.length)
+    console.log(
+      catalogsOnly ? 'Dependency catalogs are consistent.' : 'Dependency policy is consistent.'
+    );
+  else {
+    console.error(failures.map((message) => `- ${message}`).join('\n'));
+    process.exitCode = 1;
+  }
 }
-
-console.log(
-  catalogsOnly ? 'Dependency catalogs are consistent.' : 'Dependency policy is consistent.'
-);

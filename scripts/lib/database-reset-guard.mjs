@@ -1,63 +1,52 @@
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-function parseDatabaseTarget(value, label) {
+function localTarget(value, label, purpose) {
+  let target;
   try {
-    return new URL(value);
+    target = new URL(value);
   } catch {
     throw new Error(`${label} must be a valid PostgreSQL URL.`);
   }
-}
-
-export function assertLocalDatabaseResetAllowed({ args, env }) {
-  if (env.PANDA_ENV === 'production' || env.NODE_ENV === 'production') {
-    throw new Error('Database reset is disabled in production environments.');
-  }
-
-  if (env.PANDA_ALLOW_DATABASE_RESET !== 'local-development') {
-    throw new Error(
-      'Database reset requires PANDA_ALLOW_DATABASE_RESET=local-development.'
-    );
-  }
-
-  if (!args.includes('--yes')) {
-    throw new Error('Database reset requires the explicit --yes argument.');
-  }
-
-  const databaseUrl = parseDatabaseTarget(env.DATABASE_URL, 'DATABASE_URL');
-
-  if (!LOOPBACK_HOSTS.has(databaseUrl.hostname)) {
-    throw new Error(
-      `Database reset is limited to loopback hosts; received ${databaseUrl.hostname}.`
-    );
-  }
-
+  if (!LOOPBACK_HOSTS.has(target.hostname))
+    throw new Error(`${purpose} is limited to loopback hosts; received ${target.hostname}.`);
   return {
-    database: databaseUrl.pathname.replace(/^\//, ''),
-    host: databaseUrl.hostname,
-    port: databaseUrl.port || '5432',
+    target,
+    database: target.pathname.slice(1),
+    host: target.hostname,
+    port: target.port || '5432',
   };
 }
 
+export function assertLocalDatabaseResetAllowed({ args, env }) {
+  const refusals = [
+    [
+      env.PANDA_ENV === 'production' || env.NODE_ENV === 'production',
+      'Database reset is disabled in production environments.',
+    ],
+    [
+      env.PANDA_ALLOW_DATABASE_RESET !== 'local-development',
+      'Database reset requires PANDA_ALLOW_DATABASE_RESET=local-development.',
+    ],
+    [!args.includes('--yes'), 'Database reset requires the explicit --yes argument.'],
+  ];
+  const denial = refusals.find(([refused]) => refused);
+  if (denial) throw new Error(denial[1]);
+  const { database, host, port } = localTarget(env.DATABASE_URL, 'DATABASE_URL', 'Database reset');
+  return { database, host, port };
+}
+
 export function assertDisposableUpgradeDatabase(env) {
-  if (!env.UPGRADE_DATABASE_URL) {
-    throw new Error(
-      'The populated upgrade harness requires an explicit UPGRADE_DATABASE_URL.'
-    );
-  }
-
-  const databaseUrl = parseDatabaseTarget(env.UPGRADE_DATABASE_URL, 'UPGRADE_DATABASE_URL');
-  if (!LOOPBACK_HOSTS.has(databaseUrl.hostname)) {
-    throw new Error(
-      `The populated upgrade harness is limited to loopback hosts; received ${databaseUrl.hostname}.`
-    );
-  }
-
-  const database = databaseUrl.pathname.replace(/^\//, '');
-  if (!/^panda_upgrade(?:_[a-z0-9_]+)?$/.test(database)) {
-    throw new Error(
-      'UPGRADE_DATABASE_URL must name a disposable panda_upgrade database.'
-    );
-  }
-
-  return databaseUrl.toString();
+  const url = env.UPGRADE_DATABASE_URL;
+  if (!url)
+    throw new Error('The populated upgrade harness requires an explicit UPGRADE_DATABASE_URL.');
+  const { target, database } = localTarget(
+    url,
+    'UPGRADE_DATABASE_URL',
+    'The populated upgrade harness'
+  );
+  const prefix = 'panda_upgrade';
+  const suffix = database.slice(prefix.length);
+  if (!database.startsWith(prefix) || (suffix !== '' && !/^_[a-z0-9_]+$/.test(suffix)))
+    throw new Error('UPGRADE_DATABASE_URL must name a disposable panda_upgrade database.');
+  return target.href;
 }
