@@ -5,6 +5,10 @@ use anyhow::{anyhow, bail, Context};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+#[path = "full_replacement_key_custody_backup_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 use crate::{config::Config, errors::AppError};
 
 const MAX_BYTES: usize = 20 * 1024 * 1024;

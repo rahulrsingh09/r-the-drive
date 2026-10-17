@@ -5,6 +5,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
+#[cfg(test)]
+#[path = "full_replacement_key_custody_weather_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 use crate::services::{external_connections as connections, outbound};
 
 pub const FORECAST_URL: &str = "https://api.open-meteo.com/v1/forecast";

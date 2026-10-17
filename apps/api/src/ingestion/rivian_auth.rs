@@ -1,5 +1,9 @@
 //! Rivian authentication flow.
 
+#[cfg(test)]
+#[path = "full_replacement_rivian_auth_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 use crate::ingestion::session_store::RivianTokenBundle;
 use crate::services::outbound_policy::{self, gateway_url};
 use serde::{Deserialize, Serialize};

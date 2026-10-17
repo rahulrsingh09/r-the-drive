@@ -3,6 +3,10 @@ use anyhow::{bail, Context};
 use futures::TryStreamExt;
 use sqlx::{PgPool, Postgres, Transaction};
 
+#[cfg(test)]
+#[path = "full_replacement_key_custody_keys_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 #[derive(Clone)]
 pub struct BootstrappedKeys {
     pub jwt_private_pem: String,

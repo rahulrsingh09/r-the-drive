@@ -1,6 +1,10 @@
 use crate::errors::AppError;
 use uuid::Uuid;
 
+#[cfg(test)]
+#[path = "full_replacement_key_custody_enrollment_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 pub(crate) async fn lock_enrollment(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,

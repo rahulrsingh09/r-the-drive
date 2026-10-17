@@ -1,5 +1,9 @@
 //! Encrypts/decrypts Rivian credential bundles using the `age` crate.
 
+#[cfg(test)]
+#[path = "full_replacement_key_custody_tests.rs"]
+mod full_replacement_key_custody_tests;
+
 use age::x25519;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
