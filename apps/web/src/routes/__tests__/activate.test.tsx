@@ -27,7 +27,8 @@ vi.mock('@tanstack/react-query', async (original) => ({
   ...(await original<typeof import('@tanstack/react-query')>()),
   useQuery: () => ({ data: preview, isLoading: false, isError: false }),
 }));
-vi.mock('@panda/hooks', () => ({
+vi.mock('@panda/hooks', async () => ({
+  queryKeys: (await import('../../../../../packages/hooks/src/queryKeys')).queryKeys,
   api: { previewAccountInvitation: vi.fn(), startAccountInvitationOidc: startSso },
   useAuth: (selector: (state: { acceptAccountInvitation: typeof accept }) => unknown) => selector({ acceptAccountInvitation: accept }),
 }));

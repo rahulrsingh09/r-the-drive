@@ -1,4 +1,4 @@
-import type { DailyChargeSessionsDay, DailyChargeSessionsSession } from './DailyChargeSessionsChart';
+import type { DailyChargeSessionsDay, DailyChargeSessionsSession } from './dailyChargingTypes';
 import { CHART_COLORS } from './ChartProvider';
 
 export type ChargerGroupKey = 'ac' | 'dc' | 'unknown';

@@ -1,0 +1,40 @@
+export interface ChargeSessionRow {
+  id: string;
+  started_at: string;
+  ended_at?: string | null;
+  session_day_local?: string | null;
+  duration_min: number | null;
+  energy_added_kwh: number | null;
+  soc_start: number | null;
+  soc_end: number | null;
+  peak_power_kw: number | null;
+  cost_usd: number | null;
+  cost_method?: string | null;
+  charger_type: string | null;
+  location_name: string | null;
+  // Enrichment fields from Rivian API
+  network_vendor: string | null;
+  range_added_km: number | null;
+  is_free_session: boolean | null;
+  is_rivian_network: boolean | null;
+  rivian_paid_total: number | null;
+  rivian_charger_type?: string | null;
+  currency_code?: string | null;
+  rivian_city?: string | null;
+  is_public?: boolean | null;
+  charger_id?: string | null;
+  live_current_price?: number | null;
+  live_current_currency?: string | null;
+  live_total_charged_kwh?: number | null;
+  live_range_added_km?: number | null;
+  live_power_kw?: number | null;
+  live_charge_rate_kph?: number | null;
+  live_soc_pct?: number | null;
+  live_time_elapsed_seconds?: number | null;
+  live_time_remaining_min?: number | null;
+  live_charger_state?: string | null;
+  live_charger_status?: string | null;
+  live_started_at?: string | null;
+  source?: string | null;
+  telemetry_sample_count?: number;
+}

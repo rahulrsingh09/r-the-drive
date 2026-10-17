@@ -1,7 +1,7 @@
 /** Shared React Query keys. Keep public keys stable; version segments document intentional cache breaks. */
 export const queryKeys = {
   me: { all: ['me'] as const },
-  auth: { config: ['auth-config'] as const, identities: ['auth-identities'] as const, authenticationSettings: ['authentication-settings'] as const },
+  auth: { setup: ['auth-setup'] as const, invitation: (token: string) => ['account-invitation', token] as const, config: ['auth-config'] as const, identities: ['auth-identities'] as const, authenticationSettings: ['authentication-settings'] as const },
   vehicles: {
     all: ['vehicles'] as const,
     status: (vehicleId: string | null) => ['vehicles', 'status', vehicleId] as const,

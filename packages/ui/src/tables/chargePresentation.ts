@@ -1,4 +1,4 @@
-import type { ChargeSessionRow } from './chargingColumns';
+import type { ChargeSessionRow } from './chargingTypes';
 import { formatAppCalendarDate, formatAppDate, formatAppTime } from '../lib/dateTime';
 const CHARGE_TYPES = new Map([['dc', 'dc'], ['dcfc', 'dc'], ['ac', 'ac'], ['ac_l2', 'ac']] as const);
 const DC_NETWORKS = new Set(['tesla', 'rivian', 'electrify america', 'evgo']);

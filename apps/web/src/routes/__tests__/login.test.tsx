@@ -30,7 +30,8 @@ const mockRegister = vi.fn();
 const mockResumeSession = vi.fn();
 const mockStartOidc = vi.hoisted(() => vi.fn());
 const mockConsumeExplicitLogoutIntent = vi.hoisted(() => vi.fn(() => false));
-vi.mock('@panda/hooks', () => ({
+vi.mock('@panda/hooks', async () => ({
+  queryKeys: (await import('../../../../../packages/hooks/src/queryKeys')).queryKeys,
   consumeExplicitLogoutIntent: mockConsumeExplicitLogoutIntent,
   useAuth: () => ({
     login: mockLogin,

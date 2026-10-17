@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { api, useAuth } from '@panda/hooks';
+import { api, queryKeys, useAuth } from '@panda/hooks';
 import { Button, Input } from '@panda/ui/primitives';
 import { RAuthBrand } from '../../features/r-experience/RAuthBrand';
 import { Zap, Route, Battery } from 'lucide-react';
@@ -19,12 +19,12 @@ export function LoginPage() {
   const { password, error, loading: passwordLoading, ssoLoading, setPassword, setError, run } = useAuthForm();
   const loading = passwordLoading || ssoLoading;
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
-  const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
+  const setup = useQuery({ queryKey: queryKeys.auth.setup, queryFn: () => api.setup(), retry: false });
   const setupRequired = setup.data?.setup_required === true;
   const setupProofRequired = setup.data?.setup_proof_required === true;
   const setupProofAvailable = setup.data?.setup_proof_available === true;
   const authConfig = useQuery({
-    queryKey: ['auth-config'], queryFn: () => api.getAuthConfig(), retry: false,
+    queryKey: queryKeys.auth.config, queryFn: () => api.getAuthConfig(), retry: false,
     enabled: setup.isSuccess && !setupRequired,
   });
   const config = authConfig.data;

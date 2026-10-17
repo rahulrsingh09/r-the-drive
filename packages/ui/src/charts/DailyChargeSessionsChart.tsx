@@ -1,3 +1,5 @@
+import type { DailyChargeSessionsDay, DailyChargeSessionsSession } from './dailyChargingTypes';
+export type { DailyChargeSessionsDay, DailyChargeSessionsSession } from './dailyChargingTypes';
 import { prepareChargingDays, chargingDayGeometry, GROUP_ORDER, GROUP_META, type ChargerGroupKey, type PreparedDay } from './dailyChargingModel';
 import * as React from 'react';
 import { RotateCcw } from 'lucide-react';
@@ -11,24 +13,6 @@ import {
   selectAdaptiveAxisLabelIndices,
   selectValueLabelIndices,
 } from './chartLabelLayout';
-
-export interface DailyChargeSessionsDay {
-  day_local: string;
-  day_start: string;
-  total_energy_kwh: number;
-  session_count: number;
-}
-
-export interface DailyChargeSessionsSession {
-  session_id: string;
-  day_local: string;
-  day_start: string;
-  started_at: string;
-  energy_added_kwh: number | null;
-  cost_usd: number | null;
-  charger_type: string | null;
-  location_name: string | null;
-}
 
 export interface DailyChargeSessionsChartProps {
   daily: DailyChargeSessionsDay[];

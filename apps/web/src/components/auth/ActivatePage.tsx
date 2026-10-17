@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { api, useAuth } from '@panda/hooks';
+import { api, queryKeys, useAuth } from '@panda/hooks';
 import { Button, Input } from '@panda/ui/primitives';
 import { RAuthBrand } from '../../features/r-experience/RAuthBrand';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from './PasswordRequirements';
@@ -13,7 +13,7 @@ export function ActivatePage() {
   const [token] = useState(() => window.location.hash.replace(/^#/, ''));
   const { password, error, loading, ssoLoading, setPassword, setError, run } = useAuthForm(true);
   const invitation = useQuery({
-    queryKey: ['account-invitation', token], queryFn: () => api.previewAccountInvitation(token),
+    queryKey: queryKeys.auth.invitation(token), queryFn: () => api.previewAccountInvitation(token),
     enabled: !!token, retry: false,
   });
   useEffect(() => {
