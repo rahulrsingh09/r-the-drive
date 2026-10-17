@@ -54,7 +54,8 @@ fn recovery_validation_checks_every_limit_and_error_precedence() {
 
 #[test]
 fn rate_limit_validation_retains_order_and_messages() {
-    let fields: [(&str, fn(&mut RateLimitConfig, bool)); 5] = [
+    type RateLimitCase = (&'static str, fn(&mut RateLimitConfig, bool));
+    let fields: [RateLimitCase; 5] = [
         ("RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE", |v, burst| if burst { v.auth_public_burst = 0 } else { v.auth_public_per_minute = 0 }),
         ("RATE_LIMIT_AUTH_METADATA_PER_MINUTE", |v, burst| if burst { v.auth_metadata_burst = 0 } else { v.auth_metadata_per_minute = 0 }),
         ("RATE_LIMIT_AUTH_READ_PER_MINUTE", |v, burst| if burst { v.auth_read_burst = 0 } else { v.auth_read_per_minute = 0 }),

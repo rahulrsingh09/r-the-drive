@@ -41,38 +41,27 @@ pub async fn match_geofence(
     lat: f64,
     lon: f64,
 ) -> anyhow::Result<Option<GeofenceMatch>> {
-    let row = sqlx::query_as::<_, GeofenceMatch>(
+    let nearest = sqlx::query_as::<_, GeofenceMatch>(
         r#"
-        SELECT
-          id,
-          name,
-          is_home,
-          is_work,
-                    address_id,
-          cost_profile_id,
-          earth_distance(
-            ll_to_earth($2, $3),
-            ll_to_earth(latitude, longitude)
-          ) AS distance_m
-        FROM panda.geofences
-        WHERE user_id = $1
-          AND earth_box(ll_to_earth(latitude, longitude), radius_m)
-              @> ll_to_earth($2, $3)
-          AND earth_distance(
-                ll_to_earth(latitude, longitude),
-                ll_to_earth($2, $3)
-              ) <= radius_m
-        ORDER BY 7 ASC
+        WITH candidates AS MATERIALIZED (
+          SELECT id, name, is_home, is_work, address_id, cost_profile_id, radius_m,
+                 earth_distance(ll_to_earth($2, $3), ll_to_earth(latitude, longitude)) AS distance_m
+          FROM panda.geofences
+          WHERE user_id = $1
+            AND earth_box(ll_to_earth(latitude, longitude), radius_m) @> ll_to_earth($2, $3)
+        )
+        SELECT id, name, is_home, is_work, address_id, cost_profile_id, distance_m
+        FROM candidates
+        WHERE distance_m <= radius_m
+        ORDER BY distance_m ASC
         LIMIT 1
         "#,
     )
     .bind(user_id)
     .bind(lat)
     .bind(lon)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row)
+    .fetch_optional(pool);
+    nearest.await.map_err(Into::into)
 }
 
 /// OSM Nominatim address cache entry.

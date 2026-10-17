@@ -30,7 +30,7 @@ pub struct CostProfile {
 
 impl CostProfile {
     pub fn tou_periods(&self) -> Vec<TouPeriod> {
-        serde_json::from_value(self.tou_periods.clone()).unwrap_or_default()
+        Vec::<TouPeriod>::deserialize(&self.tou_periods).unwrap_or_default()
     }
 
     pub fn is_effective_at(&self, started_at: DateTime<Utc>) -> bool {
@@ -58,44 +58,39 @@ pub struct TimedEnergyPoint {
 }
 
 pub fn validate_tou_periods(periods: &[TouPeriod]) -> Result<(), String> {
-    if periods.is_empty() {
+    let Some(last) = periods.last() else {
         return Err("TOU schedules need at least one period.".into());
-    }
-
-    let mut expected_start = 0u16;
-    for period in periods {
-        if period.label.trim().is_empty() {
-            return Err("Each TOU period needs a label.".into());
-        }
-        if !period.rate.is_finite() || period.rate < 0.0 {
-            return Err("Each TOU period needs a non-negative rate.".into());
-        }
-        // Sanity check: rates are stored in $/kWh.  Real US residential
-        // peak rates max out around $0.60/kWh.  Anything above $5 almost
-        // certainly means the user typed cents-per-kWh (e.g. "32.2499")
-        // by mistake — reject at the API boundary so it can't poison
-        // every cost calculation against this profile.
-        if period.rate > 5.0 {
+    };
+    for (index, period) in periods.iter().enumerate() {
+        let previous_end = index
+            .checked_sub(1)
+            .map_or(0, |previous| periods[previous].end_minute);
+        let violation = if period.label.trim().is_empty() {
+            Some("Each TOU period needs a label.")
+        } else if !period.rate.is_finite() || period.rate < 0.0 {
+            Some("Each TOU period needs a non-negative rate.")
+        } else if period.rate > 5.0 {
             return Err(format!(
                 "Rate {:.4} $/kWh is too high. Rates must be entered in dollars per kWh \
                  (e.g. 0.32 for 32¢/kWh), not cents.",
                 period.rate
             ));
+        } else if period.start_minute != previous_end {
+            Some("TOU periods must be contiguous and start at 00:00.")
+        } else if period.end_minute <= period.start_minute {
+            Some("Each TOU period must end after it starts.")
+        } else {
+            None
+        };
+        if let Some(message) = violation {
+            return Err(message.into());
         }
-        if period.start_minute != expected_start {
-            return Err("TOU periods must be contiguous and start at 00:00.".into());
-        }
-        if period.end_minute <= period.start_minute {
-            return Err("Each TOU period must end after it starts.".into());
-        }
-        expected_start = period.end_minute;
     }
-
-    if expected_start != 24 * 60 {
-        return Err("TOU periods must cover the full day through 24:00.".into());
+    if last.end_minute == 1440 {
+        Ok(())
+    } else {
+        Err("TOU periods must cover the full day through 24:00.".into())
     }
-
-    Ok(())
 }
 
 /// Calculate a profile amount, including its fee, when the start date is eligible.

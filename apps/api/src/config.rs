@@ -352,17 +352,15 @@ fn default_backup_driver() -> String {
 }
 
 fn default_vehicle_image_cache_dir() -> String {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
-        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
-        })
-        .unwrap_or_else(std::env::temp_dir);
-
-    base.join("panda")
-        .join("vehicle-images")
+    let configured = ["LOCALAPPDATA", "XDG_CACHE_HOME", "XDG_DATA_HOME"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .map(PathBuf::from);
+    let base = configured.unwrap_or_else(|| match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join(".local/share"),
+        None => std::env::temp_dir(),
+    });
+    base.join("panda/vehicle-images")
         .to_string_lossy()
         .into_owned()
 }
@@ -486,25 +484,140 @@ fn default_heavy_read_burst() -> u32 {
     90
 }
 
+impl SecurityConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        for (name, text) in [
+            (
+                "OIDC_PRIVATE_NETWORK_ALLOWLIST",
+                &self.oidc_private_network_allowlist,
+            ),
+            (
+                "S3_PRIVATE_NETWORK_ALLOWLIST",
+                &self.s3_private_network_allowlist,
+            ),
+        ] {
+            crate::services::outbound::operator_allowlist(text)
+                .map_err(|error| anyhow::anyhow!("{name}: {error}"))?;
+        }
+        let requirements = [
+            (
+                [
+                    self.ws_max_per_user,
+                    self.ws_max_per_vehicle,
+                    self.ws_max_global,
+                ]
+                .into_iter()
+                .all(|limit| limit > 0),
+                "WS_MAX_PER_USER, WS_MAX_PER_VEHICLE and WS_MAX_GLOBAL must be positive",
+            ),
+            (
+                self.metrics_max_per_user > 0 && (1..=16).contains(&self.metrics_max_global),
+                "METRICS_MAX_GLOBAL must be 1..=16 and METRICS_MAX_PER_USER must be positive",
+            ),
+            (
+                [
+                    self.metrics_timeout_seconds,
+                    self.basemap_cache_max_bytes,
+                    self.basemap_cache_ttl_seconds,
+                ]
+                .into_iter()
+                .all(|limit| limit > 0),
+                "Metric deadline and basemap cache limits must be positive",
+            ),
+            (
+                [
+                    self.weather_max_response_bytes,
+                    self.rivian_max_response_bytes,
+                    self.geocoder_max_response_bytes,
+                    self.oidc_max_response_bytes,
+                ]
+                .into_iter()
+                .all(|limit| limit > 0),
+                "Response byte limits must be positive",
+            ),
+        ];
+        match requirements.into_iter().find(|(valid, _)| !valid) {
+            Some((_, message)) => anyhow::bail!(message),
+            None => Ok(()),
+        }
+    }
+}
+
+enum BrowserOriginPolicy {
+    Secure,
+    LiteralLan,
+}
+
+impl BrowserOriginPolicy {
+    fn for_config(config: &Config, bind_address: IpAddr) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !config.allowed_origins.is_empty(),
+            "ALLOWED_ORIGINS must contain an exact browser origin in production"
+        );
+        if !config.allow_insecure_lan_http_auth {
+            return Ok(Self::Secure);
+        }
+        anyhow::ensure!(
+            config.origin_bind.allow_public_origin_bind,
+            "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires ALLOW_PUBLIC_ORIGIN_BIND=true"
+        );
+        anyhow::ensure!(is_lan_accessible_bind_address(bind_address),
+            "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires PANDA_BIND_ADDRESS to be an unspecified, private, or link-local IP address");
+        Ok(Self::LiteralLan)
+    }
+
+    fn validate_all(&self, origins: &[String]) -> anyhow::Result<()> {
+        for origin in origins {
+            let parsed = url::Url::parse(origin).map_err(|error| {
+                anyhow::anyhow!("ALLOWED_ORIGINS contains an invalid origin `{origin}`: {error}")
+            })?;
+            let plain_origin = parsed.host_str().is_some()
+                && parsed.username().is_empty()
+                && parsed.password().is_none()
+                && parsed.path() == "/"
+                && parsed.query().is_none()
+                && parsed.fragment().is_none();
+            anyhow::ensure!(plain_origin,
+                "ALLOWED_ORIGINS must contain exact origins without credentials, paths, queries, or fragments in production; found `{origin}`");
+            match self {
+                Self::Secure => anyhow::ensure!(parsed.scheme() == "https",
+                    "ALLOWED_ORIGINS must contain exact HTTPS origins without paths, queries, or fragments in production; found `{origin}`"),
+                Self::LiteralLan => {
+                    let literal = match parsed.host() {
+                        Some(url::Host::Ipv4(address)) => Some(IpAddr::V4(address)),
+                        Some(url::Host::Ipv6(address)) => Some(IpAddr::V6(address)),
+                        _ => None,
+                    }.ok_or_else(|| anyhow::anyhow!(
+                        "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires ALLOWED_ORIGINS to use private, loopback, or link-local literal IP hosts; found `{origin}`"))?;
+                    anyhow::ensure!(parsed.scheme() == "http" && is_lan_client_address(literal),
+                        "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires exact HTTP origins using private, loopback, or link-local literal IP hosts; found `{origin}`");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         populate_compose_connection_urls()?;
-        let mut config =
-            envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {e}"))?;
-        for (name, value) in [
-            ("JWT_SECRET", &mut config.jwt_secret),
-            ("JWT_PUBLIC_KEY", &mut config.jwt_public_key),
-            ("AGE_ENCRYPTION_KEY", &mut config.age_encryption_key),
-        ] {
-            let file =
-                std::env::var(format!("{name}_FILE"))
-                    .map(Some)
-                    .or_else(|error| match error {
-                        std::env::VarError::NotPresent => Ok(None),
-                        _ => Err(anyhow::anyhow!("{name}_FILE must be valid Unicode")),
-                    })?;
-            *value = resolve_key_source(name, value.take(), file)?;
-        }
+        let parsed =
+            envy::from_env::<Self>().map_err(|error| anyhow::anyhow!("Config error: {error}"))?;
+        let config = Self {
+            jwt_secret: KeyMaterialInput::from_environment("JWT_SECRET", parsed.jwt_secret)?
+                .read("JWT_SECRET")?,
+            jwt_public_key: KeyMaterialInput::from_environment(
+                "JWT_PUBLIC_KEY",
+                parsed.jwt_public_key,
+            )?
+            .read("JWT_PUBLIC_KEY")?,
+            age_encryption_key: KeyMaterialInput::from_environment(
+                "AGE_ENCRYPTION_KEY",
+                parsed.age_encryption_key,
+            )?
+            .read("AGE_ENCRYPTION_KEY")?,
+            ..parsed
+        };
         config.validate()?;
         Ok(config)
     }
@@ -513,184 +626,85 @@ impl Config {
     ///
     /// Hard-rejects insecure configurations when `PANDA_ENV=production`.
     pub fn validate(&self) -> anyhow::Result<()> {
-        let s = &self.security;
-        crate::services::outbound::operator_allowlist(&s.oidc_private_network_allowlist)
-            .map_err(|e| anyhow::anyhow!("OIDC_PRIVATE_NETWORK_ALLOWLIST: {e}"))?;
-        crate::services::outbound::operator_allowlist(&s.s3_private_network_allowlist)
-            .map_err(|e| anyhow::anyhow!("S3_PRIVATE_NETWORK_ALLOWLIST: {e}"))?;
-        anyhow::ensure!(
-            s.ws_max_per_user > 0 && s.ws_max_per_vehicle > 0 && s.ws_max_global > 0,
-            "WS_MAX_PER_USER, WS_MAX_PER_VEHICLE and WS_MAX_GLOBAL must be positive"
-        );
-        anyhow::ensure!(
-            s.metrics_max_per_user > 0 && s.metrics_max_global > 0 && s.metrics_max_global <= 16,
-            "METRICS_MAX_GLOBAL must be 1..=16 and METRICS_MAX_PER_USER must be positive"
-        );
-        anyhow::ensure!(
-            s.metrics_timeout_seconds > 0
-                && s.basemap_cache_max_bytes > 0
-                && s.basemap_cache_ttl_seconds > 0,
-            "Metric deadline and basemap cache limits must be positive"
-        );
-        anyhow::ensure!(
-            s.weather_max_response_bytes > 0
-                && s.rivian_max_response_bytes > 0
-                && s.geocoder_max_response_bytes > 0
-                && s.oidc_max_response_bytes > 0,
-            "Response byte limits must be positive"
-        );
+        self.security.validate()?;
         OidcEnvOverrides::from_env()?.validate()?;
-        let is_production = self.is_production();
         let bind_address: IpAddr =
             self.origin_bind.panda_bind_address.parse().map_err(|_| {
                 anyhow::anyhow!("PANDA_BIND_ADDRESS must be an IPv4 or IPv6 address")
             })?;
-
-        // Resolve the proof during startup so an invalid or unreadable secret
-        // fails explicitly instead of leaving first-owner setup mysteriously
-        // unavailable. An entirely absent proof is allowed: an unclaimed
-        // production installation stays healthy but registration fails closed.
         let _ = load_setup_token()?;
-
-        if !self.is_development()
-            && !self
-                .panda_env
-                .as_deref()
-                .is_some_and(|value| value.eq_ignore_ascii_case("production"))
-        {
-            anyhow::bail!(
-                "PANDA_ENV must be production or development; development is for local use only"
-            );
-        }
+        anyhow::ensure!(
+            self.is_development() || self.is_production(),
+            "PANDA_ENV must be production or development; development is for local use only"
+        );
         let external = crate::keys::external_keys(
             self.jwt_secret.as_deref(),
             self.jwt_public_key.as_deref(),
             self.age_encryption_key.as_deref(),
         )?;
-        if is_production && external.is_none() {
-            anyhow::bail!("production requires external JWT_SECRET, JWT_PUBLIC_KEY, and AGE_ENCRYPTION_KEY (or _FILE alternatives); migrate existing database keys explicitly");
-        }
-
-        if is_production {
-            if self.cookie_insecure.is_some() {
-                anyhow::bail!(
-                    "COOKIE_INSECURE must not be set when PANDA_ENV=production. \
-                     Remove it from your environment before starting the API."
-                );
-            }
-
-            if self.allowed_origins.is_empty() {
-                anyhow::bail!("ALLOWED_ORIGINS must contain an exact browser origin in production");
-            }
-
-            if self.allow_insecure_lan_http_auth {
-                if !self.origin_bind.allow_public_origin_bind {
-                    anyhow::bail!(
-                        "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires ALLOW_PUBLIC_ORIGIN_BIND=true"
-                    );
-                }
-                if !is_lan_accessible_bind_address(bind_address) {
-                    anyhow::bail!(
-                        "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires PANDA_BIND_ADDRESS to be an unspecified, private, or link-local IP address"
-                    );
-                }
-            }
-
-            for origin in &self.allowed_origins {
-                let parsed = url::Url::parse(origin).map_err(|error| {
-                    anyhow::anyhow!(
-                        "ALLOWED_ORIGINS contains an invalid origin `{origin}`: {error}"
-                    )
-                })?;
-                let common_invalid = parsed.host_str().is_none()
-                    || parsed.username() != ""
-                    || parsed.password().is_some()
-                    || parsed.path() != "/"
-                    || parsed.query().is_some()
-                    || parsed.fragment().is_some();
-                if common_invalid {
-                    anyhow::bail!(
-                        "ALLOWED_ORIGINS must contain exact origins without credentials, paths, queries, or fragments in production; found `{origin}`"
-                    );
-                }
-
-                if self.allow_insecure_lan_http_auth {
-                    let ip = match parsed.host() {
-                        Some(url::Host::Ipv4(ip)) => IpAddr::V4(ip),
-                        Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip),
-                        Some(url::Host::Domain(_)) | None => {
-                            anyhow::bail!(
-                                "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires ALLOWED_ORIGINS to use private, loopback, or link-local literal IP hosts; found `{origin}`"
-                            );
-                        }
-                    };
-                    if parsed.scheme() != "http" || !is_lan_client_address(ip) {
-                        anyhow::bail!(
-                            "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires exact HTTP origins using private, loopback, or link-local literal IP hosts; found `{origin}`"
-                        );
-                    }
-                } else if parsed.scheme() != "https" {
-                    anyhow::bail!(
-                        "ALLOWED_ORIGINS must contain exact HTTPS origins without paths, queries, or fragments in production; found `{origin}`"
-                    );
-                }
-            }
-
-            let database_url = url::Url::parse(&self.database_url)
-                .map_err(|error| anyhow::anyhow!("DATABASE_URL is invalid: {error}"))?;
-            let password = database_url.password().unwrap_or_default();
-            if password.is_empty()
-                || matches!(password, "devpassword" | "CHANGE_ME" | "change_me")
-                || password.starts_with("CHANGE_ME")
-            {
-                anyhow::bail!(
-                    "DATABASE_URL must contain a non-default database password in production"
-                );
-            }
-
-            let redis_url = url::Url::parse(&self.redis_url)
-                .map_err(|error| anyhow::anyhow!("REDIS_URL is invalid: {error}"))?;
-            let redis_password = redis_url.password().unwrap_or_default();
-            if redis_password.is_empty()
-                || matches!(redis_password, "devpassword" | "CHANGE_ME" | "change_me")
-                || redis_password.starts_with("CHANGE_ME")
-            {
-                anyhow::bail!("REDIS_URL must contain a non-default Redis password in production");
+        if self.is_production() {
+            anyhow::ensure!(external.is_some(), "production requires external JWT_SECRET, JWT_PUBLIC_KEY, and AGE_ENCRYPTION_KEY (or _FILE alternatives); migrate existing database keys explicitly");
+            anyhow::ensure!(self.cookie_insecure.is_none(),
+                "COOKIE_INSECURE must not be set when PANDA_ENV=production. Remove it from your environment before starting the API.");
+            BrowserOriginPolicy::for_config(self, bind_address)?
+                .validate_all(&self.allowed_origins)?;
+            for (name, value, message) in [
+                (
+                    "DATABASE_URL",
+                    &self.database_url,
+                    "DATABASE_URL must contain a non-default database password in production",
+                ),
+                (
+                    "REDIS_URL",
+                    &self.redis_url,
+                    "REDIS_URL must contain a non-default Redis password in production",
+                ),
+            ] {
+                let parsed = url::Url::parse(value)
+                    .map_err(|error| anyhow::anyhow!("{name} is invalid: {error}"))?;
+                let password = parsed.password().unwrap_or_default();
+                let placeholder = ["", "devpassword", "CHANGE_ME", "change_me"].contains(&password)
+                    || password.starts_with("CHANGE_ME");
+                anyhow::ensure!(!placeholder, message);
             }
         }
-
         self.rate_limit.validate()?;
         self.validate_recovery_limits()?;
-
-        if !bind_address.is_loopback() && !self.origin_bind.allow_public_origin_bind {
-            anyhow::bail!(
-                "PANDA_BIND_ADDRESS may be non-loopback only when ALLOW_PUBLIC_ORIGIN_BIND=true"
-            );
-        }
-
+        anyhow::ensure!(
+            bind_address.is_loopback() || self.origin_bind.allow_public_origin_bind,
+            "PANDA_BIND_ADDRESS may be non-loopback only when ALLOW_PUBLIC_ORIGIN_BIND=true"
+        );
         Ok(())
     }
 
     fn validate_recovery_limits(&self) -> anyhow::Result<()> {
-        if self.recovery.max_upload_bytes == 0
-            || self.recovery.max_expanded_bytes == 0
-            || self.recovery.max_manifest_bytes == 0
-            || self.recovery.max_settings_bytes == 0
-            || self.recovery.max_history_bytes == 0
-            || self.recovery.max_member_bytes == 0
-            || self.recovery.max_members == 0
-            || self.recovery.max_compression_ratio == 0
-            || self.recovery.upload_deadline_seconds == 0
-            || self.recovery.restore_deadline_seconds == 0
-        {
-            anyhow::bail!("recovery resource limits and deadlines must be greater than zero");
-        }
-        if self.recovery.max_member_bytes > self.recovery.max_expanded_bytes {
-            anyhow::bail!("RECOVERY_MAX_MEMBER_BYTES cannot exceed RECOVERY_MAX_EXPANDED_BYTES");
-        }
-        if self.recovery.min_free_bytes < default_recovery_min_free_bytes() {
-            anyhow::bail!("RECOVERY_MIN_FREE_BYTES cannot be less than 2 GiB");
-        }
+        let limits = &self.recovery;
+        let positive = [
+            limits.max_upload_bytes,
+            limits.max_expanded_bytes,
+            limits.max_manifest_bytes,
+            limits.max_settings_bytes,
+            limits.max_history_bytes,
+            limits.max_member_bytes,
+            limits.max_compression_ratio,
+            limits.upload_deadline_seconds,
+            limits.restore_deadline_seconds,
+        ];
+        anyhow::ensure!(
+            limits.max_members != 0
+                && positive
+                    .into_iter()
+                    .all(|value| std::num::NonZeroU64::new(value).is_some()),
+            "recovery resource limits and deadlines must be greater than zero"
+        );
+        anyhow::ensure!(
+            limits.max_member_bytes <= limits.max_expanded_bytes,
+            "RECOVERY_MAX_MEMBER_BYTES cannot exceed RECOVERY_MAX_EXPANDED_BYTES"
+        );
+        anyhow::ensure!(
+            limits.min_free_bytes >= default_recovery_min_free_bytes(),
+            "RECOVERY_MIN_FREE_BYTES cannot be less than 2 GiB"
+        );
         Ok(())
     }
 
@@ -744,13 +758,10 @@ impl Config {
         let supplied = trim_one_trailing_line_ending(supplied);
         let expected_digest = Sha256::digest(expected.as_bytes());
         let supplied_digest = Sha256::digest(supplied.as_bytes());
-        let difference = expected_digest
-            .iter()
-            .zip(supplied_digest.iter())
-            .fold(0_u8, |difference, (left, right)| {
-                difference | (left ^ right)
-            });
-        Ok(difference == 0)
+        Ok(
+            aws_lc_rs::constant_time::verify_slices_are_equal(&expected_digest, &supplied_digest)
+                .is_ok(),
+        )
     }
 }
 
@@ -815,117 +826,194 @@ impl OidcEnvOverrides {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.required_claim_name.is_some() != self.required_claim_value.is_some() {
-            anyhow::bail!("PANDA_OIDC_REQUIRED_CLAIM_NAME and PANDA_OIDC_REQUIRED_CLAIM_VALUE must be set together");
+        match (&self.required_claim_name, &self.required_claim_value) {
+            (Some(_), None) | (None, Some(_)) => anyhow::bail!("PANDA_OIDC_REQUIRED_CLAIM_NAME and PANDA_OIDC_REQUIRED_CLAIM_VALUE must be set together"),
+            _ => {}
         }
-        if let Some(method) = &self.token_auth_method {
-            if !matches!(
-                method.as_str(),
-                "auto" | "client_secret_basic" | "client_secret_post"
-            ) {
-                anyhow::bail!("PANDA_OIDC_TOKEN_AUTH_METHOD must be auto, client_secret_basic, or client_secret_post");
-            }
-        }
-        for (name, value) in [
-            ("PANDA_OIDC_ISSUER_URL", &self.issuer_url),
-            ("PANDA_OIDC_PUBLIC_BASE_URL", &self.public_base_url),
-        ] {
-            if let Some(value) = value {
-                let url = url::Url::parse(value)
-                    .map_err(|e| anyhow::anyhow!("{name} is invalid: {e}"))?;
-                if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-                    anyhow::bail!("{name} must be an absolute HTTP or HTTPS URL");
-                }
-            }
-        }
-        Ok(())
+        let methods = ["auto", "client_secret_basic", "client_secret_post"];
+        anyhow::ensure!(
+            self.token_auth_method
+                .as_deref()
+                .is_none_or(|method| methods.contains(&method)),
+            "PANDA_OIDC_TOKEN_AUTH_METHOD must be auto, client_secret_basic, or client_secret_post"
+        );
+        let endpoints = [
+            ("PANDA_OIDC_ISSUER_URL", self.issuer_url.as_deref()),
+            (
+                "PANDA_OIDC_PUBLIC_BASE_URL",
+                self.public_base_url.as_deref(),
+            ),
+        ];
+        endpoints
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
+            .try_for_each(|(name, value)| {
+                let parsed = url::Url::parse(value)
+                    .map_err(|error| anyhow::anyhow!("{name} is invalid: {error}"))?;
+                anyhow::ensure!(
+                    ["http", "https"].contains(&parsed.scheme()) && parsed.host_str().is_some(),
+                    "{name} must be an absolute HTTP or HTTPS URL"
+                );
+                Ok(())
+            })
     }
 }
 
+enum KeyMaterialInput {
+    Missing,
+    Inline(String),
+    File(PathBuf),
+}
+
+impl KeyMaterialInput {
+    fn from_environment(name: &str, direct: Option<String>) -> anyhow::Result<Self> {
+        let path = std::env::var_os(format!("{name}_FILE"))
+            .map(|value| {
+                value
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("{name}_FILE must be valid Unicode"))
+            })
+            .transpose()?;
+        Self::select(name, direct, path)
+    }
+
+    fn select(name: &str, direct: Option<String>, file: Option<String>) -> anyhow::Result<Self> {
+        if direct.is_some() && file.is_some() {
+            anyhow::bail!("{name} and {name}_FILE are mutually exclusive");
+        }
+        if let Some(material) = direct {
+            return Ok(Self::Inline(material));
+        }
+        let Some(path) = file else {
+            return Ok(Self::Missing);
+        };
+        anyhow::ensure!(
+            !path.trim().is_empty(),
+            "{name}_FILE must name a readable key file"
+        );
+        Ok(Self::File(path.into()))
+    }
+
+    fn read(self, name: &str) -> anyhow::Result<Option<String>> {
+        let material = match self {
+            Self::Missing => return Ok(None),
+            Self::Inline(value) => value,
+            Self::File(path) => std::fs::read_to_string(path)
+                .map_err(|_| anyhow::anyhow!("{name}_FILE cannot be read as UTF-8 key material"))?,
+        };
+        Ok(Some(material))
+    }
+}
+
+#[cfg(test)]
 fn resolve_key_source(
     name: &str,
     direct: Option<String>,
     file: Option<String>,
 ) -> anyhow::Result<Option<String>> {
-    match (direct, file) {
-        (Some(_), Some(_)) => anyhow::bail!("{name} and {name}_FILE are mutually exclusive"),
-        (None, Some(path)) => {
-            if path.trim().is_empty() {
-                anyhow::bail!("{name}_FILE must name a readable key file");
-            }
-            std::fs::read_to_string(path)
-                .map(Some)
-                .map_err(|_| anyhow::anyhow!("{name}_FILE cannot be read as UTF-8 key material"))
-        }
-        (value, None) => Ok(value),
-    }
+    KeyMaterialInput::select(name, direct, file)?.read(name)
 }
 
 fn optional_env(name: &str) -> anyhow::Result<Option<String>> {
-    Ok(std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty()))
+    let Some(value) = std::env::var_os(name).and_then(|value| value.into_string().ok()) else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    Ok((!value.is_empty()).then(|| value.to_owned()))
 }
 
 fn optional_bool_env(name: &str) -> anyhow::Result<Option<bool>> {
-    let Some(value) = optional_env(name)? else {
-        return Ok(None);
-    };
-    value
-        .parse::<bool>()
-        .map(Some)
-        .map_err(|_| anyhow::anyhow!("{name} must be true or false"))
+    optional_env(name)?
+        .map(|value| match value.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(anyhow::anyhow!("{name} must be true or false")),
+        })
+        .transpose()
 }
 
-fn is_lan_client_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
-        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+#[derive(Clone, Copy)]
+struct AddressScope {
+    loopback: bool,
+    unspecified: bool,
+    private_or_link_local: bool,
+}
+
+impl From<IpAddr> for AddressScope {
+    fn from(address: IpAddr) -> Self {
+        let private_or_link_local = match address {
+            IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+            IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+        };
+        Self {
+            loopback: address.is_loopback(),
+            unspecified: address.is_unspecified(),
+            private_or_link_local,
+        }
     }
 }
 
+fn is_lan_client_address(address: IpAddr) -> bool {
+    let scope = AddressScope::from(address);
+    scope.loopback || scope.private_or_link_local
+}
+
 fn is_lan_accessible_bind_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(ip) if ip.is_unspecified() => true,
-        IpAddr::V6(ip) if ip.is_unspecified() => true,
-        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
-        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+    let scope = AddressScope::from(address);
+    scope.unspecified || scope.private_or_link_local
+}
+
+struct SetupToken<'a>(&'a str);
+
+impl<'a> TryFrom<&'a str> for SetupToken<'a> {
+    type Error = anyhow::Error;
+
+    fn try_from(token: &'a str) -> Result<Self, Self::Error> {
+        const EXAMPLES: [&str; 3] = [
+            "CHANGE_ME_FIRST_OWNER_TOKEN_32_BYTES_MINIMUM",
+            "replace-with-at-least-32-random-bytes",
+            "fresh-install-setup-token-32-bytes-minimum",
+        ];
+        match (
+            token.len() >= MIN_SETUP_TOKEN_BYTES,
+            EXAMPLES.contains(&token),
+        ) {
+            (false, _) => anyhow::bail!(
+                "Panda setup token must contain at least {MIN_SETUP_TOKEN_BYTES} bytes"
+            ),
+            (_, true) => anyhow::bail!("Panda setup token must not use a documented example value"),
+            (true, false) => Ok(Self(token)),
+        }
     }
 }
 
 fn load_setup_token() -> anyhow::Result<Option<String>> {
     let inline = std::env::var("PANDA_SETUP_TOKEN").ok();
-    let file = std::env::var("PANDA_SETUP_TOKEN_FILE").ok();
-    if inline.is_some() && file.is_some() {
-        anyhow::bail!("PANDA_SETUP_TOKEN and PANDA_SETUP_TOKEN_FILE are mutually exclusive");
-    }
-
-    let token = match (inline, file) {
-        (Some(token), None) => token,
-        (None, Some(path)) => std::fs::read_to_string(&path)
-            .with_context(|| format!("read PANDA_SETUP_TOKEN_FILE at {path}"))?,
-        (None, None) => return Ok(None),
-        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
-    };
-    let token = trim_one_trailing_line_ending(&token).to_owned();
-    validate_setup_token_value(&token)?;
-    Ok(Some(token))
+    let filename = std::env::var("PANDA_SETUP_TOKEN_FILE").ok();
+    anyhow::ensure!(
+        !(inline.is_some() && filename.is_some()),
+        "PANDA_SETUP_TOKEN and PANDA_SETUP_TOKEN_FILE are mutually exclusive"
+    );
+    let value = inline
+        .map(Ok)
+        .or_else(|| {
+            filename.map(|path| {
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("read PANDA_SETUP_TOKEN_FILE at {path}"))
+            })
+        })
+        .transpose()?;
+    value
+        .map(|value| {
+            let token = SetupToken::try_from(trim_one_trailing_line_ending(&value))?;
+            Ok(token.0.to_owned())
+        })
+        .transpose()
 }
 
+#[cfg(test)]
 fn validate_setup_token_value(token: &str) -> anyhow::Result<()> {
-    if token.len() < MIN_SETUP_TOKEN_BYTES {
-        anyhow::bail!("Panda setup token must contain at least {MIN_SETUP_TOKEN_BYTES} bytes");
-    }
-    if matches!(
-        token,
-        "CHANGE_ME_FIRST_OWNER_TOKEN_32_BYTES_MINIMUM"
-            | "replace-with-at-least-32-random-bytes"
-            | "fresh-install-setup-token-32-bytes-minimum"
-    ) {
-        anyhow::bail!("Panda setup token must not use a documented example value");
-    }
-    Ok(())
+    SetupToken::try_from(token).map(|_| ())
 }
 
 fn trim_one_trailing_line_ending(value: &str) -> &str {
@@ -935,35 +1023,49 @@ fn trim_one_trailing_line_ending(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-fn populate_compose_connection_urls() -> anyhow::Result<()> {
-    if std::env::var_os("DATABASE_URL").is_none() {
-        let password = std::env::var("POSTGRES_PASSWORD")
-            .map_err(|_| anyhow::anyhow!("DATABASE_URL or POSTGRES_PASSWORD is required"))?;
-        let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "panda".into());
-        let mut url = url::Url::parse("postgresql://timescaledb:5432/panda")?;
-        url.set_username(&user)
+enum ComposeConnection {
+    Database,
+    Sessions,
+}
+
+impl ComposeConnection {
+    fn url(&self) -> anyhow::Result<String> {
+        let (name, password_variable) = match self {
+            Self::Database => ("DATABASE_URL", "POSTGRES_PASSWORD"),
+            Self::Sessions => ("REDIS_URL", "REDIS_PASSWORD"),
+        };
+        let password = std::env::var(password_variable)
+            .map_err(|_| anyhow::anyhow!("{name} or {password_variable} is required"))?;
+        if matches!(self, Self::Sessions) {
+            return compose_redis_url(&password);
+        }
+        let username = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "panda".into());
+        let mut database = url::Url::parse("postgresql://timescaledb:5432/panda")?;
+        database
+            .set_username(&username)
             .map_err(|_| anyhow::anyhow!("POSTGRES_USER cannot be encoded in DATABASE_URL"))?;
-        url.set_password(Some(&password))
+        database
+            .set_password(Some(&password))
             .map_err(|_| anyhow::anyhow!("POSTGRES_PASSWORD cannot be encoded in DATABASE_URL"))?;
-        std::env::set_var("DATABASE_URL", url.as_str());
+        Ok(database.into())
     }
+}
 
-    if std::env::var_os("REDIS_URL").is_none() {
-        let password = std::env::var("REDIS_PASSWORD")
-            .map_err(|_| anyhow::anyhow!("REDIS_URL or REDIS_PASSWORD is required"))?;
-        std::env::set_var("REDIS_URL", compose_redis_url(&password)?);
+fn populate_compose_connection_urls() -> anyhow::Result<()> {
+    for (name, connection) in [
+        ("DATABASE_URL", ComposeConnection::Database),
+        ("REDIS_URL", ComposeConnection::Sessions),
+    ] {
+        if std::env::var_os(name).is_none() {
+            std::env::set_var(name, connection.url()?);
+        }
     }
-
     Ok(())
 }
 
 fn compose_redis_url(password: &str) -> anyhow::Result<String> {
-    let mut url = url::Url::parse("redis://redis:6379")?;
-    // Redis `requirepass` authenticates the built-in ACL `default` user. An
-    // empty username in a redis URL is parsed by current clients as an ACL
-    // username rather than as the legacy one-argument AUTH form.
-    url.set_username("default")
-        .map_err(|_| anyhow::anyhow!("REDIS_URL cannot contain the Redis username"))?;
+    // Explicit ACL identity avoids ambiguous empty-username authentication.
+    let mut url = url::Url::parse("redis://default@redis:6379")?;
     url.set_password(Some(password))
         .map_err(|_| anyhow::anyhow!("REDIS_PASSWORD cannot be encoded in REDIS_URL"))?;
     Ok(url.into())
@@ -1015,41 +1117,39 @@ impl Default for OriginBindConfig {
 
 impl RateLimitConfig {
     fn validate(&self) -> anyhow::Result<()> {
-        for (name, per_minute, burst) in [
+        let rules = [
             (
                 "RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE",
-                self.auth_public_per_minute,
-                self.auth_public_burst,
+                [self.auth_public_per_minute, self.auth_public_burst],
             ),
             (
                 "RATE_LIMIT_AUTH_METADATA_PER_MINUTE",
-                self.auth_metadata_per_minute,
-                self.auth_metadata_burst,
+                [self.auth_metadata_per_minute, self.auth_metadata_burst],
             ),
             (
                 "RATE_LIMIT_AUTH_READ_PER_MINUTE",
-                self.auth_read_per_minute,
-                self.auth_read_burst,
+                [self.auth_read_per_minute, self.auth_read_burst],
             ),
             (
                 "RATE_LIMIT_AUTH_WRITE_PER_MINUTE",
-                self.auth_write_per_minute,
-                self.auth_write_burst,
+                [self.auth_write_per_minute, self.auth_write_burst],
             ),
             (
                 "RATE_LIMIT_HEAVY_READ_PER_MINUTE",
-                self.heavy_read_per_minute,
-                self.heavy_read_burst,
+                [self.heavy_read_per_minute, self.heavy_read_burst],
             ),
-        ] {
-            if per_minute == 0 {
-                anyhow::bail!("{name} must be greater than 0");
-            }
-            if burst == 0 {
-                anyhow::bail!("{name} burst size must be greater than 0");
-            }
+        ];
+        let invalid = rules.into_iter().find_map(|(name, values)| {
+            values
+                .into_iter()
+                .position(|value| value == 0)
+                .map(|index| (name, index))
+        });
+        match invalid {
+            None => Ok(()),
+            Some((name, 0)) => anyhow::bail!("{name} must be greater than 0"),
+            Some((name, _)) => anyhow::bail!("{name} burst size must be greater than 0"),
         }
-        Ok(())
     }
 }
 

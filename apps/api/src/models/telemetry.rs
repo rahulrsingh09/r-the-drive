@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 /// Raw telemetry event as received from the Rivian WebSocket.
 /// All fields are Option because Rivian sends partial updates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TelemetryEvent {
     pub vehicle_id: Uuid,
     pub ts: DateTime<Utc>,
@@ -137,102 +137,7 @@ impl TelemetryEvent {
         Self {
             vehicle_id,
             ts,
-            latitude: None,
-            longitude: None,
-            altitude_m: None,
-            speed_mph: None,
-            location_ts: None,
-            speed_mph_ts: None,
-            battery_level: None,
-            battery_capacity_wh: None,
-            distance_to_empty_mi: None,
-            battery_limit: None,
-            battery_level_ts: None,
-            distance_to_empty_mi_ts: None,
-            battery_limit_ts: None,
-            power_state: None,
-            charger_state: None,
-            charger_status: None,
-            time_to_end_of_charge_min: None,
-            power_state_ts: None,
-            charger_state_ts: None,
-            charger_status_ts: None,
-            time_to_end_of_charge_min_ts: None,
-            drive_mode: None,
-            gear_status: None,
-            cabin_temp_c: None,
-            driver_temp_c: None,
-            outside_temp_c: None,
-            hvac_active: None,
-            power_kw: None,
-            regen_power_kw: None,
-            heading_deg: None,
-            odometer_miles: None,
-            odometer_miles_ts: None,
-            tire_fl_psi: None,
-            tire_fr_psi: None,
-            tire_rl_psi: None,
-            tire_rr_psi: None,
-            tire_fl_status: None,
-            tire_fr_status: None,
-            tire_rl_status: None,
-            tire_rr_status: None,
-            tire_fl_valid: None,
-            tire_fr_valid: None,
-            tire_rl_valid: None,
-            tire_rr_valid: None,
-            door_front_left_locked: None,
-            door_front_right_locked: None,
-            door_rear_left_locked: None,
-            door_rear_right_locked: None,
-            door_front_left_closed: None,
-            door_front_right_closed: None,
-            door_rear_left_closed: None,
-            door_rear_right_closed: None,
-            closure_frunk_locked: None,
-            closure_frunk_closed: None,
-            closure_liftgate_locked: None,
-            closure_liftgate_closed: None,
-            closure_tailgate_locked: None,
-            closure_tailgate_closed: None,
-            ota_current_version: None,
-            ota_available_version: None,
-            ota_status: None,
-            ota_current_status: None,
-            hv_thermal_event: None,
-            twelve_volt_health: None,
-            is_online: None,
-            charge_port_open: None,
-            charger_derate_active: None,
-            cabin_precon_status: None,
-            cabin_precon_type: None,
-            pet_mode_active: None,
-            pet_mode_temp_ok: None,
-            defrost_active: None,
-            steering_wheel_heat: None,
-            seat_fl_heat: None,
-            seat_fr_heat: None,
-            seat_rl_heat: None,
-            seat_rr_heat: None,
-            seat_fl_vent: None,
-            seat_fr_vent: None,
-            tonneau_locked: None,
-            tonneau_closed: None,
-            side_bin_left_locked: None,
-            side_bin_right_locked: None,
-            side_bin_left_closed: None,
-            side_bin_right_closed: None,
-            window_fl_closed: None,
-            window_fr_closed: None,
-            window_rl_closed: None,
-            window_rr_closed: None,
-            gear_guard_locked: None,
-            gear_guard_video_status: None,
-            wiper_fluid_low: None,
-            brake_fluid_low: None,
-            alarm_active: None,
-            service_mode: None,
-            closure_transitions: None,
+            ..Self::default()
         }
     }
 }
@@ -248,55 +153,46 @@ pub enum ClosureTransition {
     Closing,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text")]
-#[serde(rename_all = "lowercase")]
-pub enum PowerState {
-    Sleep,
-    Ready,
-    Go,
-    Drive,
-    Charging,
-    Unknown,
+macro_rules! telemetry_vocabulary {
+    ($name:ident, $rename:literal, { $($variant:ident => $canonical:literal $(| $alias:literal)*),+ $(,)? }) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+        #[sqlx(type_name = "text")]
+        #[serde(rename_all = $rename)]
+        pub enum $name { $($variant),+ }
+
+        impl $name {
+            const WORDS: &'static [(&'static str, &'static [&'static str], Self)] = &[
+                $(($canonical, &[$($alias),*], Self::$variant)),+
+            ];
+
+            pub fn as_str(&self) -> &'static str {
+                Self::WORDS.iter().find(|(_, _, state)| state == self)
+                    .map_or("unknown", |(canonical, _, _)| *canonical)
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = ();
+            fn from_str(text: &str) -> Result<Self, Self::Err> {
+                let normalized = text.to_lowercase();
+                Ok(Self::WORDS.iter()
+                    .find(|(canonical, aliases, _)| *canonical == normalized || aliases.contains(&normalized.as_str()))
+                    .map_or(Self::Unknown, |(_, _, state)| state.clone()))
+            }
+        }
+    };
 }
 
-impl std::str::FromStr for PowerState {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s.to_lowercase().as_str() {
-            "sleep" => PowerState::Sleep,
-            "ready" => PowerState::Ready,
-            "go" => PowerState::Go,
-            "drive" => PowerState::Drive,
-            "charging" => PowerState::Charging,
-            _ => PowerState::Unknown,
-        })
-    }
-}
+telemetry_vocabulary!(PowerState, "lowercase", {
+    Sleep => "sleep", Ready => "ready", Go => "go", Drive => "drive",
+    Charging => "charging", Unknown => "unknown",
+});
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text")]
-#[serde(rename_all = "lowercase")]
-pub enum ChargerState {
-    Disconnected,
-    Connected,
-    Charging,
-    Done,
-    Unknown,
-}
-
-impl std::str::FromStr for ChargerState {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s.to_lowercase().as_str() {
-            "disconnected" => ChargerState::Disconnected,
-            "connected" => ChargerState::Connected,
-            "charging_active" | "charging" => ChargerState::Charging,
-            "charging_done" | "done" => ChargerState::Done,
-            _ => ChargerState::Unknown,
-        })
-    }
-}
+telemetry_vocabulary!(ChargerState, "lowercase", {
+    Disconnected => "disconnected", Connected => "connected",
+    Charging => "charging" | "charging_active", Done => "done" | "charging_done",
+    Unknown => "unknown",
+});
 
 #[cfg(test)]
 mod tests {
@@ -331,56 +227,11 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text")]
-#[serde(rename_all = "snake_case")]
-pub enum DriveMode {
-    Sport,
-    AllPurpose,
-    Conserve,
-    Snow,
-    AllTerrain,
-    SoftSand,
-    RockCrawl,
-    Rally,
-    Drift,
-    Towing,
-    Unknown,
-}
-
-impl DriveMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DriveMode::Sport => "sport",
-            DriveMode::AllPurpose => "all_purpose",
-            DriveMode::Conserve => "conserve",
-            DriveMode::Snow => "snow",
-            DriveMode::AllTerrain => "all_terrain",
-            DriveMode::SoftSand => "soft_sand",
-            DriveMode::RockCrawl => "rock_crawl",
-            DriveMode::Rally => "rally",
-            DriveMode::Drift => "drift",
-            DriveMode::Towing => "towing",
-            DriveMode::Unknown => "unknown",
-        }
-    }
-}
-
-impl std::str::FromStr for DriveMode {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s.to_lowercase().as_str() {
-            "sport" => DriveMode::Sport,
-            "all_purpose" | "everyday" | "normal" => DriveMode::AllPurpose,
-            "conserve" | "distance" => DriveMode::Conserve,
-            "snow" | "winter" => DriveMode::Snow,
-            "all_terrain" | "off_road" | "off_road_auto" => DriveMode::AllTerrain,
-            "soft_sand" | "off_road_sand" => DriveMode::SoftSand,
-            "rock_crawl" | "off_road_rocks" => DriveMode::RockCrawl,
-            "rally" | "off_road_sport_auto" => DriveMode::Rally,
-            "drift" | "off_road_sport_drift" => DriveMode::Drift,
-            "tow" | "towing" => DriveMode::Towing,
-            _ => DriveMode::Unknown,
-        })
-    }
-}
+telemetry_vocabulary!(DriveMode, "snake_case", {
+    Sport => "sport", AllPurpose => "all_purpose" | "everyday" | "normal",
+    Conserve => "conserve" | "distance", Snow => "snow" | "winter",
+    AllTerrain => "all_terrain" | "off_road" | "off_road_auto",
+    SoftSand => "soft_sand" | "off_road_sand", RockCrawl => "rock_crawl" | "off_road_rocks",
+    Rally => "rally" | "off_road_sport_auto", Drift => "drift" | "off_road_sport_drift",
+    Towing => "towing" | "tow", Unknown => "unknown",
+});

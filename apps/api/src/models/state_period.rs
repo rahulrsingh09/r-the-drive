@@ -30,18 +30,25 @@ pub enum VehicleState {
     Unknown,
 }
 
+impl VehicleState {
+    const VOCABULARY: &'static [(&'static str, Self)] = &[
+        ("drive", Self::Drive),
+        ("charging", Self::Charging),
+        ("ready", Self::Ready),
+        ("sleep", Self::Sleep),
+        ("offline", Self::Offline),
+        ("updating", Self::Updating),
+        ("unknown", Self::Unknown),
+    ];
+}
+
 impl std::fmt::Display for VehicleState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            VehicleState::Drive => "drive",
-            VehicleState::Charging => "charging",
-            VehicleState::Ready => "ready",
-            VehicleState::Sleep => "sleep",
-            VehicleState::Offline => "offline",
-            VehicleState::Updating => "updating",
-            VehicleState::Unknown => "unknown",
-        };
-        f.write_str(s)
+        let (text, _) = Self::VOCABULARY
+            .iter()
+            .find(|(_, state)| state == self)
+            .expect("every vehicle state has a wire name");
+        f.write_str(text)
     }
 }
 
@@ -49,16 +56,11 @@ impl std::str::FromStr for VehicleState {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "drive" => Ok(Self::Drive),
-            "charging" => Ok(Self::Charging),
-            "ready" => Ok(Self::Ready),
-            "sleep" => Ok(Self::Sleep),
-            "offline" => Ok(Self::Offline),
-            "updating" => Ok(Self::Updating),
-            "unknown" => Ok(Self::Unknown),
-            _ => Err(format!("unknown vehicle state {value:?}")),
-        }
+        Self::VOCABULARY
+            .iter()
+            .find(|(text, _)| *text == value)
+            .map(|(_, state)| state.clone())
+            .ok_or_else(|| format!("unknown vehicle state {value:?}"))
     }
 }
 
