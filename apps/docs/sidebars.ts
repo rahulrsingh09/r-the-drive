@@ -108,6 +108,7 @@ const sidebars: SidebarsConfig = {
     'architecture/full-replacement-ui-foundations',
     'architecture/full-replacement-ui-charts',
     'architecture/full-replacement-dashboard-core',
+    'architecture/full-replacement-dashboard-widgets',
     'architecture/full-replacement-r-experience',
     'architecture/full-replacement-web-features',
     'architecture/full-replacement-web-shell',
