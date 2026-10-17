@@ -52,15 +52,29 @@ the prior request pipeline; inherited series and summary shaping now uses the
 projection boundary. Request parameter shaping retains separate trip and
 efficiency semantics for tags and untagged selections.
 
+Trip and charging lists share `decodePage`, which selects the canonical or legacy
+collection, validates the collection, decodes its items, and resolves pagination
+metadata in one pass. Explicit zero values and empty canonical lists take
+precedence over aliases. Single charge responses retain their exact two-shape
+contract: a present `session` field is authoritative, including null, while a
+response without that field is the charge itself.
+
 Chart sources compile required columns before traversing rows. Source adapters
 share request planning while retaining each source's missing-context result.
 Known bundled charts continue to use the existing canonical renderer.
+
+Rear-closure selection uses an ordered model policy. R1T matches take precedence
+over R1S and R2 matches, including mixed model labels; unknown models return null.
+Model labels keep their existing case normalization and substring matching.
 
 Vehicle artwork is indexed by semantic role, design mode, and placement before
 selection. Packaged fallback paths and image markup remain unchanged. Protected
 artwork uses authenticated blobs; restoring responses continue to display the
 packaged fallback, and object URLs are revoked when their lease ends. The
-first-party artwork URL predicate remains unchanged.
+local artwork URL predicate remains unchanged. Protected asset requests also
+validate the browser-normalized pathname before dispatch. Dot segments, encoded
+dot segments, backslashes, or whitespace cannot move an authenticated artwork
+request outside `/v1/vehicle-image-cache/`.
 
 ## Theme files
 
@@ -83,3 +97,7 @@ Original behavioral, security, and golden tests remain unchanged. Added
 `fullReplacementHooksTypesThemes` tests cover query option/argument parity,
 late auth responses, wire projections, theme-manifest parity, asset indexing,
 artwork priorities, and lease release, rejection, and ownership behavior.
+Recovery tests additionally cover model priority, the charging truth table,
+pagination precedence and malformed collections, charge envelope presence, and
+protected-artwork path confinement. Four path-escape tests failed against the
+pre-recovery transport before the guard was corrected.

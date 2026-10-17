@@ -1,5 +1,13 @@
 export type VehicleGateCapability = 'liftgate' | 'tailgate';
 
+const gateModels: readonly {
+  capability: VehicleGateCapability;
+  identifiers: readonly string[];
+}[] = [
+  { capability: 'tailgate', identifiers: ['R1T'] },
+  { capability: 'liftgate', identifiers: ['R1S', 'R2'] },
+];
+
 /**
  * Resolve the single rear-closure capability that a known Rivian model should
  * display. Unknown models intentionally return null so observed telemetry can
@@ -9,7 +17,8 @@ export function resolveVehicleGateCapability(
   model: string | null | undefined
 ): VehicleGateCapability | null {
   const normalized = model?.trim().toUpperCase() ?? '';
-  if (normalized.includes('R1T')) return 'tailgate';
-  if (normalized.includes('R1S') || normalized.includes('R2S') || normalized.includes('R2')) return 'liftgate';
-  return null;
+  const match = gateModels.find(({ identifiers }) =>
+    identifiers.some((identifier) => normalized.includes(identifier))
+  );
+  return match?.capability ?? null;
 }

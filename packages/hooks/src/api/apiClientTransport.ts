@@ -5,6 +5,7 @@ import { isRecord } from './normalization';
 import { restoreJobStatus, uploadBackup } from './fileTransfers';
 import { withSessionLock } from './sessionLock';
 import { configuredTarget } from '../urlPolicy';
+import { isProtectedArtworkPath } from '../outboundPolicy';
 import { RequestCooldowns, apiFailureDetailFrom, classifyClientRequestSource, formatApiError, friendlyApiError, inferClientRateLimitClass, isPublicAuthPath, parsePositiveNumberHeader, type ApiFailureDetail } from './requestPolicy';
 import { reportClientError } from '@panda/ui/lib/clientDiagnostics';
 
@@ -183,7 +184,7 @@ export class RequestTransport {
    * token. This deliberately keeps credentials out of browser image URLs.
    */
   async authenticatedAsset(path: string): Promise<Response> {
-    if (!path.startsWith('/v1/vehicle-image-cache/')) {
+    if (!isProtectedArtworkPath(path)) {
       throw new Error('authenticatedAsset only accepts first-party vehicle artwork paths');
     }
     return this.requestResponse('GET', path, undefined, undefined, true, false);

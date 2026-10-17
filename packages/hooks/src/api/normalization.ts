@@ -277,11 +277,7 @@ export function decodeListTrips(
   page: number,
   perPage: number
 ) {
-  const normalized = normalizePaginated(response, page, perPage);
-  return {
-    ...normalized,
-    items: normalized.items.map(normalizeTrip),
-  } satisfies PaginatedResponse<Trip>;
+  return decodePage(response, page, perPage, normalizeTrip);
 }
 
 export function decodeGetTrip(trip: unknown) {
@@ -325,11 +321,7 @@ export function decodeListChargeSessions(
   page: number,
   perPage: number
 ) {
-  const normalized = normalizePaginated(response, page, perPage);
-  return {
-    ...normalized,
-    items: normalized.items.map(normalizeChargeSession),
-  } satisfies PaginatedResponse<ChargeSession>;
+  return decodePage(response, page, perPage, normalizeChargeSession);
 }
 
 export function decodeGetChargeSession(response: unknown) {
@@ -453,15 +445,22 @@ export function decodeGetEfficiencyByMode(rows: Array<{ drive_mode: string; avg_
 export function decodeGetMetricCatalog(response: { metrics: MetricCatalogEntry[] }) {
   return listEnvelope(response, 'metrics');
 }
-function normalizePaginated<T>(
-  response: PaginatedResponse<T> & { data?: T[]; limit?: number; offset?: number },
+function decodePage<T>(
+  response: PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number },
   requestedPage: number,
   requestedPerPage: number,
+  decodeItem: (raw: unknown) => T,
 ): PaginatedResponse<T> {
-  const { items, data, total = 0, page, offset } = response;
-  const perPage = [response.per_page, response.limit, requestedPerPage].find((value) => value != null)!;
-  const resolvedPage = page ?? (offset === undefined ? requestedPage : 1 + Math.floor(offset / perPage));
-  return { items: items ?? data ?? [], total: total ?? 0, page: resolvedPage, per_page: perPage };
+  const { items, data, total, page, offset, per_page, limit } = response;
+  const rows = items ?? data ?? [];
+  if (!Array.isArray(rows)) throw new Error('Expected an array in response');
+  const size = per_page ?? limit ?? requestedPerPage;
+  return {
+    items: rows.map(decodeItem),
+    total: total ?? 0,
+    page: page ?? (offset === undefined ? requestedPage : 1 + Math.floor(offset / size)),
+    per_page: size,
+  };
 }
 
 export function buildTimeframeParams(from: string | null, to: string | null, lifetime = false): Record<string, string> {

@@ -5,3 +5,9 @@ export const OPTIONAL_EXTERNAL_TRAFFIC_ENABLED = false;
 export function isLocalArtworkSource(source: string | null | undefined): source is string {
   return Boolean(source?.startsWith('/') && !source.startsWith('//') && !/[\\\s]/.test(source));
 }
+
+export function isProtectedArtworkPath(source: string): boolean {
+  if (!isLocalArtworkSource(source)) return false;
+  const pathname = new URL(source, 'https://artwork.invalid').pathname;
+  return [source, pathname].every((path) => path.startsWith('/v1/vehicle-image-cache/'));
+}
