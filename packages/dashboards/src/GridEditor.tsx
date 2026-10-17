@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import GridLayout, { useContainerWidth } from 'react-grid-layout';
 import type { LayoutItem } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
@@ -38,33 +38,43 @@ interface GridEditorProps {
 }
 
 function layoutFromConfig(widgets: WidgetInstance[]): LayoutItem[] {
-  return widgets.map(layoutItemForWidget);
+  return widgets.map(widget => {
+    const definition = getWidgetForInstance(widget);
+    const editor = getWidgetEditorMeta(definition);
+    const limits = editor.fixedSize
+      ? { minimum: widget.layout, maximum: widget.layout }
+      : { minimum: definition?.minSize ?? { w: 1, h: 1 }, maximum: editor.maxSize };
+    const item: LayoutItem = {
+      i: widget.id,
+      ...widget.layout,
+      minW: limits.minimum.w,
+      minH: limits.minimum.h,
+      isDraggable: editor.movable,
+      isResizable: editor.resizable,
+      resizeHandles: editor.resizable ? ['se'] : [],
+    };
+    if (limits.maximum) Object.assign(item, { maxW: limits.maximum.w, maxH: limits.maximum.h });
+    return item;
+  });
 }
 
-function layoutItemForWidget(widget: WidgetInstance): LayoutItem {
-  const def = getWidgetForInstance(widget);
-  const editor = getWidgetEditorMeta(def);
-  const minSize = editor.fixedSize ? widget.layout : def?.minSize ?? { w: 1, h: 1 };
-  const maxSize = editor.fixedSize ? widget.layout : editor.maxSize;
-  const item: LayoutItem = {
-    i: widget.id,
-    x: widget.layout.x,
-    y: widget.layout.y,
-    w: widget.layout.w,
-    h: widget.layout.h,
-    minW: minSize.w,
-    minH: minSize.h,
-    isDraggable: editor.movable,
-    isResizable: editor.resizable,
-    resizeHandles: editor.resizable ? ['se'] : [],
-  };
+type EditorChange =
+  | { kind: 'layout'; layout: readonly LayoutItem[] }
+  | { kind: 'remove'; id: string }
+  | { kind: 'add'; definition: WidgetDef }
+  | { kind: 'replace'; widget: WidgetInstance };
 
-  if (maxSize) {
-    item.maxW = maxSize.w;
-    item.maxH = maxSize.h;
+function editWidgets(widgets: WidgetInstance[], change: EditorChange): WidgetInstance[] {
+  switch (change.kind) {
+    case 'layout': return applyWidgetLayout(widgets, change.layout);
+    case 'remove': return widgets.filter(widget => widget.id !== change.id);
+    case 'replace': return widgets.map(widget => widget.id === change.widget.id ? change.widget : widget);
+    case 'add': {
+      let bottom = 0;
+      for (const { layout } of widgets) bottom = Math.max(bottom, layout.y + layout.h);
+      return widgets.concat(createWidgetInstance(change.definition, { x: 0, y: bottom }));
+    }
   }
-
-  return item;
 }
 
 export default function GridEditor({
@@ -78,77 +88,48 @@ export default function GridEditor({
   onVisibilityStateChange = () => {},
 }: GridEditorProps) {
   const widgets = Array.isArray(config.widgets) ? config.widgets.map(sanitizeWidgetInstance) : [];
-  const visibleWidgetIds = requestedVisibleWidgetIds ?? widgets.map((widget) => widget.id);
+  const visibleWidgetIds = requestedVisibleWidgetIds ?? widgets.map(widget => widget.id);
   const visibleWidgetIdSet = new Set(visibleWidgetIds);
-  const visibleWidgets = widgets.filter((widget) => visibleWidgetIdSet.has(widget.id));
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const visibleWidgets = widgets.filter(widget => visibleWidgetIdSet.has(widget.id));
+  const [selection, setSelection] = useState<{ dashboard: string; id: string | null }>(() => ({
+    dashboard: dashboardKey(config, config.slug), id: null,
+  }));
+  const editingId = selection.id;
+  const setEditingId = (id: string | null) => setSelection({ dashboard: dashboardKey(config, config.slug), id });
   const { width, containerRef, mounted } = useContainerWidth();
   const currentDashboardKey = dashboardKey(config, config.slug);
-  const previousDashboardKeyRef = useRef(currentDashboardKey);
 
-  const commit = useCallback(
-    (next: WidgetInstance[]) => {
-      onConfigChange?.({ ...config, widgets: next.map(sanitizeWidgetInstance) });
-    },
-    [config, onConfigChange],
-  );
+  const commit = useCallback((change: EditorChange) => {
+    const next = editWidgets(widgets, change);
+    if (next !== widgets) onConfigChange?.({ ...config, widgets: next.map(sanitizeWidgetInstance) });
+  }, [config, widgets, onConfigChange]);
 
-  function handleLayoutChange(layout: readonly LayoutItem[]) {
-    const next = applyWidgetLayout(widgets, layout);
-    if (next !== widgets) commit(next);
-  }
-
+  const handleLayoutChange = (layout: readonly LayoutItem[]) => commit({ kind: 'layout', layout });
   function removeWidget(id: string) {
-    commit(widgets.filter((widget) => widget.id !== id));
+    commit({ kind: 'remove', id });
     if (editingId === id) setEditingId(null);
   }
-
-  function addWidget(def: WidgetDef) {
-    const maxY = widgets.reduce((max, widget) => Math.max(max, widget.layout.y + widget.layout.h), 0);
-    const instance = createWidgetInstance(def, { x: 0, y: maxY });
-    commit([...widgets, instance]);
-  }
-
+  const addWidget = (definition: WidgetDef) => commit({ kind: 'add', definition });
   function updateWidget(next: WidgetInstance) {
-    const sanitized = sanitizeWidgetInstance(next);
-    for (const rule of getWidgetVisibilityRules(sanitized)) {
-      if (visibilityState[rule.type] !== rule.value) {
-        onVisibilityStateChange(rule.type, rule.value);
-      }
-    }
-    commit(widgets.map((widget) => (widget.id === sanitized.id ? sanitized : widget)));
+    const widget = sanitizeWidgetInstance(next);
+    const mismatches = getWidgetVisibilityRules(widget).filter(rule => visibilityState[rule.type] !== rule.value);
+    for (const { type, value } of mismatches) onVisibilityStateChange(type, value);
+    commit({ kind: 'replace', widget });
   }
-
   function patchWidgetOptions(widgetId: string, patch: Record<string, unknown>) {
-    const widget = widgets.find((entry) => entry.id === widgetId);
-    if (!widget) return;
-    updateWidget({
-      ...widget,
-      options: {
-        ...(widget.options ?? {}),
-        ...patch,
-      },
-    });
+    const index = widgets.findIndex(widget => widget.id === widgetId);
+    if (index < 0) return;
+    const widget = widgets[index]!;
+    updateWidget(Object.assign({}, widget, { options: Object.assign({}, widget.options, patch) }));
   }
 
-  const editingWidget = editingId ? widgets.find((widget) => widget.id === editingId) ?? null : null;
-  const drawerMode: 'palette' | 'edit' = editingWidget ? 'edit' : 'palette';
-
+  const editingWidget = editingId ? widgets.find(widget => widget.id === editingId) ?? null : null;
+  const drawerMode = editingWidget ? 'edit' : 'palette';
   useEffect(() => {
-    if (previousDashboardKeyRef.current !== currentDashboardKey) {
-      previousDashboardKeyRef.current = currentDashboardKey;
-      setEditingId(null);
-      return;
-    }
-
-    if (editingId && !widgets.some((widget) => widget.id === editingId)) {
-      setEditingId(null);
-    }
-  }, [currentDashboardKey, editingId, widgets]);
-
-  useEffect(() => {
-    if (editingId && !visibleWidgetIdSet.has(editingId)) setEditingId(null);
-  }, [editingId, visibleWidgetIds.join('|')]);
+    const changedDashboard = selection.dashboard !== currentDashboardKey;
+    const missingSelection = editingId && (!editingWidget || !visibleWidgetIdSet.has(editingId));
+    if (changedDashboard || missingSelection) setSelection({ dashboard: currentDashboardKey, id: null });
+  }, [currentDashboardKey, selection.dashboard, editingId, editingWidget, visibleWidgetIds.join('|')]);
 
   return (
     <>

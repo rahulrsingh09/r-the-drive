@@ -16,31 +16,26 @@ export function resolveChartSourceCapabilities(
   manifests: readonly ChartSourceManifest[],
   metrics: readonly MetricCatalogEntry[],
 ): ChartSourceManifest[] {
-  const seriesMetrics = metrics.filter((metric) => metric.supports_series);
-  if (seriesMetrics.length === 0) return manifests.map((manifest) => ({ ...manifest }));
-  return manifests.map((manifest) => {
-    if (manifest.id !== 'metrics.series') return { ...manifest };
-    const timestamp = manifest.fields.find((field) => field.id === 'timestamp') ?? {
-      id: 'timestamp',
-      label: 'Timestamp',
-      kind: 'time' as const,
-      roles: ['x', 'detail'] as Array<'x' | 'detail'>,
+  const fields: ChartSourceManifest['fields'] = [];
+  const ids: string[] = [];
+  for (const metric of metrics) {
+    if (!metric.supports_series) continue;
+    ids.push(metric.id);
+    const field: ChartSourceManifest['fields'][number] = {
+      id: metric.id, label: metric.label, kind: 'number', roles: ['y', 'detail'],
     };
-    return {
-      ...manifest,
-      parameters: manifest.parameters.map((parameter) => parameter.id === 'metric'
-        ? { ...parameter, options: seriesMetrics.map((metric) => metric.id) }
-        : parameter),
-      fields: [
-        timestamp,
-        ...seriesMetrics.map((metric) => ({
-          id: metric.id,
-          label: metric.label,
-          kind: 'number' as const,
-          ...(metric.unit ? { unit: metric.unit } : {}),
-          roles: ['y', 'detail'] as Array<'y' | 'detail'>,
-        })),
-      ],
-    };
+    if (metric.unit) field.unit = metric.unit;
+    fields.push(field);
+  }
+  return manifests.map(manifest => {
+    const copy = { ...manifest };
+    if (manifest.id !== 'metrics.series' || !ids.length) return copy;
+    const timestamp = manifest.fields.find(field => field.id === 'timestamp');
+    copy.fields = [timestamp ?? { id: 'timestamp', label: 'Timestamp', kind: 'time', roles: ['x', 'detail'] }, ...fields.map(field => ({ ...field, roles: [...field.roles] }))];
+    copy.parameters = manifest.parameters.map(parameter => {
+      if (parameter.id !== 'metric') return parameter;
+      return { ...parameter, options: [...ids] };
+    });
+    return copy;
   });
 }

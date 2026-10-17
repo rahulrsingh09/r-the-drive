@@ -27,65 +27,47 @@ export const WidgetChrome = React.forwardRef<HTMLDivElement, WidgetChromeProps>(
   children,
   ...frameProps
 }, ref) {
-  const hostCtx = updateWidgetOptions ? { ...ctx, updateWidgetOptions } : ctx;
-
-  if (mode === 'view') {
-    return (
-      <div
-        {...frameProps}
-        ref={ref}
-        className={['dashboard-widget-frame h-full min-h-0', className].filter(Boolean).join(' ')}
-        style={style}
-        data-widget-frame="view"
-      >
-        <WidgetHost instance={instance} ctx={hostCtx} />
-        {children}
-      </div>
-    );
-  }
-
+  const editing = mode === 'edit';
   const movable = editor?.movable ?? true;
   const fixedSize = editor?.fixedSize ?? false;
   const resizable = !fixedSize && (editor?.resizable ?? true);
+  const host = <WidgetHost instance={instance} ctx={updateWidgetOptions ? { ...ctx, updateWidgetOptions } : ctx} />;
+  const attributes = editing ? {
+    'data-widget-id': instance.id,
+    'data-widget-type': instance.componentType,
+    'data-widget-definition': instance.definitionId,
+    'data-editing': isEditing ? 'true' : 'false',
+    'data-fixed-size': fixedSize ? 'true' : 'false',
+    'data-widget-movable': movable ? 'true' : 'false',
+    'data-widget-resizable': resizable ? 'true' : 'false',
+  } : {};
+  const classes = editing ? [
+    className,
+    'rgl-card relative overflow-hidden rounded-lg border bg-bg transition-all',
+    isEditing
+      ? 'border-status-positive shadow-[0_0_0_2px_color-mix(in_oklab,var(--rm-status-positive)_28%,transparent)]'
+      : 'border-border hover:border-border-strong',
+  ] : ['dashboard-widget-frame h-full min-h-0', className];
 
   return (
-    <div
-      {...frameProps}
-      ref={ref}
-      data-widget-frame="edit"
-      data-widget-id={instance.id}
-      data-widget-type={instance.componentType}
-      data-widget-definition={instance.definitionId}
-      data-editing={isEditing ? 'true' : 'false'}
-      data-fixed-size={fixedSize ? 'true' : 'false'}
-      data-widget-movable={movable ? 'true' : 'false'}
-      data-widget-resizable={resizable ? 'true' : 'false'}
-      className={[
-        className,
-        'rgl-card relative overflow-hidden rounded-lg border bg-bg transition-all',
-        isEditing
-          ? 'border-status-positive shadow-[0_0_0_2px_color-mix(in_oklab,var(--rm-status-positive)_28%,transparent)]'
-          : 'border-border hover:border-border-strong',
-      ].filter(Boolean).join(' ')}
-      style={style}
-    >
-      <div className="h-full w-full p-2">
-        <WidgetHost instance={instance} ctx={hostCtx} />
-      </div>
-
-      <DashboardEditOverlay
-        instance={instance}
-        movable={movable}
-        fixedSize={fixedSize}
-        resizable={resizable}
-        isEditing={isEditing}
-        {...(onToggleEdit ? { onToggleEdit } : {})}
-      />
-
-      {isEditing ? (
-        <div className="pointer-events-none absolute inset-0 z-30 rounded-lg ring-2 ring-status-positive/40" />
-      ) : null}
-
+    <div {...frameProps} ref={ref} {...attributes} data-widget-frame={mode}
+      className={classes.filter(Boolean).join(' ')} style={style}>
+      {editing ? (
+        <>
+          <div className="h-full w-full p-2">{host}</div>
+          <DashboardEditOverlay
+            instance={instance}
+            movable={movable}
+            fixedSize={fixedSize}
+            resizable={resizable}
+            isEditing={isEditing}
+            {...(onToggleEdit ? { onToggleEdit } : {})}
+          />
+          {isEditing ? (
+            <div className="pointer-events-none absolute inset-0 z-30 rounded-lg ring-2 ring-status-positive/40" />
+          ) : null}
+        </>
+      ) : host}
       {children}
     </div>
   );

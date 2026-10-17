@@ -29,29 +29,33 @@ export function buildChartManagerEntries(
   userId: string | null | undefined,
   isAdmin = false,
 ): ChartManagerEntry[] {
-  const systemBySlug = new Map(rows.filter((row) => row.ownerId == null).map((row) => [row.slug, row]));
-  const personalBySlug = new Map(rows.filter((row) => row.ownerId === userId).map((row) => [row.slug, row]));
-  const slugs = new Set([...systemBySlug.keys(), ...personalBySlug.keys()]);
-  return [...slugs]
-    .map((slug) => {
-      const systemBase = systemBySlug.get(slug);
-      const personalOverride = personalBySlug.get(slug);
-      const effective = personalOverride ?? systemBase;
-      if (!effective) return null;
-      const origin = chartOrigin(effective, systemBase);
-      return {
-        effective,
-        ...(systemBase ? { systemBase } : {}),
-        ...(personalOverride ? { personalOverride } : {}),
-        origin,
-        permissions: {
-          ...defaultChartPermissions(effective, isAdmin),
-          reset: Boolean(personalOverride && systemBase),
-        },
-      } satisfies ChartManagerEntry;
-    })
-    .filter((entry): entry is ChartManagerEntry => Boolean(entry))
-    .sort((left, right) => left.effective.name.localeCompare(right.effective.name));
+  const grouped = new Map<string, { system?: ChartRecord; personal?: ChartRecord }>();
+  const systemOrder = new Set<string>();
+  const personalOrder = new Set<string>();
+  for (const row of rows) {
+    const system = row.ownerId == null;
+    const personal = row.ownerId === userId;
+    if (!system && !personal) continue;
+    const group = grouped.get(row.slug) ?? {};
+    if (system) { group.system = row; systemOrder.add(row.slug); }
+    if (personal) { group.personal = row; personalOrder.add(row.slug); }
+    grouped.set(row.slug, group);
+  }
+  const entries: ChartManagerEntry[] = [];
+  for (const slug of new Set([...systemOrder, ...personalOrder])) {
+    const { system, personal } = grouped.get(slug)!;
+    const effective = (personal ?? system)!;
+    const entry: ChartManagerEntry = {
+      effective,
+      origin: chartOrigin(effective, system),
+      permissions: defaultChartPermissions(effective, isAdmin),
+    };
+    if (system) entry.systemBase = system;
+    if (personal) entry.personalOverride = personal;
+    entry.permissions.reset = Boolean(personal && system);
+    entries.push(entry);
+  }
+  return entries.sort((left, right) => left.effective.name.localeCompare(right.effective.name));
 }
 
 export function resolveAssignedCharts(
@@ -60,13 +64,12 @@ export function resolveAssignedCharts(
   requiredSlugs: string[] = [],
 ) {
   const required = new Set(requiredSlugs);
-  return entries
-    .map((entry) => entry.effective)
-    .filter((chart) => chart.isEnabled && (
-      chart.config.placements.some((placement) => placement.dashboardSlug === dashboardSlug)
-      || required.has(chart.slug)
-    ))
-    .sort((left, right) => left.name.localeCompare(right.name));
+  const assigned: ChartRecord[] = [];
+  for (const { effective } of entries) {
+    if (!effective.isEnabled) continue;
+    if (required.has(effective.slug) || chartHasPlacement(effective, dashboardSlug)) assigned.push(effective);
+  }
+  return assigned.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function chartHasPlacement(record: ChartRecord, dashboardSlug: string) {

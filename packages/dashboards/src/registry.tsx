@@ -64,9 +64,12 @@ export interface WidgetDef {
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }
 
-const registry = new Map<string, WidgetDef>();
-const editorRegistry = new Map<string, WidgetEditorMeta>();
+interface RegisteredWidget {
+  definition: WidgetDef;
+  editor: WidgetEditorMeta;
+}
 
+const registry = new Map<string, RegisteredWidget>();
 const DEFAULT_EDITOR_META: WidgetEditorMeta = {
   deprecated: false,
   fixedSize: false,
@@ -79,20 +82,13 @@ export function widgetKey(componentType: DashboardComponentType, definitionId: s
 }
 
 export function registerWidget(def: WidgetDef) {
-  const key = widgetKey(def.componentType, def.definitionId);
-  const editorMeta: WidgetEditorMeta = {
-    ...DEFAULT_EDITOR_META,
-    ...def.editor,
-  };
-  if (editorMeta.fixedSize) {
-    editorMeta.resizable = false;
-  }
-  registry.set(key, def);
-  editorRegistry.set(key, editorMeta);
+  const editor = Object.assign({}, DEFAULT_EDITOR_META, def.editor);
+  editor.resizable = editor.fixedSize ? false : editor.resizable;
+  registry.set(widgetKey(def.componentType, def.definitionId), { definition: def, editor });
 }
 
 export function getWidget(componentType: DashboardComponentType, definitionId: string): WidgetDef | undefined {
-  return registry.get(widgetKey(componentType, definitionId));
+  return registry.get(widgetKey(componentType, definitionId))?.definition;
 }
 
 export function getWidgetForInstance(instance: WidgetInstance): WidgetDef | undefined {
@@ -100,7 +96,7 @@ export function getWidgetForInstance(instance: WidgetInstance): WidgetDef | unde
 }
 
 export function getAllWidgets(): WidgetDef[] {
-  return Array.from(registry.values());
+  return Array.from(registry.values(), entry => entry.definition);
 }
 
 export function getWidgetKeys(): string[] {
@@ -108,6 +104,6 @@ export function getWidgetKeys(): string[] {
 }
 
 export function getWidgetEditorMeta(def: WidgetDef | undefined): WidgetEditorMeta {
-  if (!def) return DEFAULT_EDITOR_META;
-  return editorRegistry.get(widgetKey(def.componentType, def.definitionId)) ?? DEFAULT_EDITOR_META;
+  const registered = def && registry.get(widgetKey(def.componentType, def.definitionId));
+  return registered ? registered.editor : DEFAULT_EDITOR_META;
 }

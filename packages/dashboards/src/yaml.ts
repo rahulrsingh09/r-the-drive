@@ -42,9 +42,10 @@ export function importDashboardYaml(text: string): DashboardConfig {
 export function downloadDashboardYaml(config: DashboardConfig) {
   const blob = new Blob([exportDashboardYaml(config)], { type: 'text/yaml' });
   const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${config.slug}.yaml`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  try {
+    const anchor = Object.assign(document.createElement('a'), { href: url, download: `${config.slug}.yaml` });
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

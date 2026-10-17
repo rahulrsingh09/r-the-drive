@@ -8,31 +8,47 @@ export interface DailyDeltaPoint {
   value: number;
 }
 
-export function seriesToDailyTotals(series: SeriesPoint[], windowDays: number): DailyDeltaPoint[] {
-  const finite = series.filter(
-    (point): point is { ts: string; value: number } =>
-      typeof point.value === 'number' &&
-      Number.isFinite(point.value) &&
-      typeof point.ts === 'string' &&
-      point.ts.length > 0
-  );
-  if (finite.length === 0) return [];
+type DayBucket = { total: number; last: DailyDeltaPoint };
+const DAY_MS = 86_400_000;
 
-  const totalsByDay = new Map<string, number>();
-  for (const point of finite) {
+function collectDays(series: SeriesPoint[]): Map<string, DayBucket> {
+  const days = new Map<string, DayBucket>();
+  for (const point of series) {
+    if (typeof point.value !== 'number' || !Number.isFinite(point.value) ||
+        typeof point.ts !== 'string' || !point.ts) continue;
     const date = new Date(point.ts);
     if (Number.isNaN(date.getTime())) continue;
     const key = dayKey(date);
-    totalsByDay.set(key, (totalsByDay.get(key) ?? 0) + point.value);
+    const current = days.get(key);
+    if (!current) {
+      days.set(key, { total: point.value, last: { ts: point.ts, value: point.value } });
+      continue;
+    }
+    current.total += point.value;
+    // Saved series select by timestamp text, including the last equal timestamp.
+    if (point.ts >= current.last.ts) current.last = { ts: point.ts, value: point.value };
   }
-  if (totalsByDay.size === 0) return [];
+  return days;
+}
 
-  const sortedKeys = Array.from(totalsByDay.keys()).sort();
-  const totals = sortedKeys.map((key) => ({
-    ts: `${key}T00:00:00.000Z`,
-    value: totalsByDay.get(key)!,
+export function seriesToDailyTotals(series: SeriesPoint[], windowDays: number): DailyDeltaPoint[] {
+  const days = collectDays(series);
+  const points = Array.from(days.keys()).sort().map(key => ({
+    ts: `${key}T00:00:00.000Z`, value: days.get(key)!.total,
   }));
-  return padDailyWindow(totals, windowDays);
+  return padDailyWindow(points, windowDays);
+}
+
+export function seriesToDailyDeltas(series: SeriesPoint[], windowDays: number): DailyDeltaPoint[] {
+  const days = collectDays(series);
+  const keys = Array.from(days.keys()).sort();
+  const points = keys.map((key, index) => {
+    const last = days.get(key)!.last;
+    const previous = index ? days.get(keys[index - 1]!)!.last.value : last.value;
+    const difference = last.value - previous;
+    return { ts: last.ts, value: difference > 0 ? difference : 0 };
+  });
+  return padDailyWindow(points, windowDays);
 }
 
 function dayKey(date: Date) {
@@ -42,63 +58,20 @@ function dayKey(date: Date) {
   return `${y}-${m}-${d}`;
 }
 
-function startOfUtcDay(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-export function seriesToDailyDeltas(series: SeriesPoint[], windowDays: number): DailyDeltaPoint[] {
-  const finite = series.filter(
-    (point): point is { ts: string; value: number } =>
-      typeof point.value === 'number' &&
-      Number.isFinite(point.value) &&
-      typeof point.ts === 'string' &&
-      point.ts.length > 0
-  );
-  if (finite.length === 0) return [];
-
-  finite.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-
-  const lastByDay = new Map<string, { ts: string; value: number }>();
-  for (const point of finite) {
-    const date = new Date(point.ts);
-    if (Number.isNaN(date.getTime())) continue;
-    lastByDay.set(dayKey(date), point);
-  }
-  if (lastByDay.size === 0) return [];
-
-  const sortedKeys = Array.from(lastByDay.keys()).sort();
-  const deltas: DailyDeltaPoint[] = [];
-  let previous: number | null = null;
-  for (const key of sortedKeys) {
-    const last = lastByDay.get(key)!;
-    if (previous == null) {
-      deltas.push({ ts: last.ts, value: 0 });
-    } else {
-      const delta = last.value - previous;
-      deltas.push({ ts: last.ts, value: delta > 0 ? delta : 0 });
-    }
-    previous = last.value;
-  }
-
-  return padDailyWindow(deltas, windowDays);
-}
-
 function padDailyWindow(points: DailyDeltaPoint[], windowDays: number): DailyDeltaPoint[] {
-  if (windowDays <= 0 || points.length === 0) return points;
-
-  const lastDate = startOfUtcDay(new Date(points[points.length - 1]!.ts));
-  const cutoff = new Date(lastDate.getTime() - (windowDays - 1) * 86_400_000);
-  const filtered = points.filter((point) => {
-    const d = new Date(point.ts);
-    return Number.isFinite(d.getTime()) && d.getTime() >= cutoff.getTime();
-  });
-
-  const byKey = new Map(filtered.map((point) => [dayKey(new Date(point.ts)), point]));
-  const padded: DailyDeltaPoint[] = [];
-  for (let i = 0; i < windowDays; i += 1) {
-    const cursor = new Date(cutoff.getTime() + i * 86_400_000);
-    const key = dayKey(cursor);
-    padded.push(byKey.get(key) ?? { ts: cursor.toISOString(), value: 0 });
+  if (windowDays <= 0 || !points.length) return points;
+  const last = new Date(points[points.length - 1]!.ts);
+  const cutoff = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth(), last.getUTCDate()) - (windowDays - 1) * DAY_MS).getTime();
+  const lookup = new Map<string, DailyDeltaPoint>();
+  for (const point of points) {
+    const date = new Date(point.ts);
+    if (Number.isFinite(date.getTime()) && date.getTime() >= cutoff) lookup.set(dayKey(date), point);
   }
-  return padded;
+  const result: DailyDeltaPoint[] = [];
+  for (let offset = 0; offset < windowDays; offset++) {
+    const day = new Date(cutoff + offset * DAY_MS);
+    const present = lookup.get(dayKey(day));
+    result.push(present ?? { ts: day.toISOString(), value: 0 });
+  }
+  return result;
 }

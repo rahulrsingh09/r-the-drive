@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { useAuth, useAuthReady, api, useUpdateDashboardChartFavorite } from '@panda/hooks';
 import { DashboardConfigSchema } from './schema';
 import { sanitizeDashboardConfig } from './layout';
-import type { DashboardConfig } from './schema';
+import type { DashboardConfig, WidgetInstance } from './schema';
 import { migrateLegacyWidgetVisibility } from './dashboardVisibility';
 
 const BASE = '/v1/dashboards';
@@ -22,332 +22,205 @@ interface DashboardRecord {
   config?: unknown;
 }
 
+const LEGACY_TRIP_SENSORS: Record<string, { definitionId: string; valueMode?: string }> = {
+  miles: { definitionId: 'trip_miles', valueMode: 'sum' },
+  count: { definitionId: 'total_trips', valueMode: 'sum' },
+  efficiency: { definitionId: 'avg_efficiency' },
+  duration: { definitionId: 'avg_trip_duration', valueMode: 'avg' },
+};
+
+function normalizeWidget(widget: WidgetInstance, charging: boolean): WidgetInstance {
+  let result = widget;
+  if (widget.componentType === 'custom') {
+    if (charging && widget.definitionId === 'charging.network_breakdown') {
+      const height = widget.layout.h;
+      const h = Number.isFinite(height) ? Math.max(1, Math.min(20, Math.round(height))) : 20;
+      if (h !== height) result = { ...widget, layout: { ...widget.layout, h } };
+    }
+    if (widget.definitionId === 'trips.stat') {
+      const options = widget.options ?? {};
+      const byMetric = Object.values(LEGACY_TRIP_SENSORS).find(sensor => sensor.definitionId === options.metric);
+      const sensor = byMetric ?? (typeof options.stat === 'string' ? LEGACY_TRIP_SENSORS[options.stat] : undefined);
+      if (sensor) {
+        const nextOptions = { ...options };
+        delete nextOptions.stat;
+        delete nextOptions.metric;
+        nextOptions.metric = sensor.definitionId;
+        if (sensor.valueMode) nextOptions.valueMode = sensor.valueMode;
+        nextOptions.tripSelectionAware = true;
+        result = { ...widget, componentType: 'sensor', definitionId: sensor.definitionId, options: nextOptions };
+      }
+    }
+  }
+  return migrateLegacyWidgetVisibility(result);
+}
 
 export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
   const record = raw as DashboardRecord;
-  const config = (
-    record && typeof record === 'object' && record.config && typeof record.config === 'object'
-      ? record.config
-      : raw
-  ) as Partial<DashboardConfig>;
-
-  const parsed = DashboardConfigSchema.parse({
-    ...config,
-    id: record.id ?? config.id,
-    slug: record.slug ?? config.slug,
-    name: record.name ?? config.name,
-    description: record.description ?? config.description ?? undefined,
-    isDefault: record.isDefault ?? record.is_default ?? config.isDefault,
-    isLocked: record.isLocked ?? record.is_locked ?? config.isLocked,
-    ownerId: record.ownerId ?? record.owner_id ?? config.ownerId ?? null,
-    controls: config.controls ?? { dateRange: true },
-    widgets: Array.isArray(config.widgets) ? config.widgets : [],
-  });
-
-  const normalized = parsed.slug === 'charging'
-    ? normalizeChargingDashboardWidgetHeights(parsed)
-    : parsed;
-  return sanitizeDashboardConfig(normalizeLegacyDashboardConfig(normalized));
+  const config = (record && typeof record === 'object' && record.config && typeof record.config === 'object'
+    ? record.config : raw) as Partial<DashboardConfig>;
+  const candidate: Record<string, unknown> = { ...config };
+  candidate.id = record.id ?? config.id;
+  candidate.slug = record.slug ?? config.slug;
+  candidate.name = record.name ?? config.name;
+  candidate.description = record.description ?? config.description ?? undefined;
+  candidate.isDefault = record.isDefault ?? record.is_default ?? config.isDefault;
+  candidate.isLocked = record.isLocked ?? record.is_locked ?? config.isLocked;
+  candidate.ownerId = record.ownerId ?? record.owner_id ?? config.ownerId ?? null;
+  candidate.controls = config.controls ?? { dateRange: true };
+  candidate.widgets = Array.isArray(config.widgets) ? config.widgets : [];
+  const parsed = DashboardConfigSchema.parse(candidate);
+  const charging = parsed.slug === 'charging';
+  parsed.widgets = parsed.widgets.map(widget => normalizeWidget(widget, charging));
+  return sanitizeDashboardConfig(parsed);
 }
 
-function normalizeLegacyDashboardConfig(config: DashboardConfig): DashboardConfig {
-  const tripsNormalized = normalizeLegacyTripStatWidgets(config);
-  return {
-    ...tripsNormalized,
-    widgets: tripsNormalized.widgets.map(migrateLegacyWidgetVisibility),
-  };
-}
-
-const LEGACY_TRIP_STAT_TO_SENSOR: Record<string, string> = {
-  miles: 'trip_miles',
-  count: 'total_trips',
-  efficiency: 'avg_efficiency',
-  duration: 'avg_trip_duration',
-};
-
-const TRIP_SENSOR_DEFINITION_IDS = new Set([
-  'trip_miles',
-  'total_trips',
-  'avg_efficiency',
-  'avg_trip_duration',
-]);
-
-function normalizeLegacyTripStatWidgets(config: DashboardConfig): DashboardConfig {
-  return {
-    ...config,
-    widgets: config.widgets.map((widget) => {
-      if (widget.componentType !== 'custom' || widget.definitionId !== 'trips.stat') {
-        return widget;
-      }
-
-      const legacyOptions = (widget.options ?? {}) as Record<string, unknown>;
-      const metric = typeof legacyOptions.metric === 'string' ? legacyOptions.metric : null;
-      const stat = typeof legacyOptions.stat === 'string' ? legacyOptions.stat : null;
-      const definitionId = metric && TRIP_SENSOR_DEFINITION_IDS.has(metric)
-        ? metric
-        : stat
-          ? LEGACY_TRIP_STAT_TO_SENSOR[stat]
-          : undefined;
-
-      if (!definitionId) return widget;
-
-      const sensorOptions = { ...legacyOptions };
-      delete sensorOptions.stat;
-      delete sensorOptions.metric;
-      const valueMode = definitionId === 'trip_miles' || definitionId === 'total_trips'
-        ? 'sum'
-        : definitionId === 'avg_trip_duration'
-          ? 'avg'
-          : undefined;
-
-      return {
-        ...widget,
-        componentType: 'sensor' as const,
-        definitionId,
-        options: {
-          ...sensorOptions,
-          metric: definitionId,
-          ...(valueMode ? { valueMode } : {}),
-          tripSelectionAware: true,
-        },
-      };
-    }),
-  };
-}
-
-const CHARGING_NETWORK_BREAKDOWN_MIN_H = 1;
-const CHARGING_NETWORK_BREAKDOWN_MAX_H = 20;
-
-function normalizeChargingDashboardWidgetHeights(config: DashboardConfig): DashboardConfig {
-  return {
-    ...config,
-    widgets: config.widgets.map((widget) => {
-      if (
-        widget.componentType !== 'custom' ||
-        widget.definitionId !== 'charging.network_breakdown'
-      ) return widget;
-
-      const nextHeight = clampBreakdownHeight(widget.layout.h);
-      if (nextHeight === widget.layout.h) return widget;
-
-      return {
-        ...widget,
-        layout: {
-          ...widget.layout,
-          h: nextHeight,
-        },
-      };
-    }),
-  };
-}
-
-function clampBreakdownHeight(height: number): number {
-  if (!Number.isFinite(height)) return CHARGING_NETWORK_BREAKDOWN_MAX_H;
-  return Math.max(CHARGING_NETWORK_BREAKDOWN_MIN_H, Math.min(CHARGING_NETWORK_BREAKDOWN_MAX_H, Math.round(height)));
-}
-
-function dashboardMutationBody(config: DashboardConfig) {
+function dashboardMutationBody(config: DashboardConfig, admin: boolean) {
   const sanitized = sanitizeDashboardConfig(config);
-  return {
-    slug: sanitized.slug,
-    name: sanitized.name,
-    description: sanitized.description,
-    config: sanitized,
-  };
+  return admin
+    ? { name: sanitized.name, description: sanitized.description, config: sanitized }
+    : { slug: sanitized.slug, name: sanitized.name, description: sanitized.description, config: sanitized };
 }
 
-function writeDashboardCache(qc: QueryClient, dashboard: DashboardConfig) {
-  qc.setQueryData<DashboardConfig>(['dashboards', 'id', dashboard.id], dashboard);
-  qc.setQueryData<DashboardConfig>(['dashboards', 'slug', dashboard.slug], (current) => {
-    if (current?.ownerId && !dashboard.ownerId) return current;
-    return dashboard;
-  });
-  qc.setQueryData<DashboardConfig[]>(['dashboards'], (current) => {
-    if (!current) return current;
-    const next = current.filter((entry) => (
-      entry.id !== dashboard.id &&
-      !(entry.slug === dashboard.slug && entry.ownerId === dashboard.ownerId)
-    ));
-    next.push(dashboard);
-    return sortDashboardList(next);
-  });
-}
-
-function removeDashboardFromCache(qc: QueryClient, id: string) {
-  const removed = qc.getQueryData<DashboardConfig[]>(['dashboards'])
-    ?.find((entry) => entry.id === id);
-  qc.removeQueries({ queryKey: ['dashboards', 'id', id], exact: true });
-  if (removed) {
-    const bySlug = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', removed.slug]);
-    if (bySlug?.id === id) {
-      qc.removeQueries({ queryKey: ['dashboards', 'slug', removed.slug], exact: true });
+function reconcileDashboardCache(qc: QueryClient, change: DashboardConfig | string) {
+  const removing = typeof change === 'string';
+  const id = removing ? change : change.id;
+  const list = qc.getQueryData<DashboardConfig[]>(['dashboards']);
+  const dashboard = removing ? list?.find(entry => entry.id === id) : change;
+  const idKey = ['dashboards', 'id', id];
+  if (removing) qc.removeQueries({ queryKey: idKey, exact: true });
+  else qc.setQueryData<DashboardConfig>(idKey, change);
+  if (dashboard) {
+    const slugKey = ['dashboards', 'slug', dashboard.slug];
+    if (removing) {
+      const selected = qc.getQueryData<DashboardConfig>(slugKey);
+      if (selected?.id === id) qc.removeQueries({ queryKey: slugKey, exact: true });
+    } else {
+      qc.setQueryData<DashboardConfig>(slugKey, current => current?.ownerId && !dashboard.ownerId ? current : dashboard);
     }
   }
-  qc.setQueryData<DashboardConfig[]>(['dashboards'], (current) =>
-    current ? current.filter((entry) => entry.id !== id) : current
-  );
+  qc.setQueryData<DashboardConfig[]>(['dashboards'], current => {
+    if (!current) return current;
+    const retained: DashboardConfig[] = [];
+    for (const entry of current) {
+      if (entry.id === id) continue;
+      if (!removing && entry.slug === change.slug && entry.ownerId === change.ownerId) continue;
+      retained.push(entry);
+    }
+    if (removing) return retained;
+    retained.push(change);
+    return retained.sort((left, right) => left.isDefault === right.isDefault
+      ? left.name.localeCompare(right.name) : left.isDefault ? -1 : 1);
+  });
 }
 
-function sortDashboardList(dashboards: DashboardConfig[]) {
-  return dashboards.sort((a, b) => {
-    if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
-    return a.name.localeCompare(b.name);
+function refreshDashboardCache(qc: QueryClient, dashboard: DashboardConfig, slug: string) {
+  reconcileDashboardCache(qc, dashboard);
+  for (const queryKey of [['dashboards'], ['dashboards', 'slug', slug]]) {
+    void qc.invalidateQueries({ queryKey });
+  }
+}
+
+const dashboardQueryPolicy = {
+  staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+};
+
+async function readDashboard(path: string): Promise<DashboardConfig> {
+  const response = await api.apiFetch<unknown>('GET', path);
+  return normalizeDashboardConfig(response);
+}
+
+function useDashboardLookup(kind: 'slug' | 'id', value: string | null) {
+  const ready = useAuthReady();
+  const suffix = kind === 'slug' ? `by-slug/${value}` : value;
+  return useQuery<DashboardConfig>({
+    ...dashboardQueryPolicy,
+    queryKey: ['dashboards', kind, value],
+    queryFn: () => readDashboard(`${BASE}/${suffix}`),
+    enabled: ready && !!value,
+    placeholderData: previous => previous,
   });
 }
 
 export function useDashboards() {
-  const authReady = useAuthReady();
+  const ready = useAuthReady();
   return useQuery<DashboardConfig[]>({
+    ...dashboardQueryPolicy,
     queryKey: ['dashboards'],
-    queryFn: async () => {
-      const records = await api.apiFetch<unknown[]>('GET', BASE);
-      return records.map(normalizeDashboardConfig);
-    },
-    enabled: authReady,
-    staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    placeholderData: (previous) => previous,
+    enabled: ready,
+    queryFn: async () => Array.from(await api.apiFetch<unknown[]>('GET', BASE), normalizeDashboardConfig),
+    placeholderData: previous => previous,
   });
 }
 
 export function useDashboardBySlug(slug: string | null) {
-  const authReady = useAuthReady();
-  return useQuery<DashboardConfig>({
-    queryKey: ['dashboards', 'slug', slug],
-    queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/by-slug/${slug}`)),
-    enabled: authReady && !!slug,
-    staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    placeholderData: (previous) => previous,
-  });
+  return useDashboardLookup('slug', slug);
 }
 
 export function useDashboardById(id: string | null) {
-  const authReady = useAuthReady();
-  return useQuery<DashboardConfig>({
-    queryKey: ['dashboards', 'id', id],
-    queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/${id}`)),
-    enabled: authReady && !!id,
-    staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    placeholderData: (previous) => previous,
+  return useDashboardLookup('id', id);
+}
+
+type WriteKind = 'create' | 'update' | 'admin';
+function useDashboardWrite(kind: WriteKind) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (config: DashboardConfig) => {
+      const body = dashboardMutationBody(config, kind === 'admin');
+      const route = kind === 'create' ? BASE : kind === 'admin' ? `/v1/admin/dashboards/${body.config.id}` : `${BASE}/${config.id}`;
+      const response = await api.apiFetch<unknown>(kind === 'create' ? 'POST' : 'PUT', route, body);
+      return normalizeDashboardConfig(response);
+    },
+    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => refreshDashboardCache(qc, data, variables.slug),
   });
 }
 
-export function useCreateDashboard() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (config: DashboardConfig) =>
-      api.apiFetch<unknown>('POST', BASE, dashboardMutationBody(config))
-        .then(normalizeDashboardConfig),
-    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => {
-      writeDashboardCache(qc, data);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
-      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
-    },
-  });
-}
-
-export function useUpdateDashboard() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (config: DashboardConfig) =>
-      api.apiFetch<unknown>('PUT', `${BASE}/${config.id}`, dashboardMutationBody(config))
-        .then(normalizeDashboardConfig),
-    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => {
-      writeDashboardCache(qc, data);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
-      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
-    },
-  });
-}
-
-export function useUpdateAdminDashboard() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (config: DashboardConfig) => {
-      const sanitized = sanitizeDashboardConfig(config);
-      return api.apiFetch<unknown>('PUT', `/v1/admin/dashboards/${sanitized.id}`, {
-        name: sanitized.name,
-        description: sanitized.description,
-        config: sanitized,
-      }).then(normalizeDashboardConfig);
-    },
-    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => {
-      writeDashboardCache(qc, data);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
-      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
-    },
-  });
-}
+export function useCreateDashboard() { return useDashboardWrite('create'); }
+export function useUpdateDashboard() { return useDashboardWrite('update'); }
+export function useUpdateAdminDashboard() { return useDashboardWrite('admin'); }
 
 export function useSetAdminDashboardLock() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, locked }: { id: string; locked: boolean }) =>
-      api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/lock`, { locked })
-        .then(normalizeDashboardConfig),
-    onSuccess: (data) => {
-      writeDashboardCache(qc, data);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
-      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
+    mutationFn: async ({ id, locked }: { id: string; locked: boolean }) => {
+      const response = await api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/lock`, { locked });
+      return normalizeDashboardConfig(response);
     },
+    onSuccess: data => refreshDashboardCache(qc, data, data.slug),
   });
 }
 
 export function useRestoreAdminDashboardDefault() {
   const qc = useQueryClient();
-  const userId = useAuth((state) => state.userId);
+  const userId = useAuth(state => state.userId);
   const updateChartFavorite = useUpdateDashboardChartFavorite();
   return useMutation({
     mutationFn: async (id: string) => {
-      if (!DashboardConfigSchema.shape.id.safeParse(id).success) {
-        throw new Error('Invalid dashboard ID');
-      }
-
-      const restored = await api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/restore-default`)
-        .then(normalizeDashboardConfig);
-      const managedChart = restored.widgets.find((widget) => (
-        widget.componentType === 'chart'
-        && widget.managedKey === 'overview.chart-catalog'
-      ));
-      const chartId = managedChart?.options && typeof managedChart.options.chartId === 'string'
-        ? managedChart.options.chartId
-        : undefined;
-
-      if (managedChart && chartId) {
-        const favoriteKey = `${restored.slug}:${restored.id}:${managedChart.id}`;
-        try {
-          await updateChartFavorite.mutateAsync({
-            key: favoriteKey,
-            chartId,
-          });
-        } catch {
-          // The dashboard restore is already committed. Keep its response as
-          // the authoritative result and keep this session on the restored
-          // chart until the account preference can be changed explicitly.
-          qc.setQueryData<{ chart_favorites: Record<string, string> }>(
-            ['auth', 'dashboard-chart-favorites', userId],
-            (current) => ({
-              chart_favorites: {
-                ...(current?.chart_favorites ?? {}),
-                [favoriteKey]: chartId,
-              },
-            }),
-          );
+      if (!DashboardConfigSchema.shape.id.safeParse(id).success) throw new Error('Invalid dashboard ID');
+      const response = await api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/restore-default`);
+      const restored = normalizeDashboardConfig(response);
+      for (const widget of restored.widgets) {
+        if (widget.componentType !== 'chart' || widget.managedKey !== 'overview.chart-catalog') continue;
+        const chartId = widget.options?.chartId;
+        if (typeof chartId === 'string' && chartId) {
+          const key = `${restored.slug}:${restored.id}:${widget.id}`;
+          try {
+            await updateChartFavorite.mutateAsync({ key, chartId });
+          } catch {
+            // Restore already committed; retain its selection if preference persistence fails.
+            qc.setQueryData<{ chart_favorites: Record<string, string> }>(
+              ['auth', 'dashboard-chart-favorites', userId],
+              current => ({ chart_favorites: Object.assign({}, current?.chart_favorites, { [key]: chartId }) }),
+            );
+          }
         }
+        break;
       }
-
       return restored;
     },
-    onSuccess: (data) => {
-      writeDashboardCache(qc, data);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
-      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
-    },
+    onSuccess: data => refreshDashboardCache(qc, data, data.slug),
   });
 }
 
@@ -356,8 +229,8 @@ export function useDeleteDashboard() {
   return useMutation({
     mutationFn: (id: string) => api.apiFetch<void>('DELETE', `${BASE}/${id}`),
     onSuccess: (_data, id) => {
-      removeDashboardFromCache(qc, id);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
+      reconcileDashboardCache(qc, id);
+      void qc.invalidateQueries({ queryKey: ['dashboards'] });
     },
   });
 }
@@ -365,12 +238,10 @@ export function useDeleteDashboard() {
 export function useCloneDashboard() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) =>
-      api.apiFetch<unknown>('POST', `${BASE}/${id}/clone`).then(normalizeDashboardConfig),
-    onSuccess: (data) => {
-      writeDashboardCache(qc, data);
-      qc.invalidateQueries({ queryKey: ['dashboards'] });
-      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
+    mutationFn: async (id: string) => {
+      const response = await api.apiFetch<unknown>('POST', `${BASE}/${id}/clone`);
+      return normalizeDashboardConfig(response);
     },
+    onSuccess: data => refreshDashboardCache(qc, data, data.slug),
   });
 }

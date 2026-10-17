@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@panda/hooks';
 import {
@@ -50,6 +50,37 @@ interface WidgetEditFormProps {
   onRemove?: () => void;
 }
 
+const SENSOR_TEXT_DEFAULTS = {
+  metric: 'total_miles', chartType: 'line', valueMode: 'latest', valuePath: '', fallbackValuePath: '',
+  valueFormula: '', unit: '', inlineSecondaryPath: '', inlineSecondaryFormula: '', inlineSecondaryTemplate: '',
+  inlineSecondaryUnit: '', inlineSecondaryPrefix: '', secondaryTemplate: '', labelSuffix: '',
+} as const;
+
+function sensorTextOptions(options: Record<string, unknown>, sensor: ReturnType<typeof getSensorDefinition>) {
+  const resolved = {} as Record<keyof typeof SENSOR_TEXT_DEFAULTS, string>;
+  for (const key of Object.keys(SENSOR_TEXT_DEFAULTS) as Array<keyof typeof SENSOR_TEXT_DEFAULTS>) {
+    const value = options[key];
+    resolved[key] = typeof value === 'string' ? value : sensor?.[key] ?? SENSOR_TEXT_DEFAULTS[key];
+  }
+  return resolved;
+}
+
+type RawEditorState = { id: string; text: string; error: string | null };
+type RawEditorAction = { kind: 'sync'; id: string; options: Record<string, unknown>; open: boolean }
+  | { kind: 'text'; text: string } | { kind: 'error'; error: string | null };
+function rawEditorTransition(state: RawEditorState, action: RawEditorAction): RawEditorState {
+  switch (action.kind) {
+    case 'text': return { ...state, text: action.text };
+    case 'error': return { ...state, error: action.error };
+    case 'sync': {
+      if (state.id === action.id && action.open) return state;
+      const text = JSON.stringify(action.options, null, 2);
+      if (state.id === action.id && state.text === text && state.error === null) return state;
+      return { id: action.id, text, error: null };
+    }
+  }
+}
+
 export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEditFormProps) {
   const def = getWidgetForInstance(widget);
   const { data: catalog = [] } = useMetricCatalog();
@@ -67,10 +98,11 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const dataSource = isSensorDataSource(options.dataSource)
     ? options.dataSource
     : sensorDefinition?.dataSource ?? 'metric';
-  const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
+  const { metric, chartType, valueMode, valuePath, fallbackValuePath, valueFormula, unit,
+    inlineSecondaryPath, inlineSecondaryFormula, inlineSecondaryTemplate, inlineSecondaryUnit,
+    inlineSecondaryPrefix, secondaryTemplate, labelSuffix } = sensorTextOptions(options, sensorDefinition);
   const palette = useDocumentPalette();
   const automaticCurveColor = getChartColor(resolveSensorColorToken(metric, sensorDefinition, palette));
-  const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
   const curveColor = normalizeChartColor(options.curveColor);
   const timeFilterSupported = supportsSpriteTimeFilter(chartType);
   const timeFilter = normalizeTimeFilter(
@@ -82,24 +114,12 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const smoothness = normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, chartType));
   const smoothnessIndex = Math.max(0, CURVE_SMOOTHNESS_OPTIONS.findIndex((option) => option.value === smoothness));
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
-  const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
   const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : sensorDefinition?.icon);
   const showSprite = typeof options.showSprite === 'boolean' ? options.showSprite : chartType !== 'none';
   const accentBorder = typeof options.accentBorder === 'boolean' ? options.accentBorder : sensorDefinition?.accent === true;
   const valueColor = isSensorValueColor(options.valueColor) ? options.valueColor : sensorDefinition?.valueColor ?? 'accent';
   const showSubtitle = options.showSubtitle === true;
   const subtitle = typeof options.subtitle === 'string' ? options.subtitle : '';
-  const valuePath = typeof options.valuePath === 'string' ? options.valuePath : sensorDefinition?.valuePath ?? '';
-  const fallbackValuePath = typeof options.fallbackValuePath === 'string' ? options.fallbackValuePath : sensorDefinition?.fallbackValuePath ?? '';
-  const valueFormula = typeof options.valueFormula === 'string' ? options.valueFormula : sensorDefinition?.valueFormula ?? '';
-  const unit = typeof options.unit === 'string' ? options.unit : sensorDefinition?.unit ?? '';
-  const inlineSecondaryPath = typeof options.inlineSecondaryPath === 'string' ? options.inlineSecondaryPath : sensorDefinition?.inlineSecondaryPath ?? '';
-  const inlineSecondaryFormula = typeof options.inlineSecondaryFormula === 'string' ? options.inlineSecondaryFormula : sensorDefinition?.inlineSecondaryFormula ?? '';
-  const inlineSecondaryTemplate = typeof options.inlineSecondaryTemplate === 'string' ? options.inlineSecondaryTemplate : sensorDefinition?.inlineSecondaryTemplate ?? '';
-  const inlineSecondaryUnit = typeof options.inlineSecondaryUnit === 'string' ? options.inlineSecondaryUnit : sensorDefinition?.inlineSecondaryUnit ?? '';
-  const inlineSecondaryPrefix = typeof options.inlineSecondaryPrefix === 'string' ? options.inlineSecondaryPrefix : sensorDefinition?.inlineSecondaryPrefix ?? '';
-  const secondaryTemplate = typeof options.secondaryTemplate === 'string' ? options.secondaryTemplate : sensorDefinition?.secondaryTemplate ?? '';
-  const labelSuffix = typeof options.labelSuffix === 'string' ? options.labelSuffix : sensorDefinition?.labelSuffix ?? '';
   const windowDays =
     typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
       ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
@@ -107,41 +127,32 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
 
   const chartPage = isDashboardChartPage(options.page) ? options.page : undefined;
   const chartDefinitions = getChartDefinitions(chartPage);
-  const metricOptions = catalog.length > 0
-    ? catalog.map((entry) => ({ value: entry.id, label: entry.label }))
-    : SENSOR_DEFINITIONS
-      .filter((entry) => (entry.dataSource ?? 'metric') === 'metric')
-      .map((entry) => ({ value: entry.metric ?? entry.id, label: entry.title }));
-  const configuredChartIds = Array.isArray(options.chartIds)
-    ? options.chartIds.filter(
-        (id): id is string =>
-          typeof id === 'string' && chartDefinitions.some((d) => d.id === id)
-      )
-    : [];
-  const selectedChartIds =
-    configuredChartIds.length > 0 ? configuredChartIds : chartDefinitions.map((d) => d.id);
+  const metricOptions: Array<{ value: string; label: string }> = [];
+  if (catalog.length) {
+    for (const entry of catalog) metricOptions.push({ value: entry.id, label: entry.label });
+  } else {
+    for (const entry of SENSOR_DEFINITIONS) if ((entry.dataSource ?? 'metric') === 'metric') metricOptions.push({ value: entry.metric ?? entry.id, label: entry.title });
+  }
+  const availableChartIds = new Set(chartDefinitions.map(definition => definition.id));
+  const configuredChartIds: string[] = [];
+  if (Array.isArray(options.chartIds)) {
+    for (const id of options.chartIds) if (typeof id === 'string' && availableChartIds.has(id)) configuredChartIds.push(id);
+  }
+  const selectedChartIds = configuredChartIds.length ? configuredChartIds : [...availableChartIds];
   const selectedChartIdSet = new Set(selectedChartIds);
-  const selectedChartId =
-    typeof options.chartId === 'string' && selectedChartIdSet.has(options.chartId)
-      ? options.chartId
-      : selectedChartIds[0] ?? chartDefinitions[0]?.id ?? '';
+  const selectedChartId = typeof options.chartId === 'string' && selectedChartIdSet.has(options.chartId)
+    ? options.chartId : selectedChartIds[0] ?? chartDefinitions[0]?.id ?? '';
   const showPicker = options.showPicker !== false;
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [advancedText, setAdvancedText] = useState(() => JSON.stringify(options, null, 2));
-  const [advancedError, setAdvancedError] = useState<string | null>(null);
-
-  const formId = useMemo(() => widget.id, [widget.id]);
+  const [rawEditor, dispatchRawEditor] = React.useReducer(rawEditorTransition, {
+    id: widget.id, text: JSON.stringify(options, null, 2), error: null,
+  });
+  const { text: advancedText, error: advancedError } = rawEditor;
+  const setAdvancedText = (text: string) => dispatchRawEditor({ kind: 'text', text });
+  const setAdvancedError = (error: string | null) => dispatchRawEditor({ kind: 'error', error });
   useEffect(() => {
-    setAdvancedText(JSON.stringify(options, null, 2));
-    setAdvancedError(null);
-  }, [formId]);
-
-  useEffect(() => {
-    if (!advancedOpen) {
-      setAdvancedText(JSON.stringify(options, null, 2));
-      setAdvancedError(null);
-    }
-  }, [advancedOpen, options]);
+    dispatchRawEditor({ kind: 'sync', id: widget.id, options, open: advancedOpen });
+  }, [widget.id, options, advancedOpen]);
 
   function patch(patchOptions: Record<string, unknown>) {
     onChange({ ...widget, options: { ...options, ...patchOptions } });
@@ -168,26 +179,18 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   }
 
   function handleChartTypeChange(nextType: string) {
-    patch({
-      chartType: nextType,
-      timeFilter: supportsSpriteTimeFilter(nextType)
-        ? supportsSpriteTimeFilter(chartType)
-          ? timeFilter
-          : DEFAULT_SPRITE_TIME_FILTER
-        : 'raw',
-      smoothness: nextType === 'line' || nextType === 'area' ? smoothness : 'straight',
-    });
+    const nextOptions = { chartType: nextType, timeFilter: 'raw' as TimeFilterWindow, smoothness: 'straight' as CurveSmoothness };
+    if (supportsSpriteTimeFilter(nextType)) nextOptions.timeFilter = timeFilterSupported ? timeFilter : DEFAULT_SPRITE_TIME_FILTER;
+    if (nextType === 'line' || nextType === 'area') nextOptions.smoothness = smoothness;
+    patch(nextOptions);
   }
 
   function toggleChartDefinition(id: string) {
-    const nextIds = selectedChartIdSet.has(id)
-      ? selectedChartIds.filter((cid) => cid !== id)
-      : [...selectedChartIds, id];
-    const safeIds = nextIds.length > 0 ? nextIds : [id];
-    patch({
-      chartIds: safeIds,
-      chartId: safeIds.includes(selectedChartId) ? selectedChartId : safeIds[0],
-    });
+    const included = selectedChartIdSet.has(id);
+    const chartIds = selectedChartIds.filter(current => !included || current !== id);
+    if (!included || !chartIds.length) chartIds.push(id);
+    const chartId = chartIds.includes(selectedChartId) ? selectedChartId : chartIds[0];
+    patch({ chartIds, chartId });
   }
 
   return (
@@ -759,13 +762,14 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
 }
 
 function normalizeChartColor(value: unknown): ChartColorDefinition {
-  if (isChartColorToken(value)) return { mode: 'token', token: value };
-  if (value && typeof value === 'object') {
-    const color = value as Partial<ChartColorDefinition>;
-    if (color.mode === 'custom' && typeof color.light === 'string' && typeof color.dark === 'string') {
-      return { mode: 'custom', light: color.light, dark: color.dark };
-    }
-    if (color.mode === 'token' && isChartColorToken(color.token)) return { mode: 'token', token: color.token };
+  const candidate = value && typeof value === 'object' ? value as Record<string, unknown> : { mode: 'token', token: value };
+  switch (candidate.mode) {
+    case 'custom':
+      if (typeof candidate.light === 'string' && typeof candidate.dark === 'string') return { mode: 'custom', light: candidate.light, dark: candidate.dark };
+      break;
+    case 'token':
+      if (isChartColorToken(candidate.token)) return { mode: 'token', token: candidate.token };
+      break;
   }
   return { mode: 'token', token: 'accent' };
 }

@@ -23,25 +23,59 @@ const COLLECTIONS = [
   { id: 'tabler', label: 'Tabler' },
 ];
 
-function loadRecent(): string[] {
+function recentStorage(next?: string[]): string[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = window.localStorage.getItem(RECENT_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((e): e is string => typeof e === 'string') : [];
+    if (next) {
+      window.localStorage.setItem(RECENT_KEY, JSON.stringify(next.slice(0, RECENT_MAX)));
+      return next;
+    }
+    const stored: unknown = JSON.parse(window.localStorage.getItem(RECENT_KEY) ?? 'null');
+    const icons: string[] = [];
+    if (Array.isArray(stored)) for (const icon of stored) if (typeof icon === 'string') icons.push(icon);
+    return icons;
   } catch {
     return [];
   }
 }
 
-function saveRecent(next: string[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next.slice(0, RECENT_MAX)));
-  } catch {
-    // ignore
-  }
+async function searchIcons(query: string, collection: string, signal: AbortSignal): Promise<string[]> {
+  const params = new URLSearchParams({ query, limit: '40' });
+  if (collection) params.set('prefix', collection);
+  const response = await api.proxyFetch(`/v1/external/iconify/search?${params}`, { signal });
+  if (!response.ok) return [];
+  const data = await response.json() as { icons?: string[] };
+  return Array.isArray(data.icons) ? data.icons : [];
+}
+
+function useIconSearch(open: boolean, query: string, collection: string) {
+  const [state, dispatch] = React.useReducer((current: { results: string[]; loading: boolean }, action:
+    { kind: 'begin' } | { kind: 'clear' } | { kind: 'finish'; results: string[] }) => {
+    switch (action.kind) {
+      case 'begin': return { ...current, loading: true };
+      case 'clear': return { ...current, results: [] };
+      case 'finish': return { results: action.results, loading: false };
+    }
+  }, { results: [], loading: false });
+  useEffect(() => {
+    if (!open) return;
+    const normalized = query.trim();
+    if (normalized.length < 2) { dispatch({ kind: 'clear' }); return; }
+    const controller = new AbortController();
+    dispatch({ kind: 'begin' });
+    const timer = window.setTimeout(() => {
+      void searchIcons(normalized, collection, controller.signal).catch(error => {
+        if (!isAbortError(error)) reportClientError(error, {
+          event: 'iconify.search_failed', area: 'asset', operation: 'icon-search', provider: 'iconify', severity: 'warn',
+        });
+        return [];
+      }).then(results => {
+        if (!controller.signal.aborted) dispatch({ kind: 'finish', results });
+      });
+    }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [open, query, collection]);
+  return state;
 }
 
 interface PopoverPos {
@@ -55,84 +89,40 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [collection, setCollection] = useState('');
-  const [results, setResults] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [recent, setRecent] = useState<string[]>(() => loadRecent());
+  const { results, loading } = useIconSearch(open, query, collection);
+  const [recent, setRecent] = useState<string[]>(() => recentStorage());
   const [popoverPos, setPopoverPos] = useState<PopoverPos | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
-  // Compute popover position when opening
   useEffect(() => {
-    if (!open) { setPopoverPos(null); return; }
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const POPUP_EST_HEIGHT = 440;
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const right = Math.max(8, window.innerWidth - rect.right);
-    if (spaceBelow >= POPUP_EST_HEIGHT || spaceBelow >= rect.top - 8) {
-      setPopoverPos({ top: rect.bottom + 6, right });
-    } else {
-      setPopoverPos({ bottom: window.innerHeight - rect.top + 6, right });
-    }
-  }, [open]);
-
-  // Close on outside click or Escape
-  useEffect(() => {
+    setPopoverPos(null);
     if (!open) return;
-    function handleClick(e: MouseEvent) {
-      const t = e.target as Node;
-      if (popoverRef.current?.contains(t)) return;
-      if (triggerRef.current?.contains(t)) return;
-      setOpen(false);
+    const trigger = triggerRef.current;
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom - 8;
+      const position: PopoverPos = { right: Math.max(8, window.innerWidth - rect.right) };
+      if (below >= 440 || below >= rect.top - 8) position.top = rect.bottom + 6;
+      else position.bottom = window.innerHeight - rect.top + 6;
+      setPopoverPos(position);
     }
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', handleKey);
+    const dismiss = (event: MouseEvent | KeyboardEvent) => {
+      if ('key' in event) {
+        if (event.key === 'Escape') setOpen(false);
+        return;
+      }
+      const target = event.target as Node;
+      const inside = [popoverRef.current, triggerRef.current].some(element => element?.contains(target));
+      if (!inside) setOpen(false);
+    };
+    document.addEventListener('mousedown', dismiss);
+    document.addEventListener('keydown', dismiss);
     return () => {
-      document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', dismiss);
     };
   }, [open]);
-
-  // Fetch search results (debounced 200ms)
-  useEffect(() => {
-    if (!open) return;
-    const q = query.trim();
-    if (q.length < 2) { setResults([]); return; }
-    let cancelled = false;
-    const controller = new AbortController();
-    setLoading(true);
-    const handle = window.setTimeout(async () => {
-      try {
-        const params = new URLSearchParams({ query: q, limit: '40' });
-        if (collection) params.set('prefix', collection);
-        const res = await api.proxyFetch(`/v1/external/iconify/search?${params.toString()}`, { signal: controller.signal });
-        if (!res.ok) {
-          if (!cancelled) setResults([]);
-          return;
-        }
-        const data = (await res.json()) as { icons?: string[] };
-        if (!cancelled) setResults(Array.isArray(data.icons) ? data.icons : []);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          reportClientError(error, {
-            event: 'iconify.search_failed',
-            area: 'asset',
-            operation: 'icon-search',
-            provider: 'iconify',
-            severity: 'warn',
-          });
-        }
-        if (!cancelled) setResults([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }, 200);
-    return () => { cancelled = true; window.clearTimeout(handle); controller.abort(); };
-  }, [open, query, collection]);
 
   const recentList = useMemo(() => recent.slice(0, RECENT_MAX), [recent]);
 
@@ -140,7 +130,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
     onChange(id);
     const next = [id, ...recent.filter((e) => e !== id)].slice(0, RECENT_MAX);
     setRecent(next);
-    saveRecent(next);
+    recentStorage(next);
     setOpen(false);
   }
 

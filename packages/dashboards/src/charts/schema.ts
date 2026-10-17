@@ -203,36 +203,71 @@ export const ChartAnnotationDefinitionSchema = z.object({
 const forbiddenKeys = new Set(['url', 'remoteurl', 'sql', 'javascript', 'script', 'templatehtml', 'css']);
 
 function findForbiddenKeys(value: unknown, path: string, errors: ChartValidationError[]) {
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => findForbiddenKeys(item, `${path}.${index}`, errors));
-    return;
-  }
-  if (!value || typeof value !== 'object') return;
-  for (const [key, child] of Object.entries(value)) {
-    if (forbiddenKeys.has(key.replaceAll('_', '').toLowerCase())) {
-      errors.push({ path: `${path}.${key}`, message: 'Executable, remote, SQL, HTML, or CSS fields are not allowed' });
+  type Visit = { value: unknown; path: string; key?: string; exit?: object };
+  const pending: Visit[] = [{ value, path }];
+  const ancestors = new WeakSet<object>();
+  while (pending.length) {
+    const item = pending.pop()!;
+    if (item.exit) { ancestors.delete(item.exit); continue; }
+    if (item.key !== undefined && forbiddenKeys.has(item.key.replaceAll('_', '').toLowerCase())) {
+      errors.push({ path: item.path, message: 'Executable, remote, SQL, HTML, or CSS fields are not allowed' });
     }
-    findForbiddenKeys(child, `${path}.${key}`, errors);
+    if (!item.value || typeof item.value !== 'object') continue;
+    if (ancestors.has(item.value)) throw new RangeError('Maximum call stack size exceeded');
+    ancestors.add(item.value);
+    pending.push({ value: undefined, path: item.path, exit: item.value });
+    const entries = Array.isArray(item.value)
+      ? Array.from(item.value.entries()).filter(([, child]) => child !== undefined)
+      : Object.entries(item.value);
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const [key, child] = entries[index]!;
+      const next: Visit = { value: child, path: `${item.path}.${key}` };
+      if (!Array.isArray(item.value)) next.key = String(key);
+      pending.push(next);
+    }
   }
 }
 
-function fieldReferenceErrors(definition: ChartDefinitionV1, errors: ChartValidationError[]) {
-  const bindingIds = new Set(definition.sources.map((source) => source.id));
-  const references: Array<{ path: string; reference: ChartFieldRef }> = [
-    { path: 'x.field', reference: definition.x.field },
-    ...definition.series.flatMap((series, index) => [
-      { path: `series.${index}.y`, reference: series.y },
-      ...(series.x ? [{ path: `series.${index}.x`, reference: series.x }] : []),
-    ]),
+function definitionReferences(definition: ChartDefinitionV1) {
+  const references: Array<{ path: string; reference: ChartFieldRef; role?: 'x' | 'y' }> = [
+    { path: 'config.x.field', reference: definition.x.field, role: 'x' },
   ];
-  for (const { path, reference } of references) {
-    if (!bindingIds.has(reference.sourceBindingId)) {
-      errors.push({ path: `config.${path}.sourceBindingId`, message: `Unknown source binding '${reference.sourceBindingId}'` });
-    }
+  for (const [index, series] of definition.series.entries()) {
+    references.push({ path: `config.series.${index}.y`, reference: series.y, role: 'y' });
+    if (series.x) references.push({ path: `config.series.${index}.x`, reference: series.x });
   }
-  if (definition.series.some((series) => series.yAxis === 'y2') && !definition.axes.y2) {
+  return references;
+}
+
+function definitionErrors(definition: ChartDefinitionV1): ChartValidationError[] {
+  const errors: ChartValidationError[] = [];
+  const bindingIds = new Set<string>();
+  const seriesIds = new Set<string>();
+  for (const source of definition.sources) bindingIds.add(source.id);
+  for (const series of definition.series) seriesIds.add(series.id);
+  if (bindingIds.size !== definition.sources.length) errors.push({ path: 'config.sources', message: 'Source binding IDs must be unique' });
+  if (seriesIds.size !== definition.series.length) errors.push({ path: 'config.series', message: 'Series IDs must be unique' });
+  for (const { path, reference } of definitionReferences(definition)) {
+    if (!bindingIds.has(reference.sourceBindingId)) errors.push({ path: `${path}.sourceBindingId`, message: `Unknown source binding '${reference.sourceBindingId}'` });
+  }
+  if (!definition.axes.y2 && definition.series.some(series => series.yAxis === 'y2')) {
     errors.push({ path: 'config.axes.y2', message: 'A right-axis series requires a y2 axis definition' });
   }
+  for (const [index, source] of definition.sources.entries()) {
+    for (const [filterIndex, filter] of source.filters.entries()) {
+      const requiresValue = !['is_null', 'is_not_null'].includes(filter.operator);
+      if (requiresValue === (filter.value !== undefined)) continue;
+      errors.push({ path: `config.sources.${index}.filters.${filterIndex}.value`, message: requiresValue ? 'This filter operator requires a value' : 'Null checks do not accept a value' });
+    }
+  }
+  for (const axis of [definition.axes.x, definition.axes.y, definition.axes.y2]) {
+    if (axis?.domain.mode !== 'fixed') continue;
+    const { min, max } = axis.domain;
+    if (min >= max) errors.push({ path: 'config.axes', message: 'Fixed axis minimum must be less than maximum' });
+    if (axis.scale === 'log' && (min <= 0 || max <= 0)) errors.push({ path: 'config.axes', message: 'Logarithmic axes require positive fixed ranges' });
+  }
+  findForbiddenKeys(definition, 'config', errors);
+  return errors;
 }
 
 export const ChartDefinitionV1Schema = z.object({
@@ -248,35 +283,9 @@ export const ChartDefinitionV1Schema = z.object({
   annotations: z.array(ChartAnnotationDefinitionSchema).max(20).optional(),
   rendererId: identifier.optional(),
 }).superRefine((definition, context) => {
-  const errors: ChartValidationError[] = [];
-  const sourceIds = definition.sources.map((source) => source.id);
-  const seriesIds = definition.series.map((series) => series.id);
-  if (new Set(sourceIds).size !== sourceIds.length) errors.push({ path: 'config.sources', message: 'Source binding IDs must be unique' });
-  if (new Set(seriesIds).size !== seriesIds.length) errors.push({ path: 'config.series', message: 'Series IDs must be unique' });
-  fieldReferenceErrors(definition as ChartDefinitionV1, errors);
-  definition.sources.forEach((source, index) => {
-    source.filters.forEach((filter, filterIndex) => {
-      const noValue = filter.operator === 'is_null' || filter.operator === 'is_not_null';
-      if (noValue && filter.value !== undefined) {
-        errors.push({ path: `config.sources.${index}.filters.${filterIndex}.value`, message: 'Null checks do not accept a value' });
-      }
-      if (!noValue && filter.value === undefined) {
-        errors.push({ path: `config.sources.${index}.filters.${filterIndex}.value`, message: 'This filter operator requires a value' });
-      }
-    });
-  });
-  const axes = [definition.axes.x, definition.axes.y, definition.axes.y2];
-  for (const axis of axes) {
-    if (!axis) continue;
-    if (axis.domain.mode === 'fixed') {
-      if (axis.domain.min >= axis.domain.max) errors.push({ path: 'config.axes', message: 'Fixed axis minimum must be less than maximum' });
-      if (axis.scale === 'log' && (axis.domain.min <= 0 || axis.domain.max <= 0)) {
-        errors.push({ path: 'config.axes', message: 'Logarithmic axes require positive fixed ranges' });
-      }
-    }
+  for (const { path, message } of definitionErrors(definition as ChartDefinitionV1)) {
+    context.addIssue({ code: 'custom', path: path.split('.'), message });
   }
-  findForbiddenKeys(definition, 'config', errors);
-  for (const error of errors) context.addIssue({ code: 'custom', path: error.path.split('.'), message: error.message });
 });
 
 export const ChartRecordSchema = z.object({
@@ -313,44 +322,37 @@ export function validateChartDefinitionAgainstSources(
   manifests: ChartSourceManifest[],
 ): ChartValidationError[] {
   const errors: ChartValidationError[] = [];
-  const manifestById = new Map(manifests.map((manifest) => [manifest.id, manifest]));
-  const bindingById = new Map(definition.sources.map((source) => [source.id, source]));
-
-  for (const [bindingId, binding] of bindingById) {
-    const manifest = manifestById.get(binding.sourceId);
+  const available = new Map<string, ChartSourceManifest>();
+  for (const manifest of manifests) available.set(manifest.id, manifest);
+  const bindings = new Map<string, ChartDefinitionV1['sources'][number]>();
+  for (const binding of definition.sources) bindings.set(binding.id, binding);
+  const resolved = new Map<string, ChartSourceManifest>();
+  for (const [id, binding] of bindings) {
+    const manifest = available.get(binding.sourceId);
     if (!manifest) {
-      errors.push({ path: `config.sources.${bindingId}.sourceId`, message: `Source '${binding.sourceId}' is not available on this API` });
+      errors.push({ path: `config.sources.${id}.sourceId`, message: `Source '${binding.sourceId}' is not available on this API` });
       continue;
     }
-    const filterFields = new Map(manifest.filterableFields.map((field) => [field.field, new Set(field.operators)]));
+    resolved.set(id, manifest);
+    const filterRules = new Map(manifest.filterableFields.map(field => [field.field, field.operators]));
     for (const filter of binding.filters) {
-      const operators = filterFields.get(filter.field);
-      if (!operators || !operators.has(filter.operator)) {
-        errors.push({ path: `config.sources.${bindingId}.filters.${filter.field}`, message: `Filter '${filter.field} ${filter.operator}' is not supported by ${manifest.label}` });
-      }
+      if (filterRules.get(filter.field)?.includes(filter.operator)) continue;
+      errors.push({ path: `config.sources.${id}.filters.${filter.field}`, message: `Filter '${filter.field} ${filter.operator}' is not supported by ${manifest.label}` });
     }
   }
-
-  const fieldFor = (reference: { sourceBindingId: string; field: string }, path: string) => {
-    const binding = bindingById.get(reference.sourceBindingId);
-    const manifest = binding ? manifestById.get(binding.sourceId) : undefined;
-    const field = manifest?.fields.find((candidate) => candidate.id === reference.field);
-    if (!field) {
-      errors.push({ path, message: `Field '${reference.field}' is not available from source binding '${reference.sourceBindingId}'` });
-    }
-    return { field, manifest };
+  const checkReference = (reference: ChartFieldRef, path: string, role?: 'x' | 'y') => {
+    const manifest = resolved.get(reference.sourceBindingId);
+    const field = manifest?.fields.find(candidate => candidate.id === reference.field);
+    if (!field) errors.push({ path, message: `Field '${reference.field}' is not available from source binding '${reference.sourceBindingId}'` });
+    else if (role && !field.roles.includes(role)) errors.push({ path, message: `Field '${reference.field}' cannot be used as ${role === 'x' ? 'an X' : 'a Y'} field` });
+    return manifest;
   };
-
-  const x = fieldFor(definition.x.field, 'config.x.field');
-  if (x.field && !x.field.roles.includes('x')) errors.push({ path: 'config.x.field', message: `Field '${definition.x.field.field}' cannot be used as an X field` });
-  definition.series.forEach((series, index) => {
-    const y = fieldFor(series.y, `config.series.${index}.y`);
-    if (y.field && !y.field.roles.includes('y')) errors.push({ path: `config.series.${index}.y`, message: `Field '${series.y.field}' cannot be used as a Y field` });
-    if (series.x) fieldFor(series.x, `config.series.${index}.x`);
-    const compatibleMark = series.mark === 'step' ? 'line' : series.mark === 'histogram' ? 'bar' : series.mark;
-    if (y.manifest && !y.manifest.compatibleMarks.includes(compatibleMark)) {
-      errors.push({ path: `config.series.${index}.mark`, message: `Mark '${series.mark}' is not supported by source '${y.manifest.id}'` });
-    }
-  });
+  checkReference(definition.x.field, 'config.x.field', 'x');
+  for (const [index, series] of definition.series.entries()) {
+    const manifest = checkReference(series.y, `config.series.${index}.y`, 'y');
+    if (series.x) checkReference(series.x, `config.series.${index}.x`);
+    const mark = series.mark === 'step' ? 'line' : series.mark === 'histogram' ? 'bar' : series.mark;
+    if (manifest && !manifest.compatibleMarks.includes(mark)) errors.push({ path: `config.series.${index}.mark`, message: `Mark '${series.mark}' is not supported by source '${manifest.id}'` });
+  }
   return errors;
 }

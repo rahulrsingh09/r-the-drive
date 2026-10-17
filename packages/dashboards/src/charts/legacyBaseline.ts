@@ -42,57 +42,47 @@ const LEGACY_MILEAGE_BASELINES: Record<string, LegacyMileageBaseline> = {
  */
 export function normalizeLegacyBundledChartRecord(record: ChartRecord): ChartRecord {
   const baseline = LEGACY_MILEAGE_BASELINES[record.slug];
-  if (!baseline || !matchesLegacyMileageBaseline(record.config, baseline.definition)) {
-    return record;
-  }
-
+  if (!baseline || !matchesLegacyMileageBaseline(record.config, baseline.definition)) return record;
   const bundled = getBundledChartDefinition(record.slug);
   if (!bundled) return record;
-  const canonical = ChartDefinitionV1Schema.parse(bundled) as unknown as ChartDefinitionV1;
-  const legacyPrimary = record.config.series[0];
-
-  canonical.placements = structuredClone(record.config.placements);
-  canonical.series = canonical.series.map((series) =>
-    series.y.field === baseline.primaryField && legacyPrimary
-      ? { ...series, color: structuredClone(legacyPrimary.color) }
-      : series
-  );
-
-  return { ...record, config: canonical };
+  const config = ChartDefinitionV1Schema.parse(bundled) as unknown as ChartDefinitionV1;
+  config.placements = structuredClone(record.config.placements);
+  const primary = record.config.series[0];
+  if (primary) {
+    for (let index = 0; index < config.series.length; index++) {
+      const series = config.series[index]!;
+      if (series.y.field !== baseline.primaryField) continue;
+      config.series[index] = { ...series, color: structuredClone(primary.color) };
+    }
+  }
+  return { ...record, config };
 }
 
-function matchesLegacyMileageBaseline(
-  definition: ChartDefinitionV1,
-  baseline: ChartDefinitionV1
-) {
+function matchesLegacyMileageBaseline(definition: ChartDefinitionV1, baseline: ChartDefinitionV1) {
   const candidate = structuredClone(definition);
   candidate.placements = structuredClone(baseline.placements);
   candidate.timeframe = structuredClone(baseline.timeframe);
-  if (candidate.series[0] && baseline.series[0]) {
-    candidate.series[0].color = structuredClone(baseline.series[0].color);
+  if (candidate.series[0] && baseline.series[0]) candidate.series[0].color = structuredClone(baseline.series[0].color);
+  const pending: Array<[unknown, unknown]> = [[candidate, baseline]];
+  while (pending.length) {
+    const [left, right] = pending.pop()!;
+    if (Object.is(left, right)) continue;
+    if (Array.isArray(left) || Array.isArray(right)) {
+      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+      for (let index = 0; index < left.length; index++) if (index in left) pending.push([left[index], right[index]]);
+      continue;
+    }
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+    const l = left as Record<string, unknown>;
+    const r = right as Record<string, unknown>;
+    const keys = Object.keys(l);
+    if (keys.length !== Object.keys(r).length) return false;
+    for (const key of keys) {
+      if (!Object.hasOwn(r, key)) return false;
+      pending.push([l[key], r[key]]);
+    }
   }
-  return structurallyEqual(candidate, baseline);
-}
-
-function structurallyEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => structurallyEqual(value, right[index]))
-    );
-  }
-  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord).sort();
-  const rightKeys = Object.keys(rightRecord).sort();
-  return (
-    structurallyEqual(leftKeys, rightKeys) &&
-    leftKeys.every((key) => structurallyEqual(leftRecord[key], rightRecord[key]))
-  );
+  return true;
 }
 
 function legacyMileageDefinition({

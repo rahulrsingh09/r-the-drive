@@ -33,19 +33,15 @@ export function DashboardRenderer({
   onConfigChange,
   editActions,
 }: DashboardRendererProps) {
-  const widgets = Array.isArray(config.widgets) ? config.widgets : [];
   const {
+    widgets,
     liveWidgets,
     previewWidgets,
     previewScenario,
     setPreviewScenarioValue,
     visibilityTypes,
-  } = useDashboardViewWidgets(config.id, widgets, ctx, mode);
-  const dataWidgets = mode === 'edit' ? previewWidgets : liveWidgets;
-  const requirements = React.useMemo(
-    () => collectDashboardDataRequirements(dataWidgets),
-    [dataWidgets],
-  );
+    requirements,
+  } = useDashboardViewWidgets(config, ctx, mode);
 
   return (
     <DashboardDataProvider ctx={ctx} requirements={requirements}>
@@ -74,11 +70,11 @@ export function DashboardRenderer({
 }
 
 function useDashboardViewWidgets(
-  dashboardId: string,
-  widgets: DashboardConfig['widgets'],
+  config: DashboardConfig,
   ctx: WidgetCtx,
   mode: 'view' | 'edit',
 ) {
+  const widgets = Array.isArray(config.widgets) ? config.widgets : [];
   const hasVisibilityRules = hasDashboardVisibilityRules(widgets);
   const visibilityTypes = React.useMemo(
     () => getDashboardVisibilityRuleTypes(widgets),
@@ -91,30 +87,21 @@ function useDashboardViewWidgets(
     () => dashboardVisibilityStateFromStatus(status),
     [status],
   );
-  const [previewScenario, setPreviewScenario] = React.useState<DashboardPreviewState>(liveState);
-  const previewTouchedRef = React.useRef(false);
-  const previewKey = `${dashboardId}:${mode}`;
-  const previousPreviewKeyRef = React.useRef(previewKey);
-
-  React.useEffect(() => {
-    if (previousPreviewKeyRef.current !== previewKey) {
-      previousPreviewKeyRef.current = previewKey;
-      previewTouchedRef.current = false;
-      setPreviewScenario(liveState);
-    }
-  }, [liveState, previewKey]);
-
-  React.useEffect(() => {
-    if (!previewTouchedRef.current) setPreviewScenario(liveState);
-  }, [liveState]);
-
-  const setPreviewScenarioValue = React.useCallback((
-    type: 'vehicle-connection',
-    value: DashboardPreviewState['vehicle-connection'],
-  ) => {
-    previewTouchedRef.current = true;
-    setPreviewScenario((current) => ({ ...current, [type]: value }));
+  const previewKey = `${config.id}:${mode}`;
+  const [preview, dispatchPreview] = React.useReducer((current: {
+    key: string; touched: boolean; state: DashboardPreviewState;
+  }, action: { kind: 'sync'; key: string; live: DashboardPreviewState } | {
+    kind: 'select'; type: 'vehicle-connection'; value: DashboardPreviewState['vehicle-connection'];
+  }) => {
+    if (action.kind === 'select') return { ...current, touched: true, state: { ...current.state, [action.type]: action.value } };
+    if (current.key !== action.key) return { key: action.key, touched: false, state: action.live };
+    return current.touched || current.state === action.live ? current : { ...current, state: action.live };
+  }, { key: previewKey, touched: false, state: liveState });
+  React.useEffect(() => dispatchPreview({ kind: 'sync', key: previewKey, live: liveState }), [previewKey, liveState]);
+  const setPreviewScenarioValue = React.useCallback((type: 'vehicle-connection', value: DashboardPreviewState['vehicle-connection']) => {
+    dispatchPreview({ kind: 'select', type, value });
   }, []);
+  const previewScenario = preview.state;
 
   const liveWidgets = hasVisibilityRules
     ? resolveDashboardViewWidgets(widgets, liveState)
@@ -123,7 +110,12 @@ function useDashboardViewWidgets(
     ? resolveDashboardViewWidgets(widgets, previewScenario)
     : widgets;
 
+  const dataWidgets = mode === 'edit' ? previewWidgets : liveWidgets;
+  const requirements = React.useMemo(() => collectDashboardDataRequirements(dataWidgets), [dataWidgets]);
+
   return {
+    widgets,
+    requirements,
     liveWidgets,
     previewWidgets,
     previewScenario,

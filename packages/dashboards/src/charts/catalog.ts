@@ -180,137 +180,65 @@ export function validateBundledRendererDefinition(
   const capability = bundledCapabilityBySlug.get(slug);
   if (!capability) return [];
   const errors: Array<{ path: string; message: string }> = [];
-  const canonical = BUNDLED_CHART_DEFINITIONS.find((chart) => chart.slug === slug);
-  const xBinding = definition.sources.find(
-    (source) => source.id === definition.x.field.sourceBindingId
-  );
-  if (
-    !xBinding ||
-    xBinding.sourceId !== capability.x.sourceId ||
-    definition.x.field.field !== capability.x.field ||
-    definition.x.kind !== capability.x.kind
-  ) {
-    errors.push({
-      path: 'config.x',
-      message: `The ${slug} production renderer requires ${capability.x.kind} X data from ${capability.x.sourceId}.${capability.x.field}.`,
-    });
-  }
+  const require = (valid: unknown, path: string, message: string) => {
+    if (!valid) errors.push({ path, message });
+  };
+  const canonical = BUNDLED_CHART_DEFINITIONS.find(chart => chart.slug === slug);
+  const sources = new Map<string, string>();
+  for (const source of definition.sources) if (!sources.has(source.id)) sources.set(source.id, source.sourceId);
+  const xSource = sources.get(definition.x.field.sourceBindingId);
+  require(xSource === capability.x.sourceId && definition.x.field.field === capability.x.field && definition.x.kind === capability.x.kind,
+    'config.x', `The ${slug} production renderer requires ${capability.x.kind} X data from ${capability.x.sourceId}.${capability.x.field}.`);
   if (canonical) {
-    if (!sameConfigValue(definition.timeframe, canonical.timeframe)) {
-      errors.push({
-        path: 'config.timeframe',
-        message: 'Bundled charts inherit the active dashboard timeframe so preview and dashboard data stay identical.',
+    require(sameConfigValue(definition.timeframe, canonical.timeframe), 'config.timeframe', 'Bundled charts inherit the active dashboard timeframe so preview and dashboard data stay identical.');
+    for (const axis of ['x', 'y', 'y2'] as const) require(definition.axes[axis]?.unit === canonical.axes[axis]?.unit,
+      `config.axes.${axis}.unit`, 'Bundled renderer units are owned by the production data adapter.');
+    require(definition.display.emptyTitle === canonical.display.emptyTitle && definition.display.emptyDescription === canonical.display.emptyDescription,
+      'config.display.emptyTitle', 'Bundled empty-state copy is owned by the production renderer.');
+    require(definition.rendererId === canonical.rendererId, 'config.rendererId', 'Bundled renderer selection cannot be changed.');
+    if (capability.editing !== 'rich') {
+      const comparableAxes = structuredClone(definition.axes);
+      const canonicalAxes = structuredClone(canonical.axes);
+      if (['daily-charge-sessions', 'daily-energy-bars', 'phantom-drain', 'tire-pressure-timeline'].includes(capability.renderer)) comparableAxes.y.domain = canonicalAxes.y.domain;
+      const withoutColors = (series: ChartDefinitionV1['series']) => series.map(item => {
+        const copy: Partial<typeof item> = { ...item };
+        delete copy.color;
+        return copy;
       });
-    }
-    for (const axisId of ['x', 'y', 'y2'] as const) {
-      if (definition.axes[axisId]?.unit !== canonical.axes[axisId]?.unit) {
-        errors.push({
-          path: `config.axes.${axisId}.unit`,
-          message: 'Bundled renderer units are owned by the production data adapter.',
-        });
-      }
-    }
-    if (
-      definition.display.emptyTitle !== canonical.display.emptyTitle ||
-      definition.display.emptyDescription !== canonical.display.emptyDescription
-    ) {
-      errors.push({
-        path: 'config.display.emptyTitle',
-        message: 'Bundled empty-state copy is owned by the production renderer.',
-      });
-    }
-    if (definition.rendererId !== canonical.rendererId) {
-      errors.push({
-        path: 'config.rendererId',
-        message: 'Bundled renderer selection cannot be changed.',
-      });
+      const contracts: Array<[string, unknown, unknown, string]> = [
+        ['sources', definition.sources, canonical.sources, 'This bundled renderer owns its data bindings; duplicate the chart to build a custom source configuration.'],
+        ['series', withoutColors(definition.series), withoutColors(canonical.series), 'This bundled renderer supports curve color edits only; its curve order, labels, marks, and axes are fixed.'],
+        ['x', definition.x, canonical.x, 'This bundled renderer owns its X-axis encoding.'],
+        ['axes', comparableAxes, canonicalAxes, 'This bundled renderer supports only its production axis contract; use dashboard chart settings for a temporary range.'],
+        ['display', definition.display, canonical.display, 'This bundled renderer owns its legend, grid, tooltip, and smoothing presentation.'],
+        ['interaction', definition.interaction, canonical.interaction, 'This bundled renderer owns its interaction behavior.'],
+      ];
+      for (const [path, value, expected, message] of contracts) require(sameConfigValue(value, expected), `config.${path}`, message);
     }
   }
-  if (canonical && capability.editing !== 'rich') {
-    if (!sameConfigValue(definition.sources, canonical.sources)) {
-      errors.push({
-        path: 'config.sources',
-        message: 'This bundled renderer owns its data bindings; duplicate the chart to build a custom source configuration.',
-      });
-    }
-    const withoutColors = (series: ChartDefinitionV1['series']) =>
-      series.map(({ color: _color, ...item }) => item);
-    if (!sameConfigValue(withoutColors(definition.series), withoutColors(canonical.series))) {
-      errors.push({
-        path: 'config.series',
-        message: 'This bundled renderer supports curve color edits only; its curve order, labels, marks, and axes are fixed.',
-      });
-    }
-    if (!sameConfigValue(definition.x, canonical.x)) {
-      errors.push({
-        path: 'config.x',
-        message: 'This bundled renderer owns its X-axis encoding.',
-      });
-    }
-    const comparableAxes = structuredClone(definition.axes);
-    const canonicalAxes = structuredClone(canonical.axes);
-    const supportsYDomain = [
-      'daily-charge-sessions',
-      'daily-energy-bars',
-      'phantom-drain',
-      'tire-pressure-timeline',
-    ].includes(capability.renderer);
-    if (supportsYDomain) comparableAxes.y.domain = canonicalAxes.y.domain;
-    if (!sameConfigValue(comparableAxes, canonicalAxes)) {
-      errors.push({
-        path: 'config.axes',
-        message: 'This bundled renderer supports only its production axis contract; use dashboard chart settings for a temporary range.',
-      });
-    }
-    if (!sameConfigValue(definition.display, canonical.display)) {
-      errors.push({
-        path: 'config.display',
-        message: 'This bundled renderer owns its legend, grid, tooltip, and smoothing presentation.',
-      });
-    }
-    if (!sameConfigValue(definition.interaction, canonical.interaction)) {
-      errors.push({
-        path: 'config.interaction',
-        message: 'This bundled renderer owns its interaction behavior.',
-      });
-    }
+  const supported = new Map<string, Set<string>>();
+  for (const curve of capability.curves) {
+    const fields = supported.get(curve.sourceId) ?? new Set<string>();
+    fields.add(curve.field);
+    supported.set(curve.sourceId, fields);
   }
-  definition.series.forEach((series, index) => {
-    const binding = definition.sources.find((source) => source.id === series.y.sourceBindingId);
-    if (
-      !binding ||
-      !capability.curves.some(
-        (curve) => curve.sourceId === binding.sourceId && curve.field === series.y.field
-      )
-    ) {
-      errors.push({
-        path: `config.series.${index}.y`,
-        message: `The ${slug} production renderer does not support this curve.`,
-      });
-    }
-    if (series.x) errors.push({ path: `config.series.${index}.x`, message: 'Per-series X fields are supported only by independent custom charts.' });
-    if (series.transforms.some((transform) => transform.kind !== 'none'))
-      errors.push({ path: `config.series.${index}.transforms`, message: 'Transforms are not supported by bundled production renderers.' });
-    if (series.stackId && series.mark !== 'bar' && series.mark !== 'histogram')
-      errors.push({ path: `config.series.${index}.stackId`, message: 'Stacking is supported only for bar or histogram curves.' });
-    if (series.connectGaps !== undefined)
-      errors.push({ path: `config.series.${index}.connectGaps`, message: 'Use the chart-level connectGaps setting for bundled charts.' });
-    if (series.valueFormat !== undefined)
-      errors.push({ path: `config.series.${index}.valueFormat`, message: 'Per-curve value formatting is not supported by bundled production renderers.' });
-  });
-  if (definition.annotations && definition.annotations.length > 0)
-    errors.push({ path: 'config.annotations', message: 'Annotations are supported only by independent custom charts.' });
-  if (definition.display.dataSmoothing)
-    errors.push({ path: 'config.display.dataSmoothing', message: 'Use curve smoothness for bundled production renderers.' });
-  if (!definition.interaction.panZoom)
-    errors.push({ path: 'config.interaction.panZoom', message: 'Bundled production charts require pan and zoom.' });
-  if (!definition.interaction.touchExplore)
-    errors.push({ path: 'config.interaction.touchExplore', message: 'Bundled production charts require touch exploration.' });
-  for (const [axisId, axis] of Object.entries(definition.axes)) {
-    if (axis?.scale === 'log')
-      errors.push({ path: `config.axes.${axisId}.scale`, message: 'Logarithmic axes are not supported by bundled production renderers.' });
-    if (axis?.tickFormat)
-      errors.push({ path: `config.axes.${axisId}.tickFormat`, message: 'Custom tick formats are not supported by bundled production renderers.' });
+  for (const [index, series] of definition.series.entries()) {
+    const sourceId = sources.get(series.y.sourceBindingId);
+    const prefix = `config.series.${index}`;
+    require(sourceId !== undefined && supported.get(sourceId)?.has(series.y.field), `${prefix}.y`, `The ${slug} production renderer does not support this curve.`);
+    require(!series.x, `${prefix}.x`, 'Per-series X fields are supported only by independent custom charts.');
+    require(series.transforms.every(transform => transform.kind === 'none'), `${prefix}.transforms`, 'Transforms are not supported by bundled production renderers.');
+    require(!series.stackId || series.mark === 'bar' || series.mark === 'histogram', `${prefix}.stackId`, 'Stacking is supported only for bar or histogram curves.');
+    require(series.connectGaps === undefined, `${prefix}.connectGaps`, 'Use the chart-level connectGaps setting for bundled charts.');
+    require(series.valueFormat === undefined, `${prefix}.valueFormat`, 'Per-curve value formatting is not supported by bundled production renderers.');
+  }
+  require(!definition.annotations?.length, 'config.annotations', 'Annotations are supported only by independent custom charts.');
+  require(!definition.display.dataSmoothing, 'config.display.dataSmoothing', 'Use curve smoothness for bundled production renderers.');
+  require(definition.interaction.panZoom, 'config.interaction.panZoom', 'Bundled production charts require pan and zoom.');
+  require(definition.interaction.touchExplore, 'config.interaction.touchExplore', 'Bundled production charts require touch exploration.');
+  for (const [id, axis] of Object.entries(definition.axes)) {
+    require(axis?.scale !== 'log', `config.axes.${id}.scale`, 'Logarithmic axes are not supported by bundled production renderers.');
+    require(!axis?.tickFormat, `config.axes.${id}.tickFormat`, 'Custom tick formats are not supported by bundled production renderers.');
   }
   return errors;
 }

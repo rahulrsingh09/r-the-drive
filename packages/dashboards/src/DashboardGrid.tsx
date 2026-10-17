@@ -5,19 +5,23 @@ import type { WidgetCtx } from './registry';
 import type { WidgetInstance } from './schema';
 
 function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState(() =>
-    typeof window !== 'undefined' && window.innerWidth < 640
-  );
-
-  React.useEffect(() => {
-    const mq = window.matchMedia('(max-width: 639px)');
-    setIsMobile(mq.matches);
-    const handler = (event: MediaQueryListEvent) => setIsMobile(event.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-
-  return isMobile;
+  const [viewport] = React.useState(() => {
+    let mobile = typeof window !== 'undefined' && window.innerWidth < 640;
+    return {
+      read: () => mobile,
+      subscribe(notify: () => void) {
+        const query = window.matchMedia('(max-width: 639px)');
+        const update = ({ matches }: { matches: boolean }) => {
+          mobile = matches;
+          notify();
+        };
+        query.addEventListener('change', update);
+        update(query);
+        return () => query.removeEventListener('change', update);
+      },
+    };
+  });
+  return React.useSyncExternalStore(viewport.subscribe, viewport.read, viewport.read);
 }
 
 export interface DashboardGridProps {
@@ -36,6 +40,32 @@ function shouldDeferWidget(widget: WidgetInstance) {
     (widget.componentType === 'custom' && DEFERRED_CUSTOM_WIDGETS.has(widget.definitionId));
 }
 
+const pendingWidgets = new Map<Element, () => void>();
+let widgetObserver: IntersectionObserver | undefined;
+
+function releaseWidget(element: Element) {
+  pendingWidgets.delete(element);
+  widgetObserver?.unobserve(element);
+  if (!pendingWidgets.size) {
+    widgetObserver?.disconnect();
+    widgetObserver = undefined;
+  }
+}
+
+function observeWidget(element: Element, reveal: () => void) {
+  if (!widgetObserver) widgetObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const notify = pendingWidgets.get(entry.target);
+      releaseWidget(entry.target);
+      notify?.();
+    }
+  }, { rootMargin: '320px 0px' });
+  pendingWidgets.set(element, reveal);
+  widgetObserver.observe(element);
+  return () => releaseWidget(element);
+}
+
 function DeferredWidget({
   enabled,
   children,
@@ -43,28 +73,18 @@ function DeferredWidget({
   enabled: boolean;
   children: React.ReactNode;
 }) {
-  const [visible, setVisible] = React.useState(!enabled);
+  const [visible, reveal] = React.useReducer(() => true, !enabled);
   const boundaryRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
-    if (!enabled || visible) return;
+    if (visible || !enabled) return;
     const element = boundaryRef.current;
     if (!element || typeof IntersectionObserver === 'undefined') {
-      setVisible(true);
+      reveal();
       return;
     }
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '320px 0px' },
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [enabled, visible]);
+    return observeWidget(element, reveal);
+  }, [visible, enabled]);
 
   return (
     <div ref={boundaryRef} className="h-full min-h-[inherit]">
@@ -75,8 +95,18 @@ function DeferredWidget({
   );
 }
 
+function widgetGridStyle(widget: WidgetInstance, mobile: boolean): React.CSSProperties {
+  if (!mobile) return {
+    gridColumn: `${widget.layout.x + 1} / span ${widget.layout.w}`,
+    gridRow: `${widget.layout.y + 1} / span ${widget.layout.h}`,
+  };
+  const height = `${Math.min(widget.layout.h * DASHBOARD_ROW_HEIGHT, 480)}px`;
+  return widget.componentType === 'chart' ? { height } : { minHeight: height };
+}
+
 export function DashboardGrid({ widgets, ctx }: DashboardGridProps) {
   const isMobile = useIsMobile();
+  const frames = widgets.map(widget => ({ widget, style: widgetGridStyle(widget, isMobile), deferred: shouldDeferWidget(widget) }));
 
   return (
     <div
@@ -90,24 +120,16 @@ export function DashboardGrid({ widgets, ctx }: DashboardGridProps) {
         gridAutoRows: `${DASHBOARD_ROW_HEIGHT}px`,
       }}
     >
-      {widgets.map((widget) => {
-        const mobileHeight = Math.min(widget.layout.h * DASHBOARD_ROW_HEIGHT, 480);
-        const mobileStyle: React.CSSProperties = widget.componentType === 'chart'
-          ? { height: `${mobileHeight}px` }
-          : { minHeight: `${mobileHeight}px` };
-
+      {frames.map(({ widget, style, deferred }) => {
         return (
           <div
             key={widget.id}
             data-widget-id={widget.id}
             data-widget-type={widget.componentType}
             data-widget-definition={widget.definitionId}
-            style={isMobile ? mobileStyle : {
-              gridColumn: `${widget.layout.x + 1} / span ${widget.layout.w}`,
-              gridRow: `${widget.layout.y + 1} / span ${widget.layout.h}`,
-            }}
+            style={style}
           >
-            <DeferredWidget enabled={shouldDeferWidget(widget)}>
+            <DeferredWidget enabled={deferred}>
               <WidgetChrome instance={widget} ctx={ctx} mode="view" />
             </DeferredWidget>
           </div>

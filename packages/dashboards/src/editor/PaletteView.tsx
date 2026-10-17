@@ -10,15 +10,21 @@ interface PaletteViewProps {
 
 export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
   const [search, setSearch] = useState('');
-  const visibleWidgets = widgets.filter((def) => !getWidgetEditorMeta(def).deprecated && !isLegacyStatWidget(def));
-  const filtered = search.trim()
-    ? visibleWidgets.filter(
-        (def) =>
-          def.title.toLowerCase().includes(search.toLowerCase()) ||
-          def.componentType.toLowerCase().includes(search.toLowerCase()) ||
-          def.definitionId.toLowerCase().includes(search.toLowerCase())
-      )
-    : visibleWidgets;
+  const groups = new Map<string, WidgetDef[]>();
+  const needle = search.trim() ? search.toLowerCase() : '';
+  let matchCount = 0;
+  for (const definition of widgets) {
+    const editor = getWidgetEditorMeta(definition);
+    if (editor.deprecated || isLegacyStatWidget(definition)) continue;
+    const fields = [definition.title, definition.componentType, definition.definitionId];
+    if (needle && !fields.some(field => field.toLowerCase().includes(needle))) continue;
+    const category = editor.category ?? titleCase(definition.componentType);
+    const group = groups.get(category);
+    if (group) group.push(definition);
+    else groups.set(category, [definition]);
+    matchCount++;
+  }
+  const categories = Array.from(groups).sort(([left], [right]) => left.localeCompare(right));
 
   return (
     <div className="flex flex-col">
@@ -42,7 +48,7 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
         </div>
       </div>
       <div className="flex flex-col gap-3 px-3 pb-3">
-        {groupWidgets(filtered).map(([category, defs]) => (
+        {categories.map(([category, defs]) => (
           <section key={category} className="grid gap-1">
             <p className="px-1 text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
               {category}
@@ -72,21 +78,12 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
             })}
           </section>
         ))}
-        {filtered.length === 0 ? (
+        {matchCount === 0 ? (
           <p className="px-3 py-2 text-xs text-fg-tertiary">No widgets found</p>
         ) : null}
       </div>
     </div>
   );
-}
-
-function groupWidgets(widgets: WidgetDef[]) {
-  const groups = new Map<string, WidgetDef[]>();
-  for (const widget of widgets) {
-    const category = getWidgetEditorMeta(widget).category ?? titleCase(widget.componentType);
-    groups.set(category, [...(groups.get(category) ?? []), widget]);
-  }
-  return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
 }
 
 function titleCase(value: string) {

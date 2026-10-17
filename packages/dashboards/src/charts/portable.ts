@@ -74,9 +74,10 @@ function toChartImportDraft(chart: PortableChartDocument['chart']): ChartImportD
 export function downloadChartJson(record: ChartRecord) {
   const blob = new Blob([exportChartJson(record)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${record.slug}.panda-chart.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  try {
+    const anchor = Object.assign(document.createElement('a'), { href: url, download: `${record.slug}.panda-chart.json` });
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
