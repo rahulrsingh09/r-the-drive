@@ -126,29 +126,38 @@ fn active_window(vehicle_id: Uuid, now: DateTime<Utc>) -> Option<Window> {
 /// Whether a capture is running for this vehicle. Cheap enough for hot paths;
 /// callers use it to skip building records nobody will store.
 pub fn is_capturing(vehicle_id: Uuid) -> bool {
-    active_window(vehicle_id, Utc::now()).is_some()
+    let Some(capture) = CAPTURE.get() else {
+        return false;
+    };
+    let Ok(windows) = capture.windows.read() else {
+        return false;
+    };
+    windows
+        .get(&vehicle_id)
+        .is_some_and(|window| window.ends_at > Utc::now())
 }
 
 /// Record one capture event. A no-op when no capture is running (or the
 /// service was never started, as in tests and CLI binaries). Never blocks:
 /// a full channel drops the record and counts it.
 pub fn record(vehicle_id: Uuid, kind: Kind, fields: Value) {
-    let now = Utc::now();
-    let Some(window) = active_window(vehicle_id, now) else {
-        return;
-    };
     let Some(capture) = CAPTURE.get() else {
         return;
     };
-    let record = Record {
-        vehicle_id,
-        capture_id: window.capture_id,
-        recorded_at: now,
-        kind,
-        fields: sanitize(fields),
-    };
-    if capture.tx.try_send(record).is_err() {
-        window.dropped.fetch_add(1, Ordering::Relaxed);
+    let now = Utc::now();
+    if let Some(window) = active_window(vehicle_id, now) {
+        match capture.tx.try_send(Record {
+            vehicle_id,
+            capture_id: window.capture_id,
+            recorded_at: now,
+            kind,
+            fields: sanitize(fields),
+        }) {
+            Ok(()) => {}
+            Err(_) => {
+                window.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 }
 
@@ -175,96 +184,103 @@ const FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 fn is_forbidden_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    FORBIDDEN_KEYS
+    if FORBIDDEN_KEYS
         .iter()
-        .any(|forbidden| lower == forbidden.to_ascii_lowercase())
-        || ["token", "secret", "password", "csrf"]
-            .iter()
-            .any(|needle| lower.contains(needle))
+        .any(|blocked| key.eq_ignore_ascii_case(blocked))
+    {
+        return true;
+    }
+    let lower = key.to_ascii_lowercase();
+    ["token", "secret", "password", "csrf"]
+        .iter()
+        .any(|needle| lower.contains(needle))
 }
 
 /// Remove identifying and location keys at any depth. Call sites already
 /// avoid them; this is the backstop that keeps the file shareable.
 pub fn sanitize(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .filter(|(key, _)| !is_forbidden_key(key))
-                .map(|(key, value)| (key, sanitize(value)))
-                .collect(),
-        ),
-        Value::Array(values) => Value::Array(values.into_iter().map(sanitize).collect()),
-        other => other,
+    let mut value = value;
+    let mut pending = vec![&mut value];
+    while let Some(node) = pending.pop() {
+        match node {
+            Value::Object(object) => {
+                object.retain(|key, _| !is_forbidden_key(key));
+                pending.extend(object.values_mut());
+            }
+            Value::Array(array) => pending.extend(array.iter_mut()),
+            _ => {}
+        }
     }
+    value
 }
 
 /// Non-null fields of a serialized value, without identity or location.
 pub fn present_fields<T: serde::Serialize>(value: &T) -> Value {
-    match serde_json::to_value(value) {
-        Ok(Value::Object(map)) => sanitize(Value::Object(
-            map.into_iter()
-                .filter(|(_, value)| !value.is_null())
-                .collect::<Map<_, _>>(),
-        )),
-        _ => Value::Null,
-    }
+    let Ok(Value::Object(mut fields)) = serde_json::to_value(value) else {
+        return Value::Null;
+    };
+    fields.retain(|_, value| !value.is_null());
+    sanitize(Value::Object(fields))
 }
 
 /// Start the batch writer, expiry, and purge tasks, and restore any capture
 /// that was running when the process stopped.
 pub async fn init(pool: PgPool) -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let capture = Capture {
-        windows: RwLock::new(HashMap::new()),
-        tx,
-    };
-    if CAPTURE.set(capture).is_err() {
-        anyhow::bail!("ingestion capture service already initialised");
-    }
-
-    sqlx::query(
-        "UPDATE panda.vehicle_ingestion_diagnostics \
-         SET stopped_at = enabled_until, stop_reason = 'expired', updated_at = now() \
-         WHERE stopped_at IS NULL AND enabled_until <= now()",
-    )
-    .execute(&pool)
-    .await?;
-    let open = sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>)>(
-        "SELECT vehicle_id, capture_id, enabled_until FROM panda.vehicle_ingestion_diagnostics \
-         WHERE stopped_at IS NULL",
+    CAPTURE
+        .set(Capture {
+            windows: RwLock::default(),
+            tx,
+        })
+        .map_err(|_| anyhow::anyhow!("ingestion capture service already initialised"))?;
+    let open: Vec<(Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as(
+        "WITH expired AS (
+            UPDATE panda.vehicle_ingestion_diagnostics
+            SET stopped_at=enabled_until,stop_reason='expired',updated_at=now()
+            WHERE stopped_at IS NULL AND enabled_until<=now() RETURNING vehicle_id
+         ) SELECT vehicle_id,capture_id,enabled_until FROM panda.vehicle_ingestion_diagnostics
+           WHERE stopped_at IS NULL AND vehicle_id NOT IN (SELECT vehicle_id FROM expired)",
     )
     .fetch_all(&pool)
     .await?;
-    for (vehicle_id, capture_id, ends_at) in open {
-        register(vehicle_id, capture_id, ends_at);
+    open.into_iter()
+        .for_each(|(vehicle, capture, until)| register(vehicle, capture, until));
+    for task in [
+        tokio::spawn(run_writer(pool.clone(), rx)),
+        tokio::spawn(run_expiry(pool.clone())),
+        tokio::spawn(run_purge(pool)),
+    ] {
+        drop(task);
     }
-
-    tokio::spawn(run_writer(pool.clone(), rx));
-    tokio::spawn(run_expiry(pool.clone()));
-    tokio::spawn(run_purge(pool));
     Ok(())
 }
 
 fn register(vehicle_id: Uuid, capture_id: Uuid, ends_at: DateTime<Utc>) {
-    if let Some(capture) = CAPTURE.get() {
-        if let Ok(mut windows) = capture.windows.write() {
-            windows.insert(
-                vehicle_id,
-                Window {
-                    capture_id,
-                    ends_at,
-                    dropped: Arc::new(AtomicU64::new(0)),
-                },
-            );
+    let Some(capture) = CAPTURE.get() else {
+        return;
+    };
+    let Ok(mut windows) = capture.windows.write() else {
+        return;
+    };
+    let window = Window {
+        capture_id,
+        ends_at,
+        dropped: Arc::default(),
+    };
+    match windows.entry(vehicle_id) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(window);
+        }
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            entry.insert(window);
         }
     }
 }
 
 fn unregister(vehicle_id: Uuid) -> Option<Window> {
-    CAPTURE
-        .get()
-        .and_then(|capture| capture.windows.write().ok()?.remove(&vehicle_id))
+    let capture = CAPTURE.get()?;
+    let mut windows = capture.windows.write().ok()?;
+    windows.remove_entry(&vehicle_id).map(|(_, window)| window)
 }
 
 /// Start a new capture, replacing the vehicle's previous one.
@@ -272,33 +288,23 @@ pub async fn start(pool: &PgPool, vehicle_id: Uuid, user_id: Uuid) -> anyhow::Re
     unregister(vehicle_id);
     let capture_id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM panda.vehicle_ingestion_capture_events WHERE vehicle_id = $1")
-        .bind(vehicle_id)
-        .execute(&mut *tx)
-        .await?;
-    let (started_at, ends_at) = sqlx::query_as::<_, (DateTime<Utc>, DateTime<Utc>)>(
-        "INSERT INTO panda.vehicle_ingestion_diagnostics \
-             (vehicle_id, capture_id, started_at, enabled_until, enabled_by, stopped_at, stop_reason, dropped_events) \
-         VALUES ($1, $2, now(), now() + $3::interval, $4, NULL, NULL, 0) \
-         ON CONFLICT (vehicle_id) DO UPDATE SET \
-             capture_id = EXCLUDED.capture_id, started_at = EXCLUDED.started_at, \
-             enabled_until = EXCLUDED.enabled_until, enabled_by = EXCLUDED.enabled_by, \
-             stopped_at = NULL, stop_reason = NULL, dropped_events = 0, updated_at = now() \
-         RETURNING started_at, enabled_until",
-    )
-    .bind(vehicle_id)
-    .bind(capture_id)
-    .bind(CAPTURE_DURATION)
-    .bind(user_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (started_at, ends_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+        "WITH removed AS (DELETE FROM panda.vehicle_ingestion_capture_events WHERE vehicle_id=$1)
+         INSERT INTO panda.vehicle_ingestion_diagnostics
+           (vehicle_id,capture_id,started_at,enabled_until,enabled_by,stopped_at,stop_reason,dropped_events)
+         VALUES($1,$2,now(),now()+$3::interval,$4,NULL,NULL,0)
+         ON CONFLICT(vehicle_id) DO UPDATE SET capture_id=EXCLUDED.capture_id,
+           started_at=EXCLUDED.started_at,enabled_until=EXCLUDED.enabled_until,enabled_by=EXCLUDED.enabled_by,
+           stopped_at=NULL,stop_reason=NULL,dropped_events=0,updated_at=now()
+         RETURNING started_at,enabled_until"
+    ).bind(vehicle_id).bind(capture_id).bind(CAPTURE_DURATION).bind(user_id).fetch_one(&mut *tx).await?;
     insert_marker(
         &mut *tx,
         vehicle_id,
         capture_id,
         started_at,
         Kind::CaptureStarted,
-        serde_json::json!({ "ends_at": ends_at }),
+        serde_json::json!({"ends_at":ends_at}),
     )
     .await?;
     tx.commit().await?;
@@ -309,35 +315,25 @@ pub async fn start(pool: &PgPool, vehicle_id: Uuid, user_id: Uuid) -> anyhow::Re
 /// Stop the running capture, keeping its events for download. Returns false
 /// when no capture was running.
 pub async fn stop(pool: &PgPool, vehicle_id: Uuid, reason: StopReason) -> anyhow::Result<bool> {
-    let window = unregister(vehicle_id);
-    let dropped = window
-        .as_ref()
-        .map_or(0, |window| window.dropped.load(Ordering::Relaxed));
-    let stopped = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
-        "UPDATE panda.vehicle_ingestion_diagnostics \
-         SET stopped_at = LEAST(now(), enabled_until), stop_reason = $2, \
-             dropped_events = dropped_events + $3, updated_at = now() \
-         WHERE vehicle_id = $1 AND stopped_at IS NULL \
-         RETURNING capture_id, stopped_at",
+    let dropped = unregister(vehicle_id).map_or(0, |window| window.dropped.load(Ordering::Relaxed));
+    let stopped: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
+        "UPDATE panda.vehicle_ingestion_diagnostics SET stopped_at=LEAST(now(),enabled_until),
+         stop_reason=$2,dropped_events=dropped_events+$3,updated_at=now()
+         WHERE vehicle_id=$1 AND stopped_at IS NULL RETURNING capture_id,stopped_at",
     )
     .bind(vehicle_id)
     .bind(reason.as_str())
     .bind(i64::try_from(dropped).unwrap_or(i64::MAX))
     .fetch_optional(pool)
     .await?;
-    let Some((capture_id, stopped_at)) = stopped else {
-        return Ok(false);
-    };
-    insert_marker(
-        pool,
-        vehicle_id,
-        capture_id,
-        stopped_at,
-        Kind::CaptureStopped,
-        serde_json::json!({ "reason": reason.as_str(), "dropped_events": dropped }),
-    )
-    .await?;
-    Ok(true)
+    match stopped {
+        None => Ok(false),
+        Some((capture, at)) => {
+            let fields = serde_json::json!({"reason":reason.as_str(),"dropped_events":dropped});
+            insert_marker(pool, vehicle_id, capture, at, Kind::CaptureStopped, fields).await?;
+            Ok(true)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -145,41 +145,42 @@ pub fn load_fixture() -> Result<DemoFixtureSpec, AppError> {
 }
 
 pub fn validate_fixture(fixture: &DemoFixtureSpec) -> Result<(), AppError> {
-    if fixture.schema_version != 1 {
-        return Err(AppError::Validation(format!(
+    let problem = if fixture.schema_version != 1 {
+        Some(format!(
             "unsupported demo fixture schema version {}",
             fixture.schema_version
-        )));
-    }
-    if fixture.source_model != "R1S" || fixture.window_days != 14 {
-        return Err(AppError::Validation(
-            "demo fixture must be a 14-day sanitized R1S profile".into(),
-        ));
-    }
-    if !(1_000..=20_000).contains(&fixture.telemetry_rows)
-        || !(7..=14).contains(&fixture.active_days)
-        || !(10..=100).contains(&fixture.trip_count)
-        || !(2..=20).contains(&fixture.charge_count)
-        || fixture.weather_sample_count < fixture.trip_count
-    {
-        return Err(AppError::Validation(
-            "demo fixture density is outside the approved bounds".into(),
-        ));
-    }
-    for (name, value) in [
-        ("location", fixture.coverage.location),
-        ("battery", fixture.coverage.battery),
-        ("tires", fixture.coverage.tires),
-        ("doors", fixture.coverage.doors),
-        ("outside_temperature", fixture.coverage.outside_temperature),
-    ] {
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            return Err(AppError::Validation(format!(
-                "demo fixture coverage '{name}' must be between zero and one"
-            )));
+        ))
+    } else if fixture.source_model != "R1S" || fixture.window_days != 14 {
+        Some("demo fixture must be a 14-day sanitized R1S profile".into())
+    } else {
+        let density = [
+            (fixture.telemetry_rows, 1_000, 20_000),
+            (i64::from(fixture.active_days), 7, 14),
+            (i64::from(fixture.trip_count), 10, 100),
+            (i64::from(fixture.charge_count), 2, 20),
+        ];
+        if density
+            .iter()
+            .any(|(value, min, max)| !(min..=max).contains(&value))
+            || fixture.weather_sample_count < fixture.trip_count
+        {
+            Some("demo fixture density is outside the approved bounds".into())
+        } else {
+            [
+                ("location", fixture.coverage.location),
+                ("battery", fixture.coverage.battery),
+                ("tires", fixture.coverage.tires),
+                ("doors", fixture.coverage.doors),
+                ("outside_temperature", fixture.coverage.outside_temperature),
+            ]
+            .into_iter()
+            .find_map(|(name, value)| {
+                (!value.is_finite() || !(0.0..=1.0).contains(&value))
+                    .then(|| format!("demo fixture coverage '{name}' must be between zero and one"))
+            })
         }
-    }
-    Ok(())
+    };
+    problem.map_or(Ok(()), |message| Err(AppError::Validation(message)))
 }
 
 /// Serialize create-if-missing requests and recheck authority under the user lock.
@@ -335,36 +336,34 @@ async fn clear_seeded_history(
 }
 
 async fn ensure_demo_addresses(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Uuid>, AppError> {
-    let mut ids = Vec::with_capacity(DEMO_ADDRESSES.len());
-    for (index, address) in DEMO_ADDRESSES.iter().enumerate() {
-        let osm_id = DEMO_OSM_ID_BASE - index as i64;
-        let id = sqlx::query_scalar::<_, Uuid>(
-            r#"INSERT INTO panda.addresses
-                 (display_name, osm_id, latitude, longitude, road, city, state, country, raw)
-               VALUES ($1, $2, $3, $4, $5, $6, 'DC', 'US',
-                       jsonb_build_object('source', 'panda_demo_fixture', 'fixture_version', 1))
-               ON CONFLICT (osm_id) DO UPDATE
-               SET display_name = EXCLUDED.display_name,
-                   latitude = EXCLUDED.latitude,
-                   longitude = EXCLUDED.longitude,
-                   road = EXCLUDED.road,
-                   city = EXCLUDED.city,
-                   state = EXCLUDED.state,
-                   country = EXCLUDED.country,
-                   raw = EXCLUDED.raw
-               RETURNING id"#,
-        )
-        .bind(address.label)
-        .bind(osm_id)
-        .bind(address.latitude)
-        .bind(address.longitude)
-        .bind(address.road)
-        .bind(address.city)
-        .fetch_one(&mut **tx)
-        .await?;
-        ids.push(id);
-    }
-    Ok(ids)
+    let labels: Vec<_> = DEMO_ADDRESSES.iter().map(|address| address.label).collect();
+    let osm: Vec<_> = (0..DEMO_ADDRESSES.len())
+        .map(|index| DEMO_OSM_ID_BASE - index as i64)
+        .collect();
+    let latitudes: Vec<_> = DEMO_ADDRESSES
+        .iter()
+        .map(|address| address.latitude)
+        .collect();
+    let longitudes: Vec<_> = DEMO_ADDRESSES
+        .iter()
+        .map(|address| address.longitude)
+        .collect();
+    let roads: Vec<_> = DEMO_ADDRESSES.iter().map(|address| address.road).collect();
+    let cities: Vec<_> = DEMO_ADDRESSES.iter().map(|address| address.city).collect();
+    let mut rows: Vec<(i64, Uuid)> = sqlx::query_as(
+        "INSERT INTO panda.addresses(display_name,osm_id,latitude,longitude,road,city,state,country,raw)
+         SELECT label,osm,lat,lng,road,city,'DC','US',
+            jsonb_build_object('source','panda_demo_fixture','fixture_version',1)
+         FROM unnest($1::text[],$2::bigint[],$3::float8[],$4::float8[],$5::text[],$6::text[])
+            AS input(label,osm,lat,lng,road,city)
+         ON CONFLICT(osm_id) DO UPDATE SET display_name=EXCLUDED.display_name,
+            latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,road=EXCLUDED.road,
+            city=EXCLUDED.city,state=EXCLUDED.state,country=EXCLUDED.country,raw=EXCLUDED.raw
+         RETURNING osm_id,id"
+    ).bind(labels).bind(osm).bind(latitudes).bind(longitudes).bind(roads).bind(cities)
+        .fetch_all(&mut **tx).await?;
+    rows.sort_by_key(|(osm, _)| std::cmp::Reverse(*osm));
+    Ok(rows.into_iter().map(|(_, id)| id).collect())
 }
 
 async fn seed_trips(
@@ -612,16 +611,19 @@ async fn seed_software_history(
     vehicle_id: Uuid,
     anchor: DateTime<Utc>,
 ) -> Result<(), AppError> {
+    let versions = ["2026.10.0", "2026.14.0", "2026.18.0"];
+    let starts = [120i32, 45, 14];
+    let ends = [Some(45i32), Some(14), None];
     sqlx::query(
-        r#"INSERT INTO panda.software_versions
-             (vehicle_id, version, installed_at, observed_until)
-           VALUES
-             ($1, '2026.10.0', $2 - interval '120 days', $2 - interval '45 days'),
-             ($1, '2026.14.0', $2 - interval '45 days', $2 - interval '14 days'),
-             ($1, '2026.18.0', $2 - interval '14 days', NULL)"#,
+        "INSERT INTO panda.software_versions(vehicle_id,version,installed_at,observed_until)
+         SELECT $1,version,$2 - make_interval(days=>start_days),$2 - make_interval(days=>end_days)
+         FROM unnest($3::text[],$4::int[],$5::int[]) AS release(version,start_days,end_days)",
     )
     .bind(vehicle_id)
     .bind(anchor)
+    .bind(&versions[..])
+    .bind(&starts[..])
+    .bind(&ends[..])
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -634,108 +636,111 @@ async fn seed_latest_status(
     anchor: DateTime<Utc>,
     profile: ModelProfile,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        r#"INSERT INTO panda.vehicle_latest_status
-             (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi,
-              battery_limit, power_state, charger_state, charger_state_ts, charger_status,
-              time_to_end_of_charge_min, drive_mode, gear_status, altitude_m, speed_mph,
-              cabin_temp_c, driver_temp_c, heading_deg, odometer_miles,
-              tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-              tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
-              tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
-              door_front_left_locked, door_front_right_locked, door_rear_left_locked,
-              door_rear_right_locked, door_front_left_closed, door_front_right_closed,
-              door_rear_left_closed, door_rear_right_closed, closure_frunk_locked,
-              closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
-              closure_tailgate_locked, closure_tailgate_closed, ota_current_version,
-              ota_status, ota_current_status, hv_thermal_event, twelve_volt_health,
-              charge_port_open, charger_derate_active, cabin_precon_status,
-              cabin_precon_type, pet_mode_active, pet_mode_temp_ok, defrost_active,
-              steering_wheel_heat, seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat,
-              seat_fl_vent, seat_fr_vent, tonneau_locked, tonneau_closed,
-              side_bin_left_locked, side_bin_right_locked, side_bin_left_closed,
-              side_bin_right_closed, window_fl_closed, window_fr_closed, window_rl_closed,
-              window_rr_closed, gear_guard_locked, gear_guard_video_status,
-              wiper_fluid_low, brake_fluid_low, alarm_active, service_mode, updated_at)
-           VALUES
-             ($1,$2,68,$3,$4,85,'ready','Connected',$2,'chrgr_sts_connected_no_chrg',NULL,
-              'all_purpose','park',18,0,22.1,21.0,118,15062,
-              48.1,48.0,49.8,49.7,'normal','normal','normal','normal',
-              TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,
-              TRUE,TRUE,
-              CASE WHEN $5::bool THEN TRUE END, CASE WHEN $5::bool THEN TRUE END,
-              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
-              '2026.18.0','idle','up_to_date','none','normal',
-              TRUE,FALSE,'off','none',FALSE,TRUE,FALSE,0,0,0,0,0,0,0,
-              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
-              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
-              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
-              TRUE,TRUE,TRUE,TRUE,TRUE,'idle',FALSE,FALSE,FALSE,FALSE,$2)
-           ON CONFLICT (vehicle_id) DO UPDATE SET
-             ts=EXCLUDED.ts, battery_level=EXCLUDED.battery_level,
-             battery_capacity_wh=EXCLUDED.battery_capacity_wh,
-             distance_to_empty_mi=EXCLUDED.distance_to_empty_mi,
-             battery_limit=EXCLUDED.battery_limit, power_state=EXCLUDED.power_state,
-             charger_state=EXCLUDED.charger_state, charger_state_ts=EXCLUDED.charger_state_ts,
-             charger_status=EXCLUDED.charger_status, time_to_end_of_charge_min=EXCLUDED.time_to_end_of_charge_min,
-             drive_mode=EXCLUDED.drive_mode, gear_status=EXCLUDED.gear_status,
-             altitude_m=EXCLUDED.altitude_m, speed_mph=EXCLUDED.speed_mph,
-             cabin_temp_c=EXCLUDED.cabin_temp_c, driver_temp_c=EXCLUDED.driver_temp_c,
-             heading_deg=EXCLUDED.heading_deg, odometer_miles=EXCLUDED.odometer_miles,
-             tire_fl_psi=EXCLUDED.tire_fl_psi, tire_fr_psi=EXCLUDED.tire_fr_psi,
-             tire_rl_psi=EXCLUDED.tire_rl_psi, tire_rr_psi=EXCLUDED.tire_rr_psi,
-             tire_fl_status=EXCLUDED.tire_fl_status, tire_fr_status=EXCLUDED.tire_fr_status,
-             tire_rl_status=EXCLUDED.tire_rl_status, tire_rr_status=EXCLUDED.tire_rr_status,
-             tire_fl_valid=EXCLUDED.tire_fl_valid, tire_fr_valid=EXCLUDED.tire_fr_valid,
-             tire_rl_valid=EXCLUDED.tire_rl_valid, tire_rr_valid=EXCLUDED.tire_rr_valid,
-             door_front_left_locked=EXCLUDED.door_front_left_locked,
-             door_front_right_locked=EXCLUDED.door_front_right_locked,
-             door_rear_left_locked=EXCLUDED.door_rear_left_locked,
-             door_rear_right_locked=EXCLUDED.door_rear_right_locked,
-             door_front_left_closed=EXCLUDED.door_front_left_closed,
-             door_front_right_closed=EXCLUDED.door_front_right_closed,
-             door_rear_left_closed=EXCLUDED.door_rear_left_closed,
-             door_rear_right_closed=EXCLUDED.door_rear_right_closed,
-             closure_frunk_locked=EXCLUDED.closure_frunk_locked,
-             closure_frunk_closed=EXCLUDED.closure_frunk_closed,
-             closure_liftgate_locked=EXCLUDED.closure_liftgate_locked,
-             closure_liftgate_closed=EXCLUDED.closure_liftgate_closed,
-             closure_tailgate_locked=EXCLUDED.closure_tailgate_locked,
-             closure_tailgate_closed=EXCLUDED.closure_tailgate_closed,
-             ota_current_version=EXCLUDED.ota_current_version, ota_status=EXCLUDED.ota_status,
-             ota_current_status=EXCLUDED.ota_current_status,
-             hv_thermal_event=EXCLUDED.hv_thermal_event, twelve_volt_health=EXCLUDED.twelve_volt_health,
-             charge_port_open=EXCLUDED.charge_port_open,
-             charger_derate_active=EXCLUDED.charger_derate_active,
-             cabin_precon_status=EXCLUDED.cabin_precon_status,
-             cabin_precon_type=EXCLUDED.cabin_precon_type,
-             pet_mode_active=EXCLUDED.pet_mode_active, pet_mode_temp_ok=EXCLUDED.pet_mode_temp_ok,
-             defrost_active=EXCLUDED.defrost_active, steering_wheel_heat=EXCLUDED.steering_wheel_heat,
-             seat_fl_heat=EXCLUDED.seat_fl_heat, seat_fr_heat=EXCLUDED.seat_fr_heat,
-             seat_rl_heat=EXCLUDED.seat_rl_heat, seat_rr_heat=EXCLUDED.seat_rr_heat,
-             seat_fl_vent=EXCLUDED.seat_fl_vent, seat_fr_vent=EXCLUDED.seat_fr_vent,
-             tonneau_locked=EXCLUDED.tonneau_locked, tonneau_closed=EXCLUDED.tonneau_closed,
-             side_bin_left_locked=EXCLUDED.side_bin_left_locked,
-             side_bin_right_locked=EXCLUDED.side_bin_right_locked,
-             side_bin_left_closed=EXCLUDED.side_bin_left_closed,
-             side_bin_right_closed=EXCLUDED.side_bin_right_closed,
-             window_fl_closed=EXCLUDED.window_fl_closed, window_fr_closed=EXCLUDED.window_fr_closed,
-             window_rl_closed=EXCLUDED.window_rl_closed, window_rr_closed=EXCLUDED.window_rr_closed,
-             gear_guard_locked=EXCLUDED.gear_guard_locked,
-             gear_guard_video_status=EXCLUDED.gear_guard_video_status,
-             wiper_fluid_low=EXCLUDED.wiper_fluid_low, brake_fluid_low=EXCLUDED.brake_fluid_low,
-             alarm_active=EXCLUDED.alarm_active, service_mode=EXCLUDED.service_mode,
-             updated_at=EXCLUDED.updated_at"#,
-    )
-    .bind(vehicle_id)
-    .bind(anchor)
-    .bind(profile.capacity_wh)
-    .bind(profile.max_range_mi * 0.68)
-    .bind(profile.has_liftgate)
-    .bind(profile.has_truck_closures)
-    .execute(&mut **tx)
-    .await?;
-
+    let sample = serde_json::json!({
+        "vehicle_id": vehicle_id,
+        "ts": anchor.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        "battery_level": 68,
+        "battery_capacity_wh": profile.capacity_wh,
+        "distance_to_empty_mi": profile.max_range_mi * 0.68,
+        "battery_limit": 85,
+        "power_state": "ready",
+        "charger_state": "Connected",
+        "charger_state_ts": anchor.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        "charger_status": "chrgr_sts_connected_no_chrg",
+        "time_to_end_of_charge_min": None::<bool>,
+        "drive_mode": "all_purpose",
+        "gear_status": "park",
+        "altitude_m": 18,
+        "speed_mph": 0,
+        "cabin_temp_c": 22.1,
+        "driver_temp_c": 21.0,
+        "heading_deg": 118,
+        "odometer_miles": 15062,
+        "tire_fl_psi": 48.1,
+        "tire_fr_psi": 48.0,
+        "tire_rl_psi": 49.8,
+        "tire_rr_psi": 49.7,
+        "tire_fl_status": "normal",
+        "tire_fr_status": "normal",
+        "tire_rl_status": "normal",
+        "tire_rr_status": "normal",
+        "tire_fl_valid": true,
+        "tire_fr_valid": true,
+        "tire_rl_valid": true,
+        "tire_rr_valid": true,
+        "door_front_left_locked": true,
+        "door_front_right_locked": true,
+        "door_rear_left_locked": true,
+        "door_rear_right_locked": true,
+        "door_front_left_closed": true,
+        "door_front_right_closed": true,
+        "door_rear_left_closed": true,
+        "door_rear_right_closed": true,
+        "closure_frunk_locked": true,
+        "closure_frunk_closed": true,
+        "closure_liftgate_locked": profile.has_liftgate.then_some(true),
+        "closure_liftgate_closed": profile.has_liftgate.then_some(true),
+        "closure_tailgate_locked": profile.has_truck_closures.then_some(true),
+        "closure_tailgate_closed": profile.has_truck_closures.then_some(true),
+        "ota_current_version": "2026.18.0",
+        "ota_status": "idle",
+        "ota_current_status": "up_to_date",
+        "hv_thermal_event": "none",
+        "twelve_volt_health": "normal",
+        "charge_port_open": true,
+        "charger_derate_active": false,
+        "cabin_precon_status": "off",
+        "cabin_precon_type": "none",
+        "pet_mode_active": false,
+        "pet_mode_temp_ok": true,
+        "defrost_active": false,
+        "steering_wheel_heat": 0,
+        "seat_fl_heat": 0,
+        "seat_fr_heat": 0,
+        "seat_rl_heat": 0,
+        "seat_rr_heat": 0,
+        "seat_fl_vent": 0,
+        "seat_fr_vent": 0,
+        "tonneau_locked": profile.has_truck_closures.then_some(true),
+        "tonneau_closed": profile.has_truck_closures.then_some(true),
+        "side_bin_left_locked": profile.has_truck_closures.then_some(true),
+        "side_bin_right_locked": profile.has_truck_closures.then_some(true),
+        "side_bin_left_closed": profile.has_truck_closures.then_some(true),
+        "side_bin_right_closed": profile.has_truck_closures.then_some(true),
+        "window_fl_closed": true,
+        "window_fr_closed": true,
+        "window_rl_closed": true,
+        "window_rr_closed": true,
+        "gear_guard_locked": true,
+        "gear_guard_video_status": "idle",
+        "wiper_fluid_low": false,
+        "brake_fluid_low": false,
+        "alarm_active": false,
+        "service_mode": false,
+        "updated_at": anchor.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+    });
+    let columns: Vec<_> = sample
+        .as_object()
+        .expect("fixed status object")
+        .keys()
+        .cloned()
+        .collect();
+    let updates: Vec<_> = columns
+        .iter()
+        .filter(|name| name.as_str() != "vehicle_id")
+        .map(|name| format!("{name}=EXCLUDED.{name}"))
+        .collect();
+    let columns = columns.join(",");
+    let statement = format!(
+        "INSERT INTO panda.vehicle_latest_status({columns})
+         SELECT {columns} FROM jsonb_populate_record(NULL::panda.vehicle_latest_status,$1::jsonb)
+         ON CONFLICT(vehicle_id) DO UPDATE SET {}",
+        updates.join(",")
+    );
+    sqlx::query(sqlx::AssertSqlSafe(statement))
+        .bind(sample)
+        .execute(&mut **tx)
+        .await?;
     sqlx::query(
         r#"INSERT INTO panda.vehicle_runtime_state
              (vehicle_id, is_online, last_event_at, worker_health, worker_health_msg, updated_at)
@@ -757,30 +762,13 @@ async fn read_seed_counts(
     tx: &mut Transaction<'_, Postgres>,
     vehicle_id: Uuid,
 ) -> Result<DemoSeedCounts, AppError> {
-    let telemetry = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM timeseries.telemetry WHERE vehicle_id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    let trips =
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM panda.trips WHERE vehicle_id=$1")
-            .bind(vehicle_id)
-            .fetch_one(&mut **tx)
-            .await?;
-    let charges = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM panda.charge_sessions WHERE vehicle_id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    let weather_samples = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM panda.trip_weather_samples tw
-         JOIN panda.trips t ON t.id=tw.trip_id WHERE t.vehicle_id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let (telemetry, trips, charges, weather_samples) = sqlx::query_as(
+        "SELECT
+          (SELECT count(*) FROM timeseries.telemetry WHERE vehicle_id=$1),
+          (SELECT count(*) FROM panda.trips WHERE vehicle_id=$1),
+          (SELECT count(*) FROM panda.charge_sessions WHERE vehicle_id=$1),
+          (SELECT count(*) FROM panda.trip_weather_samples sample JOIN panda.trips trip ON trip.id=sample.trip_id WHERE trip.vehicle_id=$1)"
+    ).bind(vehicle_id).fetch_one(&mut **tx).await?;
     Ok(DemoSeedCounts {
         telemetry,
         trips,

@@ -99,14 +99,19 @@ fn simplify_indices(points: &[(f64, f64)], tolerance_meters: f64) -> Vec<usize> 
 }
 
 fn squared_segment_distance(point: (f64, f64), start: (f64, f64), end: (f64, f64)) -> f64 {
-    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
-    if dx == 0.0 && dy == 0.0 {
-        return (point.0 - start.0).powi(2) + (point.1 - start.1).powi(2);
-    }
-
-    let projection = ((point.0 - start.0) * dx + (point.1 - start.1) * dy) / (dx * dx + dy * dy);
-    let projection = projection.clamp(0.0, 1.0);
-    let closest = (start.0 + projection * dx, start.1 + projection * dy);
+    let direction = [end.0 - start.0, end.1 - start.1];
+    let offset = [point.0 - start.0, point.1 - start.1];
+    let closest = if direction == [0.0, 0.0] {
+        start
+    } else {
+        let along = (offset[0] * direction[0] + offset[1] * direction[1])
+            / (direction[0] * direction[0] + direction[1] * direction[1]);
+        let along = along.clamp(0.0, 1.0);
+        (
+            start.0 + along * direction[0],
+            start.1 + along * direction[1],
+        )
+    };
     (point.0 - closest.0).powi(2) + (point.1 - closest.1).powi(2)
 }
 

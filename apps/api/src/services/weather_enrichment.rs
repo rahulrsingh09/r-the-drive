@@ -77,32 +77,39 @@ pub fn start_worker(pool: PgPool, age_key: String) -> tokio::task::JoinHandle<()
                 return;
             }
         };
-
+        let next_job = tokio::time::sleep(Duration::ZERO);
+        tokio::pin!(next_job);
         loop {
-            match process_next_job(&pool, &client, &age_key).await {
-                Ok(true) => tokio::time::sleep(Duration::from_secs(1)).await,
-                Ok(false) => tokio::time::sleep(Duration::from_secs(30)).await,
+            next_job.as_mut().await;
+            let wait = match process_next_job(&pool, &client, &age_key).await {
+                Ok(worked) => {
+                    if worked {
+                        1
+                    } else {
+                        30
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(error = %error, "weather_enrichment.worker_iteration_failed");
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    30
                 }
-            }
+            };
+            next_job
+                .as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_secs(wait));
         }
     })
 }
 
 pub async fn enqueue(pool: &PgPool, trip_id: Uuid) -> Result<()> {
-    sqlx::query(
-        r#"INSERT INTO panda.weather_enrichment_jobs
-             (trip_id, status, attempts, next_attempt_at, last_error, updated_at, completed_at)
-           VALUES ($1, 'pending', 0, now(), NULL, now(), NULL)
-           ON CONFLICT (trip_id) DO UPDATE SET
-             status = CASE WHEN panda.weather_enrichment_jobs.status = 'succeeded' THEN 'succeeded' ELSE 'pending' END,
-             next_attempt_at = now(), last_error = NULL, updated_at = now()"#,
-    )
-    .bind(trip_id)
-    .execute(pool)
-    .await?;
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "INSERT INTO panda.weather_enrichment_jobs(trip_id,status,attempts,next_attempt_at,last_error,updated_at,completed_at) VALUES("
+    );
+    query.push_bind(trip_id).push(", 'pending',0,now(),NULL,now(),NULL)
+        ON CONFLICT(trip_id) DO UPDATE SET status=CASE panda.weather_enrichment_jobs.status
+            WHEN 'succeeded' THEN panda.weather_enrichment_jobs.status ELSE EXCLUDED.status END,
+        next_attempt_at=EXCLUDED.next_attempt_at,last_error=EXCLUDED.last_error,updated_at=EXCLUDED.updated_at");
+    query.build().execute(pool).await?;
     Ok(())
 }
 
@@ -321,15 +328,30 @@ async fn store_estimates(
         .bind(trip_id)
         .execute(&mut *tx)
         .await?;
-    for (target, temp) in enriched {
+    if !enriched.is_empty() {
+        let times: Vec<_> = enriched
+            .iter()
+            .map(|(target, _)| target.sampled_at)
+            .collect();
+        let elapsed: Vec<_> = enriched
+            .iter()
+            .map(|(target, _)| target.elapsed_seconds)
+            .collect();
+        let latitudes: Vec<_> = enriched
+            .iter()
+            .map(|(target, _)| target.provider_lat)
+            .collect();
+        let longitudes: Vec<_> = enriched
+            .iter()
+            .map(|(target, _)| target.provider_lng)
+            .collect();
+        let temperatures: Vec<_> = enriched.iter().map(|(_, temp)| *temp).collect();
         sqlx::query(
-            r#"INSERT INTO panda.trip_weather_samples
-                 (trip_id, sampled_at, elapsed_seconds, provider_latitude, provider_longitude, temperature_c)
-               VALUES ($1,$2,$3,$4,$5,$6)"#,
-        )
-        .bind(trip_id).bind(target.sampled_at).bind(target.elapsed_seconds)
-        .bind(target.provider_lat).bind(target.provider_lng).bind(temp)
-        .execute(&mut *tx).await?;
+            "INSERT INTO panda.trip_weather_samples(trip_id,sampled_at,elapsed_seconds,provider_latitude,provider_longitude,temperature_c)
+             SELECT $1,at,elapsed,lat,lng,temp FROM unnest($2::timestamptz[],$3::int[],$4::float8[],$5::float8[],$6::float8[])
+                AS samples(at,elapsed,lat,lng,temp)"
+        ).bind(trip_id).bind(times).bind(elapsed).bind(latitudes).bind(longitudes).bind(temperatures)
+            .execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE panda.trips SET outside_temp_c=$2, outside_temp_source=$3 WHERE id=$1")
         .bind(trip_id)
@@ -398,17 +420,23 @@ fn history_weather_target(
 }
 
 fn unique_weather_cells(targets: &[TargetSample]) -> Vec<WeatherCell> {
-    let mut cells_by_key = HashMap::<String, WeatherCell>::new();
-    for target in targets {
-        cells_by_key
-            .entry(target.cell_key.clone())
-            .or_insert_with(|| WeatherCell {
-                key: target.cell_key.clone(),
-                lat: target.provider_lat,
-                lng: target.provider_lng,
-            });
-    }
-    cells_by_key.into_values().collect()
+    targets
+        .iter()
+        .fold(HashMap::new(), |mut cells, target| {
+            if !cells.contains_key(&target.cell_key) {
+                cells.insert(
+                    target.cell_key.clone(),
+                    WeatherCell {
+                        key: target.cell_key.clone(),
+                        lat: target.provider_lat,
+                        lng: target.provider_lng,
+                    },
+                );
+            }
+            cells
+        })
+        .into_values()
+        .collect()
 }
 
 async fn fetch_weather_chunk(
@@ -429,40 +457,37 @@ async fn fetch_weather_chunk(
 fn pick_closest_temp(body: &Value, target: DateTime<Utc>) -> Option<f64> {
     let times = body.pointer("/hourly/time")?.as_array()?;
     let temps = body.pointer("/hourly/temperature_2m")?.as_array()?;
-    times
-        .iter()
-        .zip(temps)
-        .filter_map(|(time, temp)| {
-            let raw = time.as_str()?;
-            let parsed = chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M")
-                .ok()?
-                .and_utc();
-            Some(((parsed - target).num_seconds().abs(), temp.as_f64()?))
-        })
-        .min_by_key(|(distance, _)| *distance)
-        .filter(|(distance, _)| *distance <= 3600)
-        .map(|(_, temp)| temp)
+    let mut best: Option<(i64, f64)> = None;
+    for (time, temp) in times.iter().zip(temps) {
+        let (Some(raw), Some(temp)) = (time.as_str(), temp.as_f64()) else {
+            continue;
+        };
+        let Ok(at) = chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M") else {
+            continue;
+        };
+        let distance = (at.and_utc() - target).num_seconds().abs();
+        if best.is_none_or(|(previous, _)| distance < previous) {
+            best = Some((distance, temp));
+        }
+    }
+    best.and_then(|(distance, value)| (distance <= 3600).then_some(value))
 }
 
 fn time_weighted_average(values: &[(DateTime<Utc>, f64)]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
+    let &(first_at, first_value) = values.first()?;
+    let mut previous = (first_at, first_value);
+    let (mut weighted, mut seconds) = (0.0, 0.0);
+    for &(at, value) in &values[1..] {
+        let span = (at - previous.0).num_seconds().max(0) as f64;
+        weighted += ((previous.1 + value) / 2.0) * span;
+        seconds += span;
+        previous = (at, value);
     }
-    if values.len() == 1 {
-        return Some(values[0].1);
-    }
-    let mut weighted = 0.0;
-    let mut seconds = 0.0;
-    for pair in values.windows(2) {
-        let duration = (pair[1].0 - pair[0].0).num_seconds().max(0) as f64;
-        weighted += ((pair[0].1 + pair[1].1) / 2.0) * duration;
-        seconds += duration;
-    }
-    if seconds > 0.0 {
-        Some(weighted / seconds)
+    Some(if seconds > 0.0 {
+        weighted / seconds
     } else {
-        Some(values[0].1)
-    }
+        first_value
+    })
 }
 
 #[cfg(test)]

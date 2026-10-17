@@ -257,47 +257,47 @@ struct BundledRendererCurve {
 }
 
 fn id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 80
-        && value.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-        })
+    match value.as_bytes() {
+        [] => false,
+        bytes if bytes.len() > 80 => false,
+        bytes => !bytes
+            .iter()
+            .any(|byte| !matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-')),
+    }
 }
 fn finite(value: f64) -> bool {
     value.is_finite()
 }
 
 fn valid_chart_color_token(token: &str) -> bool {
-    matches!(
-        token,
-        "accent"
-            | "emerald"
-            | "amber"
-            | "sky"
-            | "violet"
-            | "rose"
-            | "teal"
-            | "indigo"
-            | "success"
-            | "warning"
-            | "danger"
-            | "muted"
-    ) || token
-        .strip_prefix("series-")
-        .and_then(|slot| slot.parse::<u8>().ok())
-        .is_some_and(|slot| token.len() == 9 && (1..=16).contains(&slot))
+    const NAMED: [&str; 12] = [
+        "accent", "emerald", "amber", "sky", "violet", "rose", "teal", "indigo", "success",
+        "warning", "danger", "muted",
+    ];
+    if NAMED.contains(&token) {
+        return true;
+    }
+    match token.strip_prefix("series-") {
+        Some(slot) if token.len() == 9 => slot.parse::<u8>().is_ok_and(|n| (1..=16).contains(&n)),
+        _ => false,
+    }
 }
 
 fn valid_custom_color(color: &str) -> bool {
-    let color = color.trim();
-    let lowercase = color.to_ascii_lowercase();
-    let hex = color.strip_prefix('#').is_some_and(|value| {
-        [3, 4, 6, 8].contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-    });
-    let functional = ["rgb(", "rgba(", "hsl(", "hsla("]
+    let value = color.trim();
+    if let Some(digits) = value.strip_prefix('#') {
+        return matches!(digits.len(), 3 | 4 | 6 | 8)
+            && digits.bytes().all(|digit| digit.is_ascii_hexdigit());
+    }
+    if value.len() > 86 || !value.ends_with(')') {
+        return false;
+    }
+    let Some((function, _)) = value.split_once('(') else {
+        return false;
+    };
+    ["rgb", "rgba", "hsl", "hsla"]
         .iter()
-        .any(|prefix| lowercase.starts_with(prefix) && color.ends_with(')') && color.len() <= 86);
-    hex || functional
+        .any(|name| function.eq_ignore_ascii_case(name))
 }
 
 pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartValidationError>> {
@@ -361,80 +361,82 @@ fn finite_options(value: Option<f64>, min: f64, max: f64) -> bool {
         .unwrap_or(true)
 }
 fn valid_filter_value(value: &Value) -> bool {
-    match value {
-        Value::String(s) => s.len() <= 160,
-        Value::Number(n) => n.as_f64().is_some_and(f64::is_finite),
-        Value::Bool(_) | Value::Null => true,
-        Value::Array(items) => {
-            items.len() <= 100
-                && items.iter().all(|item| match item {
-                    Value::String(s) => s.len() <= 160,
-                    Value::Number(n) => n.as_f64().is_some_and(f64::is_finite),
-                    _ => false,
-                })
+    fn scalar(value: &Value) -> bool {
+        match value {
+            Value::String(text) => text.len() <= 160,
+            Value::Number(number) => number.as_f64().is_some_and(f64::is_finite),
+            _ => false,
         }
-        _ => false,
+    }
+    if let Value::Array(items) = value {
+        items.len() <= 100 && items.iter().all(scalar)
+    } else {
+        matches!(value, Value::Null | Value::Bool(_)) || scalar(value)
     }
 }
 fn validate_transform(
     transform: &ChartTransformDefinition,
     errors: &mut Vec<ChartValidationError>,
 ) {
-    match transform {
+    let (valid, path, message) = match transform {
         ChartTransformDefinition::Scale { factor }
-        | ChartTransformDefinition::HistogramBin { size: factor }
-            if !finite(*factor) || *factor <= 0.0 =>
-        {
-            errors.push(error(
-                "config.series.transforms",
-                "Transform numeric values must be finite and positive",
-            ))
-        }
-        ChartTransformDefinition::Offset { amount } if !finite(*amount) => errors.push(error(
+        | ChartTransformDefinition::HistogramBin { size: factor } => (
+            finite(*factor) && *factor > 0.0,
+            "config.series.transforms",
+            "Transform numeric values must be finite and positive",
+        ),
+        ChartTransformDefinition::Offset { amount } => (
+            finite(*amount),
             "config.series.transforms",
             "Transform numeric values must be finite",
-        )),
+        ),
         ChartTransformDefinition::RollingAverage { window }
-        | ChartTransformDefinition::RollingMedian { window }
-            if !(2..=1000).contains(window) =>
-        {
-            errors.push(error(
-                "config.series.transforms",
-                "Transform windows must be between 2 and 1000",
-            ))
-        }
-        ChartTransformDefinition::FixedTimeBin { milliseconds }
-            if *milliseconds == 0 || *milliseconds > 31_536_000_000 =>
-        {
-            errors.push(error(
-                "config.series.transforms",
-                "Transform bin is out of bounds",
-            ))
-        }
-        ChartTransformDefinition::Expression { formula }
-            if formula.trim().is_empty() || formula.len() > 512 =>
-        {
-            errors.push(error(
-                "config.series.transforms.formula",
-                "Expression is empty or too long",
-            ))
-        }
-        _ => {}
+        | ChartTransformDefinition::RollingMedian { window } => (
+            (2..=1000).contains(window),
+            "config.series.transforms",
+            "Transform windows must be between 2 and 1000",
+        ),
+        ChartTransformDefinition::FixedTimeBin { milliseconds } => (
+            (1..=31_536_000_000).contains(milliseconds),
+            "config.series.transforms",
+            "Transform bin is out of bounds",
+        ),
+        ChartTransformDefinition::Expression { formula } => (
+            !formula.trim().is_empty() && formula.len() <= 512,
+            "config.series.transforms.formula",
+            "Expression is empty or too long",
+        ),
+        _ => return,
+    };
+    if !valid {
+        errors.push(error(path, message));
     }
 }
 fn validate_axis(axis: &ChartAxisDefinition, errors: &mut Vec<ChartValidationError>) {
-    if !["linear", "log"].contains(&axis.scale.as_str()) {
-        errors.push(error("config.axes", "Unsupported axis scale"));
-    }
-    if let ChartAxisDomain::Fixed { min, max } = axis.domain {
-        if !finite(min)
-            || !finite(max)
-            || min >= max
-            || (axis.scale == "log" && (min <= 0.0 || max <= 0.0))
-        {
-            errors.push(error("config.axes.domain", "Invalid fixed axis range"));
+    let valid_domain = match axis.domain {
+        ChartAxisDomain::Auto { .. } => true,
+        ChartAxisDomain::Fixed { min, max } => {
+            finite(min)
+                && finite(max)
+                && min < max
+                && (axis.scale != "log" || (min > 0.0 && max > 0.0))
         }
-    }
+    };
+    append_failures(
+        errors,
+        [
+            (
+                !["linear", "log"].contains(&axis.scale.as_str()),
+                "config.axes",
+                "Unsupported axis scale",
+            ),
+            (
+                !valid_domain,
+                "config.axes.domain",
+                "Invalid fixed axis range",
+            ),
+        ],
+    );
 }
 fn find_forbidden(value: &Value, path: &str, errors: &mut Vec<ChartValidationError>) {
     let mut pending = vec![(value, path.to_owned(), false)];

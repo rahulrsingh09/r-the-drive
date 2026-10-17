@@ -1,14 +1,29 @@
 //! Basemap-only eviction. Operational Redis keys never participate in this index.
 use crate::config::SecurityConfig;
+#[cfg(test)]
 use redis::AsyncCommands;
 
 const INDEX: &str = "external:cache:basemap:lru";
 const COSTS: &str = "external:cache:basemap:costs";
 const TOTAL: &str = "external:cache:basemap:bytes";
+const CLEAN_LEGACY: &str = r#"
+local page=redis.call('SCAN',ARGV[1],'MATCH','external:basemap:*','COUNT',100)
+for _,key in ipairs(page[2]) do
+  if redis.pcall('TTL',key)==-1 then redis.pcall('UNLINK',key) end
+end
+return page[1]
+"#;
 const PUT: &str = r#"
-local key=KEYS[1]
-local index,costs,total=KEYS[2],KEYS[3],KEYS[4]
+local key,index,costs,total=unpack(KEYS)
 local budget,ttl=tonumber(ARGV[4]),tonumber(ARGV[5])
+local payload={key,key..':content-type',key..':max-age'}
+local estimate=math.ceil(#ARGV[1]*1.5)+#ARGV[2]+#ARGV[3]+5*#key+2048
+local function failed(result)
+  return type(result)=='table' and result.err
+end
+local function bytes()
+  return tonumber(redis.call('GET',total) or '0')
+end
 local function remove(k)
   local cost=tonumber(redis.call('HGET',costs,k) or '0')
   redis.call('UNLINK',k,k..':content-type',k..':max-age')
@@ -16,34 +31,40 @@ local function remove(k)
   local remaining=math.max(0,tonumber(redis.call('GET',total) or '0')-cost)
   redis.call('SET',total,remaining)
 end
--- Reclaim stale index entries and evict a bounded number of oldest resources.
--- Count key/index/TTL bookkeeping as well as payload and response metadata.
-local estimate=math.ceil(#ARGV[1]*1.5)+#ARGV[2]+#ARGV[3]+5*#key+2048
 if estimate > budget then return 0 end
-local initialized=redis.pcall('SET',total,'0','NX')
-if type(initialized)=='table' and initialized.err then return 0 end
+if failed(redis.pcall('SET',total,'0','NX')) then return 0 end
 if redis.call('HEXISTS',costs,key)==1 then remove(key) end
-for i=1,64 do
-  local oldest=redis.call('ZRANGE',index,0,0)[1]
-  if not oldest then break end
-  if redis.call('EXISTS',oldest)==1 and tonumber(redis.call('GET',total) or '0')+estimate<=budget then break end
-  remove(oldest)
+local oldest=redis.call('ZRANGE',index,0,63)
+for _,resource in ipairs(oldest) do
+  if redis.call('EXISTS',resource)==1 and bytes()+estimate<=budget then break end
+  remove(resource)
 end
-if tonumber(redis.call('GET',total) or '0')+estimate > budget then return 0 end
-local result=redis.pcall('SET',key,ARGV[1],'EX',ttl)
-if type(result)=='table' and result.err then return 0 end
-result=redis.pcall('SET',key..':content-type',ARGV[2],'EX',ttl)
-if type(result)=='table' and result.err then redis.call('UNLINK',key); return 0 end
-result=redis.pcall('SET',key..':max-age',ARGV[3],'EX',ttl)
-if type(result)=='table' and result.err then redis.call('UNLINK',key,key..':content-type'); return 0 end
-local actual=redis.call('MEMORY','USAGE',key)+redis.call('MEMORY','USAGE',key..':content-type')+redis.call('MEMORY','USAGE',key..':max-age')+2*#key+512
-if actual > estimate or tonumber(redis.call('GET',total) or '0')+actual > budget then
-  redis.call('UNLINK',key,key..':content-type',key..':max-age'); return 0
+if bytes()+estimate>budget then return 0 end
+local written={}
+for field,resource in ipairs(payload) do
+  if failed(redis.pcall('SET',resource,ARGV[field],'EX',ttl)) then
+    if #written>0 then redis.call('UNLINK',unpack(written)) end
+    return 0
+  end
+  written[#written+1]=resource
 end
-result=redis.pcall('HSET',costs,key,actual)
-if type(result)=='table' and result.err then redis.call('UNLINK',key,key..':content-type',key..':max-age'); return 0 end
-result=redis.pcall('ZADD',index,ARGV[6],key)
-if type(result)=='table' and result.err then redis.call('HDEL',costs,key); redis.call('UNLINK',key,key..':content-type',key..':max-age'); return 0 end
+local actual=2*#key+512
+for _,resource in ipairs(payload) do
+  actual=actual+redis.call('MEMORY','USAGE',resource)
+end
+if actual>estimate or bytes()+actual>budget then
+  redis.call('UNLINK',unpack(payload))
+  return 0
+end
+if failed(redis.pcall('HSET',costs,key,actual)) then
+  redis.call('UNLINK',unpack(payload))
+  return 0
+end
+if failed(redis.pcall('ZADD',index,ARGV[6],key)) then
+  redis.call('HDEL',costs,key)
+  redis.call('UNLINK',unpack(payload))
+  return 0
+end
 redis.call('INCRBY',total,actual)
 return 1
 "#;
@@ -100,31 +121,20 @@ pub fn start_maintenance(client: redis::Client) -> tokio::task::JoinHandle<()> {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let Ok(mut connection) = client.get_multiplexed_async_connection().await else {
-                continue;
-            };
-            let Ok((next, keys)) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg("external:basemap:*")
-                .arg("COUNT")
-                .arg(100)
-                .query_async::<(u64, Vec<String>)>(&mut connection)
-                .await
-            else {
-                continue;
-            };
-            for key in keys {
-                if matches!(connection.ttl::<_, i64>(&key).await, Ok(-1)) {
-                    let _: Result<i64, _> = redis::cmd("UNLINK")
-                        .arg(&key)
-                        .query_async(&mut connection)
-                        .await;
-                }
+            let attempt = async {
+                let mut connection = client.get_multiplexed_async_connection().await?;
+                let next: u64 = redis::Script::new(CLEAN_LEGACY)
+                    .arg(cursor)
+                    .invoke_async(&mut connection)
+                    .await?;
+                Ok::<_, redis::RedisError>(next)
             }
-            cursor = next;
-            if cursor == 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            .await;
+            if let Ok(next) = attempt {
+                cursor = next;
+                if cursor == 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                }
             }
         }
     })

@@ -66,26 +66,39 @@ impl ResourceLimits {
         vehicle_max: usize,
         total_max: usize,
     ) -> Result<ResourcePermit, AppError> {
-        let mut counts = if live { &self.live } else { &self.heavy }
-            .lock()
-            .expect("resource counts poisoned");
-        if counts.total >= total_max
-            || counts.users.get(&user).copied().unwrap_or(0) >= user_max
-            || vehicle.is_some_and(|v| counts.vehicles.get(&v).copied().unwrap_or(0) >= vehicle_max)
-        {
+        let bucket = if live { &self.live } else { &self.heavy };
+        let mut counts = bucket.lock().expect("resource counts poisoned");
+        let usage = [
+            (counts.total, total_max),
+            (
+                counts.users.get(&user).copied().unwrap_or_default(),
+                user_max,
+            ),
+            (
+                vehicle
+                    .and_then(|id| counts.vehicles.get(&id).copied())
+                    .unwrap_or_default(),
+                if vehicle.is_some() {
+                    vehicle_max
+                } else {
+                    usize::MAX
+                },
+            ),
+        ];
+        if usage.iter().any(|(used, maximum)| used >= maximum) {
             return Err(AppError::ResourceLimited(if live {
                 "live_connections"
             } else {
                 "heavy_read"
             }));
         }
-        counts.total += 1;
         *counts.users.entry(user).or_default() += 1;
-        if let Some(v) = vehicle {
-            *counts.vehicles.entry(v).or_default() += 1;
+        if let Some(id) = vehicle {
+            *counts.vehicles.entry(id).or_default() += 1;
         }
+        counts.total += 1;
         Ok(ResourcePermit {
-            limits: self.clone(),
+            limits: Arc::clone(self),
             user,
             vehicle,
             live,
@@ -110,10 +123,12 @@ impl Drop for ResourcePermit {
     }
 }
 fn decrement(counts: &mut HashMap<Uuid, usize>, key: Uuid) {
-    if let Some(n) = counts.get_mut(&key) {
-        *n -= 1;
-        if *n == 0 {
-            counts.remove(&key);
+    if let std::collections::hash_map::Entry::Occupied(mut entry) = counts.entry(key) {
+        let remaining = *entry.get() - 1;
+        if remaining == 0 {
+            entry.remove();
+        } else {
+            *entry.get_mut() = remaining;
         }
     }
 }

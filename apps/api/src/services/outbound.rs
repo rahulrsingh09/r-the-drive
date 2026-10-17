@@ -8,55 +8,58 @@ use std::{
 };
 use url::Url;
 pub async fn read_response_limited(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     limit: usize,
     label: &str,
 ) -> Result<Vec<u8>, AppError> {
+    let exceeded =
+        || AppError::DependencyUnavailable(format!("{label} response exceeded the limit"));
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
-        return Err(AppError::DependencyUnavailable(format!(
-            "{label} response exceeded the limit"
-        )));
+        return Err(exceeded());
     }
+    let mut response = response;
+    let mut remaining = limit;
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| AppError::DependencyUnavailable(format!("{label} response failed")))?
-    {
-        if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(AppError::DependencyUnavailable(format!(
-                "{label} response exceeded the limit"
-            )));
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                remaining = remaining.checked_sub(chunk.len()).ok_or_else(exceeded)?;
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(bytes),
+            Err(_) => {
+                return Err(AppError::DependencyUnavailable(format!(
+                    "{label} response failed"
+                )))
+            }
         }
-        bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes)
 }
 
 pub fn parse_private_network_allowlist(values: &[String]) -> Result<Vec<IpNet>, AppError> {
-    let mut parsed = values
+    let mut networks = std::collections::BTreeMap::new();
+    for value in values
         .iter()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            value.parse::<IpNet>().map_err(|_| {
-                AppError::Validation(format!("invalid private-network CIDR `{value}`"))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    parsed.sort_by_key(ToString::to_string);
-    parsed.dedup();
-    for network in &parsed {
-        if !is_private_ip(network.network()) || !is_private_ip(network.broadcast()) {
-            return Err(AppError::Validation(format!(
-                "private-network CIDR `{network}` must be contained entirely in RFC1918 or IPv6 ULA space"
-            )));
-        }
+    {
+        let network: IpNet = value
+            .parse()
+            .map_err(|_| AppError::Validation(format!("invalid private-network CIDR `{value}`")))?;
+        networks.insert(network.to_string(), network);
     }
-    Ok(parsed)
+    networks.into_values().map(|network| {
+        if [network.network(), network.broadcast()].into_iter().all(is_private_ip) {
+            Ok(network)
+        } else {
+            Err(AppError::Validation(format!(
+                "private-network CIDR `{network}` must be contained entirely in RFC1918 or IPv6 ULA space"
+            )))
+        }
+    }).collect()
 }
 
 pub fn configured_private_network_allowlist(
@@ -71,21 +74,18 @@ pub fn configured_private_network_allowlist(
 }
 
 pub fn endpoint_is_private(value: &str) -> bool {
-    let Ok(url) = Url::parse(value) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    IpAddr::from_str(host)
-        .map(|ip| match ip {
-            IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(),
-            IpAddr::V6(ip) => ip.is_loopback() || is_ipv6_unique_local(ip),
+    Url::parse(value).ok().is_some_and(|url| {
+        url.host_str().is_some_and(|host| {
+            if host.eq_ignore_ascii_case("localhost") {
+                return true;
+            }
+            match host.parse::<IpAddr>() {
+                Ok(IpAddr::V4(ip)) => ip.is_private() || ip.is_loopback(),
+                Ok(IpAddr::V6(ip)) => ip.is_loopback() || is_ipv6_unique_local(ip),
+                Err(_) => false,
+            }
         })
-        .unwrap_or(false)
+    })
 }
 
 pub fn is_link_local_or_metadata(host: &str) -> bool {
@@ -98,41 +98,41 @@ pub fn is_link_local_or_metadata(host: &str) -> bool {
 pub fn is_forbidden_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            ip.is_unspecified()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || octets[0] == 0
-                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-                || octets == [169, 254, 169, 254]
-                || octets[..3] == [192, 0, 0]
-                || octets[..3] == [192, 0, 2]
-                || octets[..3] == [192, 88, 99]
-                || octets[..3] == [192, 175, 48]
-                || (octets[0] == 198 && matches!(octets[1], 18 | 19))
-                || octets[..3] == [198, 51, 100]
-                || octets[..3] == [203, 0, 113]
-                || octets[0] >= 240
+            let address = u32::from(ip);
+            let ranges = [
+                (0x0000_0000, 8),
+                (0x6440_0000, 10),
+                (0x7f00_0000, 8),
+                (0xa9fe_0000, 16),
+                (0xc000_0000, 24),
+                (0xc000_0200, 24),
+                (0xc058_6300, 24),
+                (0xc0af_3000, 24),
+                (0xc612_0000, 15),
+                (0xc633_6400, 24),
+                (0xcb00_7100, 24),
+                (0xe000_0000, 3),
+            ];
+            ranges
+                .into_iter()
+                .any(|(network, bits)| address >> (32 - bits) == network >> (32 - bits))
         }
         IpAddr::V6(ip) => {
-            let segments = ip.segments();
-            ip.is_unspecified()
-                || (!is_ipv6_unique_local(ip)
-                    && ip.to_ipv4_mapped().is_none()
-                    && (segments[0] & 0xe000) != 0x2000)
-                || ip.is_loopback()
-                || ip.is_multicast()
-                || is_ipv6_unicast_link_local(ip)
-                || (segments[0] & 0xffc0) == 0xfec0
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || (segments[0] == 0x2001 && (segments[1] & 0xfe00) == 0)
-                || segments[0] == 0x2002
-                || segments[0] == 0x3fff
-                || ip
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| is_forbidden_ip(IpAddr::V4(mapped)))
+            let words = ip.segments();
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_forbidden_ip(IpAddr::V4(mapped));
+            }
+            if is_ipv6_unique_local(ip) {
+                return false;
+            }
+            if words[0] & 0xe000 != 0x2000 {
+                return true;
+            }
+            match words[0] {
+                0x2001 => words[1] == 0x0db8 || words[1] & 0xfe00 == 0,
+                0x2002 | 0x3fff => true,
+                _ => false,
+            }
         }
     }
 }
@@ -186,92 +186,106 @@ pub async fn outbound_client_for_url(
     url: &Url,
     allowlist: &[IpNet],
 ) -> Result<reqwest::Client, AppError> {
-    if !matches!(url.scheme(), "http" | "https")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(AppError::Validation(
-            "Outbound endpoint must use HTTP(S) without credentials or fragments".into(),
-        ));
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| AppError::Validation("connection endpoint host is required".into()))?;
-    if is_link_local_or_metadata(host) {
-        return Err(AppError::Validation(
-            "link-local and cloud metadata endpoints are not allowed".into(),
-        ));
-    }
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| AppError::Validation("connection endpoint port is required".into()))?;
-    let addresses = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::lookup_host((host, port)),
-    )
-    .await
-    .map_err(|_| AppError::DependencyUnavailable("connection endpoint DNS timed out".into()))?
-    .map_err(|_| {
-        AppError::DependencyUnavailable("connection endpoint could not be resolved".into())
-    })?
-    .collect::<Vec<SocketAddr>>();
-    if addresses.is_empty() {
-        return Err(AppError::DependencyUnavailable(
-            "connection endpoint could not be resolved".into(),
-        ));
-    }
-    let private = validate_addresses(&addresses, allowlist)?;
-    if url.scheme() == "http" && !private {
-        return Err(AppError::Validation(
-            "HTTP is permitted only for an explicitly allowed private destination".into(),
-        ));
-    }
+    let destination = ApprovedDestination::resolve(url, allowlist).await?;
     reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .resolve_to_addrs(host, &addresses)
+        .resolve_to_addrs(destination.host, &destination.addresses)
         .build()
         .map_err(|error| AppError::Internal(error.into()))
 }
 
 pub fn validate_addresses(addresses: &[SocketAddr], allowlist: &[IpNet]) -> Result<bool, AppError> {
-    if addresses.is_empty() {
+    let Some(_) = addresses.first() else {
         return Err(AppError::DependencyUnavailable(
             "No outbound addresses resolved".into(),
         ));
-    }
-    let mut private = false;
-    let mut public = false;
+    };
+    let mut family = None;
+    let mut mixed = false;
     for address in addresses {
-        if is_forbidden_ip(address.ip()) {
+        let ip = address.ip();
+        if is_forbidden_ip(ip) {
             return Err(AppError::Validation(
                 "connection endpoint resolved to a forbidden address".into(),
             ));
         }
-        if is_private_ip(address.ip()) {
-            private = true;
-            if !allowlist
+        let private = is_private_ip(ip);
+        if private
+            && !allowlist
                 .iter()
-                .any(|network| network.contains(&canonical_ip(address.ip())))
-            {
-                return Err(AppError::Validation(
-                    "connection endpoint resolved outside its private CIDR allowlist".into(),
-                ));
+                .any(|network| network.contains(&canonical_ip(ip)))
+        {
+            return Err(AppError::Validation(
+                "connection endpoint resolved outside its private CIDR allowlist".into(),
+            ));
+        }
+        mixed |= family.is_some_and(|prior| prior != private);
+        family = Some(private);
+    }
+    if mixed {
+        Err(AppError::Validation(
+            "connection endpoint DNS returned mixed public and private addresses".into(),
+        ))
+    } else {
+        Ok(family.unwrap_or(false))
+    }
+}
+
+struct ApprovedDestination<'a> {
+    host: &'a str,
+    addresses: Vec<SocketAddr>,
+}
+
+impl<'a> ApprovedDestination<'a> {
+    async fn resolve(url: &'a Url, allowlist: &[IpNet]) -> Result<Self, AppError> {
+        let clean =
+            url.username().is_empty() && url.password().is_none() && url.fragment().is_none();
+        if !clean || !["http", "https"].contains(&url.scheme()) {
+            return Err(AppError::Validation(
+                "Outbound endpoint must use HTTP(S) without credentials or fragments".into(),
+            ));
+        }
+        let host = url
+            .host_str()
+            .ok_or_else(|| AppError::Validation("connection endpoint host is required".into()))?;
+        if is_link_local_or_metadata(host) {
+            return Err(AppError::Validation(
+                "link-local and cloud metadata endpoints are not allowed".into(),
+            ));
+        }
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| AppError::Validation("connection endpoint port is required".into()))?;
+        let unresolved =
+            || AppError::DependencyUnavailable("connection endpoint could not be resolved".into());
+        let addresses: Vec<_> = match tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        {
+            Err(_) => {
+                return Err(AppError::DependencyUnavailable(
+                    "connection endpoint DNS timed out".into(),
+                ))
             }
-        } else {
-            public = true;
+            Ok(Err(_)) => return Err(unresolved()),
+            Ok(Ok(addresses)) => addresses.collect(),
+        };
+        if addresses.is_empty() {
+            return Err(unresolved());
+        }
+        match (url.scheme(), validate_addresses(&addresses, allowlist)?) {
+            ("http", false) => Err(AppError::Validation(
+                "HTTP is permitted only for an explicitly allowed private destination".into(),
+            )),
+            _ => Ok(Self { host, addresses }),
         }
     }
-    if private && public {
-        return Err(AppError::Validation(
-            "connection endpoint DNS returned mixed public and private addresses".into(),
-        ));
-    }
-    Ok(private)
 }
 
 #[cfg(test)]

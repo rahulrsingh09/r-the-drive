@@ -256,13 +256,22 @@ fn behavior(definition: &ChartDefinitionV1, errors: &mut Vec<ChartValidationErro
 }
 
 fn series_without_colors(value: &Value) -> Value {
-    let mut series = value.get("series").cloned().unwrap_or(Value::Null);
-    if let Some(items) = series.as_array_mut() {
-        for item in items {
-            if let Some(object) = item.as_object_mut() {
-                object.remove("color");
-            }
-        }
+    match value.get("series") {
+        Some(Value::Array(items)) => Value::Array(
+            items
+                .iter()
+                .map(|item| match item {
+                    Value::Object(object) => Value::Object(
+                        object
+                            .iter()
+                            .filter(|(name, _)| name.as_str() != "color")
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect(),
+                    ),
+                    other => other.clone(),
+                })
+                .collect(),
+        ),
+        other => other.cloned().unwrap_or(Value::Null),
     }
-    series
 }

@@ -47,13 +47,16 @@ pub fn rivian_renewal_state(
         return RivianRenewalState::ReauthRequired;
     }
     let renewal_at = issued_at + RIVIAN_RENEWAL_INTERVAL;
-    if now >= renewal_at {
-        RivianRenewalState::RenewalDue
-    } else if now >= renewal_at - RIVIAN_RENEWAL_WARNING {
-        RivianRenewalState::RenewalSoon
-    } else {
-        RivianRenewalState::Healthy
-    }
+    [
+        (renewal_at, RivianRenewalState::RenewalDue),
+        (
+            renewal_at - RIVIAN_RENEWAL_WARNING,
+            RivianRenewalState::RenewalSoon,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(threshold, state)| (now >= threshold).then_some(state))
+    .unwrap_or(RivianRenewalState::Healthy)
 }
 
 pub fn rivian_renewal_state_for_auth(
@@ -65,40 +68,25 @@ pub fn rivian_renewal_state_for_auth(
 }
 
 pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppError> {
-    let issued_at = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
-        "SELECT MIN(token_created_at) FROM panda.vehicle_credentials",
+    let (issued_at, auth_failed): (Option<DateTime<Utc>>, bool) = sqlx::query_as(
+        "SELECT MIN(token_created_at),
+            EXISTS(SELECT 1 FROM panda.vehicle_runtime_state WHERE auth_state='needs_reauth')
+         FROM panda.vehicle_credentials",
     )
     .fetch_one(pool)
     .await?;
-    let auth_failed = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM panda.vehicle_runtime_state WHERE auth_state = 'needs_reauth')",
-    )
-    .fetch_one(pool)
-    .await?;
-    let runtime = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        r#"SELECT worker_health, worker_health_msg
-           FROM panda.vehicle_runtime_state
-           ORDER BY CASE worker_health
-               WHEN 'error' THEN 5
-               WHEN 'degraded' THEN 4
-               WHEN 'stale' THEN 3
-               WHEN 'starting' THEN 2
-               WHEN 'connected' THEN 1
-               ELSE 0
-           END DESC, updated_at DESC
-           LIMIT 1"#,
-    )
-    .fetch_optional(pool)
-    .await?;
-    let expected = issued_at.map(|at| at + RIVIAN_RENEWAL_INTERVAL);
+    let runtime: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT worker_health, worker_health_msg FROM panda.vehicle_runtime_state
+         ORDER BY CASE worker_health WHEN 'error' THEN 5 WHEN 'degraded' THEN 4 WHEN 'stale' THEN 3
+                    WHEN 'starting' THEN 2 WHEN 'connected' THEN 1 ELSE 0 END DESC, updated_at DESC LIMIT 1"
+    ).fetch_optional(pool).await?;
+    let (observed_health, observed_error) = runtime.unwrap_or_default();
     Ok(RivianConnectionStatus {
         credential_issued_at: issued_at,
-        expected_renewal_at: expected,
-        renewal_state: issued_at.map(|at| {
-            rivian_renewal_state_for_auth(at, Utc::now(), auth_failed.then_some("needs_reauth"))
-        }),
-        observed_health: runtime.as_ref().and_then(|row| row.0.clone()),
-        observed_error: runtime.and_then(|row| row.1),
+        expected_renewal_at: issued_at.map(|at| at + RIVIAN_RENEWAL_INTERVAL),
+        renewal_state: issued_at.map(|at| rivian_renewal_state(at, Utc::now(), auth_failed)),
+        observed_health,
+        observed_error,
     })
 }
 
@@ -106,22 +94,14 @@ pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppE
 /// sanitized restore. Custom endpoints and encrypted credentials always win:
 /// this only fills rows that are entirely absent.
 pub async fn ensure_defaults(pool: &PgPool) -> Result<(), AppError> {
+    const DEFAULT_ROWS: &str = r#"[{"id":"rivian_account","enabled":true,"mode":"remote","weather_precision":null,"forecast_url":null,"archive_url":null,"base_url":null,"light_url_template":null,"dark_url_template":null,"attribution":null,"attribution_url":null,"custom_autocomplete":false,"allow_private_network":false,"basemap_provider":"auto"},{"id":"open_meteo","enabled":false,"mode":"disabled","weather_precision":"approximate","forecast_url":"https://api.open-meteo.com/v1/forecast","archive_url":"https://archive-api.open-meteo.com/v1/archive","base_url":null,"light_url_template":null,"dark_url_template":null,"attribution":"Weather data by Open-Meteo","attribution_url":"https://open-meteo.com/","custom_autocomplete":false,"allow_private_network":false,"basemap_provider":"auto"},{"id":"nominatim","enabled":false,"mode":"disabled","weather_precision":null,"forecast_url":null,"archive_url":null,"base_url":"https://nominatim.openstreetmap.org","light_url_template":null,"dark_url_template":null,"attribution":"OpenStreetMap contributors","attribution_url":"https://www.openstreetmap.org/copyright","custom_autocomplete":false,"allow_private_network":false,"basemap_provider":"auto"},{"id":"basemap","enabled":false,"mode":"disabled","weather_precision":null,"forecast_url":null,"archive_url":null,"base_url":null,"light_url_template":"https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png","dark_url_template":"https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png","attribution":"OpenStreetMap contributors and CARTO","attribution_url":"https://carto.com/attributions","custom_autocomplete":false,"allow_private_network":false,"basemap_provider":"auto"},{"id":"iconify","enabled":false,"mode":"disabled","weather_precision":null,"forecast_url":null,"archive_url":null,"base_url":"https://api.iconify.design","light_url_template":null,"dark_url_template":null,"attribution":"Iconify","attribution_url":"https://iconify.design/","custom_autocomplete":false,"allow_private_network":false,"basemap_provider":"auto"},{"id":"s3_backup","enabled":false,"mode":"disabled","weather_precision":null,"forecast_url":null,"archive_url":null,"base_url":null,"light_url_template":null,"dark_url_template":null,"attribution":null,"attribution_url":null,"custom_autocomplete":false,"allow_private_network":false,"basemap_provider":"auto"}]"#;
+    let defaults: serde_json::Value =
+        serde_json::from_str(DEFAULT_ROWS).map_err(|error| AppError::Internal(error.into()))?;
     sqlx::query(
-        r#"INSERT INTO panda.external_connection_settings
-             (id, enabled, mode, weather_precision, forecast_url, archive_url, base_url,
-              light_url_template, dark_url_template, attribution, attribution_url,
-              custom_autocomplete, allow_private_network, basemap_provider)
-           VALUES
-             ('rivian_account', TRUE, 'remote', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE, 'auto'),
-             ('open_meteo', FALSE, 'disabled', 'approximate', 'https://api.open-meteo.com/v1/forecast', 'https://archive-api.open-meteo.com/v1/archive', NULL, NULL, NULL, 'Weather data by Open-Meteo', 'https://open-meteo.com/', FALSE, FALSE, 'auto'),
-             ('nominatim', FALSE, 'disabled', NULL, NULL, NULL, 'https://nominatim.openstreetmap.org', NULL, NULL, 'OpenStreetMap contributors', 'https://www.openstreetmap.org/copyright', FALSE, FALSE, 'auto'),
-             ('basemap', FALSE, 'disabled', NULL, NULL, NULL, NULL, 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', 'OpenStreetMap contributors and CARTO', 'https://carto.com/attributions', FALSE, FALSE, 'auto'),
-             ('iconify', FALSE, 'disabled', NULL, NULL, NULL, 'https://api.iconify.design', NULL, NULL, 'Iconify', 'https://iconify.design/', FALSE, FALSE, 'auto'),
-             ('s3_backup', FALSE, 'disabled', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE, 'auto')
-           ON CONFLICT (id) DO NOTHING"#,
-    )
-    .execute(pool)
-    .await?;
+        "INSERT INTO panda.external_connection_settings(id,enabled,mode,weather_precision,forecast_url,archive_url,base_url,light_url_template,dark_url_template,attribution,attribution_url,custom_autocomplete,allow_private_network,basemap_provider)
+         SELECT id,enabled,mode,weather_precision,forecast_url,archive_url,base_url,light_url_template,dark_url_template,attribution,attribution_url,custom_autocomplete,allow_private_network,basemap_provider FROM jsonb_populate_recordset(NULL::panda.external_connection_settings,$1::jsonb)
+         ON CONFLICT(id) DO NOTHING"
+    ).bind(defaults).execute(pool).await?;
     Ok(())
 }
 
@@ -155,21 +135,30 @@ pub use crate::private_deployment::outbound::{connection_allowed, require_connec
 
 impl ConnectionSettingsRow {
     fn apply_outbound_policy(mut self) -> Self {
-        if !connection_allowed(&self.id)
-            || (self.id == OPEN_METEO
-                && !crate::private_deployment::weather::settings_allowed(&self))
-        {
+        let allowed = connection_allowed(&self.id)
+            && match self.id.as_str() {
+                OPEN_METEO => crate::private_deployment::weather::settings_allowed(&self),
+                _ => true,
+            };
+        if !allowed {
             self.enabled = false;
-            self.mode = "disabled".into();
+            self.mode.clear();
+            self.mode.push_str("disabled");
         }
         self
     }
 
     pub fn is_active(&self) -> bool {
-        self.enabled
-            && self.mode != "disabled"
-            && connection_allowed(&self.id)
-            && (self.id != OPEN_METEO || crate::private_deployment::weather::settings_allowed(self))
+        if !self.enabled || self.mode == "disabled" {
+            return false;
+        }
+        match self.id.as_str() {
+            OPEN_METEO => {
+                connection_allowed(&self.id)
+                    && crate::private_deployment::weather::settings_allowed(self)
+            }
+            _ => connection_allowed(&self.id),
+        }
     }
 }
 
@@ -207,38 +196,13 @@ pub async fn list(
     pool: &PgPool,
 ) -> Result<Vec<(ConnectionSettingsRow, ConnectionActivityRow)>, AppError> {
     #[derive(FromRow)]
-    struct JoinedRow {
-        id: String,
-        enabled: bool,
-        mode: String,
-        basemap_provider: String,
-        weather_precision: Option<String>,
-        forecast_url: Option<String>,
-        archive_url: Option<String>,
-        base_url: Option<String>,
-        light_url_template: Option<String>,
-        dark_url_template: Option<String>,
-        attribution: Option<String>,
-        attribution_url: Option<String>,
-        request_identifier: Option<String>,
-        custom_autocomplete: bool,
-        allow_private_network: bool,
-        private_network_allowlist: Vec<String>,
-        private_network_policy_state: String,
-        api_key_encrypted: Option<Vec<u8>>,
-        bearer_token_encrypted: Option<Vec<u8>>,
-        updated_at: DateTime<Utc>,
-        last_attempt_at: Option<DateTime<Utc>>,
-        last_success_at: Option<DateTime<Utc>>,
-        last_error: Option<String>,
-        usage_date: NaiveDate,
-        request_count: i32,
-        last_test_at: Option<DateTime<Utc>>,
-        last_test_ok: Option<bool>,
-        last_test_error: Option<String>,
+    struct ConnectionWithActivity {
+        #[sqlx(flatten)]
+        settings: ConnectionSettingsRow,
+        #[sqlx(flatten)]
+        activity: ConnectionActivityRow,
     }
-
-    let rows = sqlx::query_as::<_, JoinedRow>(
+    let rows = sqlx::query_as::<_, ConnectionWithActivity>(
         r#"SELECT s.id, s.enabled, s.mode, s.basemap_provider, s.weather_precision, s.forecast_url,
                   s.archive_url, s.base_url, s.light_url_template, s.dark_url_template,
                   s.attribution, s.attribution_url, s.request_identifier,
@@ -259,46 +223,9 @@ pub async fn list(
     )
     .fetch_all(pool)
     .await?;
-
     Ok(rows
         .into_iter()
-        .map(|row| {
-            (
-                ConnectionSettingsRow {
-                    id: row.id,
-                    enabled: row.enabled,
-                    mode: row.mode,
-                    basemap_provider: row.basemap_provider,
-                    weather_precision: row.weather_precision,
-                    forecast_url: row.forecast_url,
-                    archive_url: row.archive_url,
-                    base_url: row.base_url,
-                    light_url_template: row.light_url_template,
-                    dark_url_template: row.dark_url_template,
-                    attribution: row.attribution,
-                    attribution_url: row.attribution_url,
-                    request_identifier: row.request_identifier,
-                    custom_autocomplete: row.custom_autocomplete,
-                    allow_private_network: row.allow_private_network,
-                    private_network_allowlist: row.private_network_allowlist,
-                    private_network_policy_state: row.private_network_policy_state,
-                    api_key_encrypted: row.api_key_encrypted,
-                    bearer_token_encrypted: row.bearer_token_encrypted,
-                    updated_at: row.updated_at,
-                }
-                .apply_outbound_policy(),
-                ConnectionActivityRow {
-                    last_attempt_at: row.last_attempt_at,
-                    last_success_at: row.last_success_at,
-                    last_error: row.last_error,
-                    usage_date: row.usage_date,
-                    request_count: row.request_count,
-                    last_test_at: row.last_test_at,
-                    last_test_ok: row.last_test_ok,
-                    last_test_error: row.last_test_error,
-                },
-            )
-        })
+        .map(|row| (row.settings.apply_outbound_policy(), row.activity))
         .collect())
 }
 
@@ -331,9 +258,14 @@ pub async fn record_test(pool: &PgPool, id: &str, ok: bool, message: Option<&str
 }
 
 fn sanitize_error(message: &str) -> String {
-    let first_line = message.lines().next().unwrap_or("External request failed");
-    let without_query = first_line.split('?').next().unwrap_or(first_line);
-    without_query.chars().take(240).collect()
+    message
+        .lines()
+        .next()
+        .unwrap_or("External request failed")
+        .chars()
+        .take_while(|character| *character != '?')
+        .take(240)
+        .collect()
 }
 
 #[cfg(test)]

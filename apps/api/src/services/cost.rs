@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -261,7 +262,7 @@ async fn fetch_session_energy_readings(
     ended_at: DateTime<Utc>,
     session_id: Uuid,
 ) -> Result<Vec<TimedEnergyPoint>> {
-    let rows = sqlx::query_as::<_, TelemetryEnergyRow>(
+    let telemetry = sqlx::query_as::<_, TelemetryEnergyRow>(
         r#"WITH samples AS (
                SELECT bucket,
                       avg_soc,
@@ -287,24 +288,8 @@ async fn fetch_session_energy_readings(
     )
     .bind(vehicle_id)
     .bind(started_at)
-    .bind(ended_at)
-    .fetch_all(pool)
-    .await?;
-
-    if !rows.is_empty() {
-        return Ok(rows
-            .into_iter()
-            .map(|r| TimedEnergyPoint {
-                ts: r.ts,
-                kwh: r.energy_kwh,
-            })
-            .collect());
-    }
-
-    // Fallback: Rivian API backfill curve points stored during polling.
-    // power_kw is instantaneous power; dividing by 60 gives kWh for that
-    // 1-minute sample interval.
-    let fallback = sqlx::query_as::<_, TelemetryEnergyRow>(
+    .bind(ended_at);
+    let curve = sqlx::query_as::<_, TelemetryEnergyRow>(
         r#"SELECT ts,
                   GREATEST(0.0, power_kw) / 60.0 AS energy_kwh
            FROM panda.rivian_charge_curve_points
@@ -313,17 +298,21 @@ async fn fetch_session_energy_readings(
              AND power_kw > 0
            ORDER BY ts"#,
     )
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(fallback
-        .into_iter()
-        .map(|r| TimedEnergyPoint {
-            ts: r.ts,
-            kwh: r.energy_kwh,
-        })
-        .collect())
+    .bind(session_id);
+    for source in [telemetry, curve] {
+        let readings: Vec<_> = source
+            .fetch(pool)
+            .map_ok(|reading| TimedEnergyPoint {
+                ts: reading.ts,
+                kwh: reading.energy_kwh,
+            })
+            .try_collect()
+            .await?;
+        if !readings.is_empty() {
+            return Ok(readings);
+        }
+    }
+    Ok(Vec::new())
 }
 
 pub async fn recompute_charge_session_cost(

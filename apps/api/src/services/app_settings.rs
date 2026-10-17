@@ -6,26 +6,28 @@ use crate::errors::AppError;
 pub const APP_TIMEZONE_KEY: &str = "app_timezone";
 
 pub async fn load_app_timezone_name(pool: &PgPool) -> Result<String, AppError> {
-    let value =
-        sqlx::query_scalar::<_, String>("SELECT value FROM panda.system_config WHERE key = $1")
-            .bind(APP_TIMEZONE_KEY)
+    for (statement, discard_blank) in [
+        ("SELECT value FROM panda.system_config WHERE key=$1", true),
+        (
+            "SELECT timezone FROM panda.backup_settings WHERE id=TRUE",
+            false,
+        ),
+    ] {
+        let mut query = sqlx::query_scalar::<_, String>(statement);
+        if discard_blank {
+            query = query.bind(APP_TIMEZONE_KEY);
+        }
+        if let Some(name) = query
             .fetch_optional(pool)
-            .await?;
-
-    let value = match value {
-        Some(value) if !value.trim().is_empty() => value,
-        _ => sqlx::query_scalar::<_, String>(
-            "SELECT timezone FROM panda.backup_settings WHERE id = TRUE",
-        )
-        .fetch_optional(pool)
-        .await?
-        .unwrap_or_else(|| "UTC".to_string()),
-    };
-
-    value
-        .parse::<Tz>()
-        .map(|_| value)
-        .map_err(|_| AppError::Validation("timezone must be a valid IANA timezone".into()))
+            .await?
+            .filter(|name| !discard_blank || !name.trim().is_empty())
+        {
+            return name.parse::<Tz>().map(|_| name).map_err(|_| {
+                AppError::Validation("timezone must be a valid IANA timezone".into())
+            });
+        }
+    }
+    Ok("UTC".to_owned())
 }
 
 pub async fn load_app_timezone(pool: &PgPool) -> Result<Tz, AppError> {
@@ -46,20 +48,11 @@ pub async fn set_app_timezone_tx(
     transaction: &mut Transaction<'_, Postgres>,
     timezone: Tz,
 ) -> Result<(), AppError> {
-    let timezone_name = timezone.name();
     sqlx::query(
-        "INSERT INTO panda.system_config (key, value) VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-    )
-    .bind(APP_TIMEZONE_KEY)
-    .bind(timezone_name)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        "UPDATE panda.backup_settings SET timezone = $1, updated_at = now() WHERE id = TRUE",
-    )
-    .bind(timezone_name)
-    .execute(&mut **transaction)
-    .await?;
+        "WITH configured AS (
+            INSERT INTO panda.system_config(key,value) VALUES($1,$2)
+            ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value RETURNING value
+         ) UPDATE panda.backup_settings SET timezone=(SELECT value FROM configured), updated_at=now() WHERE id=TRUE"
+    ).bind(APP_TIMEZONE_KEY).bind(timezone.name()).execute(&mut **transaction).await?;
     Ok(())
 }

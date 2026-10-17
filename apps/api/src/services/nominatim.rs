@@ -123,9 +123,11 @@ pub async fn adaptive_extra_ms() -> u64 {
 }
 
 pub fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    let value = headers.get(reqwest::header::RETRY_AFTER)?;
-    let retry_after = value.to_str().ok()?.trim().parse::<u64>().ok()?;
-    Some(Duration::from_secs(retry_after))
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|header| header.to_str().ok())
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 pub async fn search(
@@ -134,64 +136,15 @@ pub async fn search(
     query: &str,
     limit: u8,
 ) -> Result<Vec<Value>, AppError> {
-    let settings =
-        external_connections::require_enabled(pool, external_connections::NOMINATIM).await?;
-    let endpoint = endpoint(&settings, "search")?;
-    let slot = acquire_slot(NominatimLane::InteractiveSearch).await;
-    external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
-    let allowlist = crate::services::outbound::configured_private_network_allowlist(&settings)?;
-    let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
-    let response = match client
-        .get(endpoint)
-        .header(reqwest::header::USER_AGENT, user_agent(&settings))
-        .query(&[
-            ("format", "jsonv2"),
-            ("addressdetails", "1"),
-            ("limit", &limit.clamp(1, 10).to_string()),
-            ("q", query),
-        ])
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => {
-            external_connections::record_failure(
-                pool,
-                external_connections::NOMINATIM,
-                "Address search request failed",
-            )
-            .await;
-            return Err(AppError::DependencyUnavailable(
-                "Address search request failed".into(),
-            ));
-        }
-    };
-    let status = response.status();
-    let retry_after = retry_after_from_headers(response.headers());
-    report_outcome(Some(status.as_u16()), retry_after).await;
-    if !status.is_success() {
-        external_connections::record_failure(
-            pool,
-            external_connections::NOMINATIM,
-            &format!("HTTP {status}"),
-        )
-        .await;
-        tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.search_http_error");
-        return Err(AppError::DependencyUnavailable(
-            "Address provider returned an error".into(),
-        ));
-    }
-    let rows = crate::services::outbound::read_json::<Vec<Value>>(
-        response,
-        crate::services::outbound::operator_security()?.geocoder_max_response_bytes,
-        "Address provider",
-    )
-    .await
-    .map_err(|_| {
-        AppError::DependencyUnavailable("Address provider returned invalid data".into())
-    })?;
-    external_connections::record_success(pool, external_connections::NOMINATIM).await;
-    Ok(rows)
+    let parameters = [
+        ("format", "jsonv2".to_owned()),
+        ("addressdetails", "1".to_owned()),
+        ("limit", limit.clamp(1, 10).to_string()),
+        ("q", query.to_owned()),
+    ];
+    request_address(pool, AddressRequest::Search, &parameters)
+        .await?
+        .ok_or_else(|| AppError::DependencyUnavailable("Address provider returned an error".into()))
 }
 
 pub async fn reverse(
@@ -200,62 +153,13 @@ pub async fn reverse(
     lat: f64,
     lon: f64,
 ) -> Result<Option<Value>, AppError> {
-    let settings =
-        external_connections::require_enabled(pool, external_connections::NOMINATIM).await?;
-    let endpoint = endpoint(&settings, "reverse")?;
-    let slot = acquire_slot(NominatimLane::BackgroundReverseGeocode).await;
-    external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
-    let allowlist = crate::services::outbound::configured_private_network_allowlist(&settings)?;
-    let client = crate::services::outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
-    let response = match client
-        .get(endpoint)
-        .header(reqwest::header::USER_AGENT, user_agent(&settings))
-        .query(&[
-            ("format", "jsonv2"),
-            ("addressdetails", "1"),
-            ("lat", &lat.to_string()),
-            ("lon", &lon.to_string()),
-        ])
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => {
-            external_connections::record_failure(
-                pool,
-                external_connections::NOMINATIM,
-                "Reverse geocoding request failed",
-            )
-            .await;
-            return Err(AppError::DependencyUnavailable(
-                "Reverse geocoding request failed".into(),
-            ));
-        }
-    };
-    let status = response.status();
-    let retry_after = retry_after_from_headers(response.headers());
-    report_outcome(Some(status.as_u16()), retry_after).await;
-    if !status.is_success() {
-        external_connections::record_failure(
-            pool,
-            external_connections::NOMINATIM,
-            &format!("HTTP {status}"),
-        )
-        .await;
-        tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.reverse_http_error");
-        return Ok(None);
-    }
-    let value = crate::services::outbound::read_json::<Value>(
-        response,
-        crate::services::outbound::operator_security()?.geocoder_max_response_bytes,
-        "Address provider",
-    )
-    .await
-    .map_err(|_| {
-        AppError::DependencyUnavailable("Address provider returned invalid data".into())
-    })?;
-    external_connections::record_success(pool, external_connections::NOMINATIM).await;
-    Ok(Some(value))
+    let parameters = [
+        ("format", "jsonv2".to_owned()),
+        ("addressdetails", "1".to_owned()),
+        ("lat", lat.to_string()),
+        ("lon", lon.to_string()),
+    ];
+    request_address(pool, AddressRequest::Reverse, &parameters).await
 }
 
 fn endpoint(
@@ -278,6 +182,100 @@ fn user_agent(settings: &external_connections::ConnectionSettingsRow) -> String 
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "R (self-hosted Rivian telemetry)".into())
+}
+
+#[derive(Clone, Copy)]
+enum AddressRequest {
+    Search,
+    Reverse,
+}
+
+impl AddressRequest {
+    fn policy(self) -> (&'static str, NominatimLane, &'static str) {
+        match self {
+            Self::Search => (
+                "search",
+                NominatimLane::InteractiveSearch,
+                "Address search request failed",
+            ),
+            Self::Reverse => (
+                "reverse",
+                NominatimLane::BackgroundReverseGeocode,
+                "Reverse geocoding request failed",
+            ),
+        }
+    }
+}
+
+async fn request_address<T: serde::de::DeserializeOwned>(
+    pool: &PgPool,
+    request: AddressRequest,
+    parameters: &[(&str, String)],
+) -> Result<Option<T>, AppError> {
+    use crate::services::outbound;
+    let (path, lane, send_failure) = request.policy();
+    let settings =
+        external_connections::require_enabled(pool, external_connections::NOMINATIM).await?;
+    let endpoint = endpoint(&settings, path)?;
+    let slot = acquire_slot(lane).await;
+    external_connections::record_attempt(pool, external_connections::NOMINATIM).await;
+    let allowlist = outbound::configured_private_network_allowlist(&settings)?;
+    let client = outbound::outbound_client_for_url(&endpoint, &allowlist).await?;
+    let sent = client
+        .get(endpoint)
+        .header(reqwest::header::USER_AGENT, user_agent(&settings))
+        .query(parameters)
+        .send()
+        .await;
+    let response = match sent {
+        Ok(response) => response,
+        Err(_) => {
+            external_connections::record_failure(
+                pool,
+                external_connections::NOMINATIM,
+                send_failure,
+            )
+            .await;
+            return Err(AppError::DependencyUnavailable(send_failure.into()));
+        }
+    };
+    let status = response.status();
+    report_outcome(
+        Some(status.as_u16()),
+        retry_after_from_headers(response.headers()),
+    )
+    .await;
+    if status.is_success() {
+        let decoded = outbound::read_json(
+            response,
+            outbound::operator_security()?.geocoder_max_response_bytes,
+            "Address provider",
+        )
+        .await
+        .map_err(|_| {
+            AppError::DependencyUnavailable("Address provider returned invalid data".into())
+        })?;
+        external_connections::record_success(pool, external_connections::NOMINATIM).await;
+        return Ok(Some(decoded));
+    }
+    external_connections::record_failure(
+        pool,
+        external_connections::NOMINATIM,
+        &format!("HTTP {status}"),
+    )
+    .await;
+    match request {
+        AddressRequest::Search => {
+            tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.search_http_error");
+            Err(AppError::DependencyUnavailable(
+                "Address provider returned an error".into(),
+            ))
+        }
+        AddressRequest::Reverse => {
+            tracing::warn!(status = %status, lane = ?slot.lane, queued_ms = slot.queued_ms, gate_wait_ms = slot.gate_wait_ms, "nominatim.reverse_http_error");
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]

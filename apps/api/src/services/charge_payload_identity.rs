@@ -49,72 +49,56 @@ impl Default for BackfillConfig {
 
 impl BackfillConfig {
     pub fn from_env() -> Result<Self> {
-        let batch_size = parse_i64_env("CHARGE_IDENTITY_BACKFILL_BATCH_SIZE", DEFAULT_BATCH_SIZE)?;
-        if !(MIN_BATCH_SIZE..=MAX_BATCH_SIZE).contains(&batch_size) {
-            anyhow::bail!(
-                "CHARGE_IDENTITY_BACKFILL_BATCH_SIZE must be between {MIN_BATCH_SIZE} and {MAX_BATCH_SIZE}"
-            );
+        let mut config = Self::default();
+        config.batch_size =
+            parse_i64_env("CHARGE_IDENTITY_BACKFILL_BATCH_SIZE", config.batch_size)?;
+        match config.batch_size {
+            MIN_BATCH_SIZE..=MAX_BATCH_SIZE => {},
+            _ => anyhow::bail!("CHARGE_IDENTITY_BACKFILL_BATCH_SIZE must be between {MIN_BATCH_SIZE} and {MAX_BATCH_SIZE}"),
         }
-
-        let pause_ms = parse_u64_env("CHARGE_IDENTITY_BACKFILL_PAUSE_MS", DEFAULT_PAUSE_MS)?;
-        if pause_ms > MAX_PAUSE_MS {
-            anyhow::bail!("CHARGE_IDENTITY_BACKFILL_PAUSE_MS must be between 0 and {MAX_PAUSE_MS}");
-        }
-
-        Ok(Self {
-            batch_size,
-            pause: Duration::from_millis(pause_ms),
-        })
+        let pause = parse_u64_env("CHARGE_IDENTITY_BACKFILL_PAUSE_MS", DEFAULT_PAUSE_MS)?;
+        config.pause = match pause {
+            0..=MAX_PAUSE_MS => Duration::from_millis(pause),
+            _ => anyhow::bail!(
+                "CHARGE_IDENTITY_BACKFILL_PAUSE_MS must be between 0 and {MAX_PAUSE_MS}"
+            ),
+        };
+        Ok(config)
     }
 }
 
 fn parse_i64_env(name: &str, default: i64) -> Result<i64> {
-    match std::env::var(name) {
-        Ok(value) => value
-            .parse::<i64>()
-            .with_context(|| format!("{name} must be an integer")),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(error).with_context(|| format!("read {name}")),
-    }
+    parse_env(name, default, "an integer")
 }
 
 fn parse_u64_env(name: &str, default: u64) -> Result<u64> {
-    match std::env::var(name) {
-        Ok(value) => value
-            .parse::<u64>()
-            .with_context(|| format!("{name} must be an unsigned integer")),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(error).with_context(|| format!("read {name}")),
-    }
+    parse_env(name, default, "an unsigned integer")
 }
 
 pub fn start_worker(pool: PgPool, config: BackfillConfig) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut retry_delay = Duration::from_secs(1);
+        let mut retry = Duration::from_secs(1);
         loop {
-            match run_until_complete(&pool, config).await {
-                Ok(WorkerResult::Complete) => {
-                    retry_delay = Duration::from_secs(1);
-                    tokio::time::sleep(RETENTION_RECONCILE_INTERVAL).await;
-                }
-                Ok(WorkerResult::Busy) => {
-                    retry_delay = Duration::from_secs(1);
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+            let delay = match run_until_complete(&pool, config).await {
+                Ok(outcome) => {
+                    retry = Duration::from_secs(1);
+                    match outcome {
+                        WorkerResult::Complete => RETENTION_RECONCILE_INTERVAL,
+                        WorkerResult::Busy => Duration::from_secs(30),
+                    }
                 }
                 Err(error) => {
-                    let error_text = error.to_string();
-                    tracing::error!(
-                        error = %error,
-                        retry_in_ms = retry_delay.as_millis() as u64,
-                        "charge_payload_identity_worker_failed"
-                    );
-                    if let Err(status_error) = mark_error(&pool, &error_text).await {
+                    tracing::error!(error = %error, retry_in_ms = retry.as_millis() as u64,
+                        "charge_payload_identity_worker_failed");
+                    if let Err(status_error) = mark_error(&pool, &error.to_string()).await {
                         tracing::error!(error = %status_error, "charge_payload_identity_backfill_status_failed");
                     }
-                    tokio::time::sleep(retry_delay).await;
-                    retry_delay = next_retry_delay(retry_delay);
+                    let delay = retry;
+                    retry = next_retry_delay(retry);
+                    delay
                 }
-            }
+            };
+            tokio::time::sleep(delay).await;
         }
     })
 }
@@ -133,30 +117,34 @@ enum WorkerResult {
 }
 
 async fn run_until_complete(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResult> {
-    let mut lock_connection = pool.acquire().await?;
-    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 0))")
+    let mut connection = pool.acquire().await?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 0))")
         .bind(ADVISORY_LOCK_KEY)
-        .fetch_one(&mut *lock_connection)
+        .fetch_one(&mut *connection)
         .await?;
-    if !locked {
+    if !acquired {
         return Ok(WorkerResult::Busy);
     }
-
-    let result = run_locked(pool, config).await;
-    let unlock_result =
+    let work = run_locked(pool, config).await;
+    let release =
         sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
             .bind(ADVISORY_LOCK_KEY)
-            .fetch_one(&mut *lock_connection)
+            .fetch_one(&mut *connection)
             .await;
-
-    match (result, unlock_result) {
-        (Ok(result), Ok(true)) => Ok(result),
-        (Ok(_), Ok(false)) => anyhow::bail!("charge payload identity backfill lock was not held"),
-        (Ok(_), Err(error)) => Err(error).context("release charge payload identity backfill lock"),
-        (Err(error), Ok(_)) => Err(error),
-        (Err(error), Err(unlock_error)) => Err(error.context(format!(
-            "also failed to release backfill lock: {unlock_error}"
-        ))),
+    match work {
+        Err(error) => match release {
+            Err(unlock_error) => Err(error.context(format!(
+                "also failed to release backfill lock: {unlock_error}"
+            ))),
+            Ok(_) => Err(error),
+        },
+        Ok(outcome) => {
+            if release.context("release charge payload identity backfill lock")? {
+                Ok(outcome)
+            } else {
+                anyhow::bail!("charge payload identity backfill lock was not held")
+            }
+        }
     }
 }
 
@@ -202,47 +190,32 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
 }
 
 async fn ensure_pending_index(pool: &PgPool) -> Result<()> {
-    let is_hypertable: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM timescaledb_information.hypertables
-             WHERE hypertable_schema = 'panda'
-               AND hypertable_name = 'rivian_charge_payloads'
-         )",
-    )
-    .fetch_one(pool)
-    .await?;
-    let validity: Option<bool> = sqlx::query_scalar(
-        "SELECT i.indisvalid
-         FROM pg_index i
-         JOIN pg_class c ON c.oid = i.indexrelid
-         JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'panda' AND c.relname = $1",
+    let (hypertable, valid): (bool, Option<bool>) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM timescaledb_information.hypertables
+             WHERE hypertable_schema='panda' AND hypertable_name='rivian_charge_payloads'),
+           (SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='panda' AND c.relname=$1)",
     )
     .bind(PENDING_INDEX_NAME)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
-
-    if validity == Some(false) {
-        sqlx::query(if is_hypertable {
-            DROP_PENDING_INDEX_LOCKING_SQL
-        } else {
-            DROP_PENDING_INDEX_SQL
-        })
-        .execute(pool)
-        .await?;
-    }
-
-    // TimescaleDB does not support CREATE INDEX CONCURRENTLY on a hypertable.
-    // This branch still runs only after the API is serving traffic; ordinary
-    // PostgreSQL tables retain the non-blocking concurrent build.
-    sqlx::query(if is_hypertable {
-        CREATE_PENDING_INDEX_LOCKING_SQL
+    let (drop_index, create_index) = if hypertable {
+        (
+            DROP_PENDING_INDEX_LOCKING_SQL,
+            CREATE_PENDING_INDEX_LOCKING_SQL,
+        )
     } else {
-        CREATE_PENDING_INDEX_SQL
-    })
-    .execute(pool)
-    .await?;
+        (DROP_PENDING_INDEX_SQL, CREATE_PENDING_INDEX_SQL)
+    };
+    for statement in [
+        (valid == Some(false)).then_some(drop_index),
+        Some(create_index),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        sqlx::query(statement).execute(pool).await?;
+    }
     Ok(())
 }
 
@@ -335,20 +308,18 @@ pub(crate) async fn reconcile_retained_payload_references(
         r#"WITH orphaned_identities AS MATERIALIZED (
                SELECT identity.identity_key, identity.canonical_payload_id
                FROM panda.rivian_charge_payload_identities identity
-               LEFT JOIN panda.rivian_charge_payloads payload
-                 ON payload.id = identity.canonical_payload_id
                WHERE identity.canonical_payload_id IS NOT NULL
-                 AND payload.id IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM panda.rivian_charge_payloads payload
+                                 WHERE payload.id=identity.canonical_payload_id)
                ORDER BY identity.created_at, identity.identity_key
                FOR UPDATE OF identity SKIP LOCKED
                LIMIT $1
            ), orphaned_aliases AS MATERIALIZED (
                SELECT alias.charge_session_id, alias.external_id
                FROM panda.charge_session_external_aliases alias
-               LEFT JOIN panda.rivian_charge_payloads payload
-                 ON payload.id = alias.latest_payload_id
                WHERE alias.latest_payload_id IS NOT NULL
-                 AND payload.id IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM panda.rivian_charge_payloads payload
+                                 WHERE payload.id=alias.latest_payload_id)
                ORDER BY alias.updated_at, alias.charge_session_id, alias.external_id
                FOR UPDATE OF alias SKIP LOCKED
                LIMIT $2
@@ -396,51 +367,42 @@ async fn pending_count(pool: &PgPool) -> Result<i64> {
 }
 
 async fn mark_started(pool: &PgPool) -> Result<()> {
-    sqlx::query(
-        "UPDATE panda.charge_payload_identity_backfill_status
-         SET status = 'running',
-             last_error = NULL,
-             started_at = now(),
-             completed_at = NULL,
-             heartbeat_at = now(),
-             updated_at = now()
-         WHERE job_key = $1",
-    )
-    .bind(JOB_KEY)
-    .execute(pool)
-    .await?;
-    Ok(())
+    write_backfill_status(pool, "running", None).await
 }
 
 async fn mark_complete(pool: &PgPool) -> Result<()> {
-    sqlx::query(
-        "UPDATE panda.charge_payload_identity_backfill_status
-         SET status = 'complete',
-             last_error = NULL,
-             completed_at = COALESCE(completed_at, now()),
-             heartbeat_at = now(),
-             updated_at = now()
-         WHERE job_key = $1",
-    )
-    .bind(JOB_KEY)
-    .execute(pool)
-    .await?;
-    Ok(())
+    write_backfill_status(pool, "complete", None).await
 }
 
 async fn mark_error(pool: &PgPool, error: &str) -> Result<()> {
+    write_backfill_status(pool, "error", Some(error)).await
+}
+
+fn parse_env<T>(name: &str, default: T, expected: &str) -> Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    let raw = match std::env::var(name) {
+        Ok(raw) => Some(raw),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error).with_context(|| format!("read {name}")),
+    };
+    raw.map_or(Ok(default), |raw| {
+        raw.parse()
+            .with_context(|| format!("{name} must be {expected}"))
+    })
+}
+
+async fn write_backfill_status(pool: &PgPool, status: &str, error: Option<&str>) -> Result<()> {
     sqlx::query(
         "UPDATE panda.charge_payload_identity_backfill_status
-         SET status = 'error',
-             last_error = $1,
-             heartbeat_at = now(),
-             updated_at = now()
-         WHERE job_key = $2",
-    )
-    .bind(error)
-    .bind(JOB_KEY)
-    .execute(pool)
-    .await?;
+         SET status=$1, last_error=$2, heartbeat_at=now(), updated_at=now(),
+             started_at=CASE WHEN $1='running' THEN now() ELSE started_at END,
+             completed_at=CASE WHEN $1='running' THEN NULL
+                               WHEN $1='complete' THEN COALESCE(completed_at,now()) ELSE completed_at END
+         WHERE job_key=$3"
+    ).bind(status).bind(error).bind(JOB_KEY).execute(pool).await?;
     Ok(())
 }
 

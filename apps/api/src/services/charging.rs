@@ -6,13 +6,16 @@
 /// power_kw is the AC draw (positive or negative depending on sign convention;
 /// this function takes the absolute value).
 pub fn compute_energy_used_wh(samples: &[(f64, f64)]) -> f64 {
-    samples.windows(2).fold(0.0, |acc, w| {
-        let (t0, kw0) = w[0];
-        let (t1, _kw1) = w[1];
-        let dt_hours = (t1 - t0) / 3_600.0;
-        // Use left-endpoint rule; take |kw| to be sign-convention agnostic
-        acc + kw0.abs() * 1_000.0 * dt_hours
-    })
+    let mut previous = None;
+    let mut watt_hours = 0.0;
+    for &(timestamp, kilowatts) in samples {
+        if let Some((at, power)) = previous {
+            let hours = (timestamp - at) / 3_600.0;
+            watt_hours += f64::abs(power) * 1_000.0 * hours;
+        }
+        previous = Some((timestamp, kilowatts));
+    }
+    watt_hours
 }
 
 /// Classify charger type by peak observed power.

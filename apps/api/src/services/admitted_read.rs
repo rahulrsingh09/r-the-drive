@@ -8,8 +8,12 @@ use std::{
 
 pub(crate) struct AdmittedRead {
     pool: PgPool,
-    transaction: Option<Transaction<'static, Postgres>>,
-    permit: Option<ResourcePermit>,
+    lease: Option<ReadLease>,
+}
+
+struct ReadLease {
+    transaction: Transaction<'static, Postgres>,
+    permit: ResourcePermit,
     backend_pid: Option<i32>,
 }
 
@@ -19,74 +23,88 @@ impl AdmittedRead {
         permit: ResourcePermit,
         timeout_seconds: u64,
     ) -> Result<Self, AppError> {
+        let transaction = pool.begin().await?;
         let mut read = Self {
             pool: pool.clone(),
-            transaction: None,
-            permit: Some(permit),
-            backend_pid: None,
+            lease: Some(ReadLease {
+                transaction,
+                permit,
+                backend_pid: None,
+            }),
         };
-        read.transaction = Some(pool.begin().await?);
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *read)
             .await?;
-        sqlx::query("SELECT set_config('statement_timeout', $1, true)")
-            .bind(format!("{}ms", timeout_seconds.saturating_mul(1000)))
-            .execute(&mut *read)
-            .await?;
-        read.backend_pid = Some(
-            sqlx::query_scalar("SELECT pg_backend_pid()")
+        let (_, pid): (String, i32) =
+            sqlx::query_as("SELECT set_config('statement_timeout', $1, true), pg_backend_pid()")
+                .bind(format!("{}ms", timeout_seconds.saturating_mul(1000)))
                 .fetch_one(&mut *read)
-                .await?,
-        );
+                .await?;
+        read.lease
+            .as_mut()
+            .expect("active read transaction")
+            .backend_pid = Some(pid);
         Ok(read)
     }
 
     pub(crate) async fn commit(mut self) -> Result<(), AppError> {
-        let tx = self.transaction.take().expect("active read transaction");
-        let permit = self.permit.take();
-        // COMMIT and its permit also survive cancellation of their waiter.
-        tokio::spawn(async move {
-            let _permit = permit;
-            tx.commit().await.map_err(AppError::from)
-        })
-        .await
-        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
+        let lease = self.lease.take().expect("active read transaction");
+        let completion = tokio::spawn(lease.finish(None));
+        match completion.await {
+            Ok(result) => result.map_err(AppError::from),
+            Err(error) => Err(AppError::Internal(anyhow::anyhow!(error))),
+        }
     }
 }
 
 impl Deref for AdmittedRead {
     type Target = PgConnection;
     fn deref(&self) -> &Self::Target {
-        self.transaction
-            .as_deref()
+        &self
+            .lease
+            .as_ref()
             .expect("active read transaction")
+            .transaction
     }
 }
 
 impl DerefMut for AdmittedRead {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.transaction
-            .as_deref_mut()
+        &mut self
+            .lease
+            .as_mut()
             .expect("active read transaction")
+            .transaction
     }
 }
 
 impl Drop for AdmittedRead {
     fn drop(&mut self) {
-        let Some(tx) = self.transaction.take() else {
-            return;
-        };
-        let permit = self.permit.take();
-        let pool = self.pool.clone();
-        let pid = self.backend_pid;
-        tokio::spawn(async move {
-            let _permit = permit;
-            if let Some(pid) = pid {
-                // Use a short-lived control connection: the main pool may be
-                // occupied, or configured with a single connection in tests.
-                // The retained transaction prevents this PID being reused.
+        if let Some(lease) = self.lease.take() {
+            let options = self.pool.connect_options();
+            tokio::spawn(async move {
+                if let Err(error) = lease.finish(Some(options)).await {
+                    tracing::warn!(?error, "heavy read rollback failed");
+                }
+            });
+        }
+    }
+}
+
+impl ReadLease {
+    async fn finish(
+        self,
+        cancel: Option<std::sync::Arc<sqlx::postgres::PgConnectOptions>>,
+    ) -> sqlx::Result<()> {
+        let Self {
+            transaction,
+            permit,
+            backend_pid,
+        } = self;
+        let result = if let Some(options) = cancel {
+            if let Some(pid) = backend_pid {
                 let cancelled = tokio::time::timeout(Duration::from_secs(5), async {
-                    let mut control = PgConnection::connect_with(&pool.connect_options()).await?;
+                    let mut control = PgConnection::connect_with(&options).await?;
                     sqlx::query_scalar::<_, bool>("SELECT pg_cancel_backend($1)")
                         .bind(pid)
                         .fetch_one(&mut control)
@@ -101,11 +119,11 @@ impl Drop for AdmittedRead {
                     );
                 }
             }
-            // Rollback drains the pending server response. Keep admission
-            // until that work has ended, even if the client has disconnected.
-            if let Err(error) = tx.rollback().await {
-                tracing::warn!(?error, "heavy read rollback failed");
-            }
-        });
+            transaction.rollback().await
+        } else {
+            transaction.commit().await
+        };
+        drop(permit);
+        result
     }
 }

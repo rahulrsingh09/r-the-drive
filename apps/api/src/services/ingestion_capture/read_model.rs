@@ -70,32 +70,35 @@ async fn event_stats(pool: &PgPool, capture_id: Uuid) -> sqlx::Result<EventStats
 }
 
 pub async fn status(pool: &PgPool, vehicle_id: Uuid) -> sqlx::Result<CaptureStatus> {
-    let Some(row) = load_row(pool, vehicle_id).await? else {
-        return Ok(CaptureStatus {
-            state: "idle",
-            started_at: None,
-            ends_at: None,
-            stopped_at: None,
-            stop_reason: None,
-            event_count: 0,
-            last_event_at: None,
-            truncated: false,
-        });
+    let mut status = CaptureStatus {
+        state: "idle",
+        started_at: None,
+        ends_at: None,
+        stopped_at: None,
+        stop_reason: None,
+        event_count: 0,
+        last_event_at: None,
+        truncated: false,
     };
-    let stats = event_stats(pool, row.capture_id).await?;
-    let running = row.stopped_at.is_none() && row.enabled_until > Utc::now();
-    Ok(CaptureStatus {
-        state: if running { "capturing" } else { "stopped" },
-        started_at: Some(row.started_at),
-        ends_at: Some(row.enabled_until),
-        stopped_at: row.stopped_at.or((!running).then_some(row.enabled_until)),
-        stop_reason: row
-            .stop_reason
-            .or((!running).then(|| StopReason::Expired.as_str().to_owned())),
-        event_count: stats.count,
-        last_event_at: stats.last_event_at,
-        truncated: stats.truncated,
-    })
+    if let Some(row) = load_row(pool, vehicle_id).await? {
+        let stats = event_stats(pool, row.capture_id).await?;
+        let running = row.stopped_at.is_none() && row.enabled_until > Utc::now();
+        status.state = if running { "capturing" } else { "stopped" };
+        status.started_at = Some(row.started_at);
+        status.ends_at = Some(row.enabled_until);
+        status.stopped_at = row.stopped_at;
+        status.stop_reason = row.stop_reason;
+        if !running {
+            status.stopped_at.get_or_insert(row.enabled_until);
+            status
+                .stop_reason
+                .get_or_insert_with(|| StopReason::Expired.as_str().to_owned());
+        }
+        status.event_count = stats.count;
+        status.last_event_at = stats.last_event_at;
+        status.truncated = stats.truncated;
+    }
+    Ok(status)
 }
 
 /// A finished or running capture, ready to stream as NDJSON.
@@ -143,19 +146,20 @@ pub async fn export_rows(
     after_id: i64,
     limit: i64,
 ) -> sqlx::Result<Vec<(i64, Value)>> {
-    let rows = sqlx::query_as::<_, (i64, DateTime<Utc>, String, Value)>(
-        "SELECT id, recorded_at, kind, fields FROM panda.vehicle_ingestion_capture_events \
-         WHERE capture_id = $1 AND id > $2 ORDER BY id LIMIT $3",
+    use futures::TryStreamExt;
+    let mut rows = sqlx::query_as::<_, (i64, DateTime<Utc>, String, Value)>(
+        "SELECT id,recorded_at,kind,fields FROM panda.vehicle_ingestion_capture_events
+         WHERE capture_id=$1 AND id>$2 ORDER BY id LIMIT $3",
     )
     .bind(capture_id)
     .bind(after_id)
     .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, recorded_at, kind, fields)| (id, export_line(recorded_at, &kind, fields)))
-        .collect())
+    .fetch(pool);
+    let mut exported = Vec::new();
+    while let Some((id, at, kind, fields)) = rows.try_next().await? {
+        exported.push((id, export_line(at, &kind, fields)));
+    }
+    Ok(exported)
 }
 
 fn export_line(recorded_at: DateTime<Utc>, kind: &str, fields: Value) -> Value {
@@ -167,19 +171,19 @@ fn export_line(recorded_at: DateTime<Utc>, kind: &str, fields: Value) -> Value {
 }
 
 pub fn export_filename(model: Option<&str>, started_at: DateTime<Utc>) -> String {
-    let model: String = model
+    let mut normalized = String::new();
+    for letter in model
         .unwrap_or("vehicle")
         .chars()
         .filter(char::is_ascii_alphanumeric)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let model = if model.is_empty() {
-        "vehicle".to_owned()
-    } else {
-        model
-    };
+    {
+        normalized.push(letter.to_ascii_lowercase());
+    }
+    if normalized.is_empty() {
+        normalized.push_str("vehicle");
+    }
     format!(
-        "panda-capture-{model}-{}.jsonl",
+        "panda-capture-{normalized}-{}.jsonl",
         started_at.format("%Y%m%dT%H%MZ")
     )
 }
@@ -195,24 +199,38 @@ fn build_header(
     dropped_events: i64,
     truncated: bool,
 ) -> Value {
-    let counts: Map<String, Value> = counts_by_kind
-        .iter()
-        .map(|(kind, count)| (kind.clone(), Value::from(*count)))
-        .collect();
-    serde_json::json!({
-        "kind": "header",
-        "format_version": FORMAT_VERSION,
-        "app_version": std::env::var("PANDA_BUILD_VERSION")
+    #[derive(serde::Serialize)]
+    struct Header<'a> {
+        kind: &'static str,
+        format_version: u32,
+        app_version: String,
+        model: Option<&'a str>,
+        started_at: String,
+        stopped_at: Option<String>,
+        stop_reason: Option<&'a str>,
+        event_count: i64,
+        counts_by_kind: Map<String, Value>,
+        dropped_events: i64,
+        truncated: bool,
+    }
+    let header = Header {
+        kind: "header",
+        format_version: FORMAT_VERSION,
+        app_version: std::env::var("PANDA_BUILD_VERSION")
             .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into()),
-        "model": model,
-        "started_at": started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "stopped_at": stopped_at.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
-        "stop_reason": stop_reason,
-        "event_count": event_count,
-        "counts_by_kind": counts,
-        "dropped_events": dropped_events,
-        "truncated": truncated,
-    })
+        model,
+        started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        stopped_at: stopped_at.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        stop_reason,
+        event_count,
+        counts_by_kind: counts_by_kind
+            .iter()
+            .map(|(name, count)| (name.clone(), Value::from(*count)))
+            .collect(),
+        dropped_events,
+        truncated,
+    };
+    serde_json::to_value(header).expect("capture header contains only JSON-compatible fields")
 }
 
 #[cfg(test)]

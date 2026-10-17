@@ -43,6 +43,74 @@ pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> 
 /// Fill missing coordinates, then saved-place matches, for trips and charge
 /// sessions. Each step logs its own failure so one bad step cannot starve the
 /// others; the address pass that follows picks up any trips still unresolved.
+enum AnnotationPatch {
+    Trip([Option<Uuid>; 4]),
+    Charge([Option<Uuid>; 2], Option<bool>),
+}
+
+impl AnnotationPatch {
+    async fn persist(self, pool: &PgPool, item: Uuid, user: Uuid) -> Result<()> {
+        let (table, id_column, timestamp, columns, ids, home) = match self {
+            Self::Trip(ids) => (
+                "trip_user_annotations",
+                "trip_id",
+                "matched_at",
+                &[
+                    "start_geofence_id",
+                    "end_geofence_id",
+                    "start_address_id",
+                    "end_address_id",
+                ][..],
+                ids.to_vec(),
+                None,
+            ),
+            Self::Charge(ids, home) => (
+                "charge_session_user_annotations",
+                "charge_session_id",
+                "computed_at",
+                &["geofence_id", "address_id", "is_home"][..],
+                ids.to_vec(),
+                Some(home),
+            ),
+        };
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!(
+            "INSERT INTO panda.{table}({id_column},user_id,{}, {timestamp}) VALUES(",
+            columns.join(",")
+        ));
+        query.push_bind(item).push(",").push_bind(user);
+        for id in ids {
+            query.push(",").push_bind(id);
+        }
+        if let Some(home) = home {
+            query.push(",").push_bind(home);
+        }
+        query.push(format!(
+            ",now()) ON CONFLICT({id_column},user_id) DO UPDATE SET "
+        ));
+        for column in columns {
+            query.push(format!(
+                "{column}=COALESCE(EXCLUDED.{column},panda.{table}.{column}),"
+            ));
+        }
+        query.push(format!("{timestamp}=now(),updated_at=now()"));
+        query.build().execute(pool).await?;
+        Ok(())
+    }
+}
+
+async fn complete_vehicle_enrichment(
+    pool: &PgPool,
+    client: &Client,
+    vehicle: Uuid,
+    weather: impl Future<Output = Result<BackfillStats>>,
+) -> Result<TripEnrichmentReport> {
+    Ok(TripEnrichmentReport {
+        geofence_matches: backfill_trip_geofence_matches(pool, Some(vehicle)).await?,
+        address_matches: backfill_trip_addresses(pool, client, Some(vehicle)).await?,
+        outside_temps: weather.await?,
+    })
+}
+
 #[cfg(test)]
 async fn reconcile_locations(pool: &PgPool, client: &Client) {
     jobs::locations(pool, client).await;
@@ -263,15 +331,8 @@ pub async fn enrich_trip_history_for_vehicle(
     client: &Client,
     vehicle_id: Uuid,
 ) -> Result<TripEnrichmentReport> {
-    let geofence_matches = backfill_trip_geofence_matches(pool, Some(vehicle_id)).await?;
-    let address_matches = backfill_trip_addresses(pool, client, Some(vehicle_id)).await?;
-    let outside_temps = enqueue_trip_weather_enrichment(pool, Some(vehicle_id)).await?;
-
-    Ok(TripEnrichmentReport {
-        geofence_matches,
-        address_matches,
-        outside_temps,
-    })
+    let weather = enqueue_trip_weather_enrichment(pool, Some(vehicle_id));
+    complete_vehicle_enrichment(pool, client, vehicle_id, weather).await
 }
 
 pub async fn enrich_trip_history_for_vehicle_with_lookup<F, Fut>(
@@ -284,16 +345,8 @@ where
     F: FnMut(f64, f64, DateTime<Utc>) -> Fut,
     Fut: Future<Output = Option<f64>>,
 {
-    let geofence_matches = backfill_trip_geofence_matches(pool, Some(vehicle_id)).await?;
-    let address_matches = backfill_trip_addresses(pool, client, Some(vehicle_id)).await?;
-    let outside_temps =
-        backfill_trip_outside_temps_with_lookup(pool, Some(vehicle_id), lookup, None).await?;
-
-    Ok(TripEnrichmentReport {
-        geofence_matches,
-        address_matches,
-        outside_temps,
-    })
+    let weather = backfill_trip_outside_temps_with_lookup(pool, Some(vehicle_id), lookup, None);
+    complete_vehicle_enrichment(pool, client, vehicle_id, weather).await
 }
 
 pub async fn report_trip_enrichment_gaps(
@@ -301,7 +354,12 @@ pub async fn report_trip_enrichment_gaps(
     vehicle_id: Option<Uuid>,
 ) -> Result<Vec<TripEnrichmentDiagnosticsRow>> {
     let rows = sqlx::query_as::<_, TripEnrichmentDiagnosticsRow>(
-        r#"SELECT
+        r#"WITH eligible AS MATERIALIZED (
+               SELECT *,
+                 start_lat IS NOT NULL AND start_lng IS NOT NULL AND NOT(start_lat=0 AND start_lng=0) AS usable_start,
+                 end_lat IS NOT NULL AND end_lng IS NOT NULL AND NOT(end_lat=0 AND end_lng=0) AS usable_end
+               FROM panda.trips WHERE ($1::uuid IS NULL OR vehicle_id=$1)
+           ) SELECT
                t.vehicle_id,
                (t.started_at AT TIME ZONE 'UTC')::date AS trip_day,
                COUNT(*)::int8 AS total_trips,
@@ -312,21 +370,15 @@ pub async fn report_trip_enrichment_gaps(
                COUNT(*) FILTER (WHERE t.outside_temp_c IS NULL)::int8 AS missing_outside_temp_c,
                COUNT(*) FILTER (
                    WHERE t.start_address_id IS NULL
-                     AND t.start_lat IS NOT NULL
-                     AND t.start_lng IS NOT NULL
-                     AND NOT (t.start_lat = 0 AND t.start_lng = 0)
+                     AND t.usable_start
                )::int8 AS missing_start_address_with_coordinates,
                COUNT(*) FILTER (
                    WHERE t.end_address_id IS NULL
-                     AND t.end_lat IS NOT NULL
-                     AND t.end_lng IS NOT NULL
-                     AND NOT (t.end_lat = 0 AND t.end_lng = 0)
+                     AND t.usable_end
                )::int8 AS missing_end_address_with_coordinates,
                COUNT(*) FILTER (
                    WHERE t.start_address_id IS NULL
-                     AND t.start_lat IS NOT NULL
-                     AND t.start_lng IS NOT NULL
-                     AND NOT (t.start_lat = 0 AND t.start_lng = 0)
+                     AND t.usable_start
                      AND EXISTS (
                          SELECT 1
                          FROM panda.addresses a
@@ -338,9 +390,7 @@ pub async fn report_trip_enrichment_gaps(
                )::int8 AS start_address_cached_matches,
                COUNT(*) FILTER (
                    WHERE t.end_address_id IS NULL
-                     AND t.end_lat IS NOT NULL
-                     AND t.end_lng IS NOT NULL
-                     AND NOT (t.end_lat = 0 AND t.end_lng = 0)
+                     AND t.usable_end
                      AND EXISTS (
                          SELECT 1
                          FROM panda.addresses a
@@ -352,9 +402,7 @@ pub async fn report_trip_enrichment_gaps(
                )::int8 AS end_address_cached_matches,
                COUNT(*) FILTER (
                    WHERE t.outside_temp_c IS NULL
-                     AND t.start_lat IS NOT NULL
-                     AND t.start_lng IS NOT NULL
-                     AND NOT (t.start_lat = 0 AND t.start_lng = 0)
+                     AND t.usable_start
                )::int8 AS missing_outside_temp_with_coordinates,
                COUNT(*) FILTER (
                    WHERE t.outside_temp_c IS NULL
@@ -364,8 +412,7 @@ pub async fn report_trip_enrichment_gaps(
                          OR (t.start_lat = 0 AND t.start_lng = 0)
                      )
                )::int8 AS missing_outside_temp_unrecoverable_no_start_coordinates
-           FROM panda.trips t
-           WHERE ($1::uuid IS NULL OR t.vehicle_id = $1)
+           FROM eligible t
            GROUP BY t.vehicle_id, trip_day
            ORDER BY trip_day DESC, t.vehicle_id"#,
     )
@@ -802,56 +849,54 @@ pub async fn backfill_trip_coordinates(
     .bind(RECONCILIATION_COORDINATE_BATCH_SIZE)
     .fetch_all(pool)
     .await?;
-
     let mut stats = BackfillStats {
         scanned: trips.len(),
         ..BackfillStats::default()
     };
-
-    for trip in &trips {
-        let start = HistoryCoordinates {
-            latitude: trip.start_lat,
-            longitude: trip.start_lng,
+    for trip in trips {
+        let mut fixes = [None, None];
+        let boundaries = [
+            (trip.start_lat, trip.start_lng, trip.started_at),
+            (trip.end_lat, trip.end_lng, trip.ended_at),
+        ];
+        for ((latitude, longitude, at), fix) in boundaries.into_iter().zip(&mut fixes) {
+            *fix = HistoryCoordinates {
+                latitude,
+                longitude,
+            }
+            .recover(pool, trip.vehicle_id, at)
+            .await?;
         }
-        .recover(pool, trip.vehicle_id, trip.started_at)
-        .await?;
-        let end = HistoryCoordinates {
-            latitude: trip.end_lat,
-            longitude: trip.end_lng,
-        }
-        .recover(pool, trip.vehicle_id, trip.ended_at)
-        .await?;
-
-        if start.is_none() && end.is_none() {
+        if fixes.iter().all(Option::is_none) {
             stats.skipped += 1;
-            continue;
+        } else {
+            let mut update = sqlx::QueryBuilder::<sqlx::Postgres>::new("UPDATE panda.trips SET ");
+            for (index, (prefix, fix)) in ["start", "end"].into_iter().zip(fixes).enumerate() {
+                if index > 0 {
+                    update.push(",");
+                }
+                for (axis, coordinate) in [
+                    ("lat", fix.map(|point| point.0)),
+                    ("lng", fix.map(|point| point.1)),
+                ] {
+                    if axis == "lng" {
+                        update.push(",");
+                    }
+                    update.push(format!("{prefix}_{axis}=CASE WHEN {prefix}_lat IS NULL OR {prefix}_lng IS NULL THEN COALESCE("))
+                        .push_bind(coordinate).push(format!(",{prefix}_{axis}) ELSE {prefix}_{axis} END"));
+                }
+            }
+            update
+                .push(" WHERE id=")
+                .push_bind(trip.id)
+                .build()
+                .execute(pool)
+                .await?;
+            stats.filled += 1;
         }
-
-        sqlx::query(
-            r#"UPDATE panda.trips
-               SET start_lat = CASE WHEN start_lat IS NULL OR start_lng IS NULL THEN COALESCE($2, start_lat) ELSE start_lat END,
-                   start_lng = CASE WHEN start_lat IS NULL OR start_lng IS NULL THEN COALESCE($3, start_lng) ELSE start_lng END,
-                   end_lat   = CASE WHEN end_lat IS NULL OR end_lng IS NULL THEN COALESCE($4, end_lat) ELSE end_lat END,
-                   end_lng   = CASE WHEN end_lat IS NULL OR end_lng IS NULL THEN COALESCE($5, end_lng) ELSE end_lng END
-               WHERE id = $1"#,
-        )
-        .bind(trip.id)
-        .bind(start.map(|(lat, _)| lat))
-        .bind(start.map(|(_, lng)| lng))
-        .bind(end.map(|(lat, _)| lat))
-        .bind(end.map(|(_, lng)| lng))
-        .execute(pool)
-        .await?;
-        stats.filled += 1;
     }
-
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        skipped = stats.skipped,
-        "trip_enrichment.trip_coordinates.complete"
-    );
+    info!(vehicle_id = ?vehicle_id, scanned=stats.scanned, filled=stats.filled, skipped=stats.skipped,
+        "trip_enrichment.trip_coordinates.complete");
     Ok(stats)
 }
 
@@ -892,95 +937,58 @@ pub async fn backfill_charge_session_locations(
     .bind(RECONCILIATION_ADDRESS_BATCH_SIZE)
     .fetch_all(pool)
     .await?;
-
     let mut stats = BackfillStats {
         scanned: sessions.len(),
         ..BackfillStats::default()
     };
-
-    for session in &sessions {
-        let owner_id = match get_vehicle_owner_id(pool, session.vehicle_id).await {
-            Ok(Some(user_id)) => user_id,
-            Ok(None) => {
-                warn!(session_id = %session.id, "trip_enrichment.charge_location.owner_missing");
-                stats.failed += 1;
-                continue;
+    for session in sessions {
+        let completed: Result<bool> = async {
+            let owner = match get_vehicle_owner_id(pool, session.vehicle_id).await {
+                Ok(Some(owner)) => owner,
+                Ok(None) => {
+                    warn!(session_id = %session.id,"trip_enrichment.charge_location.owner_missing");
+                    return Ok(false);
+                }
+                Err(err) => {
+                    warn!(session_id = %session.id,error = %err,"trip_enrichment.charge_location.owner_lookup_failed");
+                    return Ok(false);
+                }
+            };
+            let location = resolve_trip_location(pool, client, owner,
+                session.location_lat.expect("checked"), session.location_lng.expect("checked")).await?;
+            if location.geofence_id.is_none() && location.address_id.is_none() {
+                warn!(session_id = %session.id,lat=session.location_lat,lng=session.location_lng,
+                    "trip_enrichment.charge_location.lookup_failed");
+                return Ok(false);
             }
-            Err(err) => {
-                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.owner_lookup_failed");
-                stats.failed += 1;
-                continue;
-            }
-        };
-
-        let matched = resolve_trip_location(
-            pool,
-            client,
-            owner_id,
-            session.location_lat.expect("checked"),
-            session.location_lng.expect("checked"),
-        )
-        .await?;
-
-        if matched.geofence_id.is_none() && matched.address_id.is_none() {
-            warn!(
-                session_id = %session.id,
-                lat = session.location_lat,
-                lng = session.location_lng,
-                "trip_enrichment.charge_location.lookup_failed"
-            );
-            stats.failed += 1;
-            continue;
-        }
-
-        if let Err(err) = sqlx::query(
-            r#"UPDATE panda.charge_sessions
+            let update = sqlx::query(r#"UPDATE panda.charge_sessions
                SET geofence_id = COALESCE(geofence_id, $2),
                    address_id  = COALESCE(address_id,  $3),
                    is_home     = COALESCE(is_home,     $4)
                WHERE id = $1
-                 AND location_override_mode = 'automatic'"#,
-        )
-        .bind(session.id)
-        .bind(matched.geofence_id)
-        .bind(matched.address_id)
-        .bind(matched.is_home)
-        .execute(pool)
-        .await
-        {
-            warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.session_update_failed");
-            stats.failed += 1;
-            continue;
-        }
-
-        upsert_charge_session_user_annotation(
-            pool,
-            session.id,
-            owner_id,
-            matched.geofence_id,
-            matched.address_id,
-            matched.is_home,
-        )
-        .await?;
-
-        // A newly matched geofence can carry a cost profile (e.g. home rates).
-        if matched.geofence_id.is_some() {
-            if let Err(err) = recompute_charge_session_cost(pool, session.id).await {
-                warn!(session_id = %session.id, error = %err, "trip_enrichment.charge_location.cost_recompute_failed");
+                 AND location_override_mode = 'automatic'"#)
+                .bind(session.id).bind(location.geofence_id).bind(location.address_id).bind(location.is_home)
+                .execute(pool).await;
+            if let Err(err) = update {
+                warn!(session_id = %session.id,error = %err,"trip_enrichment.charge_location.session_update_failed");
+                return Ok(false);
             }
+            upsert_charge_session_user_annotation(pool,session.id,owner,location.geofence_id,
+                location.address_id,location.is_home).await?;
+            if location.geofence_id.is_some() {
+                if let Err(err) = recompute_charge_session_cost(pool,session.id).await {
+                    warn!(session_id = %session.id,error = %err,"trip_enrichment.charge_location.cost_recompute_failed");
+                }
+            }
+            Ok(true)
+        }.await;
+        match completed? {
+            true => stats.filled += 1,
+            false => stats.failed += 1,
         }
-
-        stats.filled += 1;
     }
-
-    info!(
-        vehicle_id = ?vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip_enrichment.charge_location.complete"
-    );
+    info!(vehicle_id = ?vehicle_id,scanned=stats.scanned,filled=stats.filled,failed=stats.failed,skipped=stats.skipped,
+        "trip_enrichment.charge_location.complete");
     Ok(stats)
 }
 
@@ -1144,26 +1152,18 @@ where
 }
 
 async fn find_cached_address_id(pool: &PgPool, lat: f64, lon: f64) -> Option<Uuid> {
-    sqlx::query_scalar(
-        r#"SELECT id
-           FROM panda.addresses
-           WHERE earth_distance(
-                     ll_to_earth(latitude, longitude),
-                     ll_to_earth($1, $2)
-                 ) < $3
-           ORDER BY earth_distance(
-                     ll_to_earth(latitude, longitude),
-                     ll_to_earth($1, $2)
-                 )
-           LIMIT 1"#,
+    let result = sqlx::query_scalar(
+        "WITH distances AS MATERIALIZED (
+            SELECT id,earth_distance(ll_to_earth(latitude,longitude),ll_to_earth($1,$2)) AS meters
+            FROM panda.addresses
+         ) SELECT id FROM distances WHERE meters<$3 ORDER BY meters LIMIT 1",
     )
     .bind(lat)
     .bind(lon)
     .bind(ADDRESS_CACHE_RADIUS_METERS)
     .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
+    .await;
+    result.unwrap_or_default()
 }
 
 async fn reverse_geocode_and_store(
@@ -1270,28 +1270,14 @@ async fn upsert_trip_user_annotation(
     start_address_id: Option<Uuid>,
     end_address_id: Option<Uuid>,
 ) -> Result<()> {
-    sqlx::query(
-        r#"INSERT INTO panda.trip_user_annotations
-           (trip_id, user_id, start_geofence_id, end_geofence_id, start_address_id, end_address_id, matched_at)
-           VALUES ($1, $2, $3, $4, $5, $6, now())
-           ON CONFLICT (trip_id, user_id) DO UPDATE
-           SET start_geofence_id = COALESCE(EXCLUDED.start_geofence_id, panda.trip_user_annotations.start_geofence_id),
-               end_geofence_id = COALESCE(EXCLUDED.end_geofence_id, panda.trip_user_annotations.end_geofence_id),
-               start_address_id = COALESCE(EXCLUDED.start_address_id, panda.trip_user_annotations.start_address_id),
-               end_address_id = COALESCE(EXCLUDED.end_address_id, panda.trip_user_annotations.end_address_id),
-               matched_at = now(),
-               updated_at = now()"#,
-    )
-    .bind(trip_id)
-    .bind(user_id)
-    .bind(start_geofence_id)
-    .bind(end_geofence_id)
-    .bind(start_address_id)
-    .bind(end_address_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
+    AnnotationPatch::Trip([
+        start_geofence_id,
+        end_geofence_id,
+        start_address_id,
+        end_address_id,
+    ])
+    .persist(pool, trip_id, user_id)
+    .await
 }
 
 async fn upsert_charge_session_user_annotation(
@@ -1302,26 +1288,9 @@ async fn upsert_charge_session_user_annotation(
     address_id: Option<Uuid>,
     is_home: Option<bool>,
 ) -> Result<()> {
-    sqlx::query(
-        r#"INSERT INTO panda.charge_session_user_annotations
-           (charge_session_id, user_id, geofence_id, address_id, is_home, computed_at)
-           VALUES ($1, $2, $3, $4, $5, now())
-           ON CONFLICT (charge_session_id, user_id) DO UPDATE
-           SET geofence_id = COALESCE(EXCLUDED.geofence_id, panda.charge_session_user_annotations.geofence_id),
-               address_id = COALESCE(EXCLUDED.address_id, panda.charge_session_user_annotations.address_id),
-               is_home = COALESCE(EXCLUDED.is_home, panda.charge_session_user_annotations.is_home),
-               computed_at = now(),
-               updated_at = now()"#,
-    )
-    .bind(charge_session_id)
-    .bind(user_id)
-    .bind(geofence_id)
-    .bind(address_id)
-    .bind(is_home)
-    .execute(pool)
-    .await?;
-
-    Ok(())
+    AnnotationPatch::Charge([geofence_id, address_id], is_home)
+        .persist(pool, charge_session_id, user_id)
+        .await
 }
 
 fn has_usable_coordinate_pair(lat: Option<f64>, lng: Option<f64>) -> bool {

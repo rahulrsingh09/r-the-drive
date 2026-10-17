@@ -110,12 +110,6 @@ struct MatchRow {
 }
 
 #[derive(Debug, FromRow)]
-struct AliasRow {
-    external_id: String,
-    alias_kind: String,
-}
-
-#[derive(Debug, FromRow)]
 struct BackfillAliasSeedRow {
     id: Uuid,
     rivian_session_id: Option<String>,
@@ -145,34 +139,44 @@ pub fn confidence_for_source(source: &str) -> &'static str {
 }
 
 pub fn infer_is_rivian_network(vendor: Option<&str>) -> Option<bool> {
-    let vendor = vendor?.trim();
-    if vendor.is_empty() {
-        return None;
-    }
-
-    let normalized = vendor.to_ascii_lowercase();
-    let known_network = matches!(
-        normalized.as_str(),
-        "rivian" | "electrify america" | "evgo" | "chargepoint" | "tesla"
-    );
-    Some(known_network)
+    vendor
+        .map(str::trim)
+        .filter(|vendor| !vendor.is_empty())
+        .map(|vendor| {
+            [
+                "rivian",
+                "electrify america",
+                "evgo",
+                "chargepoint",
+                "tesla",
+            ]
+            .iter()
+            .any(|network| vendor.eq_ignore_ascii_case(network))
+        })
 }
 
 pub fn normalize_api_charger_type(value: Option<&str>) -> Option<&'static str> {
-    match value?.trim().to_ascii_lowercase().as_str() {
-        "wallbox" | "ac" | "level1" | "level2" | "j1772" => Some("ac"),
-        "dc" | "dcfc" | "ran15_dispenser" | "supercharger" => Some("dc"),
-        _ => None,
-    }
+    let value = value?.trim();
+    [
+        ("ac", &["wallbox", "ac", "level1", "level2", "j1772"][..]),
+        ("dc", &["dc", "dcfc", "ran15_dispenser", "supercharger"][..]),
+    ]
+    .into_iter()
+    .find_map(|(kind, names)| {
+        names
+            .iter()
+            .any(|name| value.eq_ignore_ascii_case(name))
+            .then_some(kind)
+    })
 }
 
 pub fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option<&'static str> {
-    if is_home == Some(true) {
-        return Some("ac");
-    }
-
-    match vendor?.trim().to_ascii_lowercase().as_str() {
-        "tesla" | "rivian" | "electrify america" | "evgo" => Some("dc"),
+    match (is_home, vendor.map(str::trim)) {
+        (Some(true), _) => Some("ac"),
+        (_, Some(vendor)) => ["tesla", "rivian", "electrify america", "evgo"]
+            .iter()
+            .any(|name| vendor.eq_ignore_ascii_case(name))
+            .then_some("dc"),
         _ => None,
     }
 }
@@ -187,20 +191,20 @@ pub fn normalize_grouping_key(raw: Option<&str>) -> Option<String> {
 }
 
 fn parse_data_source_alias(data_source: &str) -> Option<(ExternalAliasKind, String)> {
-    let mut parts = data_source.splitn(2, ':');
-    let prefix = parts.next()?.trim();
-    let external_id = parts.next()?.trim();
+    let (prefix, external_id) = data_source.split_once(':')?;
+    let external_id = external_id.trim();
     if external_id.is_empty() {
         return None;
     }
-
-    let kind = match prefix {
-        "CDRS" => ExternalAliasKind::Cdrs,
-        "TXN" => ExternalAliasKind::Txn,
-        "VTXN" => ExternalAliasKind::Vtxn,
-        _ => ExternalAliasKind::Unknown,
-    };
-    Some((kind, external_id.to_string()))
+    let kind = [
+        ("CDRS", ExternalAliasKind::Cdrs),
+        ("TXN", ExternalAliasKind::Txn),
+        ("VTXN", ExternalAliasKind::Vtxn),
+    ]
+    .into_iter()
+    .find_map(|(label, kind)| (prefix.trim() == label).then_some(kind))
+    .unwrap_or(ExternalAliasKind::Unknown);
+    Some((kind, external_id.to_owned()))
 }
 
 fn infer_alias_kind_from_id(external_id: &str) -> ExternalAliasKind {
@@ -421,39 +425,18 @@ async fn find_overlapping_session(
     started_at: Option<DateTime<Utc>>,
     ended_at: Option<DateTime<Utc>>,
 ) -> Result<Option<MatchRow>> {
-    let Some(started_at) = started_at else {
-        return Ok(None);
-    };
-    let end_bound = ended_at.unwrap_or(started_at);
-
-    let matched = sqlx::query_as::<_, MatchRow>(
-        r#"
-        SELECT
-            cs.id,
-            cs.source
-        FROM panda.charge_sessions cs
-        WHERE cs.vehicle_id = $1
-          AND cs.started_at <= $3
-          AND COALESCE(cs.ended_at, cs.started_at) >= $2
-        ORDER BY CASE COALESCE(cs.source, '')
-                     WHEN 'telemetry+rivian_api' THEN 4
-                     WHEN 'telemetry' THEN 3
-                     WHEN 'rivian_api' THEN 1
-                     ELSE 2
-                 END DESC,
-                 ABS(EXTRACT(EPOCH FROM (cs.started_at - $2))) ASC,
-                 cs.started_at ASC,
-                 cs.id ASC
-        LIMIT 1
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(started_at)
-    .bind(end_bound)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(matched)
+    match started_at {
+        None => Ok(None),
+        Some(start) => Ok(sqlx::query_as::<_, MatchRow>(
+            "SELECT session.id,session.source FROM panda.charge_sessions session
+             LEFT JOIN (VALUES('rivian_api',1),('telemetry',3),('telemetry+rivian_api',4))
+                 AS priority(source,rank) ON priority.source=session.source
+             WHERE session.vehicle_id=$1 AND session.started_at<=$3
+               AND COALESCE(session.ended_at,session.started_at)>=$2
+             ORDER BY COALESCE(priority.rank,2) DESC,
+               ABS(EXTRACT(EPOCH FROM(session.started_at-$2))),session.started_at,session.id LIMIT 1"
+        ).bind(vehicle_id).bind(start).bind(ended_at.unwrap_or(start)).fetch_optional(pool).await?),
+    }
 }
 
 async fn find_time_window_session(
@@ -636,78 +619,63 @@ async fn insert_api_only_session(
     let Some(started_at) = summary.start_instant else {
         return Ok(None);
     };
-
-    let inserted = sqlx::query_scalar::<_, Uuid>(
-        r#"
-        INSERT INTO panda.charge_sessions
-            (
-                vehicle_id,
-                started_at,
-                ended_at,
-                api_started_at,
-                api_ended_at,
-                kwh_added,
-                rivian_session_id,
-                network_vendor,
-                range_added_km,
-                is_free_session,
-                is_rivian_network,
-                rivian_paid_total,
-                is_home,
-                charger_type,
-                duration_minutes,
-                source,
-                data_confidence,
-                rivian_charger_type,
-                currency_code,
-                rivian_city,
-                rivian_vehicle_id,
-                rivian_vehicle_name,
-                is_public,
-                rivian_meta
-            )
-        VALUES
-            (
-                $1,$2,$3,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                'rivian_api',
-                'api_only',
-                $14,$15,$16,$17,$18,$19,$20
-            )
-        ON CONFLICT DO NOTHING
-        RETURNING id
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(started_at)
-    .bind(summary.end_instant)
-    .bind(summary.total_energy_kwh)
-    .bind(preferred_external_id)
-    .bind(summary.vendor.as_deref())
-    .bind(summary.range_added_km)
-    .bind(summary.paid_total.map(|total| total == 0.0))
-    .bind(is_rivian_network)
-    .bind(summary.paid_total)
-    .bind(summary.is_home_charger)
-    .bind(
-        normalized_charger_type
-            .or_else(|| infer_api_charger_type(summary.vendor.as_deref(), summary.is_home_charger)),
-    )
-    .bind(
-        summary
-            .end_instant
-            .map(|ended_at| (ended_at - started_at).num_minutes() as i32),
-    )
-    .bind(summary.charger_type.as_deref())
-    .bind(summary.currency_code.as_deref())
-    .bind(summary.city.as_deref())
-    .bind(summary.vehicle_id.as_deref())
-    .bind(summary.vehicle_name.as_deref())
-    .bind(summary.is_public)
-    .bind(serde_json::to_value(summary).ok())
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(inserted)
+    let charger = normalized_charger_type
+        .or_else(|| infer_api_charger_type(summary.vendor.as_deref(), summary.is_home_charger));
+    let duration = summary
+        .end_instant
+        .map(|ended| (ended - started_at).num_minutes() as i32);
+    let mut insert = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "INSERT INTO panda.charge_sessions(
+            vehicle_id,started_at,ended_at,api_started_at,api_ended_at,
+            kwh_added,range_added_km,rivian_paid_total,
+            rivian_session_id,network_vendor,charger_type,source,data_confidence,
+            rivian_charger_type,currency_code,rivian_city,rivian_vehicle_id,rivian_vehicle_name,
+            is_free_session,is_rivian_network,is_home,is_public,duration_minutes,rivian_meta) ",
+    );
+    insert.push_values([()], |mut row, ()| {
+        row.push_bind(vehicle_id);
+        for at in [
+            Some(started_at),
+            summary.end_instant,
+            Some(started_at),
+            summary.end_instant,
+        ] {
+            row.push_bind(at);
+        }
+        for amount in [
+            summary.total_energy_kwh,
+            summary.range_added_km,
+            summary.paid_total,
+        ] {
+            row.push_bind(amount);
+        }
+        for text in [
+            preferred_external_id,
+            summary.vendor.as_deref(),
+            charger,
+            Some(CHARGE_SESSION_SOURCE_RIVIAN_API),
+            Some(CHARGE_SESSION_CONFIDENCE_API_ONLY),
+            summary.charger_type.as_deref(),
+            summary.currency_code.as_deref(),
+            summary.city.as_deref(),
+            summary.vehicle_id.as_deref(),
+            summary.vehicle_name.as_deref(),
+        ] {
+            row.push_bind(text);
+        }
+        for flag in [
+            summary.paid_total.map(|total| total == 0.0),
+            is_rivian_network,
+            summary.is_home_charger,
+            summary.is_public,
+        ] {
+            row.push_bind(flag);
+        }
+        row.push_bind(duration)
+            .push_bind(serde_json::to_value(summary).ok());
+    });
+    insert.push(" ON CONFLICT DO NOTHING RETURNING id");
+    Ok(insert.build_query_scalar().fetch_optional(pool).await?)
 }
 
 pub async fn upsert_external_aliases(
@@ -716,114 +684,62 @@ pub async fn upsert_external_aliases(
     aliases: &[ChargeSessionExternalAlias],
     payload_ref: Option<ChargeSessionPayloadRef>,
 ) -> Result<u64> {
-    let mut written = 0u64;
-    for alias in aliases {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO panda.charge_session_external_aliases (
-                charge_session_id,
-                external_id,
-                alias_kind,
-                transaction_id_grouping_key,
-                first_seen_at,
-                last_seen_at,
-                latest_payload_id,
-                latest_payload_captured_at
-            )
-            VALUES ($1,$2,$3,$4,now(),now(),$5,$6)
-            ON CONFLICT (charge_session_id, external_id) DO UPDATE
-            SET alias_kind = CASE
-                    WHEN panda.charge_session_external_aliases.alias_kind = 'legacy'
-                         AND EXCLUDED.alias_kind <> 'legacy'
-                    THEN EXCLUDED.alias_kind
-                    ELSE panda.charge_session_external_aliases.alias_kind
-                END,
-                transaction_id_grouping_key = COALESCE(
-                    EXCLUDED.transaction_id_grouping_key,
-                    panda.charge_session_external_aliases.transaction_id_grouping_key
-                ),
-                last_seen_at = GREATEST(
-                    panda.charge_session_external_aliases.last_seen_at,
-                    EXCLUDED.last_seen_at
-                ),
-                latest_payload_id = COALESCE(EXCLUDED.latest_payload_id, panda.charge_session_external_aliases.latest_payload_id),
-                latest_payload_captured_at = COALESCE(
-                    EXCLUDED.latest_payload_captured_at,
-                    panda.charge_session_external_aliases.latest_payload_captured_at
-                )
-            WHERE (
-                (panda.charge_session_external_aliases.alias_kind = 'legacy'
-                    AND EXCLUDED.alias_kind <> 'legacy')
-                OR (EXCLUDED.transaction_id_grouping_key IS NOT NULL
-                    AND panda.charge_session_external_aliases.transaction_id_grouping_key
-                        IS DISTINCT FROM EXCLUDED.transaction_id_grouping_key)
-                OR (EXCLUDED.latest_payload_id IS NOT NULL
-                    AND panda.charge_session_external_aliases.latest_payload_id
-                        IS DISTINCT FROM EXCLUDED.latest_payload_id)
-                OR (EXCLUDED.latest_payload_captured_at IS NOT NULL
-                    AND panda.charge_session_external_aliases.latest_payload_captured_at
-                        IS DISTINCT FROM EXCLUDED.latest_payload_captured_at)
-            )
-            "#,
-        )
-        .bind(charge_session_id)
-        .bind(&alias.external_id)
-        .bind(alias.alias_kind.as_str())
-        .bind(alias.transaction_id_grouping_key.as_deref())
-        .bind(payload_ref.map(|payload| payload.payload_id))
-        .bind(payload_ref.map(|payload| payload.captured_at))
-        .execute(pool)
-        .await?;
-
-        written += result.rows_affected();
+    let optional_fields = [
+        "transaction_id_grouping_key",
+        "latest_payload_id",
+        "latest_payload_captured_at",
+    ];
+    let promoted = "stored.alias_kind='legacy' AND EXCLUDED.alias_kind<>'legacy'";
+    let mut assignments = vec![
+        format!(
+            "alias_kind=CASE WHEN {promoted} THEN EXCLUDED.alias_kind ELSE stored.alias_kind END"
+        ),
+        "last_seen_at=GREATEST(stored.last_seen_at,EXCLUDED.last_seen_at)".to_owned(),
+    ];
+    let mut changes = vec![format!("({promoted})")];
+    for field in optional_fields {
+        assignments.push(format!("{field}=COALESCE(EXCLUDED.{field},stored.{field})"));
+        changes.push(format!(
+            "(EXCLUDED.{field} IS NOT NULL AND stored.{field} IS DISTINCT FROM EXCLUDED.{field})"
+        ));
     }
-
+    let statement = format!(
+        "INSERT INTO panda.charge_session_external_aliases AS stored
+         (charge_session_id,external_id,alias_kind,transaction_id_grouping_key,first_seen_at,last_seen_at,latest_payload_id,latest_payload_captured_at)
+         VALUES($1,$2,$3,$4,now(),now(),$5,$6)
+         ON CONFLICT(charge_session_id,external_id) DO UPDATE SET {} WHERE {}",
+         assignments.join(","), changes.join(" OR ")
+    );
+    let payload = payload_ref.map(|reference| (reference.payload_id, reference.captured_at));
+    let mut written = 0;
+    for alias in aliases {
+        written += sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+            .bind(charge_session_id)
+            .bind(&alias.external_id)
+            .bind(alias.alias_kind.as_str())
+            .bind(alias.transaction_id_grouping_key.as_deref())
+            .bind(payload.map(|value| value.0))
+            .bind(payload.map(|value| value.1))
+            .execute(pool)
+            .await?
+            .rows_affected();
+    }
     Ok(written)
 }
 
 pub async fn finalize_charge_session_aliases(pool: &PgPool, charge_session_id: Uuid) -> Result<()> {
-    let alias_rows = sqlx::query_as::<_, AliasRow>(
-        r#"
-        SELECT external_id, alias_kind
-        FROM panda.charge_session_external_aliases
-        WHERE charge_session_id = $1
-        "#,
-    )
-    .bind(charge_session_id)
-    .fetch_all(pool)
-    .await?;
-
-    let Some(best_alias) = alias_rows.into_iter().min_by(|left, right| {
-        alias_kind_from_str(&left.alias_kind)
-            .rank()
-            .cmp(&alias_kind_from_str(&right.alias_kind).rank())
-            .then_with(|| left.external_id.cmp(&right.external_id))
-    }) else {
-        return Ok(());
-    };
-
-    // The alias table can temporarily contain an ID that is still stored as
-    // the canonical ID on an older API-only row.  Do not let that stale
-    // cross-row state turn an otherwise idempotent sync into a transaction
-    // failure.  Canonicalization will merge the rows and can promote the
-    // preferred ID once the duplicate row is gone.
-    sqlx::query(
-        "UPDATE panda.charge_sessions
-         SET rivian_session_id = $2
-         WHERE id = $1
-           AND rivian_session_id IS DISTINCT FROM $2
-           AND NOT EXISTS (
-                   SELECT 1
-                   FROM panda.charge_sessions existing
-                   WHERE existing.rivian_session_id = $2
-                     AND existing.id <> $1
-               )",
-    )
-    .bind(charge_session_id)
-    .bind(best_alias.external_id)
-    .execute(pool)
-    .await?;
-
+    let best = sqlx::query_scalar::<_, String>(
+        "SELECT external_id FROM panda.charge_session_external_aliases WHERE charge_session_id=$1
+         ORDER BY CASE alias_kind WHEN 'cdrs' THEN 0 WHEN 'txn' THEN 1 WHEN 'network_session' THEN 2
+                  WHEN 'vtxn' THEN 3 WHEN 'legacy' THEN 4 ELSE 5 END, external_id COLLATE \"C\" LIMIT 1"
+    ).bind(charge_session_id).fetch_optional(pool).await?;
+    if let Some(alias) = best {
+        sqlx::query(
+            "UPDATE panda.charge_sessions SET rivian_session_id=$2 WHERE id=$1
+             AND rivian_session_id IS DISTINCT FROM $2
+             AND NOT EXISTS(SELECT 1 FROM panda.charge_sessions existing WHERE existing.rivian_session_id=$2 AND existing.id<>$1)"
+        ).bind(charge_session_id).bind(alias).execute(pool).await?;
+    }
     Ok(())
 }
 
@@ -842,41 +758,22 @@ pub async fn backfill_charge_session_sources(
     pool: &PgPool,
     vehicle_id: Option<Uuid>,
 ) -> Result<u64> {
-    let result = sqlx::query(
-        r#"
-        UPDATE panda.charge_sessions
-        SET source = COALESCE(source, 'telemetry'),
-            data_confidence = CASE
-                WHEN COALESCE(source, 'telemetry') = 'telemetry+rivian_api' THEN 'telemetry_enriched'
-                WHEN COALESCE(source, 'telemetry') = 'rivian_api' THEN 'api_only'
-                ELSE 'telemetry'
-            END,
-            api_started_at = CASE
-                WHEN COALESCE(source, 'telemetry') IN ('rivian_api', 'telemetry+rivian_api')
-                THEN COALESCE(api_started_at, started_at)
-                ELSE api_started_at
-            END,
-            api_ended_at = CASE
-                WHEN COALESCE(source, 'telemetry') IN ('rivian_api', 'telemetry+rivian_api')
-                THEN COALESCE(api_ended_at, ended_at)
-                ELSE api_ended_at
-            END
-        WHERE ($1::uuid IS NULL OR vehicle_id = $1)
-          AND (
-              source IS NULL
-              OR data_confidence IS NULL
-              OR (
-                  COALESCE(source, 'telemetry') IN ('rivian_api', 'telemetry+rivian_api')
-                  AND (api_started_at IS NULL OR api_ended_at IS NULL)
-              )
-          )
-        "#,
-    )
-    .bind(vehicle_id)
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected())
+    let updated = sqlx::query(
+        "UPDATE panda.charge_sessions AS session
+         SET source=COALESCE(session.source,'telemetry'),
+             data_confidence=COALESCE((SELECT confidence FROM
+                 (VALUES('telemetry+rivian_api','telemetry_enriched'),('rivian_api','api_only'))
+                 AS mapping(source,confidence) WHERE mapping.source=session.source),'telemetry'),
+             api_started_at=CASE WHEN session.source IN ('rivian_api','telemetry+rivian_api')
+                 THEN COALESCE(session.api_started_at,session.started_at) ELSE session.api_started_at END,
+             api_ended_at=CASE WHEN session.source IN ('rivian_api','telemetry+rivian_api')
+                 THEN COALESCE(session.api_ended_at,session.ended_at) ELSE session.api_ended_at END
+         WHERE ($1::uuid IS NULL OR session.vehicle_id=$1)
+           AND (session.source IS NULL OR session.data_confidence IS NULL
+                OR (session.source IN ('rivian_api','telemetry+rivian_api')
+                    AND (session.api_started_at IS NULL OR session.api_ended_at IS NULL)))"
+    ).bind(vehicle_id).execute(pool).await?;
+    Ok(updated.rows_affected())
 }
 
 pub async fn backfill_charge_session_aliases_from_rows(
@@ -884,59 +781,30 @@ pub async fn backfill_charge_session_aliases_from_rows(
     vehicle_id: Option<Uuid>,
 ) -> Result<u64> {
     let rows = sqlx::query_as::<_, BackfillAliasSeedRow>(
-        r#"
-        SELECT id, rivian_session_id, rivian_meta
-        FROM panda.charge_sessions
-        WHERE ($1::uuid IS NULL OR vehicle_id = $1)
-          AND (rivian_session_id IS NOT NULL OR rivian_meta IS NOT NULL)
-        "#,
-    )
-    .bind(vehicle_id)
-    .fetch_all(pool)
-    .await?;
-
-    let mut written = 0u64;
+        "SELECT id,rivian_session_id,rivian_meta FROM panda.charge_sessions
+         WHERE ($1::uuid IS NULL OR vehicle_id=$1) AND (rivian_session_id IS NOT NULL OR rivian_meta IS NOT NULL)"
+    ).bind(vehicle_id).fetch_all(pool).await?;
+    let mut written = 0;
     for row in rows {
-        let summary = row.rivian_meta.as_ref().and_then(|value| {
-            serde_json::from_value::<ChargeSessionSummaryPayload>(value.clone()).ok()
-        });
-        let aliases = if let Some(summary) = summary.as_ref() {
-            let parsed = parse_summary_aliases(summary);
-            if parsed.is_empty() {
-                row.rivian_session_id
-                    .as_deref()
-                    .map(|external_id| {
-                        vec![ChargeSessionExternalAlias {
-                            external_id: external_id.to_string(),
-                            alias_kind: infer_alias_kind_from_id(external_id),
-                            transaction_id_grouping_key: None,
-                        }]
-                    })
-                    .unwrap_or_default()
-            } else {
-                parsed
-            }
-        } else {
-            row.rivian_session_id
-                .as_deref()
-                .map(|external_id| {
-                    vec![ChargeSessionExternalAlias {
-                        external_id: external_id.to_string(),
-                        alias_kind: infer_alias_kind_from_id(external_id),
-                        transaction_id_grouping_key: None,
-                    }]
-                })
-                .unwrap_or_default()
-        };
-
+        let mut aliases = row
+            .rivian_meta
+            .and_then(|value| serde_json::from_value::<ChargeSessionSummaryPayload>(value).ok())
+            .map(|summary| parse_summary_aliases(&summary))
+            .unwrap_or_default();
         if aliases.is_empty() {
-            continue;
+            if let Some(external_id) = row.rivian_session_id {
+                aliases.push(ChargeSessionExternalAlias {
+                    alias_kind: infer_alias_kind_from_id(&external_id),
+                    external_id,
+                    transaction_id_grouping_key: None,
+                });
+            }
         }
-
-        written += upsert_external_aliases(pool, row.id, &aliases, None).await?;
-        finalize_charge_session_aliases(pool, row.id).await?;
+        if !aliases.is_empty() {
+            written += upsert_external_aliases(pool, row.id, &aliases, None).await?;
+            finalize_charge_session_aliases(pool, row.id).await?;
+        }
     }
-
     Ok(written)
 }
 
@@ -1237,14 +1105,21 @@ fn choose_canonical_session<'a>(
     sessions: &'a [CanonicalSessionRow],
     aliases_by_session: &std::collections::HashMap<Uuid, Vec<CanonicalAliasRow>>,
 ) -> &'a CanonicalSessionRow {
-    sessions
-        .iter()
-        .max_by(|left, right| {
-            canonical_priority(left, aliases_by_session)
-                .cmp(&canonical_priority(right, aliases_by_session))
-                .then_with(|| right.started_at.cmp(&left.started_at))
-        })
-        .expect("cluster must contain at least one session")
+    let mut candidates = sessions.iter();
+    let mut selected = candidates
+        .next()
+        .expect("cluster must contain at least one session");
+    let mut priority = canonical_priority(selected, aliases_by_session);
+    for candidate in candidates {
+        let next_priority = canonical_priority(candidate, aliases_by_session);
+        if next_priority > priority
+            || (next_priority == priority && candidate.started_at <= selected.started_at)
+        {
+            selected = candidate;
+            priority = next_priority;
+        }
+    }
+    selected
 }
 
 fn canonical_priority(
@@ -1275,54 +1150,48 @@ pub async fn replay_charge_payload_summaries(
     insert_policy: UnmatchedInsertPolicy,
 ) -> Result<u64> {
     let payloads = sqlx::query_as::<_, PayloadReplayRow>(
-        r#"
-        SELECT id, vehicle_id, captured_at, payload
-        FROM panda.rivian_charge_payloads
-        WHERE operation = 'getCompletedSessionSummaries'
-          AND ($1::uuid IS NULL OR vehicle_id = $1)
-        ORDER BY captured_at ASC, id ASC
-        "#,
+        "SELECT id,vehicle_id,captured_at,payload FROM panda.rivian_charge_payloads
+         WHERE operation='getCompletedSessionSummaries' AND ($1::uuid IS NULL OR vehicle_id=$1)
+         ORDER BY captured_at ASC,id ASC",
     )
     .bind(vehicle_id)
     .fetch_all(pool)
     .await?;
-
-    let mut linked = 0u64;
-    for payload in payloads {
-        let Ok(summary) =
-            serde_json::from_value::<ChargeSessionSummaryPayload>(payload.payload.clone())
-        else {
-            continue;
-        };
-
-        let payload_ref = ChargeSessionPayloadRef {
+    let summaries = payloads.into_iter().filter_map(|payload| {
+        let summary =
+            serde_json::from_value::<ChargeSessionSummaryPayload>(payload.payload).ok()?;
+        let reference = ChargeSessionPayloadRef {
             payload_id: payload.id,
             captured_at: payload.captured_at,
             charge_session_id: None,
             unchanged: false,
         };
-        if let Some(session_id) = reconcile_completed_session_summary(
+        Some((payload.vehicle_id, summary, reference))
+    });
+    let mut linked = 0;
+    for (vehicle, summary, reference) in summaries {
+        match reconcile_completed_session_summary(
             pool,
-            payload.vehicle_id,
+            vehicle,
             &summary,
             insert_policy,
-            Some(payload_ref),
+            Some(reference),
         )
         .await?
         {
-            sqlx::query(
-                "UPDATE panda.rivian_charge_payloads
-                 SET charge_session_id = $2
-                 WHERE id = $1",
-            )
-            .bind(payload.id)
-            .bind(session_id)
-            .execute(pool)
-            .await?;
-            linked += 1;
+            None => {}
+            Some(session) => {
+                sqlx::query(
+                    "UPDATE panda.rivian_charge_payloads SET charge_session_id=$2 WHERE id=$1",
+                )
+                .bind(reference.payload_id)
+                .bind(session)
+                .execute(pool)
+                .await?;
+                linked += 1;
+            }
         }
     }
-
     Ok(linked)
 }
 
@@ -1330,8 +1199,8 @@ pub async fn diagnose_charge_sessions(
     pool: &PgPool,
     vehicle_id: Option<Uuid>,
 ) -> Result<ChargeSessionDiagnostics> {
-    let alias_duplicate_clusters = sqlx::query_scalar::<_, i64>(
-        r#"
+    let statements = [
+r#"
         SELECT COUNT(*)::int8
         FROM (
             SELECT transaction_id_grouping_key
@@ -1344,13 +1213,7 @@ pub async fn diagnose_charge_sessions(
             HAVING COUNT(DISTINCT charge_session_id) > 1
         ) grouped
         "#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    let api_telemetry_overlap_pairs = sqlx::query_scalar::<_, i64>(
-        r#"
+r#"
         SELECT COUNT(*)::int8
         FROM panda.charge_sessions api
         JOIN panda.charge_sessions live
@@ -1362,13 +1225,7 @@ pub async fn diagnose_charge_sessions(
           AND COALESCE(live.source, 'telemetry') <> 'rivian_api'
           AND ($1::uuid IS NULL OR api.vehicle_id = $1)
         "#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    let restart_split_pairs = sqlx::query_scalar::<_, i64>(
-        r#"
+r#"
         WITH transitions AS (
             SELECT
                 vehicle_id,
@@ -1391,13 +1248,7 @@ pub async fn diagnose_charge_sessions(
               AND ts - prev_ts <= interval '15 minutes'
         ) deduped
         "#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    let unlinked_payloads_inside_telemetry_window = sqlx::query_scalar::<_, i64>(
-        r#"
+r#"
         WITH telemetry_window AS (
             SELECT vehicle_id, MIN(ts) AS min_ts, MAX(ts) AS max_ts
             FROM timeseries.telemetry
@@ -1411,13 +1262,7 @@ pub async fn diagnose_charge_sessions(
           AND ($1::uuid IS NULL OR payload.vehicle_id = $1)
           AND (payload.payload ->> 'startInstant')::timestamptz BETWEEN tw.min_ts AND tw.max_ts
         "#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    let unlinked_payloads_outside_telemetry_window = sqlx::query_scalar::<_, i64>(
-        r#"
+r#"
         WITH telemetry_window AS (
             SELECT vehicle_id, MIN(ts) AS min_ts, MAX(ts) AS max_ts
             FROM timeseries.telemetry
@@ -1435,13 +1280,7 @@ pub async fn diagnose_charge_sessions(
               OR (payload.payload ->> 'startInstant')::timestamptz > tw.max_ts
           )
         "#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    let canonical_overlap_pairs = sqlx::query_scalar::<_, i64>(
-        r#"
+r#"
         SELECT COUNT(*)::int8
         FROM panda.charge_sessions a
         JOIN panda.charge_sessions b
@@ -1451,18 +1290,16 @@ pub async fn diagnose_charge_sessions(
          AND COALESCE(a.ended_at, a.started_at) >= b.started_at
         WHERE ($1::uuid IS NULL OR a.vehicle_id = $1)
         "#,
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
-    let null_source_rows = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*)::int8 FROM panda.charge_sessions WHERE ($1::uuid IS NULL OR vehicle_id = $1) AND source IS NULL",
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await?;
-
+"SELECT COUNT(*)::int8 FROM panda.charge_sessions WHERE ($1::uuid IS NULL OR vehicle_id = $1) AND source IS NULL"];
+    let mut counts = [0i64; 7];
+    for (count, statement) in counts.iter_mut().zip(statements) {
+        *count = sqlx::query_scalar(statement)
+            .bind(vehicle_id)
+            .fetch_one(pool)
+            .await?;
+    }
+    let [alias_duplicate_clusters, api_telemetry_overlap_pairs, restart_split_pairs, unlinked_payloads_inside_telemetry_window, unlinked_payloads_outside_telemetry_window, canonical_overlap_pairs, null_source_rows] =
+        counts;
     Ok(ChargeSessionDiagnostics {
         alias_duplicate_clusters,
         api_telemetry_overlap_pairs,

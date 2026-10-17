@@ -135,31 +135,29 @@ pub async fn reconcile_unassociated_parallax_samples(
 
 pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
     let mut tx = pool.begin().await?;
-    let vehicle_id: Uuid = sqlx::query_scalar(
+    let vehicle = sqlx::query_scalar(
         "SELECT vehicle_id FROM panda.charge_session_repair_journal WHERE id=$1",
     )
     .bind(journal_id)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| anyhow::anyhow!("repair journal entry not found"))?;
-    super::charge_sessions::lock_charge_history(&mut tx, vehicle_id).await?;
+    super::charge_sessions::lock_charge_history(&mut tx, vehicle).await?;
     let journal = sqlx::query_as::<_, ChargeHistoryRepairJournal>(
-        "SELECT before_images,after_images,reference_mappings,reverted_at FROM panda.charge_session_repair_journal WHERE id=$1 FOR UPDATE",
+        "SELECT before_images,after_images,reference_mappings,reverted_at FROM panda.charge_session_repair_journal WHERE id=$1 FOR UPDATE"
     ).bind(journal_id).fetch_optional(&mut *tx).await?
-     .ok_or_else(|| anyhow::anyhow!("repair journal entry not found"))?;
-    if journal.reverted_at.is_some() {
-        anyhow::bail!("repair has already been rolled back");
-    }
+        .ok_or_else(|| anyhow::anyhow!("repair journal entry not found"))?;
+    anyhow::ensure!(
+        journal.reverted_at.is_none(),
+        "repair has already been rolled back"
+    );
     let survivor = parse_mapping_uuid(&journal.reference_mappings, "survivor_id")?;
     let duplicate = parse_mapping_uuid(&journal.reference_mappings, "duplicate_id")?;
     anyhow::ensure!(
-        super::charge_sessions::charge_sessions_are_unpinned(&mut tx, vehicle_id, &[survivor])
-            .await?,
+        super::charge_sessions::charge_sessions_are_unpinned(&mut tx, vehicle, &[survivor]).await?,
         "cannot roll back repair while a charge checkpoint or completion pins its session"
     );
-
-    let unchanged: bool = sqlx::query_scalar(
-        r#"SELECT EXISTS(
+    let unchanged: bool = sqlx::query_scalar(r#"SELECT EXISTS(
                SELECT 1 FROM panda.charge_sessions s WHERE s.id=$1
                  AND to_jsonb(s)=$2->'survivor')
             AND NOT EXISTS(SELECT 1 FROM panda.charge_sessions WHERE id=$3)
@@ -181,83 +179,97 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
             AND (SELECT count(*) FROM timeseries.parallax_charge_curve_points p
                  JOIN jsonb_to_recordset($4->'parallax_curve_keys') AS k(source_at timestamptz,segment_index integer)
                    ON p.source_at=k.source_at AND p.segment_index=k.segment_index
-                 WHERE p.charge_session_id=$1)=jsonb_array_length(COALESCE($4->'parallax_curve_keys','[]'::jsonb))"#,
-    )
-    .bind(survivor)
-    .bind(&journal.after_images)
-    .bind(duplicate)
-    .bind(&journal.reference_mappings)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !unchanged {
-        anyhow::bail!(
-            "affected session, annotations, or aliases changed after repair; rollback refused"
-        );
-    }
-
+                 WHERE p.charge_session_id=$1)=jsonb_array_length(COALESCE($4->'parallax_curve_keys','[]'::jsonb))"#)
+        .bind(survivor).bind(&journal.after_images).bind(duplicate).bind(&journal.reference_mappings)
+        .fetch_one(&mut *tx).await?;
+    anyhow::ensure!(
+        unchanged,
+        "affected session, annotations, or aliases changed after repair; rollback refused"
+    );
     sqlx::query("INSERT INTO panda.charge_sessions SELECT (jsonb_populate_record(NULL::panda.charge_sessions,$1->'duplicate')).*")
         .bind(&journal.before_images).execute(&mut *tx).await?;
+    let columns = [
+        "started_at",
+        "ended_at",
+        "soc_start",
+        "soc_end",
+        "charge_limit",
+        "kwh_added",
+        "energy_added_wh",
+        "energy_used_wh",
+        "max_charge_rate_kw",
+        "avg_charge_rate_kw",
+        "live_total_charged_kwh",
+        "live_range_added_km",
+        "live_power_kw",
+        "live_charge_rate_kph",
+        "live_time_elapsed_seconds",
+        "live_session_started_at",
+        "api_started_at",
+        "api_ended_at",
+        "pack_energy_kwh",
+        "thermal_energy_kwh",
+        "parallax_live_power_kw",
+        "parallax_total_charged_kwh",
+        "parallax_pack_energy_kwh",
+        "parallax_thermal_energy_kwh",
+        "parallax_time_remaining_minutes",
+        "parallax_power_observed_at",
+        "parallax_energy_observed_at",
+        "parallax_total_energy_observed_at",
+        "parallax_pack_energy_observed_at",
+        "parallax_thermal_energy_observed_at",
+        "parallax_time_observed_at",
+        "parallax_status_observed_at",
+        "parallax_charger_status",
+        "duration_minutes",
+        "source",
+        "data_confidence",
+        "rivian_session_id",
+    ]
+    .join(",");
+    let restore = format!(
+        "UPDATE panda.charge_sessions SET ({columns})=(SELECT {columns}
+         FROM jsonb_populate_record(NULL::panda.charge_sessions,$2->'survivor')) WHERE id=$1"
+    );
+    sqlx::query(sqlx::AssertSqlSafe(restore))
+        .bind(survivor)
+        .bind(&journal.before_images)
+        .execute(&mut *tx)
+        .await?;
+    for (table, predicate, restrict_survivor) in [
+        ("timeseries.telemetry", "vehicle_id=(SELECT vehicle_id FROM panda.charge_sessions WHERE id=$1) AND ts IN (SELECT value::timestamptz FROM jsonb_array_elements_text($2->'telemetry_ts'))", false),
+        ("panda.rivian_charge_curve_points", "ts IN (SELECT value::timestamptz FROM jsonb_array_elements_text($2->'rivian_curve_ts'))", true),
+        ("panda.rivian_charge_payloads", "id IN (SELECT value::uuid FROM jsonb_array_elements_text($2->'payload_ids'))", true),
+        ("panda.rivian_parallax_events", "id IN (SELECT value::uuid FROM jsonb_array_elements_text($2->'parallax_event_ids'))", true),
+    ] {
+        let statement = format!("UPDATE {table} SET charge_session_id=$1 WHERE {predicate}{}",
+            if restrict_survivor { " AND charge_session_id=$3" } else { "" });
+        let mut update = sqlx::query(sqlx::AssertSqlSafe(statement)).bind(duplicate).bind(&journal.reference_mappings);
+        if restrict_survivor { update = update.bind(survivor); }
+        update.execute(&mut *tx).await?;
+    }
     sqlx::query(
-        r#"WITH original AS (SELECT (jsonb_populate_record(NULL::panda.charge_sessions,$2->'survivor')).*)
-           UPDATE panda.charge_sessions s SET
-             started_at=o.started_at,ended_at=o.ended_at,soc_start=o.soc_start,soc_end=o.soc_end,
-             charge_limit=o.charge_limit,kwh_added=o.kwh_added,energy_added_wh=o.energy_added_wh,
-             energy_used_wh=o.energy_used_wh,max_charge_rate_kw=o.max_charge_rate_kw,
-             avg_charge_rate_kw=o.avg_charge_rate_kw,live_total_charged_kwh=o.live_total_charged_kwh,
-             live_range_added_km=o.live_range_added_km,live_power_kw=o.live_power_kw,
-             live_charge_rate_kph=o.live_charge_rate_kph,live_time_elapsed_seconds=o.live_time_elapsed_seconds,
-             live_session_started_at=o.live_session_started_at,api_started_at=o.api_started_at,
-             api_ended_at=o.api_ended_at,pack_energy_kwh=o.pack_energy_kwh,
-             thermal_energy_kwh=o.thermal_energy_kwh,
-             parallax_live_power_kw=o.parallax_live_power_kw,
-             parallax_total_charged_kwh=o.parallax_total_charged_kwh,
-             parallax_pack_energy_kwh=o.parallax_pack_energy_kwh,
-             parallax_thermal_energy_kwh=o.parallax_thermal_energy_kwh,
-             parallax_time_remaining_minutes=o.parallax_time_remaining_minutes,
-             parallax_power_observed_at=o.parallax_power_observed_at,
-             parallax_energy_observed_at=o.parallax_energy_observed_at,
-             parallax_total_energy_observed_at=o.parallax_total_energy_observed_at,
-             parallax_pack_energy_observed_at=o.parallax_pack_energy_observed_at,
-             parallax_thermal_energy_observed_at=o.parallax_thermal_energy_observed_at,
-             parallax_time_observed_at=o.parallax_time_observed_at,
-             parallax_status_observed_at=o.parallax_status_observed_at,
-             parallax_charger_status=o.parallax_charger_status,duration_minutes=o.duration_minutes,
-             source=o.source,data_confidence=o.data_confidence,rivian_session_id=o.rivian_session_id
-           FROM original o WHERE s.id=$1"#,
-    ).bind(survivor).bind(&journal.before_images).execute(&mut *tx).await?;
-
-    sqlx::query("UPDATE timeseries.telemetry SET charge_session_id=$1 WHERE vehicle_id=(SELECT vehicle_id FROM panda.charge_sessions WHERE id=$1) AND ts IN (SELECT value::timestamptz FROM jsonb_array_elements_text($2->'telemetry_ts'))")
-        .bind(duplicate).bind(&journal.reference_mappings).execute(&mut *tx).await?;
-    sqlx::query("UPDATE panda.rivian_charge_curve_points SET charge_session_id=$1 WHERE ts IN (SELECT value::timestamptz FROM jsonb_array_elements_text($2->'rivian_curve_ts')) AND charge_session_id=$3")
-        .bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
-    sqlx::query("UPDATE panda.rivian_charge_payloads SET charge_session_id=$1 WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text($2->'payload_ids')) AND charge_session_id=$3")
-        .bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
-    sqlx::query("UPDATE panda.rivian_parallax_events SET charge_session_id=$1 WHERE id IN (SELECT value::uuid FROM jsonb_array_elements_text($2->'parallax_event_ids')) AND charge_session_id=$3")
-        .bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
-    sqlx::query(
-        r#"UPDATE timeseries.parallax_charge_curve_points p SET charge_session_id=$1
-           FROM jsonb_to_recordset($2->'parallax_curve_keys') AS k(source_at timestamptz,segment_index integer)
-           WHERE p.source_at=k.source_at AND p.segment_index=k.segment_index AND p.charge_session_id=$3"#,
+        "UPDATE timeseries.parallax_charge_curve_points p SET charge_session_id=$1
+         FROM jsonb_to_recordset($2->'parallax_curve_keys') AS k(source_at timestamptz,segment_index integer)
+         WHERE p.source_at=k.source_at AND p.segment_index=k.segment_index AND p.charge_session_id=$3"
     ).bind(duplicate).bind(&journal.reference_mappings).bind(survivor).execute(&mut *tx).await?;
-
-    sqlx::query(
-        "DELETE FROM panda.charge_session_user_annotations WHERE charge_session_id IN ($1,$2)",
-    )
-    .bind(survivor)
-    .bind(duplicate)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("INSERT INTO panda.charge_session_user_annotations SELECT (jsonb_populate_recordset(NULL::panda.charge_session_user_annotations,$1->'annotations')).*")
-        .bind(&journal.before_images).execute(&mut *tx).await?;
-    sqlx::query(
-        "DELETE FROM panda.charge_session_external_aliases WHERE charge_session_id IN ($1,$2)",
-    )
-    .bind(survivor)
-    .bind(duplicate)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("INSERT INTO panda.charge_session_external_aliases SELECT (jsonb_populate_recordset(NULL::panda.charge_session_external_aliases,$1->'aliases')).*")
-        .bind(&journal.before_images).execute(&mut *tx).await?;
+    for (table, image) in [
+        ("charge_session_user_annotations", "annotations"),
+        ("charge_session_external_aliases", "aliases"),
+    ] {
+        let delete = format!("DELETE FROM panda.{table} WHERE charge_session_id IN ($1,$2)");
+        sqlx::query(sqlx::AssertSqlSafe(delete))
+            .bind(survivor)
+            .bind(duplicate)
+            .execute(&mut *tx)
+            .await?;
+        let insert = format!("INSERT INTO panda.{table} SELECT (jsonb_populate_recordset(NULL::panda.{table},$1->'{image}')).*");
+        sqlx::query(sqlx::AssertSqlSafe(insert))
+            .bind(&journal.before_images)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("UPDATE panda.charge_session_repair_journal SET reverted_at=now() WHERE id=$1")
         .bind(journal_id)
         .execute(&mut *tx)
@@ -267,12 +279,10 @@ pub async fn rollback_repair(pool: &PgPool, journal_id: i64) -> Result<()> {
 }
 
 fn parse_mapping_uuid(value: &serde_json::Value, key: &str) -> Result<Uuid> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("repair mapping is missing {key}"))?
-        .parse()
-        .map_err(Into::into)
+    match value.get(key) {
+        Some(serde_json::Value::String(raw)) => Ok(Uuid::parse_str(raw)?),
+        _ => anyhow::bail!("repair mapping is missing {key}"),
+    }
 }
 
 pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairStats> {
@@ -280,7 +290,14 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
     super::charge_sessions::lock_charge_history(&mut tx, vehicle_id).await?;
     let candidates = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
-        WITH ordered AS (
+        WITH charging_sessions AS MATERIALIZED (
+            SELECT charge_session_id
+            FROM timeseries.telemetry
+            WHERE vehicle_id=$1 AND charge_session_id IS NOT NULL
+            GROUP BY charge_session_id
+            HAVING bool_or(power_kw > 0.1 OR lower(coalesce(charger_state, '')) = 'charging'
+                           OR charger_status = 'chrgr_sts_connected_charging')
+        ), ordered AS (
             SELECT charge_session_id AS right_id,
                    lag(charge_session_id) OVER (ORDER BY ts) AS left_id,
                    ts AS right_ts, lag(ts) OVER (ORDER BY ts) AS left_ts
@@ -293,20 +310,12 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
                 AND ls.vehicle_id = $1 AND ls.ended_at IS NULL
             JOIN panda.charge_sessions rs ON rs.id = o.right_id
                 AND rs.vehicle_id = $1
+            JOIN charging_sessions charging_left ON charging_left.charge_session_id=o.left_id
+            JOIN charging_sessions charging_right ON charging_right.charge_session_id=o.right_id
             WHERE o.left_id IS NOT NULL AND o.left_id <> o.right_id
               AND o.left_ts IS NOT NULL
               AND o.right_ts - o.left_ts <= interval '15 minutes'
               AND rs.started_at >= ls.started_at
-              AND EXISTS (
-                  SELECT 1 FROM timeseries.telemetry t
-                  WHERE t.vehicle_id = $1 AND t.charge_session_id = o.left_id
-                    AND (t.power_kw > 0.1 OR lower(coalesce(t.charger_state, '')) = 'charging'
-                         OR t.charger_status = 'chrgr_sts_connected_charging'))
-              AND EXISTS (
-                  SELECT 1 FROM timeseries.telemetry t
-                  WHERE t.vehicle_id = $1 AND t.charge_session_id = o.right_id
-                    AND (t.power_kw > 0.1 OR lower(coalesce(t.charger_state, '')) = 'charging'
-                         OR t.charger_status = 'chrgr_sts_connected_charging'))
               AND NOT EXISTS (
                   SELECT 1 FROM timeseries.telemetry t
                   WHERE t.vehicle_id = $1 AND t.ts >= o.left_ts AND t.ts <= o.right_ts
@@ -438,46 +447,11 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query(
-            r#"UPDATE panda.charge_sessions s SET
-                   started_at=LEAST(s.started_at,d.started_at), ended_at=d.ended_at,
-                   soc_start=COALESCE(s.soc_start,d.soc_start), soc_end=COALESCE(d.soc_end,s.soc_end),
-                   charge_limit=COALESCE(d.charge_limit,s.charge_limit),
-                   kwh_added=GREATEST(COALESCE(s.kwh_added,0),COALESCE(d.kwh_added,0)),
-                   energy_added_wh=GREATEST(COALESCE(s.energy_added_wh,0),COALESCE(d.energy_added_wh,0)),
-                   energy_used_wh=GREATEST(COALESCE(s.energy_used_wh,0),COALESCE(d.energy_used_wh,0)),
-                   max_charge_rate_kw=GREATEST(COALESCE(s.max_charge_rate_kw,0),COALESCE(d.max_charge_rate_kw,0)),
-                   avg_charge_rate_kw=COALESCE(d.avg_charge_rate_kw,s.avg_charge_rate_kw),
-                   live_total_charged_kwh=COALESCE(d.live_total_charged_kwh,s.live_total_charged_kwh),
-                   live_range_added_km=COALESCE(d.live_range_added_km,s.live_range_added_km),
-                   live_power_kw=COALESCE(d.live_power_kw,s.live_power_kw),
-                   live_charge_rate_kph=COALESCE(d.live_charge_rate_kph,s.live_charge_rate_kph),
-                   live_time_elapsed_seconds=COALESCE(d.live_time_elapsed_seconds,s.live_time_elapsed_seconds),
-                   live_session_started_at=COALESCE(s.live_session_started_at,d.live_session_started_at),
-                   api_started_at=COALESCE(LEAST(s.api_started_at,d.api_started_at),s.api_started_at,d.api_started_at),
-                   api_ended_at=COALESCE(d.api_ended_at,s.api_ended_at),
-                   pack_energy_kwh=COALESCE(d.pack_energy_kwh,s.pack_energy_kwh),
-                   thermal_energy_kwh=COALESCE(d.thermal_energy_kwh,s.thermal_energy_kwh),
-                   parallax_live_power_kw=COALESCE(d.parallax_live_power_kw,s.parallax_live_power_kw),
-                   parallax_total_charged_kwh=COALESCE(d.parallax_total_charged_kwh,s.parallax_total_charged_kwh),
-                   parallax_pack_energy_kwh=COALESCE(d.parallax_pack_energy_kwh,s.parallax_pack_energy_kwh),
-                   parallax_thermal_energy_kwh=COALESCE(d.parallax_thermal_energy_kwh,s.parallax_thermal_energy_kwh),
-                   parallax_time_remaining_minutes=COALESCE(d.parallax_time_remaining_minutes,s.parallax_time_remaining_minutes),
-                   parallax_power_observed_at=GREATEST(s.parallax_power_observed_at,d.parallax_power_observed_at),
-                   parallax_energy_observed_at=GREATEST(s.parallax_energy_observed_at,d.parallax_energy_observed_at),
-                   parallax_total_energy_observed_at=GREATEST(s.parallax_total_energy_observed_at,d.parallax_total_energy_observed_at),
-                   parallax_pack_energy_observed_at=GREATEST(s.parallax_pack_energy_observed_at,d.parallax_pack_energy_observed_at),
-                   parallax_thermal_energy_observed_at=GREATEST(s.parallax_thermal_energy_observed_at,d.parallax_thermal_energy_observed_at),
-                   parallax_time_observed_at=GREATEST(s.parallax_time_observed_at,d.parallax_time_observed_at),
-                   parallax_status_observed_at=GREATEST(s.parallax_status_observed_at,d.parallax_status_observed_at),
-                   parallax_charger_status=COALESCE(d.parallax_charger_status,s.parallax_charger_status),
-                   duration_minutes=CASE WHEN d.ended_at IS NOT NULL THEN
-                       (EXTRACT(EPOCH FROM (d.ended_at-LEAST(s.started_at,d.started_at)))/60)::integer ELSE NULL END,
-                   source=CASE WHEN s.source='rivian_api' THEN d.source ELSE s.source END,
-                   data_confidence=COALESCE(d.data_confidence,s.data_confidence),
-                   rivian_session_id=COALESCE(s.rivian_session_id,d.rivian_session_id)
-               FROM panda.charge_sessions d WHERE s.id=$1 AND d.id=$2"#,
-        ).bind(survivor).bind(duplicate).execute(&mut *tx).await?;
+        sqlx::query(sqlx::AssertSqlSafe(active_tail_merge_statement()))
+            .bind(survivor)
+            .bind(duplicate)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("DELETE FROM panda.charge_sessions WHERE id=$1")
             .bind(duplicate)
             .execute(&mut *tx)
@@ -545,6 +519,63 @@ pub async fn heal_active_tail(pool: &PgPool, vehicle_id: Uuid) -> Result<RepairS
 
     tx.commit().await?;
     Ok(stats)
+}
+
+fn active_tail_merge_statement() -> String {
+    let mut assignments = vec![
+        "started_at=LEAST(s.started_at,d.started_at)".to_owned(),
+        "ended_at=d.ended_at".to_owned(),
+        "api_started_at=COALESCE(LEAST(s.api_started_at,d.api_started_at),s.api_started_at,d.api_started_at)".to_owned(),
+        "duration_minutes=CASE WHEN d.ended_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (d.ended_at-LEAST(s.started_at,d.started_at)))/60)::integer ELSE NULL END".to_owned(),
+        "source=CASE WHEN s.source='rivian_api' THEN d.source ELSE s.source END".to_owned(),
+    ];
+    for column in ["soc_start", "live_session_started_at", "rivian_session_id"] {
+        assignments.push(format!("{column}=COALESCE(s.{column},d.{column})"));
+    }
+    for column in [
+        "soc_end",
+        "charge_limit",
+        "avg_charge_rate_kw",
+        "live_total_charged_kwh",
+        "live_range_added_km",
+        "live_power_kw",
+        "live_charge_rate_kph",
+        "live_time_elapsed_seconds",
+        "api_ended_at",
+        "pack_energy_kwh",
+        "thermal_energy_kwh",
+        "parallax_live_power_kw",
+        "parallax_total_charged_kwh",
+        "parallax_pack_energy_kwh",
+        "parallax_thermal_energy_kwh",
+        "parallax_time_remaining_minutes",
+        "parallax_charger_status",
+        "data_confidence",
+    ] {
+        assignments.push(format!("{column}=COALESCE(d.{column},s.{column})"));
+    }
+    for column in [
+        "kwh_added",
+        "energy_added_wh",
+        "energy_used_wh",
+        "max_charge_rate_kw",
+    ] {
+        assignments.push(format!(
+            "{column}=GREATEST(COALESCE(s.{column},0),COALESCE(d.{column},0))"
+        ));
+    }
+    for column in [
+        "parallax_power_observed_at",
+        "parallax_energy_observed_at",
+        "parallax_total_energy_observed_at",
+        "parallax_pack_energy_observed_at",
+        "parallax_thermal_energy_observed_at",
+        "parallax_time_observed_at",
+        "parallax_status_observed_at",
+    ] {
+        assignments.push(format!("{column}=GREATEST(s.{column},d.{column})"));
+    }
+    format!("UPDATE panda.charge_sessions s SET {} FROM panda.charge_sessions d WHERE s.id=$1 AND d.id=$2", assignments.join(","))
 }
 
 #[cfg(test)]
