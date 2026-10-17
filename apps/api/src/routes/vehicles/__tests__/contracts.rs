@@ -702,3 +702,6 @@ async fn capture_dispatch_and_paged_export_boundaries() {
     .unwrap();
     f.cleanup().await;
 }
+
+#[path = "followup.rs"]
+mod followup;
