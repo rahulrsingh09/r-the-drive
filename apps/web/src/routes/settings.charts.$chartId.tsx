@@ -1,15 +1,9 @@
-import { createRoute, useParams } from '@tanstack/react-router';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
-import { ChartEditorPage } from '../features/charts/editor/ChartEditorPage';
 
+/** R has no chart editor; Insights replaces it. Keep old links working. */
 export const settingsChartsEditRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings/charts/$chartId',
-  component: SettingsChartsEditPage,
+  beforeLoad: () => { throw redirect({ to: '/insights', replace: true }); },
 });
-
-function SettingsChartsEditPage() {
-  const { chartId } = useParams({ from: '/settings/charts/$chartId' });
-  return <ProtectedRoute><ChartEditorPage mode="edit" chartId={chartId} /></ProtectedRoute>;
-}

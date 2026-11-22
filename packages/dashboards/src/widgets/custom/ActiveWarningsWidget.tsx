@@ -12,8 +12,7 @@ interface Warning {
   label: string;
   icon: React.ReactNode;
   severity: 'error' | 'warn' | 'info';
-  field: keyof VehicleStatus;
-  inactive?: unknown[];
+  active: (s: VehicleStatus) => boolean;
 }
 
 const WARNINGS: Warning[] = [
@@ -22,49 +21,52 @@ const WARNINGS: Warning[] = [
     label: 'Brake Fluid Low',
     icon: <Droplets className="h-3.5 w-3.5" />,
     severity: 'error',
-    field: 'brake_fluid_low',
+    active: (s) => s.brake_fluid_low === true,
   },
   {
     key: 'wiper_fluid',
     label: 'Wiper Fluid Low',
     icon: <Droplets className="h-3.5 w-3.5" />,
     severity: 'warn',
-    field: 'wiper_fluid_low',
+    active: (s) => s.wiper_fluid_low === true,
   },
   {
     key: 'alarm',
     label: 'Alarm Active',
     icon: <Bell className="h-3.5 w-3.5" />,
     severity: 'error',
-    field: 'alarm_active',
+    active: (s) => s.alarm_active === true,
   },
   {
     key: 'charger_derate',
     label: 'Charger Derate',
     icon: <ZapOff className="h-3.5 w-3.5" />,
     severity: 'warn',
-    field: 'charger_derate_active',
+    active: (s) => s.charger_derate_active === true,
   },
   {
     key: 'hv_thermal',
-    label: 'HV Thermal Event',
+    label: 'Battery thermal event',
     icon: <Flame className="h-3.5 w-3.5" />,
     severity: 'error',
-    field: 'hv_thermal_event', inactive: [null, undefined, '', false, 0, NaN, 'none', 'idle'],
+    active: (s) => !!(s.hv_thermal_event && s.hv_thermal_event !== 'none' && s.hv_thermal_event !== 'idle'),
   },
   {
     key: 'service_mode',
     label: 'Service Mode',
     icon: <Wrench className="h-3.5 w-3.5" />,
     severity: 'info',
-    field: 'service_mode',
+    active: (s) => s.service_mode === true,
   },
   {
     key: 'tire_pressure',
     label: 'Tire Pressure',
     icon: <ShieldAlert className="h-3.5 w-3.5" />,
     severity: 'warn',
-    field: 'tire_pressure_status', inactive: [null, undefined, 'ok', 'none'],
+    active: (s) =>
+      s.tire_pressure_status != null &&
+      s.tire_pressure_status !== 'ok' &&
+      s.tire_pressure_status !== 'none',
   },
 ];
 
@@ -87,7 +89,7 @@ function ActiveWarningsWidget({
   const { data: status } = useCurrentVehicleStatus(vehicleId);
 
   const activeWarnings = status
-    ? WARNINGS.filter(({ field, inactive }) => inactive ? !inactive.includes(status[field]) : status[field] === true)
+    ? WARNINGS.filter((w) => w.active(status))
     : [];
 
   return (

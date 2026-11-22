@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -111,5 +111,56 @@ describe('DateRangePicker', () => {
     await user.click(screen.getByRole('button', { name: 'Lifetime' }));
 
     expect(onChange).toHaveBeenCalledWith({ kind: 'lifetime' });
+  });
+  it('gives the trigger, presets and custom-range controls a 44 px target', async () => {
+    const user = userEvent.setup();
+
+    render(<DateRangePicker timeframe={{ kind: 'preset', preset: '30d' }} onChange={vi.fn()} />);
+
+    const trigger = screen.getByRole('button', { name: /last 30 days/i });
+    expect(trigger).toHaveClass('h-11');
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Select timeframe' });
+    for (const preset of within(dialog).getAllByRole('button')) expect(preset).toHaveClass('min-h-11');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Custom Range' }));
+    for (const name of ['From hour', 'From minute', 'To hour', 'To minute']) {
+      expect(within(dialog).getByRole('button', { name })).toHaveClass('h-11');
+      expect(within(dialog).getByRole('button', { name })).not.toHaveClass('h-7');
+    }
+    for (const input of within(dialog).getAllByPlaceholderText('6/3/26')) expect(input).toHaveClass('h-11');
+    expect(within(dialog).getByRole('button', { name: 'Apply custom range' })).toHaveClass('h-11');
+  });
+
+  it('labels the month buttons and gives them and the day cells a 44 px hit area', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <DateRangePicker
+        timeframe={{ kind: 'custom', from: new Date(2026, 5, 3, 10, 0), to: new Date(2026, 5, 7, 18, 30) }}
+        onChange={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /jun 3, 2026/i }));
+
+    const previous = screen.getByRole('button', { name: 'Previous month' });
+    const next = screen.getByRole('button', { name: 'Next month' });
+    for (const button of [previous, next]) expect(button).toHaveClass('h-11', 'w-11');
+
+    await user.click(next);
+    expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July');
+    await user.click(previous);
+    expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('June');
+
+    const grid = document.querySelector('[data-calendar-grid]') as HTMLElement;
+    // No column gap below the sm breakpoint keeps 7 x 44 px inside a 390 px screen.
+    expect(grid).toHaveClass('gap-x-0', 'sm:gap-x-1');
+    const days = Array.from(grid.querySelectorAll('button'));
+    expect(days).toHaveLength(30);
+    for (const day of days) {
+      expect(day).toHaveClass('h-11');
+      // Low-alpha text fails 3:1; every day uses a full-strength text token.
+      expect(day.className).not.toMatch(/text-[a-z-]+\/\d+/);
+    }
   });
 });

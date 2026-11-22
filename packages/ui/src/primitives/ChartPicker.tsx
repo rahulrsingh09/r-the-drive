@@ -1,8 +1,6 @@
-import { selectionAction } from '../lib/controlEvents';
 import * as React from 'react';
 import { Check, ChevronDown, Search, Star } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { useDisclosure, useDismissLayer } from '../hooks/useOverlayInteraction';
 
 export interface ChartPickerOption {
   value: string;
@@ -38,52 +36,68 @@ export function ChartPicker<TValue extends string = string>({
   onSetDefault,
   variant = 'default',
 }: ChartPickerProps<TValue>) {
-  const { open: isOpen, setOpen: setIsOpen, show, hide, toggle } = useDisclosure();
+  const [isOpen, setIsOpen] = React.useState(false);
   const rootRef = React.useRef<HTMLDivElement>(null);
-  const query = searchValue.trim().toLowerCase();
-  const selection = options.reduce((result, option) => {
-    if (option.value === value) result.selected.push(option);
-    if (!query || option.label.toLowerCase().includes(query)) result.matches.push(option);
-    return result;
-  }, { selected: [] as typeof options, matches: [] as typeof options });
-  const visibleOptions = selection.matches.some(option => option.value === value)
-    ? selection.matches : [...selection.selected, ...selection.matches];
-  const selectedOption = selection.selected[0] ?? options[0];
-  useDismissLayer({ roots: [rootRef], pointer: 'mousedown', dismiss: () => setIsOpen(false) });
+  const normalizedSearch = searchValue.trim().toLowerCase();
+  const filteredOptions = normalizedSearch
+    ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
+    : options;
+  const visibleOptions = filteredOptions.some((option) => option.value === value)
+    ? filteredOptions
+    : options.filter((option) => option.value === value).concat(filteredOptions);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0];
 
-  const handleSelect = selectionAction(onChange, hide);
-  const search = selectionAction(onSearchChange, show);
+  React.useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
 
-  const optionViews = new Map(options.map(option => [option, {
-    selected: option.value === value,
-    default: option.value === defaultValue,
-    select: () => handleSelect(option.value),
-  }]));
-  function renderDefaultButton(option: ChartPickerOption & { value: TValue }) {
-    const view = optionViews.get(option)!;
-    const label = `Set ${option.label} as default`;
-    const state = view.default
-      ? { label: `${option.label} is the default chart`, title: 'Default chart', className: 'text-accent sm:opacity-100', fill: 'currentColor' }
-      : { label, title: label, className: 'text-fg-tertiary hover:bg-bg-elevated hover:text-accent', fill: 'none' };
-    return onSetDefault && <button type="button" aria-label={state.label} title={state.title} aria-pressed={view.default} disabled={view.default}
-      onClick={event => { event.stopPropagation(); onSetDefault(option.value); }}
-      className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent', 'sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100', state.className)}>
-      <Star className="h-4 w-4" fill={state.fill} />
-    </button>;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  function handleSelect(nextValue: TValue) {
+    onChange(nextValue);
+    setIsOpen(false);
   }
-  function renderOption(option: ChartPickerOption & { value: TValue }) {
-    const view = optionViews.get(option)!;
-    const compact = variant === 'compact';
-    const duration = compact ? 'transition-colors' : 'transition-all';
-    const padding = compact ? 'py-2.5' : 'py-2';
-    return <div key={option.value} role="option" aria-selected={view.selected} onClick={view.select}
-      className={cn(`group flex w-full items-center justify-between gap-1 rounded-md text-sm text-fg ${duration}`, 'hover:bg-bg-elevated', view.selected && 'bg-accent/10 text-accent')}>
-      <button type="button" className={`flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-3 ${padding} text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent`}>
-        <span className="truncate">{option.label}</span>
-        {view.selected ? <Check className="h-4 w-4 shrink-0" /> : null}
+
+  function renderDefaultButton(option: ChartPickerOption & { value: TValue }) {
+    if (!onSetDefault) return null;
+    const isDefault = option.value === defaultValue;
+    return (
+      <button
+        type="button"
+        aria-label={isDefault ? `${option.label} is the default chart` : `Set ${option.label} as default`}
+        title={isDefault ? 'Default chart' : `Set ${option.label} as default`}
+        aria-pressed={isDefault}
+        disabled={isDefault}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSetDefault(option.value);
+        }}
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+          'sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100',
+          isDefault
+            ? 'text-accent sm:opacity-100'
+            : 'text-fg-tertiary hover:bg-bg-elevated hover:text-accent',
+        )}
+      >
+        <Star className="h-4 w-4" fill={isDefault ? 'currentColor' : 'none'} />
       </button>
-      {renderDefaultButton(option)}
-    </div>;
+    );
   }
 
   if (variant === 'compact') {
@@ -94,10 +108,10 @@ export function ChartPicker<TValue extends string = string>({
           aria-label={selectLabel}
           aria-haspopup="listbox"
           aria-expanded={isOpen}
-          onClick={toggle}
+          onClick={() => setIsOpen((current) => !current)}
           className={cn(
-            'flex h-10 max-w-[min(16rem,calc(100vw-8rem))] items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm font-medium text-fg',
-            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
+            'flex h-11 max-w-[min(16rem,calc(100vw-8rem))] items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm font-medium text-fg',
+            'transition-colors hover:border-border-strong focus:border-accent',
           )}
         >
           <span className="truncate">{selectedOption?.label ?? 'Select chart'}</span>
@@ -106,7 +120,31 @@ export function ChartPicker<TValue extends string = string>({
         {isOpen ? (
           <div className="absolute left-0 top-[calc(100%+0.375rem)] z-40 min-w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
             <div role="listbox">
-              {options.map(renderOption)}
+              {options.map((option) => {
+                const isSelected = option.value === value;
+                return (
+                  <div
+                    key={option.value}
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelect(option.value)}
+                    className={cn(
+                      'group flex w-full items-center justify-between gap-1 rounded-md text-sm text-fg transition-colors',
+                      'hover:bg-bg-elevated',
+                      isSelected && 'bg-accent/10 text-accent',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                    >
+                      <span className="truncate">{option.label}</span>
+                      {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                    </button>
+                    {renderDefaultButton(option)}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -121,13 +159,16 @@ export function ChartPicker<TValue extends string = string>({
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" />
         <input
           value={searchValue}
-          onFocus={show}
-          onChange={event => search(event.target.value)}
+          onFocus={() => setIsOpen(true)}
+          onChange={(event) => {
+            onSearchChange(event.target.value);
+            setIsOpen(true);
+          }}
           placeholder={searchPlaceholder}
           className={cn(
-            'h-11 sm:h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg',
+            'h-11 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg',
             'placeholder:text-fg-tertiary transition-colors',
-            'hover:border-border-strong focus:border-accent focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
+            'hover:border-border-strong focus:border-accent',
           )}
         />
       </label>
@@ -138,10 +179,10 @@ export function ChartPicker<TValue extends string = string>({
           aria-label={selectLabel}
           aria-haspopup="listbox"
           aria-expanded={isOpen}
-          onClick={toggle}
+          onClick={() => setIsOpen((current) => !current)}
           className={cn(
-            'flex min-h-11 sm:min-h-9 w-full items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 py-2 sm:py-1 text-left text-sm text-fg',
-            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
+            'flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 py-2 text-left text-sm text-fg',
+            'transition-colors hover:border-border-strong focus:border-accent',
           )}
         >
           <span className="min-w-0 break-words">{selectedOption?.label ?? 'Select chart'}</span>
@@ -158,7 +199,31 @@ export function ChartPicker<TValue extends string = string>({
         >
           <div role="listbox">
             {visibleOptions.length > 0 ? (
-              visibleOptions.map(renderOption)
+              visibleOptions.map((option) => {
+                const isSelected = option.value === value;
+                return (
+                  <div
+                    key={option.value}
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelect(option.value)}
+                    className={cn(
+                      'group flex w-full items-center justify-between gap-1 rounded-md text-sm text-fg transition-all',
+                      'hover:bg-bg-elevated',
+                      isSelected && 'bg-accent/10 text-accent',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-3 py-2 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                    >
+                      <span className="truncate">{option.label}</span>
+                      {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                    </button>
+                    {renderDefaultButton(option)}
+                  </div>
+                );
+              })
             ) : (
               <div className="px-3 py-3 text-sm text-fg-tertiary">No charts found</div>
             )}

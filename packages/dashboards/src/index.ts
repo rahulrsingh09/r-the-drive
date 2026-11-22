@@ -13,8 +13,12 @@ export {
   DashboardChartRenderer,
   ChargeSessionCurveDetail,
   ManagedChartRuntime,
+  DashboardChartInsightProvider,
 } from './widgets/chart/DashboardChartWidget';
+export type { DashboardChartInsightResolver } from './widgets/chart/DashboardChartWidget';
 export { ChartDefinitionRenderer } from './widgets/chart/ChartDefinitionRenderer';
+export { ChargeCurveInsightNote, describeChargeCurve } from './widgets/chart/chargeCurveInsight';
+export type { ChargeCurveInsight, ChargeCurvePattern } from './widgets/chart/chargeCurveInsight';
 export { TripTagPicker } from './widgets/table/TripTagPicker';
 export { PhantomDrainChart, buildPhantomDrainDailySeries } from './widgets/chart/PhantomDrainChart';
 export type {

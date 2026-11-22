@@ -20,6 +20,7 @@ import { userDashboardRoute } from './routes/d.$slug';
 import { adminDashboardsRoute } from './routes/admin.dashboards';
 import { usersRoute } from './routes/users';
 import { exploreRoute } from './routes/explore';
+import { insightsRoute } from './routes/insights';
 
 export const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -43,4 +44,5 @@ export const routeTree = rootRoute.addChildren([
   adminDashboardsRoute,
   usersRoute,
   exploreRoute,
+  insightsRoute,
 ]);

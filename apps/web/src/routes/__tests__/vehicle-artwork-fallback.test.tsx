@@ -23,6 +23,7 @@ vi.mock('../../../../../packages/hooks/src/api', async (importOriginal) => {
 import {
   AuthenticatedVehicleArtwork,
   getVehicleArtworkFallback,
+  isImmutableArtwork,
   normalizeVehicleArtworkModel,
   resolveVehicleArtwork,
 } from '@panda/hooks';
@@ -61,13 +62,13 @@ describe('vehicle artwork fallback contract', () => {
     expect(getVehicleArtworkFallback('R1T', 'charging')).toBe(
       '/vehicle-images/fallbacks/r1t/charging.webp',
     );
-    expect(getVehicleArtworkFallback('Gen 1 R2-S', 'health')).toBe(
-      '/vehicle-images/fallbacks/r2s/health.webp',
-    );
+    // The packaged "r2s" pictures show an R1S body, so an R2 gets no packaged fallback.
+    expect(getVehicleArtworkFallback('Gen 1 R2-S', 'health')).toBeNull();
     expect(getVehicleArtworkFallback('R1T', 'vehicle-card')).toBe(
       '/vehicle-images/fallbacks/r1t/side.webp',
     );
-    expect(getVehicleArtworkFallback('R2', 'health')).toBe('/vehicle-images/fallbacks/r2s/health.webp');
+    expect(getVehicleArtworkFallback('R2', 'health')).toBeNull();
+    expect(getVehicleArtworkFallback('R2', 'vehicle-card')).toBeNull();
   });
 
   it('resolves API artwork by surface priority before model fallbacks', () => {
@@ -172,7 +173,7 @@ describe('vehicle artwork fallback contract', () => {
     }
   });
 
-  it('shows packaged artwork on the first render while protected artwork is pending', () => {
+  it('shows no packaged artwork while protected artwork is pending', () => {
     renderArtwork(
       <AuthenticatedVehicleArtwork
         source="/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/overview.webp"
@@ -181,8 +182,16 @@ describe('vehicle artwork fallback contract', () => {
       />,
     );
 
-    const image = screen.getByRole('img', { name: 'Pending protected Rivian' });
-    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1t/overview.webp');
-    expect(image.getAttribute('data-artwork-fallback')).toBe('true');
+    // A packaged picture can show a different body; the owner image or nothing shows instead.
+    expect(screen.queryByRole('img', { name: 'Pending protected Rivian' })).toBeNull();
+  });
+
+  it('keeps only checksum-revisioned owner images in the browser', () => {
+    const vehicle = '00000000-0000-0000-0000-000000000000';
+    expect(isImmutableArtwork(`/v1/vehicle-image-cache/${vehicle}/a1b2c3-0123456789abcdef.webp`)).toBe(true);
+    // A pending mirror key (no checksum) can be replaced by a new picture: never kept.
+    expect(isImmutableArtwork(`/v1/vehicle-image-cache/${vehicle}/${'f'.repeat(64)}.webp`)).toBe(false);
+    expect(isImmutableArtwork('/vehicle-images/fallbacks/r1s/side.webp')).toBe(false);
+    expect(isImmutableArtwork(`https://example.com/v1/vehicle-image-cache/${vehicle}/a-0123456789abcdef.webp`)).toBe(false);
   });
 });

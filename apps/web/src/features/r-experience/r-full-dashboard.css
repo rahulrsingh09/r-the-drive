@@ -41,24 +41,6 @@
 .r-lock-icon[data-locked="false"] .r-lock-shackle { transform: rotate(-28deg); }
 .r-dashboard-surface[data-r-default-layout] [data-dashboard-grid="view"] > [data-widget-definition="overview.vehicle"] { height: auto; }
 .r-dashboard-surface[data-r-default-layout] .r-dashboard-vehicle { height: auto; overflow: visible; }
-.r-home-workspace { margin-top: 0; }
-.r-home-content { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); grid-template-areas: "vehicle activity" "totals totals" "charts charts"; gap: 36px 48px; align-items: start; }
-.r-home-content[data-has-vehicle="false"] { grid-template-areas: "activity activity" "totals totals" "charts charts"; }
-.r-home-vehicle { grid-area: vehicle; min-width: 0; }
-.r-home-vehicle .r-trip-instruments { max-width: none; margin-inline: 0; }
-.r-home-vehicle [data-dashboard-grid="view"] { display: block; }
-.r-home-vehicle [data-widget-id],.r-home-vehicle [data-widget-frame],.r-home-vehicle [data-widget-type="custom"],.r-home-vehicle .r-dashboard-vehicle { height: auto !important; min-height: 0 !important; }
-.r-home-vehicle .r-dashboard-vehicle { overflow: visible; }
-.r-home-totals { grid-area: totals; min-width: 0; }
-.r-home-totals [data-dashboard-grid="view"] { grid-auto-rows: auto !important; grid-auto-flow: dense; }
-.r-home-totals [data-dashboard-grid="view"] > [data-widget-id] { grid-row: auto !important; height: auto !important; }
-.r-home-charts { grid-area: charts; min-width: 0; padding-top: 28px; border-top: 1px solid var(--rm-border-default); }
-.r-home-workspace .r-home-totals [data-dashboard-grid="view"] [data-widget-type="sensor"] [data-ui-card] { min-height: 104px; border: 0; border-radius: 14px; background: var(--rm-bg-surface); padding: 18px 20px; }
-.r-home-workspace .r-home-totals [data-widget-type="sensor"] .font-mono { font-family: inherit; font-size: 28px; font-weight: 450; letter-spacing: -1px; }
-.r-workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
-.r-workspace-period { font-size: 11px; color: var(--rm-text-secondary); }
-.r-workspace-period h1 { font-size: 28px; color: var(--rm-text-primary); }
-.r-workspace-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .r-dashboard-tools { max-width: 100%; font-size: 12px; position: relative; }
 .r-dashboard-tools summary { min-height: 44px; padding: 12px 16px; border: 1px solid var(--rm-border-default); border-radius: 12px; cursor: pointer; white-space: nowrap; }
 .r-dashboard-tools summary { display: flex; align-items: center; justify-content: center; gap: 8px; list-style: none; }
@@ -68,28 +50,7 @@
 .r-dashboard-tools > div > * { text-align: left; min-height: 44px; padding: 12px 16px; }
 .r-dashboard-tools > div > *:hover { background: var(--rm-bg-elevated); }
 .r-dashboard-tools > p { margin-top: 12px; color: var(--rm-status-danger); }
-.r-home-activity { grid-area: activity; display: flex; flex-direction: column; gap: 32px; padding-top: 8px; min-width: 0; }
-.r-home-activity > section { margin-top: 0; min-width: 0; }
-@media(min-width:901px) {
-  .r-home-content[data-has-vehicle="true"] { grid-template-areas: "vehicle activity" "vehicle totals" "charts charts"; grid-template-rows: auto 1fr auto; }
-  .r-home-content[data-has-vehicle="true"] .r-home-totals [data-dashboard-grid="view"] { grid-template-columns: repeat(2,minmax(0,1fr)) !important; gap: 16px !important; }
-  .r-home-content[data-has-vehicle="true"] .r-home-totals [data-dashboard-grid="view"] > [data-widget-id] { grid-column: auto !important; }
-  .r-home-content[data-has-vehicle="true"] .r-home-totals [data-widget-type="sensor"] [data-ui-card] { padding-bottom: 54px; }
-}
 @media(max-width:900px) {
-  .r-home-content,.r-home-content[data-has-vehicle="false"] { grid-template-columns: minmax(0,1fr); grid-template-areas: "vehicle" "totals" "activity" "charts"; gap: 28px; }
-  .r-home-activity { gap: 24px; padding-top: 0; }
-  .r-home-charts { padding-top: 24px; }
-  .r-workspace-heading { flex-direction: column; align-items: stretch; gap: 10px; margin-bottom: 20px; }
-  .r-workspace-period > span { display: none; }
-  .r-workspace-period:has(> h1) { display: block; }
-  .r-workspace-period:not(:has(> h1)) { display: none; }
-  .r-workspace-actions { justify-content: space-between; align-items: flex-start; }
-  .r-workspace-actions [data-dashboard-actions] { min-width: 0; flex: 1; gap: 4px; flex-wrap: wrap; justify-content: flex-start; }
-  .r-workspace-actions [data-dashboard-actions] > :has([aria-label="Select vehicle"]) { min-width: 120px; flex: 1 1 120px; }
-  .r-workspace-actions [data-dashboard-actions] button { min-height: 44px; }
-  .r-workspace-actions [aria-label="Select vehicle"] { min-width: 0; width: 100%; }
-  .r-workspace-actions [aria-label^="Toggle efficiency units"] { width: 44px; }
   .r-dashboard-tools { flex-shrink: 0; }
   .r-dashboard-tools summary { padding: 10px; min-width: 44px; }
   .r-dashboard-tools summary > span { display: none; }

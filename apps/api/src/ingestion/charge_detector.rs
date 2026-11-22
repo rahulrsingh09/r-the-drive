@@ -8,19 +8,20 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::location::valid_location_pair;
+use crate::services::charging::{classify_charger_type, DC_MIN_RATE_KW, PLAUSIBLE_MAX_CHARGE_KW};
 
 const CHARGE_TIMEOUT_SECS: i64 = 1800; // 30 min
 
-/// Threshold for classifying charger type by peak power.
-const AC_L1_MAX_KW: f64 = 12.0;
-const AC_L2_MAX_KW: f64 = 50.0;
+/// A plugged-in vehicle cannot move. A fresh odometer reading, taken after
+/// charging was last seen and at least `MOVED_MIN_MILES` beyond the odometer
+/// from then, ends the session at that last charging reading. The R2 reports
+/// the odometer in 1 km steps, so one step (0.62 mi) is not enough.
+const MOVED_MIN_MILES: f64 = 1.0;
+const MOTION_READING_MAX_AGE_SECS: i64 = 120;
 
-/// Hard ceiling on any single power_kw telemetry reading during charging.
-/// The Rivian R1T/R1S peaks at ~220 kW DC (large pack). Values above this
-/// are sensor glitches and must not corrupt peak_charge_kw or the energy
-/// accumulator.  300 kW gives comfortable headroom for future hardware
-/// without letting runaway readings through.
-const PLAUSIBLE_MAX_CHARGE_KW: f64 = 300.0;
+/// A state of charge this far above the last charging reading is charging
+/// evidence, even when the frame carries no charger signal.
+const SOC_RISE_MIN_PCT: f64 = 0.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletedChargeSession {
@@ -129,6 +130,14 @@ struct ActiveCharge {
     #[serde(with = "optional_float_bits")]
     start_soc: Option<f64>,
     last_activity: DateTime<Utc>,
+    #[serde(default, with = "optional_float_bits")]
+    last_charge_soc: Option<f64>,
+    #[serde(default, with = "optional_float_bits")]
+    last_charge_odometer: Option<f64>,
+    #[serde(default, with = "float_bits")]
+    last_charge_peak_kw: f64,
+    #[serde(default, with = "float_bits")]
+    last_charge_energy_wh: f64,
     grid: ChargeGridEnergy,
 }
 
@@ -140,6 +149,8 @@ struct ChargeGridEnergy {
     watt_hours: f64,
     #[serde(with = "float_bits")]
     peak_kw: f64,
+    #[serde(default, with = "optional_float_bits")]
+    pending_dc_reading_kw: Option<f64>,
 }
 
 impl ChargeGridEnergy {
@@ -147,10 +158,19 @@ impl ChargeGridEnergy {
         let Some(kw) = power.map(f64::abs) else {
             return;
         };
-        let exceeds_ac_baseline =
-            self.peak_kw > 0.0 && self.peak_kw < AC_L2_MAX_KW && kw > 5.0 * self.peak_kw;
-        if !(kw > 0.0 && kw <= PLAUSIBLE_MAX_CHARGE_KW) || exceeds_ac_baseline {
+        if !(kw > 0.0 && kw <= PLAUSIBLE_MAX_CHARGE_KW) {
             return;
+        }
+        let ac_baseline = self.peak_kw > 0.0 && self.peak_kw < DC_MIN_RATE_KW;
+        let is_dc_rate = kw >= DC_MIN_RATE_KW;
+        if ac_baseline && is_dc_rate && self.pending_dc_reading_kw.is_none() {
+            self.pending_dc_reading_kw = Some(kw);
+            return;
+        }
+        if let Some(pending) = self.pending_dc_reading_kw.take() {
+            if is_dc_rate {
+                self.peak_kw = self.peak_kw.max(pending);
+            }
         }
         if let Some(previous) = self.last_sample_at {
             // A late reading must not rewind the next integration interval.
@@ -221,10 +241,15 @@ impl ChargeDetectorState {
                 location: (snapshot.location_lat, snapshot.location_lng),
                 start_soc: snapshot.soc_start,
                 last_activity: snapshot.last_charge_ts,
+                last_charge_soc: snapshot.last_soc,
+                last_charge_odometer: None,
+                last_charge_peak_kw: snapshot.peak_charge_kw.max(0.0),
+                last_charge_energy_wh: snapshot.energy_used_wh.max(0.0),
                 grid: ChargeGridEnergy {
                     last_sample_at: snapshot.last_power_ts,
                     watt_hours: snapshot.energy_used_wh.max(0.0),
                     peak_kw: snapshot.peak_charge_kw.max(0.0),
+                    pending_dc_reading_kw: None,
                 },
             }),
         }
@@ -287,15 +312,47 @@ impl ChargePhase {
             Self::Idle => (Self::Idle, ChargeEvent::NoChange),
             Self::Active(mut session) => {
                 session.observe(event);
-                if signals.sustains {
+                let soc_rising = matches!(
+                    (event.battery_level, session.last_charge_soc),
+                    (Some(now), Some(then)) if now - then >= SOC_RISE_MIN_PCT
+                );
+                let charging_now = signals.sustains || soc_rising;
+                if !charging_now && session.moved_since_last_charge(event) {
+                    return (
+                        Self::Idle,
+                        ChargeEvent::SessionEnded(session.finish_at_last_charge(
+                            vehicle_id,
+                            event.ts,
+                            battery,
+                        )),
+                    );
+                }
+                if charging_now {
                     session.last_activity = event.ts;
+                    session.last_charge_soc = battery.soc;
+                    session.last_charge_peak_kw = session.grid.peak_kw;
+                    session.last_charge_energy_wh = session.grid.watt_hours;
+                    if event.odometer_miles.is_some() {
+                        session.last_charge_odometer = event.odometer_miles;
+                    }
+                } else if session.last_charge_odometer.is_none() {
+                    session.last_charge_odometer = event.odometer_miles;
                 }
                 let expired =
                     (event.ts - session.last_activity).num_seconds() > CHARGE_TIMEOUT_SECS;
-                if signals.stops || expired {
+                if signals.stops {
                     (
                         Self::Idle,
                         ChargeEvent::SessionEnded(session.finish(vehicle_id, event.ts, battery)),
+                    )
+                } else if expired {
+                    (
+                        Self::Idle,
+                        ChargeEvent::SessionEnded(session.finish_at_last_charge(
+                            vehicle_id,
+                            event.ts,
+                            battery,
+                        )),
                     )
                 } else {
                     (Self::Active(session), ChargeEvent::NoChange)
@@ -316,11 +373,16 @@ impl ActiveCharge {
             location,
             start_soc: event.battery_level,
             last_activity: event.ts,
+            last_charge_soc: event.battery_level,
+            last_charge_odometer: event.odometer_miles,
+            last_charge_peak_kw: 0.0,
+            last_charge_energy_wh: 0.0,
             grid: ChargeGridEnergy {
                 // The opening frame anchors time; subsequent frames supply power.
                 last_sample_at: Some(event.ts),
                 watt_hours: 0.0,
                 peak_kw: 0.0,
+                pending_dc_reading_kw: None,
             },
         }
     }
@@ -335,6 +397,42 @@ impl ActiveCharge {
             }
         }
         self.grid.observe(event.ts, event.power_kw);
+    }
+
+    /// A fresh odometer reading, taken after charging was last seen, shows the
+    /// vehicle moved. Older (replayed or delayed) readings and GNSS speed,
+    /// which jitters while parked, are not used.
+    fn moved_since_last_charge(&self, event: &TelemetryEvent) -> bool {
+        let (Some(odometer), Some(baseline)) = (event.odometer_miles, self.last_charge_odometer)
+        else {
+            return false;
+        };
+        let read_at = event.odometer_miles_ts.unwrap_or(event.ts);
+        read_at > self.last_activity
+            && (event.ts - read_at).num_seconds() <= MOTION_READING_MAX_AGE_SECS
+            && odometer - baseline >= MOVED_MIN_MILES
+    }
+
+    /// Close a session that ended without an explicit charger signal (by
+    /// timeout or motion) when charging was last seen, with the state of
+    /// charge, peak and energy from then.
+    fn finish_at_last_charge(
+        mut self,
+        vehicle_id: Uuid,
+        noticed_at: DateTime<Utc>,
+        battery: &ChargeBatteryReadings,
+    ) -> CompletedChargeSession {
+        if self.last_activity <= self.started_at {
+            return self.finish(vehicle_id, noticed_at, battery);
+        }
+        let ended_at = self.last_activity;
+        let mut trimmed_battery = battery.clone();
+        if self.last_charge_soc.is_some() {
+            trimmed_battery.soc = self.last_charge_soc;
+        }
+        self.grid.peak_kw = self.last_charge_peak_kw;
+        self.grid.watt_hours = self.last_charge_energy_wh;
+        self.finish(vehicle_id, ended_at, &trimmed_battery)
     }
 
     fn finish(
@@ -366,7 +464,9 @@ impl ActiveCharge {
             energy_added_wh,
             peak_charge_kw,
             avg_charge_rate_kw,
-            charger_type: peak_charge_kw.or(avg_charge_rate_kw).map(classify_charger),
+            charger_type: peak_charge_kw
+                .or(avg_charge_rate_kw)
+                .map(|kw| classify_charger_type(kw).to_owned()),
         }
     }
 }
@@ -411,15 +511,6 @@ mod location_bits {
         let (lat, lng) = <(Option<u64>, Option<u64>)>::deserialize(deserializer)?;
         Ok((lat.map(f64::from_bits), lng.map(f64::from_bits)))
     }
-}
-
-/// Classify charger type from peak observed power.
-fn classify_charger(peak_kw: f64) -> String {
-    [(AC_L1_MAX_KW, "ac"), (AC_L2_MAX_KW, "ac_l2")]
-        .into_iter()
-        .find_map(|(ceiling, label)| (peak_kw < ceiling).then_some(label))
-        .unwrap_or("dc")
-        .to_owned()
 }
 
 #[cfg(test)]
@@ -567,16 +658,16 @@ mod tests {
         assert_eq!(session.energy_used_wh, Some(200.0));
         assert_eq!(session.peak_charge_kw, Some(12.0));
         assert_eq!(session.avg_charge_rate_kw, Some(12.0));
-        assert_eq!(session.charger_type.as_deref(), Some("ac_l2"));
+        assert_eq!(session.charger_type.as_deref(), Some("ac"));
     }
 
     #[test]
     fn charge_core_power_ceiling_spike_and_classification_boundaries() {
         for (kw, expected) in [
             (11.999, Some("ac")),
-            (12.0, Some("ac_l2")),
-            (49.999, Some("ac_l2")),
-            (50.0, Some("dc")),
+            (12.0, Some("ac")),
+            (24.999, Some("ac")),
+            (25.0, Some("dc")),
             (300.0, Some("dc")),
             (300.001, None),
         ] {
@@ -946,18 +1037,300 @@ mod tests {
     }
 
     #[test]
-    fn classify_ac_l1() {
-        assert_eq!(classify_charger(7.2), "ac");
+    fn timed_out_session_ends_when_charging_was_last_seen() {
+        // Shape of the Nov 6 R2 DC fast charge: no power readings, 28% to 72%
+        // in 16 minutes, then "unknown" charger state until the timeout.
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(2);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.battery_level = Some(28.0);
+        start.battery_capacity_wh = Some(91_500.0);
+        detector.process(&start);
+
+        let last_charging = started_at + Duration::minutes(16);
+        let mut last = event(vehicle_id, last_charging, None);
+        last.battery_level = Some(72.0);
+        last.time_to_end_of_charge_min = Some(9);
+        assert!(matches!(detector.process(&last), ChargeEvent::NoChange));
+
+        // The level falls after charging stops (the car drives away without
+        // odometer readings here), and the timeout must not keep that level.
+        let mut idle = event(vehicle_id, last_charging + Duration::minutes(10), None);
+        idle.battery_level = Some(64.0);
+        assert!(matches!(detector.process(&idle), ChargeEvent::NoChange));
+
+        let noticed = event(vehicle_id, last_charging + Duration::minutes(31), None);
+        let ChargeEvent::SessionEnded(session) = detector.process(&noticed) else {
+            panic!("expected the timeout to close the session");
+        };
+
+        assert_eq!(session.ended_at, last_charging);
+        assert_eq!(session.soc_end, Some(72.0));
+        let avg = session
+            .avg_charge_rate_kw
+            .expect("average rate from SOC delta");
+        assert!(avg > 140.0, "average over charging time only, got {avg}");
+        assert_eq!(session.charger_type.as_deref(), Some("dc"));
+        assert_eq!(session.peak_charge_kw, None);
     }
 
     #[test]
-    fn classify_ac_l2() {
-        assert_eq!(classify_charger(19.2), "ac_l2");
+    fn driving_away_ends_the_session_at_the_last_charging_reading() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(2);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.battery_level = Some(40.0);
+        start.battery_capacity_wh = Some(91_500.0);
+        start.odometer_miles = Some(12_000.0);
+        detector.process(&start);
+
+        let last_charging = started_at + Duration::minutes(20);
+        let mut last = event(vehicle_id, last_charging, None);
+        last.battery_level = Some(71.0);
+        last.time_to_end_of_charge_min = Some(11);
+        detector.process(&last);
+
+        let mut parked = event(vehicle_id, last_charging + Duration::minutes(2), None);
+        parked.odometer_miles = Some(12_000.04);
+        assert!(matches!(detector.process(&parked), ChargeEvent::NoChange));
+
+        let mut driving = event(vehicle_id, last_charging + Duration::minutes(6), None);
+        driving.battery_level = Some(69.5);
+        driving.odometer_miles = Some(12_002.3);
+        let ChargeEvent::SessionEnded(session) = detector.process(&driving) else {
+            panic!("motion must end the session");
+        };
+        assert_eq!(session.ended_at, last_charging);
+        assert_eq!(session.soc_end, Some(71.0));
+        assert_eq!(session.charger_type.as_deref(), Some("dc"));
+        assert_eq!(detector.active_session_id(), None);
     }
 
     #[test]
-    fn classify_dc() {
-        assert_eq!(classify_charger(150.0), "dc");
+    fn keeps_a_dc_ramp_that_starts_at_a_low_rate() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(1);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        detector.process(&event(vehicle_id, started_at, Some(ChargerState::Charging)));
+        let mut handshake = event(
+            vehicle_id,
+            started_at + Duration::seconds(10),
+            Some(ChargerState::Charging),
+        );
+        handshake.power_kw = Some(6.0);
+        detector.process(&handshake);
+        let mut ramp = event(
+            vehicle_id,
+            started_at + Duration::seconds(40),
+            Some(ChargerState::Charging),
+        );
+        ramp.power_kw = Some(184.0);
+        detector.process(&ramp);
+        // A second DC-rate reading confirms the ramp.
+        let mut steady = event(
+            vehicle_id,
+            started_at + Duration::seconds(70),
+            Some(ChargerState::Charging),
+        );
+        steady.power_kw = Some(186.4);
+        detector.process(&steady);
+
+        let end = event(
+            vehicle_id,
+            started_at + Duration::minutes(20),
+            Some(ChargerState::Done),
+        );
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+        assert_eq!(session.peak_charge_kw, Some(186.4));
+        assert_eq!(session.charger_type.as_deref(), Some("dc"));
+    }
+
+    #[test]
+    fn an_early_single_glitch_cannot_make_an_ac_session_dc() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(3);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        detector.process(&event(vehicle_id, started_at, Some(ChargerState::Charging)));
+        for (seconds, kw) in [(30_i64, 11.0_f64), (60, 45.0), (90, 11.2), (120, 11.1)] {
+            let mut reading = event(
+                vehicle_id,
+                started_at + Duration::seconds(seconds),
+                Some(ChargerState::Charging),
+            );
+            reading.power_kw = Some(kw);
+            detector.process(&reading);
+        }
+        let end = event(
+            vehicle_id,
+            started_at + Duration::minutes(40),
+            Some(ChargerState::Done),
+        );
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+        assert_eq!(session.peak_charge_kw, Some(11.2));
+        assert_eq!(session.charger_type.as_deref(), Some("ac"));
+    }
+
+    #[test]
+    fn gnss_speed_jitter_and_stale_odometer_do_not_end_a_charge() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(1);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.odometer_miles = Some(12_000.0);
+        detector.process(&start);
+        let session_id = detector.active_session_id();
+
+        // Parking-garage GNSS jitter on a frame without charger signals.
+        let mut jitter = event(vehicle_id, started_at + Duration::minutes(3), None);
+        jitter.speed_mph = Some(3.4);
+        assert!(matches!(detector.process(&jitter), ChargeEvent::NoChange));
+
+        let mut charging = event(
+            vehicle_id,
+            started_at + Duration::minutes(6),
+            Some(ChargerState::Charging),
+        );
+        charging.speed_mph = Some(4.0);
+        assert!(matches!(detector.process(&charging), ChargeEvent::NoChange));
+
+        // A delayed odometer reading taken before the last charging reading.
+        let mut stale = event(vehicle_id, started_at + Duration::minutes(8), None);
+        stale.odometer_miles = Some(12_004.0);
+        stale.odometer_miles_ts = Some(started_at + Duration::minutes(5));
+        assert!(matches!(detector.process(&stale), ChargeEvent::NoChange));
+
+        // One 1 km odometer step is below the motion limit.
+        let mut step = event(vehicle_id, started_at + Duration::minutes(9), None);
+        step.odometer_miles = Some(12_000.62);
+        assert!(matches!(detector.process(&step), ChargeEvent::NoChange));
+        assert_eq!(detector.active_session_id(), session_id);
+    }
+
+    #[test]
+    fn rising_soc_counts_as_charging_without_charger_signals() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(2);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.battery_level = Some(40.0);
+        start.battery_capacity_wh = Some(91_500.0);
+        detector.process(&start);
+        for (minutes, soc) in [(10_i64, 46.0_f64), (20, 52.0), (25, 52.2)] {
+            let mut sample = event(vehicle_id, started_at + Duration::minutes(minutes), None);
+            sample.battery_level = Some(soc);
+            detector.process(&sample);
+        }
+        let noticed = event(vehicle_id, started_at + Duration::minutes(51), None);
+        let ChargeEvent::SessionEnded(session) = detector.process(&noticed) else {
+            panic!("expected the timeout to close the session");
+        };
+        // 52.2 is not 0.5 above 52.0, so the charge ended at minute 20.
+        assert_eq!(session.ended_at, started_at + Duration::minutes(20));
+        assert_eq!(session.soc_end, Some(52.0));
+    }
+
+    #[test]
+    fn a_charge_without_later_evidence_keeps_the_timeout_close() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(2);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.battery_level = Some(40.0);
+        detector.process(&start);
+        let noticed_at = started_at + Duration::minutes(31);
+        let ChargeEvent::SessionEnded(session) =
+            detector.process(&event(vehicle_id, noticed_at, None))
+        else {
+            panic!("expected the timeout to close the session");
+        };
+        assert_eq!(session.ended_at, noticed_at);
+    }
+
+    #[test]
+    fn power_after_the_last_charging_reading_is_not_kept() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(2);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        detector.process(&event(vehicle_id, started_at, Some(ChargerState::Charging)));
+        let mut charging = event(
+            vehicle_id,
+            started_at + Duration::minutes(10),
+            Some(ChargerState::Charging),
+        );
+        charging.power_kw = Some(11.0);
+        detector.process(&charging);
+        let last_charging = started_at + Duration::minutes(40);
+        let mut last = event(vehicle_id, last_charging, Some(ChargerState::Charging));
+        last.power_kw = Some(11.0);
+        detector.process(&last);
+
+        // Drive power after the charge stopped, without charger signals.
+        let mut drive = event(vehicle_id, last_charging + Duration::minutes(5), None);
+        drive.power_kw = Some(15.0);
+        detector.process(&drive);
+
+        let noticed = event(vehicle_id, last_charging + Duration::minutes(31), None);
+        let ChargeEvent::SessionEnded(session) = detector.process(&noticed) else {
+            panic!("expected the timeout to close the session");
+        };
+        assert_eq!(session.ended_at, last_charging);
+        assert_eq!(session.peak_charge_kw, Some(11.0));
+        // 11 kW from the start to minute 40; the drive minutes are not kept.
+        let energy = session.energy_used_wh.expect("integrated energy");
+        assert!(
+            (energy - 7_333.3).abs() < 1.0,
+            "40 min at 11 kW, got {energy}"
+        );
+    }
+
+    #[test]
+    fn still_drops_a_late_spike_on_an_ac_session() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(3);
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        // The first event only starts the session, so the AC baseline comes
+        // from the next reading.
+        detector.process(&event(vehicle_id, started_at, Some(ChargerState::Charging)));
+        let mut steady = event(
+            vehicle_id,
+            started_at + Duration::minutes(2),
+            Some(ChargerState::Charging),
+        );
+        steady.power_kw = Some(11.0);
+        detector.process(&steady);
+        let mut spike = event(
+            vehicle_id,
+            started_at + Duration::minutes(25),
+            Some(ChargerState::Charging),
+        );
+        spike.power_kw = Some(250.0);
+        detector.process(&spike);
+
+        let end = event(
+            vehicle_id,
+            started_at + Duration::minutes(50),
+            Some(ChargerState::Done),
+        );
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+        assert_eq!(session.peak_charge_kw, Some(11.0));
+        assert_eq!(session.charger_type.as_deref(), Some("ac"));
     }
 
     #[test]

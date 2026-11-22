@@ -21,7 +21,7 @@ type UpdateChargeSessionLocationResponse = {
   };
 };
 
-const chargingInvalidationKeys = [['charging'], ['metrics', 'batch'], ['trips']] as const;
+const chargingInvalidationKeys = [['charging'], ['metrics', 'batch'], ['trips'], ['vehicles', 'insights']] as const;
 
 export function invalidateChargingData(queryClient: QueryClient): void {
   invalidateKeys(queryClient, chargingInvalidationKeys);

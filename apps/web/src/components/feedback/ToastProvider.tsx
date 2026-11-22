@@ -1,18 +1,20 @@
-import React, { useEffect, useReducer } from 'react';
-import type { ToastPayload } from './toast';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  TOAST_DISMISS_MS,
+  TOAST_EVENT,
+  addToast,
+  toastRole,
+  type ToastEntry,
+  type ToastPayload,
+} from './toast';
 
-let fallbackToastSequence = 0;
-let fallbackToastNamespace: string | undefined;
-
+// Use crypto.randomUUID() for toast IDs so they remain unique across HMR
+// reloads (a module-level counter resets to 0 every time the module is
+// re-evaluated, risking duplicate React keys if old toasts are still mounted).
 function nextToastId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  fallbackToastNamespace ??= `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  fallbackToastSequence += 1;
-  return `${fallbackToastNamespace}-${fallbackToastSequence}`;
-}
-
-interface Toast extends ToastPayload {
-  id: string;
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 const TOAST_VARIANT_CLASSNAMES: Record<NonNullable<ToastPayload['variant']> | 'default', {
@@ -41,78 +43,107 @@ const TOAST_VARIANT_CLASSNAMES: Record<NonNullable<ToastPayload['variant']> | 'd
   },
 };
 
-type ToastEvent = { type: 'show'; toast: Toast } | { type: 'dismiss'; id: string };
-
-function toastQueue(current: Map<string, Toast>, event: ToastEvent) {
-  const next = new Map(current);
-  if (event.type === 'dismiss') next.delete(event.id);
-  else {
-    next.set(event.toast.id, event.toast);
-    if (next.size > 3) next.delete(next.keys().next().value!);
-  }
-  return next;
-}
-
 export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [queue, dispatch] = useReducer(toastQueue, new Map<string, Toast>());
-  const toasts = Array.from(queue.values());
+  const [toasts, setToasts] = useState<ToastEntry[]>([]);
 
   useEffect(() => {
-    const timers = new Set<number>();
-    const receive = (event: Event) => {
-      const payload = (event as CustomEvent<ToastPayload>).detail;
-      if (!payload?.message) return;
-      const toast = { ...payload, id: nextToastId() };
-      dispatch({ type: 'show', toast });
-      const timer = window.setTimeout(() => {
-        timers.delete(timer);
-        dispatch({ type: 'dismiss', id: toast.id });
-      }, 7000);
-      timers.add(timer);
-    };
-    window.addEventListener('panda:toast', receive);
-    return () => {
-      window.removeEventListener('panda:toast', receive);
-      timers.forEach(timer => window.clearTimeout(timer));
-    };
+    function handleToast(event: Event) {
+      const detail = (event as CustomEvent<ToastPayload>).detail;
+      if (!detail?.message) return;
+      setToasts((current) => addToast(current, detail, nextToastId));
+    }
+
+    window.addEventListener(TOAST_EVENT, handleToast);
+    return () => window.removeEventListener(TOAST_EVENT, handleToast);
   }, []);
+
+  const dismiss = useCallback(
+    (id: string) => setToasts((current) => current.filter((toast) => toast.id !== id)),
+    [],
+  );
 
   return (
     <>
       {children}
-      <div
+      {/* One permanent polite live region. It exists before the first toast, so
+          screen readers announce success and info toasts as they are added. */}
+      <section
+        aria-label="Notifications"
         aria-live="polite"
-        aria-atomic="true"
+        aria-relevant="additions text"
         className="fixed right-4 top-4 z-50 flex w-[min(420px,calc(100vw-2rem))] flex-col gap-3"
       >
-        {toasts.map(toast => <ToastCard key={toast.id} toast={toast} dismiss={() => dispatch({ type: 'dismiss', id: toast.id })} />)}
-      </div>
+        {toasts.map((toast) => (
+          <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
+        ))}
+      </section>
     </>
   );
 }
 
-function ToastCard({ toast, dismiss }: { toast: Toast; dismiss: () => void }) {
-  const appearance = TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'];
-  const paragraphs = new Map([
-    ['title', { text: toast.title, className: `text-sm font-semibold leading-6 ${appearance.title}` }],
-  ]);
-  if (toast.code) paragraphs.set('code', {
-    text: toast.code,
-    className: 'mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-fg-secondary',
-  });
-  paragraphs.set('message', { text: toast.message, className: 'mt-1 break-words text-sm leading-6 text-fg' });
+function ToastItem({ toast, onDismiss }: { toast: ToastEntry; onDismiss: (id: string) => void }) {
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const paused = hovered || focused;
+  const remainingMs = useRef(TOAST_DISMISS_MS);
 
+  // A merged duplicate restarts the full display time.
+  useEffect(() => {
+    remainingMs.current = TOAST_DISMISS_MS;
+  }, [toast.count]);
+
+  useEffect(() => {
+    if (paused) return;
+    const startedAt = Date.now();
+    const timer = window.setTimeout(() => onDismiss(toast.id), remainingMs.current);
+    return () => {
+      window.clearTimeout(timer);
+      remainingMs.current = Math.max(0, remainingMs.current - (Date.now() - startedAt));
+    };
+  }, [paused, toast.id, toast.count, onDismiss]);
+
+  const variant = TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'];
   return (
-    <div className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-lg backdrop-blur-md ${appearance.container}`}>
+    <div
+      role={toastRole(toast.variant)}
+      aria-atomic="true"
+      data-toast-count={toast.count}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+      }}
+      className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-lg backdrop-blur-md ${variant.container}`}
+    >
       <div className="flex items-start justify-between gap-3">
-        <div>
-          {Array.from(paragraphs, ([key, paragraph]) => <p key={key} className={paragraph.className}>{paragraph.text}</p>)}
+        <div className="min-w-0">
+          <p className={`text-sm font-semibold leading-6 ${variant.title}`}>
+            {toast.title}
+            {toast.count > 1 && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="ml-2 rounded-full border border-border-strong px-2 py-0.5 font-mono text-[11px] text-fg-secondary"
+                >
+                  {toast.count}×
+                </span>
+                <span className="sr-only">{`, shown ${toast.count} times`}</span>
+              </>
+            )}
+          </p>
+          {toast.code && (
+            <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-fg-secondary">
+              {toast.code}
+            </p>
+          )}
+          <p className="mt-1 break-words text-sm leading-6 text-fg">{toast.message}</p>
         </div>
         <button
           type="button"
           aria-label="Dismiss notification"
-          className="rounded-md px-2 py-1 text-sm font-medium text-fg-secondary hover:bg-bg-elevated hover:text-fg"
-          onClick={dismiss}
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-2 text-sm font-medium text-fg-secondary hover:bg-bg-elevated hover:text-fg"
+          onClick={() => onDismiss(toast.id)}
         >
           Close
         </button>

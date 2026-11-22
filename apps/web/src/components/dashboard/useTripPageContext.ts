@@ -10,7 +10,7 @@ export function useTripPageContext(route: '/trips' | '/efficiency') {
   const replaceSearch = useCallback((next: TripTagSearch) => {
     navigate({ to: route, search: next, replace: true });
   }, [navigate, route]);
-  const tripTagFilter = useMemo(() => createTripTagFilterAdapter(search, replaceSearch), [replaceSearch, search]);
+  const tripTagFilter = useMemo(() => createTripTagFilterAdapter(search as TripTagSearch, replaceSearch), [replaceSearch, search]);
   const permissions = new Map<string, boolean>();
   for (const vehicle of selection.vehicles) {
     if (!permissions.has(vehicle.id)) {

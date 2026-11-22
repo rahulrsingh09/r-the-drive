@@ -1,0 +1,135 @@
+/* R Car tab (v5 trial: viewCar, statusRow; .spec .topdown .closures .hlist .hrow .swline). Tokens only. */
+.r-car-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-top: 18px; }
+.r-car-heading-text { min-width: 0; }
+.r-car-heading p { margin-top: 6px; }
+@media (min-width: 960px) { .r-car-heading { padding-top: 28px; } }
+.r-car { display: grid; gap: 16px; min-width: 0; }
+.r-car-grid { display: grid; gap: 4px; min-width: 0; }
+.r-car-column { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.r-car-section h2 { margin: 22px 2px 10px; color: var(--rm-text-tertiary); font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.r-car-card { min-width: 0; overflow: hidden; border: 1px solid var(--rm-border-default); border-radius: 18px; background: var(--rm-bg-surface); }
+.r-car-pad { padding: 16px; }
+.r-car-note { margin: 8px 2px 0; color: var(--rm-text-tertiary); font-size: 12.5px; line-height: 1.5; }
+
+/* Car turn: the shared orbit component sits in its own area. */
+.r-car-turn { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--rm-border-default); border-radius: 18px; background: var(--rm-bg-surface); }
+.r-car-turn .r-orbit { position: relative; margin: 0; }
+.r-car-turn .r-orbit-stage { position: relative; width: 100%; height: clamp(190px, 46vw, 280px); overflow: clip; touch-action: pan-y pinch-zoom; user-select: none; cursor: grab; }
+.r-car-turn .r-orbit-stage:active { cursor: grabbing; }
+.r-car-turn .r-orbit-stage img, .r-car-turn .r-orbit-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.r-car-turn .r-orbit-hidden { visibility: hidden; }
+.r-car-turn .r-orbit-stage:focus-visible { outline: 2px solid var(--rm-border-accent); outline-offset: -4px; border-radius: 18px; }
+
+/* Spec grid: odometer, software, charge limit, battery health. */
+.r-car-spec { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 12px; overflow: hidden; border: 1px solid var(--rm-border-default); border-radius: 18px; background: var(--rm-border-default); }
+.r-car-spec > div { min-width: 0; padding: 14px; background: var(--rm-bg-surface); }
+.r-car-spec dt { color: var(--rm-text-tertiary); font-size: 12.5px; font-weight: 500; }
+.r-car-spec dd { margin-top: 3px; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Tires: top-down drawing between the left and right wheels. */
+.r-car-topdown { display: grid; grid-template-columns: 1fr 76px 1fr; align-items: center; gap: 10px; }
+.r-car-tcol { display: grid; gap: 40px; min-width: 0; }
+.r-car-tire { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; border-radius: 14px; background: var(--rm-bg-elevated); }
+.r-car-tire > span { color: var(--rm-text-tertiary); font-size: 12px; }
+.r-car-tire strong { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.r-car-tire strong small { color: var(--rm-text-tertiary); font-size: 12px; font-weight: 500; }
+.r-car-tire[data-tone="warning"] strong, .r-car-tire[data-tone="danger"] strong { color: var(--rm-status-warning); }
+.r-car-body { width: 100%; height: auto; }
+.r-car-body-shell { fill: var(--rm-bg-elevated); stroke: var(--rm-border-strong); stroke-width: 2; }
+.r-car-body-glass { fill: var(--rm-border-default); }
+.r-car-wheel { fill: var(--rm-text-tertiary); }
+.r-car-wheel[data-state="good"] { fill: var(--rm-status-positive); }
+.r-car-wheel[data-state="warn"] { fill: var(--rm-status-warning); }
+
+/* Closures: doors, frunk, liftgate, windows. */
+.r-car-closures { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.r-car-closure { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border-radius: 14px; background: var(--rm-bg-elevated); font-size: 14px; }
+.r-car-closure span { display: block; color: var(--rm-text-tertiary); font-size: 12.5px; font-weight: 500; }
+.r-car-closure strong { font-weight: 650; }
+
+/* Status icon: check (ok), triangle (warn), dash (not reported). */
+.r-car-state-icon { display: inline-grid; place-items: center; flex: none; width: 22px; color: var(--rm-text-tertiary); }
+.r-car-state-icon svg { width: 18px; height: 18px; }
+.r-car-state-icon[data-state="ok"] { color: var(--rm-status-positive); }
+.r-car-state-icon[data-state="warn"] { color: var(--rm-status-warning); }
+
+/* Health rows: icon, label (+ detail), value. */
+.r-car-hlist { display: grid; }
+.r-car-hrow { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 44px; padding: 12px 16px; border-top: 1px solid var(--rm-border-default); font-size: 14.5px; }
+.r-car-hrow:first-child { border-top: 0; }
+.r-car-hrow > div { display: grid; gap: 2px; min-width: 0; }
+.r-car-hrow small { color: var(--rm-text-tertiary); font-size: 12.5px; line-height: 1.4; }
+.r-car-hrow > strong { max-width: 14ch; font-weight: 650; text-align: right; }
+.r-car-hrow[data-row="location"] > strong, .r-car-hrow[data-row="battery"] > strong { max-width: none; white-space: nowrap; }
+.r-car-hrow[data-state="none"] > strong { color: var(--rm-text-tertiary); font-weight: 500; }
+.r-car-samples { padding-top: 6px; border-top: 1px solid var(--rm-border-default); }
+.r-car-ctitle { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 10px 0 8px; }
+.r-car-ctitle strong { font-size: 14px; font-weight: 700; }
+.r-car-ctitle span { color: var(--rm-text-tertiary); font-size: 12.5px; }
+.r-car-bars { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
+.r-car-bars > span { flex: 1 1 0; min-width: 2px; height: calc(var(--h, 0) * 100%); min-height: 1px; border-radius: 2px 2px 0 0; background: var(--rm-status-info); transform-origin: bottom; animation: r-car-grow 600ms cubic-bezier(.22, 1, .36, 1) both; }
+.r-car-bars > span[data-low] { background: var(--rm-status-warning); }
+@keyframes r-car-grow { from { transform: scaleY(0); } }
+.r-car-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.r-car-ghost { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 18px; border: 1px solid var(--rm-border-default); border-radius: 99px; background: var(--rm-bg-elevated); color: var(--rm-text-primary); font-size: 14px; font-weight: 600; transition: background-color 160ms ease; }
+.r-car-ghost:hover { background: var(--rm-bg-surface); }
+.r-car-note:empty { display: none; }
+
+/* Software history timeline: the newest version on top, the current one filled. */
+.r-car-swline { position: relative; display: grid; gap: 14px; padding-left: 30px; }
+.r-car-swline::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--rm-border-strong); }
+.r-car-swline > li { position: relative; display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.r-car-swline > li::before { content: ""; position: absolute; left: -30px; top: 3px; width: 12px; height: 12px; border: 2px solid var(--rm-border-strong); border-radius: 6px; background: var(--rm-bg-surface); }
+.r-car-swline > li[data-current]::before { border-color: var(--r-signal); background: var(--r-signal); }
+.r-car-swline strong { font-weight: 700; font-variant-numeric: tabular-nums; }
+.r-car-swline span { color: var(--rm-text-tertiary); }
+
+.r-health-notice { display: flex; gap: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--rm-status-warning) 40%, transparent); background: color-mix(in srgb, var(--rm-status-warning) 8%, var(--rm-bg-surface)); font-size: 13px; line-height: 1.6; }
+.r-health-notice svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; color: var(--rm-status-warning); }
+
+/* Missed drives: the one place on the page that asks for an action. */
+.r-missed { padding: 16px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--r-alert) 55%, transparent); border-left-width: 4px; background: color-mix(in srgb, var(--r-alert) 10%, var(--rm-bg-surface)); }
+.r-missed-header { display: flex; gap: 12px; }
+.r-missed-header > svg { width: 22px; height: 22px; flex-shrink: 0; color: var(--r-alert); }
+.r-missed-header h2 { font-size: 17px; font-weight: 500; }
+.r-missed-header p { margin-top: 4px; color: var(--rm-text-secondary); font-size: 13px; }
+.r-missed ul { display: grid; gap: 8px; margin-top: 14px; }
+.r-missed-drive { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px; border-radius: 10px; background: var(--rm-bg-surface); }
+.r-missed-drive[data-confirming] { flex-direction: column; align-items: stretch; }
+.r-missed-facts { display: grid; gap: 4px; min-width: 0; }
+.r-missed-facts strong { font-weight: 500; }
+.r-missed-facts span { color: var(--rm-text-secondary); font-size: 13px; }
+.r-missed-confirm p { color: var(--rm-text-secondary); font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
+.r-missed-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.r-missed-note { color: var(--rm-text-secondary); font-size: 12px; }
+.r-recover { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 18px; border-radius: 99px; background: var(--r-signal); color: var(--r-signal-ink); font-size: 14px; font-weight: 600; transition: filter 160ms ease, opacity 160ms ease; }
+.r-recover svg { width: 16px; height: 16px; }
+.r-recover:hover { filter: brightness(1.06); }
+.r-recover:disabled { opacity: 0.6; cursor: progress; }
+.r-quiet-action { min-height: 44px; padding: 10px 14px; border-radius: 99px; color: var(--rm-text-secondary); font-size: 14px; transition: background-color 160ms ease, color 160ms ease; }
+.r-quiet-action:hover { background: var(--rm-bg-elevated); color: var(--rm-text-primary); }
+
+.r-missed-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding: 12px 16px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--r-alert) 55%, transparent); border-left-width: 4px; background: color-mix(in srgb, var(--r-alert) 10%, var(--rm-bg-surface)); }
+.r-missed-banner > svg { width: 20px; height: 20px; flex-shrink: 0; color: var(--r-alert); }
+.r-missed-banner > span:first-of-type { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.r-missed-banner strong { font-weight: 500; }
+.r-missed-banner small { color: var(--rm-text-secondary); font-size: 12px; }
+.r-missed-banner-action { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 14px; font-weight: 500; }
+.r-missed-banner-action svg { width: 16px; height: 16px; }
+
+@media (min-width: 1024px) {
+  .r-car-grid { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+  .r-car-column > .r-car-section:first-child h2 { margin-top: 0; }
+  .r-car-turn .r-orbit-stage { height: 280px; }
+}
+@media (max-width: 420px) {
+  .r-car-topdown { grid-template-columns: 1fr 52px 1fr; gap: 6px; }
+  .r-car-tire { padding: 8px 10px; }
+  .r-car-tire strong { font-size: 18px; }
+  .r-missed-drive .r-missed-actions { width: 100%; }
+  .r-missed-drive .r-recover { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .r-recover, .r-quiet-action, .r-car-ghost { transition: none; }
+  .r-car-bars > span { animation: none; }
+}

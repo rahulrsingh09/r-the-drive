@@ -31,20 +31,7 @@ fn prepare(payload: SessionLocationUpdate) -> Result<SessionMutation, AppError> 
             "place_id required when location_mode is saved_place".into(),
         ));
     }
-    if payload.cost_mode == Some(CostOverrideMode::Manual)
-        && !payload
-            .cost_usd
-            .is_some_and(|value| value.is_finite() && value >= 0.0)
-    {
-        return Err(AppError::Validation(
-            "cost_usd must be a non-negative number when cost_mode is manual".into(),
-        ));
-    }
-    if payload.cost_mode != Some(CostOverrideMode::Manual) && payload.cost_usd.is_some() {
-        return Err(AppError::Validation(
-            "cost_usd is only valid when cost_mode is manual".into(),
-        ));
-    }
+    validate_manual_cost(payload.cost_mode, payload.cost_usd)?;
 
     let location = match location_mode {
         Some(LocationOverrideMode::SavedPlace) => {

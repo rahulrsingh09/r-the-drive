@@ -229,6 +229,8 @@ fn trip(source: Option<&str>) -> TripRow {
         end_address: None,
         outside_temp_c: None,
         outside_temp_source: source.map(str::to_owned),
+        start_odometer_mi: None,
+        end_odometer_mi: None,
         tags: json!([]),
     }
 }

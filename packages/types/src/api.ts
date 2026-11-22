@@ -163,6 +163,10 @@ export interface Trip {
   drive_mode: DriveMode | null;
   soc_start: number | null;
   soc_end: number | null;
+  /** Odometer at trip start, in miles. Null when the trip has no reading. Additive server field; older API versions omit it. */
+  start_odometer_mi?: number | null;
+  /** Odometer at trip end, in miles. Null when the trip has no reading. Additive server field; older API versions omit it. */
+  end_odometer_mi?: number | null;
   start_lat?: number | null;
   start_lng?: number | null;
   end_lat?: number | null;
@@ -454,6 +458,17 @@ export interface PurgeExternalConnectionCacheResponse {
   message: string;
 }
 
+/** Rule that set cost_usd on a charge session. */
+export type ChargeCostMethod =
+  | 'user_free'
+  | 'user_manual'
+  | 'network_free'
+  | 'rivian_free_session'
+  | 'rivian_paid_total'
+  | 'profile'
+  | 'profile_pending'
+  | 'unknown';
+
 export interface ChargeSession {
   id: string;
   vehicle_id: string;
@@ -468,7 +483,10 @@ export interface ChargeSession {
   soc_end: number | null;
   peak_power_kw: number | null;
   cost_usd: number | null;
-  cost_method?: string | null;
+  /** Rule that set cost_usd; null while the session is open. Known values: ChargeCostMethod; repair tools may briefly write 'telemetry_repair'. */
+  cost_method?: ChargeCostMethod | (string & {}) | null;
+  /** Derived display value for user_manual only: cost_usd / kwh_added in $/kWh. Null otherwise. Not stored. */
+  cost_rate_per_kwh?: number | null;
   source?: string | null;
   api_started_at?: string | null;
   api_ended_at?: string | null;
@@ -1683,4 +1701,59 @@ export interface RivianStewardshipResponse {
   raw_events_retained: number;
   totals_24h: RivianStewardshipTotals;
   vehicles: RivianStewardshipVehicle[];
+}
+
+/** A drive that stored telemetry shows but no trip records. */
+export interface TripGap {
+  id: string;
+  started_at: string;
+  ended_at: string;
+  distance_miles: number;
+  duration_seconds: number;
+  soc_start: number | null;
+  soc_end: number | null;
+}
+
+/** Parallax stopped sending frames, and the odometer later shows movement. */
+export interface ParallaxQuiet {
+  last_frame_at: string;
+  moved_at: string;
+}
+
+export interface TripGapsResponse {
+  vehicle_id: string;
+  lookback_days: number;
+  gaps: TripGap[];
+  parallax_quiet: ParallaxQuiet | null;
+}
+
+export interface RecoveredTrip {
+  trip_id: string;
+}
+
+/** The battery rose while parked and no charge session covers that time. */
+export interface ChargeGap {
+  id: string;
+  started_at: string;
+  ended_at: string;
+  soc_start: number;
+  soc_end: number;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+/** Telemetry rows stored on one local day. */
+export interface DailySampleCount {
+  day: string;
+  samples: number;
+}
+
+/** `GET /v1/vehicles/{id}/charge-gaps`: possible missed charges for the lookback. */
+export interface ChargeGapsResponse {
+  vehicle_id: string;
+  lookback_days: number;
+  parked_periods_checked?: number | null;
+  gaps: ChargeGap[];
+  /** Optional. The Car tab hides the samples-per-day bars when the server omits it. */
+  daily_samples?: DailySampleCount[] | null;
 }

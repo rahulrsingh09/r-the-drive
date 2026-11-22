@@ -41,16 +41,13 @@ describe('foundation recovery boundaries', () => {
     expect(screen.getAllByText('No data')).toHaveLength(2);
   });
 
-  it('selects optional trip columns independently and isolates the detail action', () => {
-    const detail = vi.fn(), row = vi.fn();
+  it('selects optional trip columns independently', () => {
+    const row = vi.fn();
     const trip: TripRow = { id: 'synthetic-trip', started_at: '2026-10-01T12:00:00Z', ended_at: null, duration_min: 5, distance_mi: 1, energy_used_kwh: null, efficiency_wh_mi: null, soc_start: null, soc_end: null };
     for (const includeTags of [false, true]) {
-      const columns = createTripColumns([], { includeTags, onInfoClick: detail });
+      const columns = createTripColumns([], { includeTags });
       const view = render(<DataTable data={[trip]} columns={columns} onRowClick={row} />);
       expect(Boolean(screen.queryByRole('columnheader', { name: 'Tags' }))).toBe(includeTags);
-      fireEvent.click(screen.getByRole('button', { name: 'Open trip details' }));
-      expect(detail).toHaveBeenLastCalledWith('synthetic-trip');
-      expect(row).not.toHaveBeenCalled();
       view.unmount();
     }
     render(<DataTable data={[trip]} columns={createTripColumns([], { includeTags: false })} />);

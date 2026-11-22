@@ -1,1800 +1,304 @@
 import React from 'react';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AuthenticationSettings, Place } from '@panda/types';
 
-vi.mock('@panda/ui/primitives', async (importOriginal) => {
-  const m = await import('../../test/mockPrimitives');
-  const { ResponsiveDialog } = await importOriginal<typeof import('@panda/ui/primitives')>();
-  return { ...m, ResponsiveDialog };
-});
-
-const settingsMocks = vi.hoisted(() => ({
-  auth: {
-    logout: vi.fn(),
-    clearSession: vi.fn(),
-    accessToken: undefined as string | undefined,
-    userId: 'u1',
-    defaultVehicleId: 'v1',
-    setDefaultVehicleId: vi.fn(),
-    setActiveVehicleId: vi.fn(),
-  },
-  me: {
-    user_id: 'u1',
-    email: 'user@example.com',
-    role: 'user' as 'user' | 'admin' | 'super_user',
-    default_vehicle_id: 'v1',
-  },
-  vehicles: [
-    {
-      id: 'v1',
-      display_name: 'Adventure Truck',
-      model: 'R1T',
-      year: null,
-      trim: null,
-      vin: null,
-      rivian_vehicle_id: 'rivian-1',
-      battery_capacity_kwh: 135,
-      target_tire_pressure_psi: 48,
-      membership_role: 'owner',
-      is_demo: false,
-      },
-  ],
-  basemapConfig: undefined as { resolved_provider: string } | undefined,
-  preferences: {
-    units: {
-      mode: 'imperial',
-      distance_unit: 'miles',
-      speed_unit: 'mph',
-      temperature_unit: 'fahrenheit',
-      pressure_unit: 'psi',
-      altitude_unit: 'feet',
-      place_radius_unit: 'feet',
-      efficiency_display: 'distance_per_energy',
-    },
-    theme: { mode: 'dark', palette: 'classic' },
-    map_style: 'follow-theme',
-  },
-  themePreferences: {
-    preferences: {
-      schemaVersion: 2 as const,
-      mode: 'dark' as const,
-      selection: { kind: 'builtin' as const, themeId: 'classic' },
-    },
-    etag: '"theme-preferences-u1-1"',
-  },
-}));
-
-const dashboardMocks = vi.hoisted(() => ({
-  dashboards: [] as Array<Record<string, unknown>>,
-  downloadDashboardYaml: vi.fn(),
-  cloneMutateAsync: vi.fn(),
-  createMutateAsync: vi.fn(),
-  deleteMutate: vi.fn(),
-  lockMutate: vi.fn(),
-  restoreMutate: vi.fn(),
-}));
-
-const hooksMocks = vi.hoisted(() => ({
-  changePassword: vi.fn().mockResolvedValue(undefined),
-  updateMapStylePreference: vi.fn().mockResolvedValue({ map_style: 'follow-theme' }),
-  getAppVersion: vi.fn(),
-  getUpdateCheckSettings: vi.fn(),
-}));
-
-const mockNavigate = vi.fn();
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@tanstack/react-router')>();
-  return { ...actual, useNavigate: () => mockNavigate };
-});
-
-vi.mock('@panda/hooks', async (importOriginal) => ({
-  OPTIONAL_EXTERNAL_TRAFFIC_ENABLED: (await importOriginal<typeof import('@panda/hooks')>()).OPTIONAL_EXTERNAL_TRAFFIC_ENABLED,
-  queryKeys: {
-    auth: {
-      identities: ['auth-identities'],
-      authenticationSettings: ['authentication-settings'],
-    },
-    apiKeys: { all: ['api-keys'] },
-    apiCatalog: { all: ['api-catalog'] },
-    appTimezone: { current: ['app-timezone'] },
-    appVersion: { current: ['app-version'] },
-    updateCheck: { current: ['update-check'] },
-    backups: {
-      all: ['backup-overview'],
-      overview: (page: number, perPage: number) => ['backup-overview', page, perPage],
-    },
-    me: { all: ['me'] },
-    themePreferences: {
-      all: ['theme-preferences'],
-      forUser: (userId: string) => ['theme-preferences', userId],
-    },
-    themes: {
-      catalog: (userId: string) => ['themes', userId, 'catalog'],
-      resource: (userId: string, themeId: string) => ['themes', userId, 'resource', themeId],
-    },
-    unitPreferences: { current: ['unit-preferences'] },
-    vehicle: {
-      health: (vehicleId: string) => ['vehicles', 'health', vehicleId],
-      images: (vehicleId: string) => ['vehicles', 'images', vehicleId],
-    },
-    vehicleInvites: {
-      byVehicle: (vehicleId: string) => ['vehicle-invites', vehicleId],
-    },
-    vehicleMembers: {
-      byVehicle: (vehicleId: string) => ['vehicle-members', vehicleId],
-    },
-    vehicles: {
-      all: ['vehicles'],
-      status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
-    },
-  },
-  themeClient: {
-    getCatalog: vi.fn().mockResolvedValue({ builtInThemes: ['classic', 'rad'], customThemes: [] }),
-    getPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.themePreferences)),
-    updatePreferences: vi.fn().mockImplementation(async (preferences) => {
-      settingsMocks.themePreferences = {
-        preferences,
-        etag: '"theme-preferences-u1-2"',
-      };
-      return settingsMocks.themePreferences;
-    }),
-    create: vi.fn(),
-  },
+const mocks = vi.hoisted(() => ({
+  role: 'super_user' as 'user' | 'super_user',
+  revoke: vi.fn(),
+  trigger: vi.fn(),
+  backfill: { status: 'done', history_backfilled_at: null as string | null, rivian_session_count: 40, local_session_count: 37, missing_source_count: null as number | null },
+  vehicleAuth: null as string | null,
+  banner: null as null | { kind: 'rivian'; since: string | null; reason: 'credentials' | 'feed' },
+  places: [] as Place[],
   api: {
-    me: vi.fn().mockResolvedValue({ role: 'user' }),
-    getAppVersion: hooksMocks.getAppVersion,
-    getUpdateCheckSettings: hooksMocks.getUpdateCheckSettings,
-    getUnitPreferences: vi.fn().mockImplementation(() => Promise.resolve(settingsMocks.preferences)),
-    updateThemePreferences: vi.fn().mockImplementation(async (theme) => {
-      settingsMocks.preferences.theme = theme;
-      return settingsMocks.preferences;
-    }),
-    changePassword: hooksMocks.changePassword,
-    getVehicleIngestionCapture: vi.fn().mockResolvedValue({ state: 'idle', started_at: null, ends_at: null, stopped_at: null, stop_reason: null, event_count: 0, last_event_at: null, truncated: false }),
-    startVehicleIngestionCapture: vi.fn().mockResolvedValue({ ...{ state: 'idle', started_at: null, ends_at: null, stopped_at: null, stop_reason: null, event_count: 0, last_event_at: null, truncated: false }, state: 'capturing', started_at: '2026-09-24T17:00:00Z', ends_at: '2026-09-24T18:00:00Z' }),
-    stopVehicleIngestionCapture: vi.fn().mockResolvedValue({ ...{ state: 'idle', started_at: null, ends_at: null, stopped_at: null, stop_reason: null, event_count: 0, last_event_at: null, truncated: false }, state: 'stopped', started_at: '2026-09-24T17:00:00Z', ends_at: '2026-09-24T18:00:00Z', stopped_at: '2026-09-24T17:20:00Z', stop_reason: 'user', event_count: 12 }),
-    downloadVehicleIngestionCapture: vi.fn().mockResolvedValue({ blob: new Blob(['{}']), fileName: 'panda-capture-r1t-20260924T1700Z.jsonl' }),
-    getOidcIdentities: vi.fn().mockResolvedValue({
-      password_configured: true,
-      oidc_linked: false,
-      oidc_link_available: false,
-      button_label: 'Sign in with SSO',
-    }),
+    getOidcIdentities: vi.fn(),
+    getAuthenticationSettings: vi.fn(),
+    updateAuthenticationSettings: vi.fn(),
+    testAuthenticationSettings: vi.fn(),
     startOidcLink: vi.fn(),
-    unlinkOidc: vi.fn(),
-    listApiKeys: vi.fn().mockResolvedValue([]),
-    getApiCatalog: vi.fn().mockResolvedValue({
-      endpoints: [
-        { method: 'GET', path: '/v1/vehicles', vehicle_scoped: false, purpose: 'List vehicles' },
-        {
-          method: 'GET',
-          path: '/v1/vehicles/{id}/raw-data',
-          vehicle_scoped: true,
-          purpose: 'Read raw data',
-        },
-        {
-          method: 'POST',
-          path: '/v1/metrics/batch',
-          vehicle_scoped: false,
-          purpose: 'Read metrics',
-        },
-      ],
-    }),
-    listPlaces: vi.fn().mockResolvedValue([]),
-    searchPlaceAddresses: vi.fn().mockResolvedValue([
-      {
-        display_name: '123 Main St, Denver, CO',
-        osm_id: 123,
-        latitude: 39.7392,
-        longitude: -104.9903,
-        road: 'Main St',
-        city: 'Denver',
-        state: 'CO',
-        postcode: '80202',
-        country: 'United States',
-        raw: null,
-      },
-    ]),
-    createPlace: vi.fn(),
+    changePassword: vi.fn(),
     updatePlace: vi.fn(),
-    deletePlace: vi.fn(),
-    getRawTelemetry: vi.fn().mockResolvedValue({
-      vehicle_id: 'v1',
-      coverage: {
-        first_event_at: null,
-        last_event_at: null,
-        sample_count: 0,
-        odometer_samples: 0,
-        battery_samples: 0,
-        range_samples: 0,
-        outside_temp_samples: 0,
-        power_samples: 0,
-        regen_samples: 0,
-        tire_pressure_samples: 0,
-      },
-      samples: [],
-    }),
-    getTelemetryLanes: vi.fn().mockResolvedValue({
-      vehicle_id: 'v1',
-      window: {
-        from: '2026-05-03T12:00:00Z',
-        to: '2026-05-04T12:00:00Z',
-        resolution_seconds: 300,
-        approximate: true,
-      },
-      spine: [],
-      lanes: {},
-      truncated: false,
-    }),
-    getRivianStewardship: vi.fn().mockResolvedValue({
-      generated_at: '2026-05-04T12:00:00Z',
-      retention_days: 7,
-      raw_event_persistence_enabled: true,
-      duplicate_suppression_enabled: true,
-      active_collectors: 1,
-      raw_events_retained: 5,
-      totals_24h: {
-        ws_messages_received: 100,
-        ws_heartbeats_received: 80,
-        ws_payload_messages_received: 20,
-        ws_control_messages_received: 0,
-        ws_connections_opened: 1,
-        ws_reconnects: 0,
-        outbound_messages_sent: 2,
-        outbound_graphql_requests: 0,
-        telemetry_writes_persisted: 10,
-        telemetry_writes_suppressed: 90,
-        telemetry_suppressed_duplicate: 70,
-        telemetry_suppressed_empty: 10,
-        telemetry_suppressed_threshold: 10,
-        collector_lock_skips: 0,
-        raw_events_persisted: 100,
-      },
-      vehicles: [
-        {
-          vehicle_id: 'v1',
-          display_name: 'Adventure Truck',
-          worker_health: 'connected',
-          last_seen_at: '2026-05-04T12:00:00Z',
-          last_payload_at: '2026-05-04T12:00:00Z',
-          last_persisted_at: '2026-05-04T12:00:00Z',
-          last_heartbeat_at: '2026-05-04T12:00:00Z',
-          ws_messages_received: 100,
-          ws_heartbeats_received: 80,
-          ws_payload_messages_received: 20,
-          ws_reconnects: 0,
-          telemetry_writes_persisted: 10,
-          telemetry_writes_suppressed: 90,
-          collector_lock_skips: 0,
-        },
-      ],
-    }),
-    getBackupOverview: vi.fn().mockResolvedValue({
-      settings: {
-        enabled: true,
-        frequency: 'weekly',
-        run_at: '03:00',
-        timezone: 'America/Chicago',
-        day_of_week: 0,
-        day_of_month: null,
-        retention_count: 8,
-        local_enabled: true,
-        s3_enabled: true,
-        target_type: 's3',
-        endpoint: 'https://s3.example.com',
-        region: 'us-east-1',
-        bucket: 'panda-backups',
-        prefix: 'prod/panda',
-        access_key: 'backup-user',
-        has_secret_key: true,
-        updated_at: '2026-05-04T12:00:00Z',
-      },
-      recent_runs: [
-        {
-          id: 'run-1',
-          trigger: 'manual',
-          status: 'succeeded',
-          phase: 'completed',
-          progress_percent: 100,
-          artifact_key: '/tmp/panda/prod/panda/backup.dump',
-          started_at: '2026-05-04T12:00:00Z',
-          completed_at: '2026-05-04T12:01:00Z',
-          error_message: null,
-          created_at: '2026-05-04T12:00:00Z',
-          updated_at: '2026-05-04T12:01:00Z',
-        },
-      ],
-      recent_runs_total: 1,
-      recent_runs_page: 1,
-      recent_runs_per_page: 10,
-      artifacts: [
-        {
-          id: 'artifact-1',
-          run_id: 'run-1',
-          storage_type: 'local',
-          file_name: 'backup-20260504T120000Z.dump',
-          storage_path: '/tmp/panda/prod/panda/backup-20260504T120000Z.dump',
-          size_bytes: 2048,
-          checksum_sha256: '0123456789abcdef0123456789abcdef',
-          manifest: {},
-          created_at: '2026-05-04T12:01:00Z',
-        },
-      ],
-      restore_requests: [],
-      latest_successful_run: {
-        id: 'run-1',
-        trigger: 'manual',
-        status: 'succeeded',
-        phase: 'completed',
-        progress_percent: 100,
-        artifact_key: '/tmp/panda/prod/panda/backup.dump',
-        started_at: '2026-05-04T12:00:00Z',
-        completed_at: '2026-05-04T12:01:00Z',
-        error_message: null,
-        created_at: '2026-05-04T12:00:00Z',
-        updated_at: '2026-05-04T12:01:00Z',
-      },
-      next_run_at: '2026-05-10T08:00:00Z',
-      runtime_readiness: {
-        pg_dump_available: true,
-        run_now_allowed: true,
-        restore_automation_available: true,
-        reason: null,
-      },
-      s3_catalog_error: null,
-    }),
-    updateBackupSettings: vi.fn().mockResolvedValue({}),
-    runBackupNow: vi.fn().mockResolvedValue({}),
-    testBackupS3: vi
-      .fn()
-      .mockResolvedValue({ ok: true, message: 'S3 list/write/read/delete checks passed' }),
-    requestBackupRestore: vi.fn().mockResolvedValue({}),
-    uploadBackupArtifact: vi.fn().mockResolvedValue({}),
-    deleteUploadedBackup: vi.fn().mockResolvedValue(undefined),
-    preflightBackupRestore: vi.fn().mockResolvedValue({
-      plan: {
-        plan_id: 'plan-1',
-        engine_version: 3,
-        package_checksum_sha256: 'abc123',
-        package_format: 'panda-recovery-v3',
-        compatible: true,
-        source: {
-          postgres_major: 17,
-          timescale_version: '2.19.3',
-          migration_version: 1,
-          migration_ledger: [],
-          migration_ledger_successful: true,
-          migration_chain_id: 'panda-schema-v1',
-          migration_catalog_digest: 'catalog',
-          schema_contract_version: 'panda-schema-contract-v1',
-          schema_fingerprint: 'source',
-        },
-        target: {
-          postgres_major: 17,
-          timescale_version: '2.19.3',
-          migration_version: 1,
-          migration_ledger: [],
-          migration_ledger_successful: true,
-          migration_chain_id: 'panda-schema-v1',
-          migration_catalog_digest: 'catalog',
-          schema_contract_version: 'panda-schema-contract-v1',
-          schema_fingerprint: 'target',
-        },
-        pending_migrations: [],
-        transforms: [],
-        validation_checks: [],
-        warnings: [],
-        blocking_errors: [],
-        planned_at: '2026-05-04T12:02:00Z',
-      },
-    }),
-    startBackupRestore: vi.fn().mockResolvedValue({
-      job: {
-        id: 'restore-job-1',
-        artifact_id: 'artifact-1',
-        phase: 'queued',
-        progress_percent: 5,
-        message: 'Restore queued',
-        error_message: null,
-        created_at: '2026-05-04T12:02:00Z',
-        updated_at: '2026-05-04T12:02:00Z',
-      },
-      capability_token: 'restore-token',
-    }),
-    getRestoreJob: vi.fn().mockResolvedValue({
-      id: 'restore-job-1',
-      artifact_id: 'artifact-1',
-      phase: 'failed',
-      progress_percent: 5,
-      message: 'Restore failed',
-      error_message: 'test stop',
-      created_at: '2026-05-04T12:02:00Z',
-      updated_at: '2026-05-04T12:02:01Z',
-    }),
-    downloadBackupArtifact: vi.fn().mockResolvedValue({
-      blob: new Blob(['backup-data'], { type: 'application/octet-stream' }),
-      fileName: 'backup-20260504T120000Z.dump',
-    }),
-    createApiKey: vi.fn(),
-    revokeApiKey: vi.fn(),
-    createDemoVehicle: vi
-      .fn()
-      .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
-    refreshDemoVehicle: vi.fn().mockResolvedValue({
-      ok: true,
-      vehicle_id: 'demo-v1',
-      created: false,
-      seeded: true,
-      refreshed: true,
-      seeded_at: '2026-05-04T12:00:00Z',
-      window_start: '2026-04-20T12:00:00Z',
-      window_end: '2026-05-04T12:00:00Z',
-      telemetry_count: 5664,
-      trip_count: 31,
-      charge_count: 4,
-      weather_sample_count: 80,
-    }),
-    updateVehicleSettings: vi.fn().mockResolvedValue({}),
-    updateVehicleName: vi.fn().mockResolvedValue({}),
-    refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
+    getBackupOverview: vi.fn(),
   },
-  useAuth: (selector?: (state: typeof settingsMocks.auth) => unknown) => selector ? selector(settingsMocks.auth) : settingsMocks.auth,
-  useAuthReady: () => true,
-  useMe: () => ({ data: settingsMocks.me }),
-  useVehicles: () => ({ data: settingsMocks.vehicles }),
-  useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
-  useBasemapConfig: () => ({ data: settingsMocks.basemapConfig, isLoading: false, isError: false }),
-  useUpdateMapStyle: () => ({
-    mutate: hooksMocks.updateMapStylePreference,
-    isPending: false,
-    isError: false,
-  }),
-  useUpdateChargingNetworkPreference: () => ({
-    mutate: vi.fn(),
-    isPending: false,
-    isError: false,
-    error: null,
-    variables: undefined,
-  }),
-  resolveVehicleArtwork: (_images: unknown, model: string) => ({
-    light: null,
-    dark: null,
-    fallback: `/vehicle-images/fallbacks/${model.toLowerCase()}/side.webp`,
-  }),
-  AuthenticatedVehicleArtwork: ({
-    source,
-    fallbackSource,
-    alt,
-    className,
-  }: {
-    source?: string | null;
-    fallbackSource?: string | null;
-    alt?: string;
-    className?: string;
-  }) => <img src={source ?? fallbackSource ?? undefined} alt={alt} className={className} />,
+  logout: vi.fn(),
+  navigate: vi.fn(),
 }));
 
-vi.mock('@panda/dashboards', () => ({
-  downloadDashboardYaml: dashboardMocks.downloadDashboardYaml,
-  getDefaultBySlug: (slug: string) => slug === 'dashboard'
-    ? { id: '00000000-0000-0000-0000-000000000001' }
-    : undefined,
-  materializeUserDashboardDraft: (dashboard: Record<string, unknown>) => ({
-    ...dashboard,
-    id: 'personal-draft',
-    ownerId: null,
-    isDefault: false,
-    isLocked: false,
-  }),
-  useDashboards: () => ({ data: dashboardMocks.dashboards, isLoading: false, refetch: vi.fn() }),
-  useCreateDashboard: () => ({ mutateAsync: dashboardMocks.createMutateAsync, isPending: false }),
-  useCloneDashboard: () => ({
-    mutateAsync: dashboardMocks.cloneMutateAsync,
-    isPending: false,
-    variables: undefined,
-  }),
-  useDeleteDashboard: () => ({
-    mutate: dashboardMocks.deleteMutate,
-    isPending: false,
-    variables: undefined,
-  }),
-  useSetAdminDashboardLock: () => ({
-    mutate: dashboardMocks.lockMutate,
-    isPending: false,
-    variables: undefined,
-  }),
-  useRestoreAdminDashboardDefault: () => ({
-    mutate: dashboardMocks.restoreMutate,
-    isPending: false,
-    variables: undefined,
-  }),
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ to, search, children, ...props }: { to: string; search?: Record<string, string>; children: React.ReactNode }) =>
+    <a href={`${to}${search ? `?${new URLSearchParams(search)}` : ''}`} {...props}>{children}</a>,
+  useNavigate: () => mocks.navigate,
+  useLocation: () => ({ pathname: '/settings' }),
 }));
 
-vi.mock('../../components/layout/AppLayout', () => ({
-  AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
-vi.mock('../../components/layout/AuthGuard', () => ({
-  AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
-vi.mock('lucide-react', async (importOriginal) => ({
-  ...await importOriginal<typeof import('lucide-react')>(),
-  Activity: () => <svg data-testid="icon-activity" />,
-  AlertCircle: () => <svg data-testid="icon-alert-circle" />,
-  Braces: () => <svg data-testid="icon-braces" />,
-  Car: () => <svg data-testid="icon-car" />,
-  ChartLine: () => <svg data-testid="icon-chart-line" />,
-  CircleHelp: () => <svg data-testid="icon-help" />,
-  Circle: () => <svg data-testid="icon-circle" />,
-  Clipboard: () => <svg data-testid="icon-clipboard" />,
-  Database: () => <svg data-testid="icon-database" />,
-  DatabaseBackup: () => <svg data-testid="icon-database-backup" />,
-  Upload: () => <svg data-testid="icon-upload" />,
-  Calendar: () => <svg data-testid="icon-calendar" />,
-  Check: () => <svg data-testid="icon-check" />,
-  CheckCircle2: () => <svg data-testid="icon-check-circle" />,
-  AlertTriangle: () => <svg data-testid="icon-alert-triangle" />,
-  Cloud: () => <svg data-testid="icon-cloud" />,
-  CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
-  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
-  ChevronLeft: () => <svg data-testid="icon-chevron-left" />,
-  ChevronRight: () => <svg data-testid="icon-chevron-right" />,
-  Clock3: () => <svg data-testid="icon-clock" />,
-  Download: () => <svg data-testid="icon-download" />,
-  ExternalLink: () => <svg data-testid="icon-external-link" />,
-  Globe2: () => <svg data-testid="icon-globe" />,
-  HardDrive: () => <svg data-testid="icon-hard-drive" />,
-  History: () => <svg data-testid="icon-history" />,
-  Home: () => <svg data-testid="icon-home" />,
-  Loader2: () => <svg data-testid="icon-loader" />,
-  Server: () => <svg data-testid="icon-server" />,
-  Timer: () => <svg data-testid="icon-timer" />,
-  KeyRound: () => <svg data-testid="icon-key" />,
-  ListChecks: () => <svg data-testid="icon-list-checks" />,
-  Lock: () => <svg data-testid="icon-lock" />,
-  LogOut: () => <svg data-testid="icon-logout" />,
-  MapPin: () => <svg data-testid="icon-map-pin" />,
-  Plus: () => <svg data-testid="icon-plus" />,
-  Pencil: () => <svg data-testid="icon-pencil" />,
-  Play: () => <svg data-testid="icon-play" />,
-  RefreshCw: () => <svg data-testid="icon-refresh" />,
-  Ruler: () => <svg data-testid="icon-ruler" />,
-  RotateCcw: () => <svg data-testid="icon-rotate" />,
-  Save: () => <svg data-testid="icon-save" />,
-  Search: () => <svg data-testid="icon-search" />,
-  ShieldCheck: () => <svg data-testid="icon-shield" />,
-  ShieldOff: () => <svg data-testid="icon-shield-off" />,
-  SlidersHorizontal: () => <svg data-testid="icon-sliders" />,
-  Star: () => <svg data-testid="icon-star" />,
-  Users: () => <svg data-testid="icon-users" />,
-  Zap: () => <svg data-testid="icon-zap" />,
-  X: () => <svg data-testid="icon-x" />,
-  Trash2: () => <svg data-testid="icon-trash" />,
-  Unlock: () => <svg data-testid="icon-unlock" />,
+vi.mock('../../features/r-experience/RAppLayout', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../features/r-experience/RAppLayout')>()),
+  RAppLayout: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
 }));
 
-import { SettingsContent } from '../settings';
-import { AppearanceSection } from '../../features/settings/AppearanceSection';
-import { writeReleaseCheckSnapshot } from '../../lib/releaseCheck';
+// The card reads the same connection state as the app banner.
+vi.mock('../../features/r-experience/useRConnection', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../features/r-experience/useRConnection')>()),
+  useRConnection: () => ({ banner: mocks.banner }),
+}));
 
-function renderSettings(initialSection: NonNullable<React.ComponentProps<typeof SettingsContent>>['initialSection'] | 'directory' = 'vehicles', appearanceContract = false) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
+vi.mock('../../components/settings/BackupSection', () => ({ BackupSection: () => <p>Backup schedule editor</p> }));
+
+vi.mock('@panda/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@panda/hooks')>();
+  return {
+    queryKeys: actual.queryKeys,
+    api: mocks.api,
+    invalidateChargingData: vi.fn(),
+    useAuth: () => ({ clearSession: vi.fn(), logout: mocks.logout }),
+    useMe: () => ({ data: { user_id: 'u1', email: 'owner@example.test', role: mocks.role, password_configured: true } }),
+    useRevokeOtherAuthSessions: () => ({ mutate: mocks.revoke, isPending: false, isError: false }),
+    useChargeBackfillStatus: () => ({ data: mocks.backfill }),
+    useTriggerChargeBackfill: () => ({ mutate: mocks.trigger, isPending: false, isError: false }),
+    useResolvedVehicleSelection: () => ({ effectiveVehicleId: 'v1' }),
+    useVehicles: () => ({ data: [{
+      id: 'v1', display_name: 'Bumble Beee', membership_role: 'owner', created_at: '2026-10-06T10:00:00Z',
+      credential_issued_at: '2026-10-06T10:00:00Z', auth_state: mocks.vehicleAuth,
+    }] }),
+    useCurrentVehicleStatus: () => ({ data: { vehicle_id: 'v1', last_updated: new Date().toISOString(), auth_state: mocks.vehicleAuth } }),
+    useSavedPlaces: () => ({ data: mocks.places, isLoading: false, isError: false }),
+  };
+});
+
+import { SettingsContent, rSettingsSection } from '../../features/settings/SettingsPage';
+import { rSignInRules, rSignInState } from '../../features/settings/RSignInCard';
+import { rParseRate, rPlaceRate, rRatePlaces, rRateUpdateBody } from '../../features/settings/RRatesCard';
+import { rBackupSummary } from '../../features/settings/RBackupsCard';
+import { rBackfillLine, rRivianCardState } from '../../features/settings/RRivianCard';
+
+const place = (overrides: Partial<Place>): Place => ({
+  id: 'p-home', name: 'Home', latitude: 47.6, longitude: -122.3, radius_m: 120, is_home: true, is_work: false,
+  address: { display_name: '1 Main St', osm_id: 1, latitude: 47.6, longitude: -122.3, road: 'Main St', city: 'Seattle', state: 'WA', postcode: null, country: 'US', raw: null },
+  charging: { id: 'cp-1', name: 'PSE Schedule 7', billing_type: 'per_kwh', rate: 0.189119, session_fee: 0, currency: 'USD', timezone: null, tou_periods: [] },
+  ...overrides,
+});
+
+const authSettings = (overrides: Record<string, unknown> = {}): AuthenticationSettings => {
+  const values: Record<string, unknown> = {
+    oidc_enabled: false, password_login_enabled: true, oidc_auto_login: false, issuer_url: '', public_base_url: '',
+    client_id: '', button_label: 'Sign in with SSO', scopes: 'openid', token_auth_method: 'auto', auto_signup: false,
+    auto_link_verified_email: false, allowed_email_domains: [], required_claim_name: null, required_claim_value: null, ...overrides,
+  };
+  return {
+    ...Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value, source: 'database' }])),
+    client_secret: { configured: Boolean(overrides.issuer_url), source: 'database' },
+    last_validation_at: overrides.tested ? '2026-11-01T00:00:00Z' : null,
+    callback_url: 'https://r.example.test/v1/auth/oidc/callback',
+  } as unknown as AuthenticationSettings;
+};
+
+function renderSettings() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}><SettingsContent /></QueryClientProvider>);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.role = 'super_user';
+  mocks.vehicleAuth = null;
+  mocks.banner = null;
+  mocks.places = [place({}), place({ id: 'p-office', name: 'Office', is_home: false, is_work: true,
+    charging: { id: 'cp-2', name: 'Office', billing_type: 'free', rate: 0, session_fee: 0, currency: 'USD', timezone: null, tou_periods: [] } })];
+  mocks.api.getOidcIdentities.mockResolvedValue({ password_configured: true, oidc_linked: false, oidc_link_available: false });
+  mocks.api.getAuthenticationSettings.mockResolvedValue(authSettings());
+  mocks.api.updateAuthenticationSettings.mockImplementation(async (body) => authSettings(body));
+  mocks.api.updatePlace.mockResolvedValue({});
+  mocks.api.getBackupOverview.mockResolvedValue({
+    settings: { enabled: true, frequency: 'daily' }, artifacts: [{ id: 'a1' }, { id: 'a2' }], recent_runs: [{ status: 'succeeded' }],
+    latest_successful_run: { completed_at: '2026-11-07T11:01:00Z', created_at: '2026-11-07T11:00:00Z' },
   });
-  const view = render(
-    <QueryClientProvider client={queryClient}>
-      {appearanceContract ? <AppearanceSection preferencesQuery={{ data: settingsMocks.preferences as never, isLoading: false }} /> : <SettingsContent {...(initialSection && initialSection !== 'directory' ? { initialSection } : {})} />}
-    </QueryClientProvider>
-  );
-  return { ...view, queryClient };
-}
-
-function clickSettingsSection(label: string) {
-  const picker = screen.queryByLabelText('Settings section');
-  if (picker) {
-    const option = Array.from((picker as HTMLSelectElement).options).find(option => option.text === (label === 'Units' ? 'Units & time' : label));
-    if (!option) throw new Error(`Missing settings section: ${label}`);
-    fireEvent.change(picker, { target: { value: option.value } });
-  } else fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${label}`) }));
-}
+});
 
 describe('Settings page', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockNavigate.mockReset();
-    settingsMocks.auth.logout.mockReset();
-    settingsMocks.auth.clearSession.mockReset();
-    hooksMocks.changePassword.mockReset();
-    hooksMocks.changePassword.mockResolvedValue(undefined);
-    hooksMocks.getAppVersion.mockReset().mockResolvedValue({ version: '2026.09.4+dev' });
-    hooksMocks.getUpdateCheckSettings.mockReset().mockResolvedValue({ enabled: false, frequency: 'daily' });
-    settingsMocks.auth.setDefaultVehicleId.mockReset();
-    settingsMocks.auth.setActiveVehicleId.mockReset();
-    settingsMocks.auth.accessToken = undefined;
-    settingsMocks.auth.defaultVehicleId = 'v1';
-    settingsMocks.basemapConfig = undefined;
-    settingsMocks.preferences = {
-      units: {
-        mode: 'imperial',
-        distance_unit: 'miles',
-        speed_unit: 'mph',
-        temperature_unit: 'fahrenheit',
-        pressure_unit: 'psi',
-        altitude_unit: 'feet',
-        place_radius_unit: 'feet',
-        efficiency_display: 'distance_per_energy',
-      },
-      theme: { mode: 'dark', palette: 'classic' },
-      map_style: 'follow-theme',
-    };
-    settingsMocks.themePreferences = {
-      preferences: {
-        schemaVersion: 2,
-        mode: 'dark',
-        selection: { kind: 'builtin', themeId: 'classic' },
-      },
-      etag: '"theme-preferences-u1-1"',
-    };
-    dashboardMocks.dashboards = [];
-    dashboardMocks.downloadDashboardYaml.mockReset();
-    dashboardMocks.cloneMutateAsync.mockReset();
-    dashboardMocks.createMutateAsync.mockReset();
-    dashboardMocks.deleteMutate.mockReset();
-    dashboardMocks.lockMutate.mockReset();
-    dashboardMocks.restoreMutate.mockReset();
-    localStorage.clear();
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'user@example.com',
-      role: 'user',
-      default_vehicle_id: 'v1',
-    };
-    document.documentElement.className = 'dark';
-    document.documentElement.removeAttribute('data-rm-palette');
-    settingsMocks.vehicles = [
-      {
-        id: 'v1',
-        display_name: 'Adventure Truck',
-        model: 'R1T',
-        year: null,
-        trim: null,
-        vin: null,
-        rivian_vehicle_id: 'rivian-1',
-        battery_capacity_kwh: 135,
-        target_tire_pressure_psi: 48,
-        membership_role: 'owner',
-        is_demo: false,
-      },
-    ];
-  });
-
-  it('renders the Vehicles section heading', () => {
+  it('shows only the five R cards, with the page title', async () => {
     renderSettings();
-    expect(screen.getAllByText('Vehicles').length).toBeGreaterThan(0);
-  });
-
-  it('shows the running version in a Settings-only link to GitHub Releases', async () => {
-    settingsMocks.auth.accessToken = 'session-token';
-    renderSettings();
-
-    const versionLink = await screen.findByRole('link', { name: /^2026\.09\.4\+dev\. Update checks off/i });
-    expect(versionLink).toHaveAttribute('href', 'https://github.com/your-org/r-the-drive/releases');
-    expect(versionLink).toHaveAttribute('target', '_blank');
-    expect(versionLink).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(versionLink).toHaveTextContent('2026.09.4+dev');
-    expect(versionLink).toHaveTextContent('Update checks off');
-  });
-
-  it('shows up to date or the newer remote version as the version subtitle', async () => {
-    settingsMocks.auth.accessToken = 'session-token';
-    hooksMocks.getUpdateCheckSettings.mockResolvedValue({ enabled: true, frequency: 'daily' });
-    const snapshot = (latestVersion: string, updateAvailable: boolean) => JSON.stringify({
-      lastAttemptAt: 1, lastSuccessfulAt: 1, latestVersion, updateAvailable, error: null,
-    });
-    localStorage.setItem('rm-github-release-check-v1', snapshot('2026.09.4', false));
-    const { unmount } = renderSettings();
-    expect(await screen.findByRole('link', { name: /Up to date/ })).toBeInTheDocument();
-    unmount();
-
-    localStorage.setItem('rm-github-release-check-v1', snapshot('2026.10.1', true));
-    renderSettings();
-    expect(await screen.findByRole('link', { name: /2026\.10\.1 available/ })).toBeInTheDocument();
-    localStorage.removeItem('rm-github-release-check-v1');
-  });
-
-  it('clears the available subtitle when the running version reaches the cached latest release', async () => {
-    settingsMocks.auth.accessToken = 'session-token';
-    hooksMocks.getUpdateCheckSettings.mockResolvedValue({ enabled: true, frequency: 'daily' });
-    writeReleaseCheckSnapshot({
-      lastAttemptAt: Date.now(), lastSuccessfulAt: Date.now(),
-      latestVersion: '2026.10.2', updateAvailable: true, error: null,
-    });
-    const { queryClient } = renderSettings();
-    expect(await screen.findByRole('link', { name: /2026\.10\.2 available/ })).toBeInTheDocument();
-    act(() => queryClient.setQueryData(['app-version'], { version: '2026.10.2' }));
-
-    const link = await screen.findByRole('link', { name: /^2026\.10\.2\. Up to date\./ });
-    expect(link).not.toHaveTextContent('available');
-    expect(screen.getByText('Up to date')).toHaveClass('text-fg-tertiary');
-  });
-
-  it.each(['2026.09.4', '2026.10.2'])('shows checks off ahead of the cached %s result', async (latestVersion) => {
-    settingsMocks.auth.accessToken = 'session-token';
-    writeReleaseCheckSnapshot({
-      lastAttemptAt: Date.now(), lastSuccessfulAt: Date.now(),
-      latestVersion, updateAvailable: true, error: null,
-    });
-    renderSettings();
-
-    const link = await screen.findByRole('link', { name: /Update checks off/ });
-    expect(link).not.toHaveTextContent(/Up to date|available/);
-    expect(screen.getByText('Update checks off')).toHaveClass('text-fg-tertiary');
-  });
-
-  it.each([null, '2026.09.4', '2026.10.2'])('shows a failed check ahead of the cached %s result', async (latestVersion) => {
-    settingsMocks.auth.accessToken = 'session-token';
-    hooksMocks.getUpdateCheckSettings.mockResolvedValue({ enabled: true, frequency: 'daily' });
-    writeReleaseCheckSnapshot({
-      lastAttemptAt: Date.now(), lastSuccessfulAt: latestVersion ? Date.now() - 1000 : null,
-      latestVersion, updateAvailable: latestVersion ? true : null, error: 'GitHub returned HTTP 403.',
-    });
-    renderSettings();
-
-    const link = await screen.findByRole('link', { name: /Update check failed/ });
-    expect(link).not.toHaveTextContent(/Up to date|available/);
-  });
-
-  it.each(['getAppVersion', 'getUpdateCheckSettings'] as const)('does not claim up to date when %s fails', async (method) => {
-    settingsMocks.auth.accessToken = 'session-token';
-    hooksMocks.getUpdateCheckSettings.mockResolvedValue({ enabled: true, frequency: 'daily' });
-    hooksMocks[method].mockRejectedValue(new Error('Offline'));
-    writeReleaseCheckSnapshot({
-      lastAttemptAt: Date.now(), lastSuccessfulAt: Date.now(),
-      latestVersion: '2026.09.4', updateAvailable: false, error: null,
-    });
-    renderSettings();
-
-    expect(await screen.findByRole('link', { name: /Update status unavailable/ })).not.toHaveTextContent('Up to date');
-  });
-
-  it('does not describe an enabled check as running before it starts', async () => {
-    settingsMocks.auth.accessToken = 'session-token';
-    hooksMocks.getUpdateCheckSettings.mockResolvedValue({ enabled: true, frequency: 'daily' });
-    renderSettings();
-
-    expect(await screen.findByRole('link', { name: /Not checked yet/ })).not.toHaveTextContent(/Up to date|Checking for updates/);
-  });
-
-  it('does not claim up to date when the running version cannot be compared', async () => {
-    settingsMocks.auth.accessToken = 'session-token';
-    hooksMocks.getUpdateCheckSettings.mockResolvedValue({ enabled: true, frequency: 'daily' });
-    hooksMocks.getAppVersion.mockResolvedValue({ version: 'unknown' });
-    writeReleaseCheckSnapshot({
-      lastAttemptAt: Date.now(), lastSuccessfulAt: Date.now(),
-      latestVersion: '2026.10.2', updateAvailable: false, error: null,
-    });
-    renderSettings();
-
-    expect(await screen.findByRole('link', { name: /Unable to compare versions/ })).not.toHaveTextContent('Up to date');
-  });
-
-  it('labels missing running build metadata as unknown', async () => {
-    settingsMocks.auth.accessToken = 'session-token';
-    const hooks = await import('@panda/hooks');
-    vi.mocked(hooks.api.getAppVersion).mockResolvedValueOnce({ version: 'unknown' });
-    renderSettings();
-
-    expect(await screen.findByRole('link', { name: /^Unknown version\./i })).toHaveTextContent('Unknown version');
-  });
-
-  it('uses a chart icon for the Charts settings section', () => {
-    renderSettings('directory');
-    expect(screen.getByTestId('icon-chart-line')).toBeInTheDocument();
-  });
-
-  it('renders the mobile section picker with every available section', () => {
-    renderSettings();
-
-    const picker = screen.getByLabelText('Settings section');
-    expect(picker).toBeVisible();
-    expect(picker).toHaveValue('vehicles');
-    expect(Array.from((picker as HTMLSelectElement).options).map((option) => option.value)).toEqual([
-      'account',
-      'api',
-      'charging',
-      'charts',
-      'dashboards',
-      'external',
-      'jobs',
-      'places',
-      'raw',
-      'units',
-      'vehicles',
-    ]);
-
-    fireEvent.change(picker, { target: { value: 'units' } });
-
-    expect(picker).toHaveValue('units');
-    expect(screen.getByLabelText('Application time zone')).toBeInTheDocument();
-    expect(mockNavigate).toHaveBeenCalledWith({
-      to: '/settings',
-      search: { section: 'units' },
-    });
-  });
-
-  it('includes Backups in the mobile section picker for administrators', () => {
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-    renderSettings();
-
-    expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument();
-  });
-
-  it('renders the connected vehicle display name', () => {
-    renderSettings();
-    expect(screen.getByText('Adventure Truck')).toBeInTheDocument();
-  });
-
-  it('renders the vehicle model', () => {
-    renderSettings();
-    expect(screen.getByText(/R1T/)).toBeInTheDocument();
-  });
-
-  it('renders the Vehicle button', () => {
-    renderSettings();
-    expect(screen.getByText('Vehicle')).toBeInTheDocument();
-  });
-
-  it('uses compact accessible icon actions on vehicle cards', () => {
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-    settingsMocks.vehicles = [
-      {
-        id: 'v1',
-        display_name: 'Adventure Truck',
-        model: 'R1T',
-        year: null,
-        trim: null,
-        vin: null,
-        rivian_vehicle_id: 'rivian-1',
-        battery_capacity_kwh: 135,
-        target_tire_pressure_psi: 48,
-        membership_role: 'owner',
-        is_demo: false,
-      },
-      {
-        id: 'v2',
-        display_name: 'Second Vehicle',
-        model: 'R1S',
-        year: null,
-        trim: null,
-        vin: null,
-        rivian_vehicle_id: 'rivian-2',
-        battery_capacity_kwh: 135,
-        target_tire_pressure_psi: 48,
-        membership_role: 'owner',
-        is_demo: false,
-      },
-      {
-        id: 'demo-v1',
-        display_name: 'Demo R2S',
-        model: 'R2S',
-        year: null,
-        trim: null,
-        vin: null,
-        rivian_vehicle_id: 'demo-r2s-local',
-        battery_capacity_kwh: 82,
-        target_tire_pressure_psi: 48,
-        membership_role: 'owner',
-        is_demo: true,
-      },
-    ];
-
-    renderSettings();
-
-    const setDefault = screen.getByRole('button', {
-      name: 'Set Second Vehicle as default vehicle',
-    });
-    const manageSharing = screen.getByRole('button', {
-      name: 'Manage sharing for Adventure Truck',
-    });
-    const refreshDemo = screen.getByRole('button', { name: 'Refresh demo data for Demo R2S' });
-    for (const button of [setDefault, manageSharing, refreshDemo]) {
-      expect(button).toHaveClass('h-8', 'w-8', 'px-0');
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+    for (const name of ['Account', 'Sign-in methods', 'Rivian account', 'Charging rates']) {
+      expect(screen.getByRole('heading', { level: 2, name })).toBeInTheDocument();
     }
-    expect(screen.queryByText('Set Default')).not.toBeInTheDocument();
-    expect(screen.queryByText('Manage Sharing')).not.toBeInTheDocument();
-    expect(screen.queryByText('Refresh Demo Data')).not.toBeInTheDocument();
-
-    fireEvent.click(manageSharing);
-    expect(screen.getByText('Vehicle Access')).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Hide sharing for Adventure Truck' })
-    ).toBeInTheDocument();
-  });
-
-  it.each(['user', 'admin', 'super_user'] as const)('keeps dashboards read-only for %s even with a stored edit preference', (role) => {
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role,
-      default_vehicle_id: 'v1',
-    };
-    dashboardMocks.dashboards = [
-      {
-        id: 'default-overview',
-        slug: 'dashboard',
-        name: 'Overview',
-        description: null,
-        isDefault: true,
-        isLocked: true,
-        ownerId: null,
-        widgets: [{ id: 'w1' }],
-      },
-      {
-        id: '22222222-2222-2222-2222-222222222222',
-        slug: 'my-charging',
-        name: 'My Charging',
-        description: null,
-        isDefault: false,
-        isLocked: false,
-        ownerId: 'u1',
-        widgets: [{ id: 'w2' }, { id: 'w3' }],
-      },
-    ];
-    localStorage.setItem('rm-show-dashboard-edit-button:u1', 'true');
-    const saved = structuredClone(dashboardMocks.dashboards);
-
-    renderSettings();
-    clickSettingsSection('Dashboards');
-
-    expect(screen.getByText('System Defaults')).toBeInTheDocument();
-    expect(screen.getByText('My Dashboards')).toBeInTheDocument();
-    expect(screen.getByText('Overview')).toBeInTheDocument();
-    expect(screen.getByText('My Charging')).toBeInTheDocument();
-    expect(screen.getByText('2 saved')).toBeInTheDocument();
-    const ownershipDetails = screen
-      .getByText('How dashboard defaults and personal copies work')
-      .closest('details');
-    expect(ownershipDetails).not.toHaveAttribute('open');
-
-    const openDefaultButton = screen.getByRole('button', { name: 'Open default' });
-    const firstExportButton = screen.getAllByRole('button', { name: 'Export' })[0]!;
-    expect(firstExportButton).toHaveAttribute('variant', openDefaultButton.getAttribute('variant'));
-
-    fireEvent.click(openDefaultButton);
-    expect(mockNavigate).toHaveBeenCalledWith({
-      to: '/d/$slug',
-      params: { slug: 'dashboard' },
-      search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
-    });
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Export' })[0]!);
-    expect(dashboardMocks.downloadDashboardYaml).toHaveBeenCalledWith(dashboardMocks.dashboards[0]);
-
-    expect(screen.queryByRole('switch', { name: 'Show edit button on dashboard pages' })).not.toBeInTheDocument();
-    for (const name of [/^Edit/, /^Customize$/, /^Duplicate$/, /^Import$/, /^Create dashboard$/, /^Unlock$/, /^Restore bundled$/, /^Delete$/]) {
-      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Backups' })).toBeInTheDocument();
+    for (const removed of [/units/i, /api access/i, /dashboards/i, /external/i, /places/i, /jobs/i, /raw telemetry/i, /appearance/i]) {
+      expect(screen.queryByRole('heading', { name: removed })).not.toBeInTheDocument();
     }
-    for (const mutate of [dashboardMocks.createMutateAsync, dashboardMocks.cloneMutateAsync, dashboardMocks.deleteMutate, dashboardMocks.lockMutate, dashboardMocks.restoreMutate]) {
-      expect(mutate).not.toHaveBeenCalled();
-    }
-    expect(dashboardMocks.dashboards).toEqual(saved);
-    expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
   });
 
-  it('marks a saved same-slug personal copy active and keeps it available without reset', () => {
-    dashboardMocks.dashboards = [
-      {
-        id: 'default-overview',
-        slug: 'dashboard',
-        name: 'Overview',
-        description: null,
-        isDefault: true,
-        isLocked: true,
-        ownerId: null,
-        widgets: [{ id: 'w1' }],
-      },
-      {
-        id: '55555555-5555-5555-5555-555555555555',
-        slug: 'dashboard',
-        name: 'Overview',
-        description: null,
-        isDefault: false,
-        isLocked: false,
-        ownerId: 'u1',
-        widgets: [{ id: 'w2' }],
-      },
-    ];
-    const saved = structuredClone(dashboardMocks.dashboards);
-
+  it('shows the account and signs out the other devices', () => {
     renderSettings();
-    clickSettingsSection('Dashboards');
-
-    expect(screen.getAllByText('Active for you')).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: 'Customize' })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open default' }));
-    expect(mockNavigate).toHaveBeenLastCalledWith({
-      to: '/d/$slug',
-      params: { slug: 'dashboard' },
-      search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
-    });
-
-    expect(screen.queryByRole('button', { name: 'Reset to default' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Open$/ }));
-    expect(mockNavigate).toHaveBeenLastCalledWith({
-      to: '/d/$slug', params: { slug: 'dashboard' },
-      search: { dashboardId: '55555555-5555-5555-5555-555555555555' },
-    });
-    expect(dashboardMocks.deleteMutate).not.toHaveBeenCalled();
-    expect(dashboardMocks.dashboards).toEqual(saved);
+    const account = screen.getByRole('region', { name: 'Account' });
+    expect(within(account).getByText('owner@example.test')).toBeInTheDocument();
+    expect(within(account).getByText('Password')).toBeInTheDocument();
+    expect(within(account).getByText('Owner')).toBeInTheDocument();
+    fireEvent.click(within(account).getByRole('button', { name: 'Sign out other devices' }));
+    expect(mocks.revoke).toHaveBeenCalledTimes(1);
+    expect(within(account).getByRole('button', { name: /^Sign out$/ })).toBeInTheDocument();
   });
 
-  it('navigates to /connect when Vehicle is clicked', () => {
+  it('changes the password and sends the owner to sign in again', async () => {
+    mocks.api.changePassword.mockResolvedValue(undefined);
     renderSettings();
-    fireEvent.click(screen.getByText('Vehicle'));
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/connect' });
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'old-password-123' } });
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-password-1234' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save password' }));
+    await waitFor(() => expect(mocks.api.changePassword).toHaveBeenCalledWith({ current_password: 'old-password-123', new_password: 'new-password-1234' }));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } }));
   });
 
-  it('hides Demo Vehicle for regular users', () => {
+  it('keeps password sign-in on until SSO is on, tested and linked', async () => {
     renderSettings();
-    expect(screen.queryByText('Demo Vehicle')).not.toBeInTheDocument();
+    const password = await screen.findByRole('switch', { name: 'Password sign-in' });
+    const sso = screen.getByRole('switch', { name: 'Single sign-on (SSO)' });
+    expect(password).toHaveAttribute('aria-checked', 'true');
+    expect(password).toHaveAttribute('aria-disabled', 'true');
+    expect(sso).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('Turn on SSO first.')).toBeInTheDocument();
+    fireEvent.click(password);
+    expect(mocks.api.updateAuthenticationSettings).not.toHaveBeenCalled();
+    expect(screen.getByText('Turn off password sign-in only after SSO works. If both are off, nobody can sign in.')).toBeInTheDocument();
   });
 
-  it('shows Demo Vehicle for admin users and triggers creation', async () => {
-    const hooks = await import('@panda/hooks');
-    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
+  it('turns SSO on after it is set up and tested', async () => {
+    mocks.api.getAuthenticationSettings.mockResolvedValue(authSettings({ issuer_url: 'https://login.example.test', client_id: 'r', tested: true }));
     renderSettings();
-    await waitFor(() => {
-      expect(screen.getByText('Demo Vehicle')).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByText('Demo Vehicle'));
-    fireEvent.click(screen.getByRole('button', { name: 'R1T' }));
-    await waitFor(() => {
-      expect(hooks.api.createDemoVehicle).toHaveBeenCalledWith({ model: 'R1T' });
-    });
-    await waitFor(() => {
-      expect(settingsMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'status', 'demo-v1'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'health', 'demo-v1'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'images', 'demo-v1'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
-    invalidateSpy.mockRestore();
+    const sso = await screen.findByRole('switch', { name: 'Single sign-on (SSO)' });
+    await waitFor(() => expect(sso).not.toHaveAttribute('aria-disabled'));
+    fireEvent.click(sso);
+    await waitFor(() => expect(mocks.api.updateAuthenticationSettings).toHaveBeenCalledWith({ oidc_enabled: true }));
   });
 
-  it('refreshes only demo history after confirmation and hides Rivian repair actions', async () => {
-    const hooks = await import('@panda/hooks');
-    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'demo-v1',
-    };
-    settingsMocks.auth.defaultVehicleId = 'demo-v1';
-    settingsMocks.vehicles = [
-      {
-        id: 'demo-v1',
-        display_name: 'Demo R1T',
-        model: 'R1T',
-        year: null,
-        trim: null,
-        vin: null,
-        rivian_vehicle_id: 'demo-r1t-local',
-        battery_capacity_kwh: 135,
-        target_tire_pressure_psi: 48,
-        membership_role: 'owner',
-        is_demo: true,
-      },
-    ];
-
+  it('sets up SSO, then tests the provider', async () => {
+    mocks.api.testAuthenticationSettings.mockResolvedValue({ valid: true });
     renderSettings();
-
-    expect(screen.getAllByText('Demo data').length).toBeGreaterThan(0);
-    expect(screen.queryByLabelText('Refresh Rivian login for Demo R1T')).not.toBeInTheDocument();
-    expect(
-      screen.queryByLabelText('Clear local artwork cache for Demo R1T')
-    ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Refresh vehicle artwork for Demo R1T')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh demo data for Demo R1T' }));
-    expect(screen.getByText('Refresh Demo R1T?')).toBeInTheDocument();
-    expect(
-      screen.getByText(/illustrative telemetry, trips, charging, and weather history/i)
-    ).toBeInTheDocument();
-
-    const confirmationButtons = screen.getAllByRole('button', { name: 'Refresh Demo Data' });
-    fireEvent.click(confirmationButtons[confirmationButtons.length - 1]!);
-
-    await waitFor(() => {
-      expect(hooks.api.refreshDemoVehicle).toHaveBeenCalledWith('demo-v1');
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith();
-    invalidateSpy.mockRestore();
-  });
-
-  it('saves target tire pressure through shared vehicle settings', async () => {
-    const hooks = await import('@panda/hooks');
-
-    renderSettings();
-    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
-    fireEvent.change(screen.getByDisplayValue('48'), { target: { value: '46' } });
-    fireEvent.click(screen.getByLabelText('Save vehicle'));
-
-    await waitFor(() => {
-      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
-        battery_capacity_kwh: 135,
-        battery_config: 'R1T / R1S Large (Gen 1)',
-        target_tire_pressure_psi: 46,
-      });
-    });
-  });
-
-  it('renders the Appearance section', () => {
-    renderSettings('vehicles', true);
-    expect(screen.getAllByText('Appearance').length).toBeGreaterThan(0);
-    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
-  });
-
-  it('offers every OpenFreeMap style and saves the user selection', async () => {
-    settingsMocks.basemapConfig = { resolved_provider: 'openfreemap' };
-    renderSettings();
-    clickSettingsSection('Units');
-
-    const style = screen.getByLabelText('Map style');
-    for (const value of ['follow-theme', 'positron', 'bright', 'liberty', 'dark', 'fiord', '3d']) {
-      expect(style.querySelector(`option[value="${value}"]`)).toBeInTheDocument();
-    }
-
-    fireEvent.change(style, { target: { value: 'liberty' } });
-    await waitFor(() => expect(hooksMocks.updateMapStylePreference).toHaveBeenCalledWith('liberty'));
-  });
-
-  it('hides OpenFreeMap-only style controls for CARTO', () => {
-    settingsMocks.basemapConfig = { resolved_provider: 'carto' };
-    renderSettings();
-    clickSettingsSection('Units');
-    expect(screen.queryByLabelText('Map style')).not.toBeInTheDocument();
-  });
-
-  it('renders the Places section', () => {
-    renderSettings();
-    clickSettingsSection('Places');
-    expect(screen.getAllByText('Places').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
-  });
-
-  it('renders and filters the API endpoint catalog', async () => {
-    const hooks = await import('@panda/hooks');
-    settingsMocks.auth.accessToken = 'test-access-token';
-    renderSettings();
-    clickSettingsSection('API Access');
-
-    expect(screen.getByText('Integration Keys')).toBeInTheDocument();
-    expect(screen.getByText(/read-only and limited to one vehicle/i)).toBeInTheDocument();
-    await waitFor(() => expect(hooks.api.listApiKeys).toHaveBeenCalled());
-    await waitFor(() => expect(hooks.api.getApiCatalog).toHaveBeenCalled());
-    expect(screen.getByText('/v1/vehicles')).toBeInTheDocument();
-    expect(screen.getByText('/v1/vehicles/{id}/raw-data')).toBeInTheDocument();
-    expect(screen.getByText('/v1/metrics/batch')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('Search API endpoints'), {
-      target: { value: 'raw-data' },
-    });
-
-    expect(screen.getByText('/v1/vehicles/{id}/raw-data')).toBeInTheDocument();
-    expect(screen.queryByText('/v1/vehicles')).not.toBeInTheDocument();
-    expect(screen.queryByText('/v1/metrics/batch')).not.toBeInTheDocument();
-  });
-
-  it('shows address suggestions after explicitly submitting a place search', async () => {
-    renderSettings();
-    clickSettingsSection('Places');
-
-    fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('123 Main St, Denver, CO')).toBeInTheDocument();
-    });
-  });
-
-  it('shows an in-flight searching indicator for place search', async () => {
-    const hooks = await import('@panda/hooks');
-    vi.mocked(hooks.api.searchPlaceAddresses).mockImplementationOnce(() => new Promise(() => {}));
-
-    renderSettings();
-    clickSettingsSection('Places');
-    fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Searching addresses...')).toBeInTheDocument();
-    });
-  });
-
-  it('shows a no-matches message when place search resolves empty', async () => {
-    const hooks = await import('@panda/hooks');
-    vi.mocked(hooks.api.searchPlaceAddresses).mockResolvedValueOnce([]);
-
-    renderSettings();
-    clickSettingsSection('Places');
-    fireEvent.change(screen.getByLabelText('Address Search'), {
-      target: { value: 'unlikely query xyz' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
-    await waitFor(() => {
-      expect(
-        screen.getByText('No matching addresses found. Try a broader search.')
-      ).toBeInTheDocument();
-    });
-  });
-
-  it('filters saved places dynamically from the header search input', async () => {
-    const hooks = await import('@panda/hooks');
-    vi.mocked(hooks.api.listPlaces).mockResolvedValueOnce([
-      {
-        id: 'p-home',
-        name: 'Home Garage',
-        latitude: 39.7392,
-        longitude: -104.9903,
-        radius_m: 75,
-        is_home: true,
-        is_work: false,
-        address: {
-          id: 'a-home',
-          display_name: '123 Main St, Denver, CO',
-          osm_id: 123,
-          latitude: 39.7392,
-          longitude: -104.9903,
-          road: 'Main St',
-          city: 'Denver',
-          state: 'CO',
-          postcode: '80202',
-          country: 'United States',
-          raw: null,
-        },
-        charging: null,
-      },
-      {
-        id: 'p-work',
-        name: 'Office Lot',
-        latitude: 39.75,
-        longitude: -104.999,
-        radius_m: 75,
-        is_home: false,
-        is_work: true,
-        address: {
-          id: 'a-work',
-          display_name: '400 Market St, Boulder, CO',
-          osm_id: 456,
-          latitude: 39.75,
-          longitude: -104.999,
-          road: 'Market St',
-          city: 'Boulder',
-          state: 'CO',
-          postcode: '80301',
-          country: 'United States',
-          raw: null,
-        },
-        charging: null,
-      },
-    ]);
-
-    renderSettings();
-    clickSettingsSection('Places');
-
-    await waitFor(() => {
-      expect(screen.getByText('Home Garage')).toBeInTheDocument();
-      expect(screen.getByText('Office Lot')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText('Search saved places'), { target: { value: 'home' } });
-
-    await waitFor(() => {
-      expect(screen.getByText('Home Garage')).toBeInTheDocument();
-      expect(screen.queryByText('Office Lot')).not.toBeInTheDocument();
-    });
-  });
-
-  it('renders the theme chooser', async () => {
-    renderSettings('vehicles', true);
-    expect(screen.getByText('Appearance mode')).toBeInTheDocument();
-    expect(screen.getByLabelText('Appearance mode')).toBeInTheDocument();
-    expect(await screen.findByRole('radiogroup', { name: 'Themes' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /^Classic/ })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /^RAD/ })).toBeInTheDocument();
-  });
-
-  it('persists account-backed appearance and palette changes', async () => {
-    const hooks = await import('@panda/hooks');
-    settingsMocks.auth.accessToken = 'test-access-token';
-    renderSettings('vehicles', true);
-
-    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
-    fireEvent.click(await screen.findByRole('radio', { name: /^RAD/ }));
-
-    await waitFor(() => {
-      expect(hooks.themeClient.updatePreferences).toHaveBeenCalledWith(
-        { schemaVersion: 2, mode: 'dark', selection: { kind: 'builtin', themeId: 'rad' } },
-        '"theme-preferences-u1-1"',
-      );
-    });
-    expect(localStorage.getItem('rm-theme')).toBeNull();
-  });
-
-  it('rolls back appearance changes when the account update fails', async () => {
-    const hooks = await import('@panda/hooks');
-    settingsMocks.auth.accessToken = 'test-access-token';
-    vi.mocked(hooks.api.updateThemePreferences).mockRejectedValueOnce(new Error('save failed'));
-    renderSettings('vehicles', true);
-
-    await waitFor(() => expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark'));
-    fireEvent.change(screen.getByLabelText('Appearance mode'), { target: { value: 'light' } });
-
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/previous selection has been restored/i));
-    expect(screen.getByLabelText('Appearance mode')).toHaveValue('dark');
-    expect(document.documentElement.classList.contains('dark')).toBe(true);
-  });
-
-  it('renders the Account section with Sign Out', () => {
-    renderSettings();
-    clickSettingsSection('Account');
-    expect(screen.getAllByText('Account').length).toBeGreaterThan(0);
-    expect(screen.getByText('Sign Out')).toBeInTheDocument();
-  });
-
-  it('renders the telemetry explorer for admin users', async () => {
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-    renderSettings();
-    clickSettingsSection('Raw Data');
-
-    await waitFor(() => {
-      expect(screen.getByText('Telemetry Explorer')).toBeInTheDocument();
-      expect(screen.getByText('Field coverage')).toBeInTheDocument();
-      expect(screen.getByText('Inbound Rivian events')).toBeInTheDocument();
-    });
-  });
-
-  it('starts and stops an ingestion capture for connected owners and omits demo vehicles', async () => {
-    const hooks = await import('@panda/hooks');
-    settingsMocks.vehicles = [...settingsMocks.vehicles, {
-      id: 'demo-v1',
-      display_name: 'Demo R2',
-      model: 'R2',
-      year: null,
-      trim: null,
-      vin: null,
-      rivian_vehicle_id: 'demo-r2s-local',
-      battery_capacity_kwh: 82,
-      target_tire_pressure_psi: 48,
-      membership_role: 'owner',
-      is_demo: true,
-    }];
-    renderSettings();
-    clickSettingsSection('Raw Data');
-    const startButton = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
-    expect(screen.queryByRole('button', { name: 'Start capture for Demo R2' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Download capture for Adventure Truck' })).not.toBeInTheDocument();
-    await waitFor(() => expect(startButton).not.toBeDisabled());
-    fireEvent.click(startButton);
-    await waitFor(() => expect(hooks.api.startVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
-
-    const stopButton = await screen.findByRole('button', { name: 'Stop capture for Adventure Truck' });
-    expect(screen.getByText('Capturing')).toBeInTheDocument();
-    fireEvent.click(stopButton);
-    await waitFor(() => expect(hooks.api.stopVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
-
-    const downloadButton = await screen.findByRole('button', { name: 'Download capture for Adventure Truck' });
-    expect(screen.getByText(/12 events/)).toBeInTheDocument();
-    const createObjectURL = vi.fn(() => 'blob:capture');
-    const revokeObjectURL = vi.fn();
-    Object.assign(URL, { createObjectURL, revokeObjectURL });
-    fireEvent.click(downloadButton);
-    await waitFor(() => expect(hooks.api.downloadVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
-  });
-
-  it('confirms before a new capture replaces the previous one', async () => {
-    const hooks = await import('@panda/hooks');
-    vi.mocked(hooks.api.getVehicleIngestionCapture).mockResolvedValueOnce({
-      state: 'stopped',
-      started_at: '2026-09-24T17:00:00Z',
-      ends_at: '2026-09-24T18:00:00Z',
-      stopped_at: '2026-09-24T18:00:00Z',
-      stop_reason: 'expired',
-      event_count: 0,
-      last_event_at: null,
-      truncated: false,
-    });
-    renderSettings();
-    clickSettingsSection('Raw Data');
-    const newCapture = await screen.findByRole('button', { name: 'Start capture for Adventure Truck' });
-    expect(await screen.findByText(/stopped after 1 hour/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Download capture for Adventure Truck' })).toBeDisabled();
-    await waitFor(() => expect(newCapture).not.toBeDisabled());
-    fireEvent.click(newCapture);
-    expect(screen.getByRole('dialog', { name: 'Replace the previous capture?' })).toBeInTheDocument();
-    expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(hooks.api.startVehicleIngestionCapture).not.toHaveBeenCalled();
-    fireEvent.click(newCapture);
-    fireEvent.click(screen.getByRole('button', { name: 'Start new capture' }));
-    await waitFor(() => expect(hooks.api.startVehicleIngestionCapture).toHaveBeenCalledWith('v1'));
-  });
-
-  it('renders and operates the admin Backups section', async () => {
-    const hooks = await import('@panda/hooks');
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-    renderSettings();
-
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument());
-    clickSettingsSection('Backups');
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: 'Recovery packages' })).toBeInTheDocument();
-      expect(screen.getByLabelText('Recovery package location')).toHaveTextContent('Local');
-      expect(screen.getByText(/Page 1 of 1/)).toBeInTheDocument();
-      expect(screen.getByText('Rows')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('Save settings'));
-
-    await waitFor(() => {
-      expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          timezone: 'America/Chicago',
-          bucket: 'panda-backups',
-          retention_count: 8,
-          local_enabled: true,
-          s3_enabled: true,
-        })
-      );
-    }, { timeout: 5_000 });
-
-    fireEvent.click(screen.getByText('Test S3 connection'));
-    await waitFor(() =>
-      expect(hooks.api.testBackupS3).toHaveBeenCalledWith(
-        expect.objectContaining({
-          bucket: 'panda-backups',
-          s3_enabled: true,
-        })
-      ),
-      { timeout: 5_000 },
-    );
-
-    fireEvent.click(screen.getByText('Run now'));
-    await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled(), { timeout: 5_000 });
-
-    expect(screen.queryByText('File name')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/Expand backup details/i));
-    await waitFor(() => {
-      expect(screen.getByText('File name')).toBeInTheDocument();
-      expect(screen.getByText('SHA-256')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByLabelText(/Download backup/));
-    await waitFor(() => {
-      expect(hooks.api.downloadBackupArtifact).toHaveBeenCalledWith('artifact-1');
-    });
-
-    expect(screen.getByRole('heading', { name: 'Restore from backup' })).toBeInTheDocument();
-    const restorePicker = screen.getByRole('combobox', { name: 'Choose a recovery package' });
-    expect(restorePicker).toBeInTheDocument();
-    fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
-    await waitFor(() => {
-      expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), {
-      target: { value: 'RESTORE' },
-    });
-    fireEvent.click(screen.getByText('Validate candidate and restore'));
-
-    await waitFor(() => {
-      expect(hooks.api.startBackupRestore).toHaveBeenCalledWith({
-        artifact_id: 'artifact-1',
-        confirmation_phrase: 'RESTORE',
-        notes: null,
-        plan_id: 'plan-1',
-        package_checksum_sha256: 'abc123',
-      });
-    });
-    expect(screen.getByRole('progressbar', { name: 'Restore activity' })).toBeInTheDocument();
-    expect(screen.queryByText('5%')).not.toBeInTheDocument();
-  });
-
-  it.each([
-    {
-      code: 'unsupported_migration_chain',
-      title: 'Unsupported migration chain',
-      message:
-        'This recovery package belongs to a migration chain that this release does not support.',
-    },
-    {
-      code: 'source_ledger_invalid',
-      title: 'Source migration ledger is invalid',
-      message:
-        'The package migration ledger is incomplete, unordered, or otherwise cannot be verified.',
-    },
-    {
-      code: 'target_migration_drift',
-      title: 'Target migration drift detected',
-      message:
-        'This server’s recorded migration ledger does not match the migration catalog in the running release.',
-    },
-    {
-      code: 'migration_checksum_mismatch',
-      title: 'Migration checksum mismatch',
-      message:
-        'The migration version may match, but the migration file bytes do not. Matching schema versions are not sufficient for migration identity.',
-    },
-    {
-      code: 'schema_fingerprint_mismatch',
-      title: 'Schema contract mismatch',
-      message:
-        'The recorded schema fingerprint does not match the schema contract required by this restore.',
-    },
-    {
-      code: 'source_schema_newer',
-      title: 'Source schema is newer',
-      message:
-        'This recovery package was created by a newer schema release and cannot be restored here.',
-    },
-  ])('presents the $code restore preflight failure clearly', async ({ code, title, message }) => {
-    const hooks = await import('@panda/hooks');
-    vi.mocked(hooks.api.preflightBackupRestore).mockResolvedValueOnce({
-      plan: {
-        plan_id: `blocked-${code}`,
-        engine_version: 3,
-        package_checksum_sha256: 'blocked-package',
-        package_format: 'panda-recovery-v3',
-        compatible: false,
-        source: {
-          postgres_major: 17,
-          timescale_version: '2.19.3',
-          migration_version: 1,
-          migration_ledger: [],
-          migration_ledger_successful: true,
-          migration_chain_id: 'panda-schema-v1',
-          migration_catalog_digest: 'catalog',
-          schema_contract_version: 'panda-schema-contract-v1',
-          schema_fingerprint: 'source',
-        },
-        target: {
-          postgres_major: 17,
-          timescale_version: '2.19.3',
-          migration_version: 1,
-          migration_ledger: [],
-          migration_ledger_successful: true,
-          migration_chain_id: 'panda-schema-v1',
-          migration_catalog_digest: 'catalog',
-          schema_contract_version: 'panda-schema-contract-v1',
-          schema_fingerprint: 'target',
-        },
-        pending_migrations: [],
-        transforms: [],
-        validation_checks: [],
-        warnings: [],
-        blocking_errors: [{ code, message: 'Backend compatibility detail.' }],
-        planned_at: '2026-05-04T12:02:00Z',
-      },
-    } as never);
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-    renderSettings();
-
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument());
-    clickSettingsSection('Backups');
-    const restorePicker = await screen.findByRole('combobox', {
-      name: 'Choose a recovery package',
-    });
-    fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
-    await waitFor(() => expect(screen.getByText('Restore this backup?')).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), {
-      target: { value: 'RESTORE' },
-    });
-    fireEvent.click(screen.getByText('Validate candidate and restore'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId(`restore-blocking-error-${code}`)).toBeInTheDocument();
-    });
-    expect(screen.getByText(title)).toBeInTheDocument();
-    expect(screen.getByText(message)).toBeInTheDocument();
-    expect(screen.getByText(`Code: ${code}`)).toBeInTheDocument();
-    expect(screen.queryByText(/Versioned schema profile/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Validate candidate and restore' })).toBeDisabled();
-  });
-
-  it('shows the Backups section for super users as well', async () => {
-    const hooks = await import('@panda/hooks');
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'super@example.com',
-      role: 'super_user',
-      default_vehicle_id: 'v1',
-    };
-    renderSettings();
-
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument());
-    clickSettingsSection('Backups');
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: 'Recovery packages' })).toBeInTheDocument();
-    });
-  });
-
-  it('shows Authentication only to super users', async () => {
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-    const admin = renderSettings();
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Backups' })).toBeInTheDocument());
-    expect(screen.queryByRole('option', { name: 'Authentication' })).not.toBeInTheDocument();
-    admin.unmount();
-
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'super@example.com',
-      role: 'super_user',
-      default_vehicle_id: 'v1',
-    };
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByRole('option', { name: 'Authentication' })).toBeInTheDocument()
-    );
-  });
-
-  it('shows active vehicle state for the connected vehicle', () => {
-    renderSettings();
-    // Status text now appears inside the vehicle chip ('Active' when worker_health is ok/connected)
-    expect(screen.getAllByText(/active|connected/i).length).toBeGreaterThan(0);
-  });
-
-  it('shows the estimated Rivian renewal date and recommendation', () => {
-    Object.assign(settingsMocks.vehicles[0]!, {
-      renewal_state: 'renewal_soon',
-      expected_renewal_at: '2027-02-23T12:00:00Z',
-    });
-
-    renderSettings();
-
-    expect(screen.getByText('Rivian renewal')).toBeInTheDocument();
-    expect(screen.getByText(/estimated\)/i)).toBeInTheDocument();
-    expect(screen.getByText(/estimated 180-day renewal date/i)).toBeInTheDocument();
-  });
-
-  it('shows durable backup phase and progress while a run is active', async () => {
-    const hooks = await import('@panda/hooks');
-    const getBackupOverview = vi.mocked(hooks.api.getBackupOverview);
-    const baseline = await getBackupOverview({ page: 1, perPage: 10 });
-    const baselineRun = baseline.recent_runs[0];
-    if (!baselineRun) throw new Error('backup fixture is missing a recent run');
-    const activeOverview = {
-      ...baseline,
-      recent_runs: [
-        {
-          ...baselineRun,
-          status: 'running' as const,
-          phase: 'packaging' as const,
-          progress_percent: 65,
-          completed_at: null,
-        },
-      ],
-      latest_successful_run: null,
-    };
-    getBackupOverview.mockReset();
-    getBackupOverview.mockResolvedValue(activeOverview);
-    settingsMocks.me = {
-      user_id: 'u1',
-      email: 'admin@example.com',
-      role: 'admin',
-      default_vehicle_id: 'v1',
-    };
-
-    renderSettings();
-    clickSettingsSection('Backups');
-
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toHaveTextContent('Backup Packaging');
-      expect(screen.getByRole('progressbar', { name: 'Backup progress' })).toHaveAttribute(
-        'aria-valuenow',
-        '65'
-      );
-      expect(screen.getByRole('button', { name: 'Backup running' })).toBeDisabled();
-    });
-
-    getBackupOverview.mockReset();
-    getBackupOverview.mockResolvedValue(baseline);
-  });
-
-  it('calls logout and navigates on Sign Out click', async () => {
-    const logoutFn = vi.fn().mockResolvedValue(undefined);
-    vi.doMock('@panda/hooks', () => ({
-      useAuth: () => ({ logout: logoutFn }),
-      useVehicles: () => ({ data: [] }),
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up SSO' }));
+    fireEvent.change(screen.getByLabelText('Issuer URL'), { target: { value: 'https://login.example.test' } });
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'r-client' } });
+    fireEvent.change(screen.getByLabelText('Client secret'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and test connection' }));
+    await waitFor(() => expect(mocks.api.testAuthenticationSettings).toHaveBeenCalled());
+    expect(mocks.api.updateAuthenticationSettings).toHaveBeenCalledWith(expect.objectContaining({
+      issuer_url: 'https://login.example.test', client_id: 'r-client', client_secret: 'secret',
     }));
-    renderSettings();
-    clickSettingsSection('Account');
-    fireEvent.click(screen.getByText('Sign Out'));
-    // logout is async; just assert the click doesn't throw
-    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+    expect(await screen.findByText('SSO works. You can now turn it on.')).toBeInTheDocument();
   });
 
-  it('shows live password requirements and changes the password only after confirmation matches', async () => {
+  it('shows the Rivian connection, reconnect link and charge recovery', () => {
+    mocks.backfill = { ...mocks.backfill, missing_source_count: null };
     renderSettings();
-    clickSettingsSection('Account');
+    const rivian = screen.getByRole('region', { name: 'Rivian account' });
+    expect(within(rivian).getByText('Connected')).toBeInTheDocument();
+    expect(within(rivian).getByRole('link', { name: 'Reconnect' })).toHaveAttribute('href', '/connect?mode=refresh&vehicle_id=v1');
+    expect(within(rivian).getByText('Rivian lists 3 charges that R does not have.')).toBeInTheDocument();
+    fireEvent.click(within(rivian).getByRole('button', { name: 'Recover now' }));
+    expect(mocks.trigger).toHaveBeenCalledTimes(1);
+  });
 
-    const submit = screen.getByRole('button', { name: 'Change password' });
-    expect(submit).toBeDisabled();
-    expect(screen.getByRole('status', { name: /password requires at least 12 characters/i })).toHaveTextContent('0/12');
+  it('says when Rivian needs a reconnect', () => {
+    mocks.vehicleAuth = 'needs_reauth';
+    renderSettings();
+    const rivian = screen.getByRole('region', { name: 'Rivian account' });
+    expect(within(rivian).getByText('Reconnect needed')).toBeInTheDocument();
+    expect(within(rivian).getByRole('button', { name: 'Recover now' })).toBeDisabled();
+  });
 
-    fireEvent.change(screen.getByLabelText('Current password'), {
-      target: { value: 'current-password' },
-    });
-    fireEvent.change(screen.getByLabelText('New password'), {
-      target: { value: 'replacement-password' },
-    });
-    fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'different-password' },
-    });
-    expect(screen.getByText('Passwords do not match.')).toBeInTheDocument();
-    expect(submit).toBeDisabled();
+  it('agrees with the app banner when no new data arrives from Rivian', () => {
+    mocks.banner = { kind: 'rivian', since: null, reason: 'feed' };
+    renderSettings();
+    const rivian = screen.getByRole('region', { name: 'Rivian account' });
+    expect(within(rivian).queryByText('Connected')).not.toBeInTheDocument();
+    expect(within(rivian).getByText('Not receiving')).toBeInTheDocument();
+    expect(within(rivian).getByText(/No new data is arriving\./)).toBeInTheDocument();
+    expect(within(rivian).getByRole('link', { name: 'Reconnect' })).toBeInTheDocument();
+  });
 
-    fireEvent.change(screen.getByLabelText('Confirm new password'), {
-      target: { value: 'replacement-password' },
-    });
-    fireEvent.click(submit);
-    await waitFor(() =>
-      expect(hooksMocks.changePassword).toHaveBeenCalledWith({
-        current_password: 'current-password',
-        new_password: 'replacement-password',
-      })
-    );
-    expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
+  it('says Reconnect needed when the banner reports expired Rivian credentials', () => {
+    mocks.banner = { kind: 'rivian', since: null, reason: 'credentials' };
+    renderSettings();
+    const rivian = screen.getByRole('region', { name: 'Rivian account' });
+    expect(within(rivian).getByText('Reconnect needed')).toBeInTheDocument();
+    expect(within(rivian).getByRole('button', { name: 'Recover now' })).toBeDisabled();
+  });
+
+  it('saves the Home rate to the Home place cost profile and leaves Office alone', async () => {
+    renderSettings();
+    const home = screen.getByLabelText('Home · $ per kWh');
+    expect(home).toHaveValue('0.189119');
+    expect(screen.getByLabelText('Office · $ per kWh')).toHaveValue('0');
+    fireEvent.change(home, { target: { value: '0.21' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rates' }));
+    await waitFor(() => expect(mocks.api.updatePlace).toHaveBeenCalledTimes(1));
+    expect(mocks.api.updatePlace).toHaveBeenCalledWith('p-home', expect.objectContaining({
+      name: 'Home', is_home: true, radius_m: 120, address: expect.objectContaining({ display_name: '1 Main St' }),
+      charging: expect.objectContaining({ billing_type: 'per_kwh', rate: 0.21, name: 'PSE Schedule 7' }),
+    }));
+    expect(await screen.findByText('Rates saved. Charge costs update with them.')).toBeInTheDocument();
+  });
+
+  it('rejects a rate that is not a number', () => {
+    renderSettings();
+    fireEvent.change(screen.getByLabelText('Home · $ per kWh'), { target: { value: 'abc' } });
+    expect(screen.getByText('Enter a rate such as 0.19.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save rates' })).toBeDisabled();
+  });
+
+  it('collapses Backups behind a summary with the backup count', async () => {
+    renderSettings();
+    const backups = screen.getByRole('region', { name: 'Backups' });
+    expect(backups.querySelector('details')).not.toHaveAttribute('open');
+    expect(await within(backups).findByText('2 daily automatic backups kept, all completed. Nothing to do here.')).toBeInTheDocument();
+  });
+});
+
+describe('Settings rules', () => {
+  const base = { passwordOn: true, ssoOn: false, ssoConfigured: false, ssoTested: false, accountLinked: false };
+  it('never allows both sign-in methods off', () => {
+    expect(rSignInRules({ ...base, ssoOn: true, ssoTested: true, accountLinked: true, passwordOn: false }).canTurnSsoOff).toBe(false);
+    expect(rSignInRules({ ...base }).canTurnPasswordOff).toBe(false);
+  });
+  it('turns password sign-in off only after SSO works for this account', () => {
+    expect(rSignInRules({ ...base, ssoOn: true, ssoTested: false, accountLinked: true }).passwordOffReason).toBe('Test SSO first.');
+    expect(rSignInRules({ ...base, ssoOn: true, ssoTested: true, accountLinked: false }).passwordOffReason).toBe('Connect SSO to this account first.');
+    expect(rSignInRules({ ...base, ssoOn: true, ssoTested: true, accountLinked: true }).canTurnPasswordOff).toBe(true);
+  });
+  it('turns SSO on only after it is set up and tested', () => {
+    expect(rSignInRules({ ...base, ssoConfigured: true }).canTurnSsoOn).toBe(false);
+    expect(rSignInRules({ ...base, ssoConfigured: true, ssoTested: true }).canTurnSsoOn).toBe(true);
+    expect(rSignInState(authSettings({ issuer_url: 'https://x', client_id: 'c', tested: true }), false)).toMatchObject({ ssoConfigured: true, ssoTested: true });
+  });
+  it('maps old section links to the new cards', () => {
+    expect(rSettingsSection('authentication')).toBe('sign-in');
+    expect(rSettingsSection('vehicles')).toBe('rivian');
+    expect(rSettingsSection('places')).toBe('rates');
+    expect(rSettingsSection('backup')).toBe('backups');
+    expect(rSettingsSection('units')).toBeUndefined();
+  });
+  it('reads, parses and writes rates', () => {
+    const targets = rRatePlaces([place({}), place({ id: 'w', name: 'Work', is_home: false, is_work: false, charging: null })]);
+    expect(targets.home?.id).toBe('p-home');
+    expect(targets.office?.id).toBe('w');
+    expect(rPlaceRate(targets.office)).toBeNull();
+    expect(rParseRate('$0.19')).toBe(0.19);
+    expect(rParseRate('0,25')).toBe(0.25);
+    expect(rParseRate('-1')).toBeNull();
+    const noAddress = rRateUpdateBody(place({ address: null }), 0);
+    expect(noAddress.address).toMatchObject({ latitude: 47.6, longitude: -122.3, display_name: 'Home' });
+    expect(noAddress.charging).toMatchObject({ billing_type: 'per_kwh', rate: 0 });
+  });
+  it('words the backfill and backup states', () => {
+    expect(rBackfillLine(undefined, true)).toBe('Fetching charges from Rivian…');
+    expect(rBackfillLine({ vehicle_id: 'v', status: 'error', history_backfilled_at: null, rivian_session_count: null, local_session_count: 0 }, false)).toBe('The last recovery failed. Try again.');
+    expect(rBackupSummary(undefined).note).toBe('Backup status is not available.');
+    expect(rRivianCardState(null, false)).toBe('connected');
+    expect(rRivianCardState(null, true)).toBe('reconnect');
+    expect(rRivianCardState({ kind: 'offline', since: null }, false)).toBe('connected');
+    expect(rRivianCardState({ kind: 'rivian', since: null, reason: 'feed' }, false)).toBe('feed');
+    expect(rRivianCardState({ kind: 'rivian', since: null, reason: 'credentials' }, false)).toBe('reconnect');
   });
 });

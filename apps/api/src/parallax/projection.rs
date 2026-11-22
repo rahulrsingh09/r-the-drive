@@ -83,7 +83,8 @@ impl CanonicalReading {
                 if kilometers > 2_000_000 {
                     anyhow::bail!("invalid odometer");
                 }
-                event.odometer_miles = Some(kilometers as f64 * 0.621_371_192);
+                // The same conversion as legacy `vehicleMileage`, so equal readings match.
+                event.odometer_miles = Some(kilometers as f64 * 1000.0 / 1609.344);
                 event.odometer_miles_ts = Some(source_at);
                 meaningful = true;
             }

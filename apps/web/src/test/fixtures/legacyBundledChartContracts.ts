@@ -8,7 +8,7 @@
  */
 export const LEGACY_BUNDLED_CHART_BASELINE_REVISION =
   'dbd7ae58be996e6eb5a1b01582ab73f46fb388af';
-export const CURRENT_BUNDLED_BASELINE_REVISION = 5;
+export const CURRENT_BUNDLED_BASELINE_REVISION = 6;
 
 export type LegacyBundledChartContract = {
   source: string;

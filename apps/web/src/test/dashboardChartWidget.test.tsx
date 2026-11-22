@@ -53,6 +53,7 @@ function setMatchMedia(mobile = false, portrait = false) {
 
 beforeEach(() => {
   setMatchMedia(false);
+  mockTirePressureTimeline.mockImplementation(emptyTirePressureTimeline);
   localStorage.clear();
   for (const key of Object.keys(mockFavoriteState.chart_favorites)) {
     delete mockFavoriteState.chart_favorites[key];
@@ -178,7 +179,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(LEGACY_BUNDLED_CHART_BASELINE_REVISION).toBe(
       'dbd7ae58be996e6eb5a1b01582ab73f46fb388af'
     );
-    expect(CURRENT_BUNDLED_BASELINE_REVISION).toBe(5);
+    expect(CURRENT_BUNDLED_BASELINE_REVISION).toBe(6);
     for (const seed of chartSeeds) {
       const expected = LEGACY_BUNDLED_CHART_CONTRACTS[seed.slug];
       expect(expected, `missing immutable oracle entry for ${seed.slug}`).toBeDefined();
@@ -224,6 +225,22 @@ describe('DashboardChartWidget - smoothing controls', () => {
   });
 
   it('routes every bundled slug through its historical production renderer family', () => {
+    // Every source needs data here: a chart with no data shows the compact empty row instead.
+    mockTirePressureTimeline.mockReturnValue({
+      data: {
+        samples: [
+          {
+            ts: '2024-01-02T00:00:00Z',
+            tire_fl_psi: 48,
+            tire_fr_psi: 48,
+            tire_rl_psi: 47,
+            tire_rr_psi: 47,
+          },
+        ],
+        trips: [],
+      },
+      isLoading: false,
+    });
     for (const seed of chartSeeds) {
       const expected = LEGACY_BUNDLED_CHART_CONTRACTS[seed.slug];
       if (!expected) throw new Error(`missing immutable oracle entry for ${seed.slug}`);
@@ -344,7 +361,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent(
       'Projected Range by Mileage'
     );
-    expect(screen.getByRole('button', { name: 'Chart settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Chart options' })).toBeInTheDocument();
 
     populated.unmount();
     mockEffectiveCharts.mockReturnValue({
@@ -485,8 +502,8 @@ describe('DashboardChartWidget - smoothing controls', () => {
     const rendered = renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
-    fireEvent.click(screen.getByRole('option', { name: 'State of Charge' }));
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    fireEvent.click(screen.getByRole('option', { name: 'Battery Level' }));
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
 
     rendered.rerender(
       <DashboardChartWidget
@@ -495,7 +512,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
       />
     );
 
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
   });
   it('uses projected range by mileage as the Overview app default', () => {
     const overview = getDefaultBySlug('dashboard');
@@ -562,7 +579,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
     expect(
-      screen.getByRole('button', { name: 'State of Charge is the default chart' })
+      screen.getByRole('button', { name: 'Battery Level is the default chart' })
     ).toBeDisabled();
     fireEvent.click(
       screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' })
@@ -574,7 +591,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
       key: 'dashboard:test-soc-history',
       chartId: 'projected-range-mileage',
     });
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
 
     firstRender.unmount();
     renderWidget(instance, ctx);
@@ -605,7 +622,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
       { ...CTX, dashboardSlug: 'dashboard' }
     );
 
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
   });
 
   it('restores the saved chart when favorites arrive after the assigned catalog', () => {
@@ -619,7 +636,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     };
     const ctx = { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-a' };
     const view = renderWidget(instance, ctx);
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
     mockFavoriteState.chart_favorites['dashboard:dashboard-a:test-soc-history'] = 'projected-range-mileage';
     mockDashboardChartFavorites.mockReturnValue({ data: mockFavoriteState, isSuccess: true });
     view.rerender(<DashboardChartWidget instance={instance} ctx={ctx} />);
@@ -721,7 +738,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' })
     );
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
 
     firstRender.unmount();
     const dashboardARender = renderWidget(instance, {
@@ -739,7 +756,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
       dashboardSlug: 'dashboard',
       dashboardConfigId: 'dashboard-b',
     });
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Level');
   });
 
   it('shows the display-filter slider without a chart picker', () => {
@@ -755,7 +772,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     };
 
     render(<DashboardChartWidget instance={instance} ctx={CTX} />);
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     const slider = screen.getByLabelText('Display filter');
     expect(slider).toBeTruthy();
@@ -776,18 +793,17 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
     const search = screen.getByLabelText('Search charts');
     expect(search.className).toContain('focus:border-accent');
-    expect(search.className).toContain('focus-visible:!outline-none');
-    expect(search.className).toContain('focus-visible:!outline-offset-0');
-    expect(search.className).toContain('focus-visible:ring-0');
     expect(search.className).not.toContain('focus:ring-1');
 
-    const chartSelector = screen.getByRole('button', { name: 'Chart' });
-    expect(chartSelector.className).toContain('focus-visible:!outline-none');
-    expect(chartSelector.className).toContain('focus-visible:ring-0');
-
-    const settings = screen.getByRole('button', { name: 'Chart settings' });
-    expect(settings.className).toContain('focus-visible:!outline-none');
-    expect(settings.className).toContain('focus-visible:ring-0');
+    // The global keyboard focus ring must stay visible on every chart control.
+    const controls = [
+      search,
+      screen.getByRole('button', { name: 'Chart' }),
+      screen.getByRole('button', { name: 'Chart options' }),
+    ];
+    for (const control of controls) {
+      expect(control.className).not.toMatch(/outline-none|ring-0|outline-offset-0/);
+    }
   });
 
   it('maps saved smoothing values to the chart filter default and preserves a zero value as raw', () => {
@@ -824,7 +840,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
       { ...CTX, updateWidgetOptions }
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
     fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
 
     expect(updateWidgetOptions).toHaveBeenLastCalledWith(
@@ -838,7 +854,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
   it('persists curve smoothness independently from the display filter', () => {
     const updateWidgetOptions = vi.fn();
     renderWidget(makeInstance('soc-history'), { ...CTX, updateWidgetOptions });
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
     fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
     expect(updateWidgetOptions).toHaveBeenLastCalledWith(
       'test-soc-history',
@@ -856,7 +872,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
   it('applies the display filter and curve smoothness to both projected-range curves', () => {
     renderChart('projected-range-mileage');
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
     expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', '1h');
@@ -872,7 +888,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
   it('persists projected-range display controls through the account dashboard save seam', () => {
     const updateWidgetOptions = vi.fn();
     renderWidget(makeInstance('projected-range-mileage'), { ...CTX, updateWidgetOptions });
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
@@ -895,7 +911,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     setMatchMedia(true);
     renderChart('soc-history');
 
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     const dialog = screen.getByRole('dialog', { name: /chart settings/i });
     expect(dialog.className).toContain('max-w-xl');
@@ -905,7 +921,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
   it('shows an empty shared-settings state for unsupported chart families', () => {
     renderChart('efficiency-mode');
 
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     expect(screen.getByText(/does not expose shared display controls yet/i)).toBeTruthy();
   });
@@ -913,7 +929,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
   it('keeps manual axis changes local outside dashboard edit mode', () => {
     renderChart('battery-capacity-mileage');
 
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     const axisCard = screen.getByText('Mileage').closest('div.rounded-lg');
     expect(axisCard).toBeTruthy();
@@ -930,7 +946,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
     renderWidget(makeInstance('projected-range-mileage'), editCtx);
 
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     const axisCard = screen.getByText('Projected max range').closest('div.rounded-lg');
     expect(axisCard).toBeTruthy();
@@ -969,15 +985,15 @@ describe('DashboardChartWidget - smoothing controls', () => {
     };
 
     renderWidget(instance);
-    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    openChartSettings();
 
     const axisCard = within(screen.getByRole('dialog', { name: 'Chart settings' }))
-      .getByText('State of Charge', { selector: 'p' })
+      .getByText('Battery level', { selector: 'p' })
       .closest('div.rounded-lg');
     expect(axisCard).toBeTruthy();
     fireEvent.click(within(axisCard as HTMLElement).getByRole('button', { name: 'Manual' }));
-    fireEvent.change(screen.getByLabelText('State of Charge minimum'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('State of Charge maximum'), { target: { value: '90' } });
+    fireEvent.change(screen.getByLabelText('Battery level minimum'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Battery level maximum'), { target: { value: '90' } });
 
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
 
@@ -986,7 +1002,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).not.toBe('10|90');
 
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
-    fireEvent.click(screen.getByRole('option', { name: /state of charge/i }));
+    fireEvent.click(screen.getByRole('option', { name: /battery level/i }));
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
   });
 });
@@ -1009,8 +1025,8 @@ describe('DashboardChartWidget mobile viewer', () => {
     const updateWidgetOptions = vi.fn();
     renderWidget(viewerInstance(), { ...CTX, updateWidgetOptions });
 
-    const expand = screen.getByRole('button', { name: 'Expand chart' });
-    fireEvent.click(expand);
+    const options = screen.getByRole('button', { name: 'Chart options' });
+    openFullScreen();
 
     const dialog = screen.getByRole('dialog', { name: /efficiency trend expanded chart/i });
     expect(dialog.getAttribute('data-mobile-chart-viewer')).toBe('true');
@@ -1018,7 +1034,7 @@ describe('DashboardChartWidget mobile viewer', () => {
     expect(dialog.className).toContain('touch-none');
     fireEvent.click(screen.getByRole('button', { name: 'Choose chart' }));
     expect(screen.getByRole('option', { name: 'Efficiency by Temperature' })).toBeTruthy();
-    expect(screen.queryByRole('option', { name: 'State of Charge' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Battery Level' })).toBeNull();
 
     fireEvent.click(screen.getByRole('option', { name: 'Efficiency by Drive Mode' }));
     expect(
@@ -1028,14 +1044,14 @@ describe('DashboardChartWidget mobile viewer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close expanded chart' }));
     expect(screen.queryByRole('dialog')).toBeNull();
-    await waitFor(() => expect(document.activeElement).toBe(expand));
+    await waitFor(() => expect(document.activeElement).toBe(options));
   });
 
   it('shows the rotate prompt before rendering the expanded chart in portrait', () => {
     setMatchMedia(true, true);
     renderWidget(viewerInstance());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand chart' }));
+    openFullScreen();
     const title = screen.getByText('Rotate for a wider chart');
     expect(title).toBeTruthy();
     expect(title.closest('.bg-accent.text-fg-on-accent')).toBeTruthy();
@@ -1047,7 +1063,7 @@ describe('DashboardChartWidget mobile viewer', () => {
     setMatchMedia(true, false);
     renderWidget(viewerInstance());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand chart' }));
+    openFullScreen();
     const dialog = screen.getByRole('dialog', { name: /efficiency trend expanded chart/i });
     const controls = dialog.querySelector('[data-mobile-chart-controls="true"]');
     expect(controls?.getAttribute('aria-hidden')).toBe('false');
@@ -1394,6 +1410,24 @@ const mockBatteryMileage = vi.fn(
     isLoading: false,
   })
 );
+type MockTirePressureTimeline = {
+  data: {
+    samples: Array<{
+      ts: string;
+      tire_fl_psi: number | null;
+      tire_fr_psi: number | null;
+      tire_rl_psi: number | null;
+      tire_rr_psi: number | null;
+    }>;
+    trips: never[];
+  };
+  isLoading: boolean;
+};
+const emptyTirePressureTimeline = (): MockTirePressureTimeline => ({
+  data: { samples: [], trips: [] },
+  isLoading: false,
+});
+const mockTirePressureTimeline = vi.fn(emptyTirePressureTimeline);
 const mockFavoriteState = { chart_favorites: {} as Record<string, string> };
 const mockDashboardChartFavorites = vi.fn(() => ({ data: mockFavoriteState, isSuccess: true }));
 const mockUpdateDashboardChartFavorite = vi.fn(
@@ -1429,7 +1463,7 @@ vi.mock('@panda/hooks', () => ({
   usePhantomDrainPeriods: () => mockPhantomDrainPeriods(),
   useDegradation: () => mockDegradation(),
   useBatteryMileage: () => mockBatteryMileage(),
-  useTirePressureTimeline: () => ({ data: { samples: [], trips: [] }, isLoading: false }),
+  useTirePressureTimeline: () => mockTirePressureTimeline(),
   useVehicles: () => ({ data: [] }),
   useDashboardChartFavorites: () => mockDashboardChartFavorites(),
   useUpdateDashboardChartFavorite: () => ({ mutate: mockUpdateDashboardChartFavorite }),
@@ -1624,6 +1658,7 @@ vi.mock('@panda/ui/charts', async (importOriginal) => {
 // Import after mocks are registered.
 import {
   buildPhantomDrainDailySeries,
+  DashboardChartInsightProvider,
   DashboardChartWidget,
   DashboardChartRenderer,
 } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
@@ -1714,6 +1749,20 @@ function renderWidget(
   ctx: React.ComponentProps<typeof DashboardChartWidget>['ctx'] = CTX
 ) {
   return render(<DashboardChartWidget instance={instance} ctx={ctx} />);
+}
+
+function openChartOptions() {
+  fireEvent.click(screen.getByRole('button', { name: 'Chart options' }));
+}
+
+function openChartSettings() {
+  openChartOptions();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Chart settings' }));
+}
+
+function openFullScreen() {
+  openChartOptions();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Full screen' }));
 }
 
 function renderChart(chartId: string) {
@@ -1883,7 +1932,7 @@ describe('DashboardChartWidget — charging_curve_analysis', () => {
       'Trend: Observed'
     );
     expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-details')).toContain(
-      'SoC/time estimate'
+      'Estimated from battery level and time'
     );
     expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-x-range', '0|100');
     expect(screen.getByTestId('rich-chart')).toHaveAttribute(
@@ -1907,7 +1956,7 @@ describe('DashboardChartWidget — charging_curve_analysis', () => {
       expect.stringContaining('Observed trend:line')
     );
     expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-details')).toContain(
-      '25 SoC; SoC/time estimate'
+      'Battery 25%; Estimated from battery level and time'
     );
   });
 
@@ -2445,5 +2494,214 @@ describe('DashboardChartWidget — unknown chart id', () => {
     // Test DashboardChartRenderer directly to verify the error path.
     render(<DashboardChartRenderer chartId="does-not-exist" ctx={CTX} height={300} />);
     expect(screen.getByText(/unknown chart/i)).toBeTruthy();
+  });
+});
+
+describe('DashboardChartWidget — chart card states', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows a failed chart query as an in-card error with Retry', () => {
+    const refetch = vi.fn();
+    mockDegradation.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      isFetching: false,
+      refetch,
+    } as unknown as ReturnType<typeof mockDegradation>);
+    try {
+      renderChart('battery-degradation');
+
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent('Unable to load chart data.');
+      expect(alert.closest('[data-chart-card="true"]')).toBeTruthy();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+      expect(refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      // mockReset restores the original data implementation.
+      mockDegradation.mockReset();
+    }
+  });
+
+  it('replaces an endless skeleton with "Still loading" and Retry after 15 seconds', () => {
+    vi.useFakeTimers();
+    const refetch = vi.fn();
+    const loadingState = {
+      data: undefined,
+      isLoading: true,
+      isFetching: true,
+      refetch,
+    } as unknown as ReturnType<typeof mockEfficiencyTrend>;
+    mockEfficiencyTrend.mockReturnValue(loadingState);
+    try {
+      renderChart('efficiency-trend');
+      act(() => vi.advanceTimersByTime(14_999));
+      expect(screen.queryByText('Still loading')).toBeNull();
+
+      act(() => vi.advanceTimersByTime(1));
+      const status = screen.getByText('Still loading').closest('[role="status"]') as HTMLElement;
+      expect(status.closest('[data-chart-card="true"]')).toBeTruthy();
+      fireEvent.click(within(status).getByRole('button', { name: 'Retry' }));
+      expect(refetch).toHaveBeenCalledTimes(1);
+      // Retry starts a new 15 second wait.
+      expect(screen.queryByText('Still loading')).toBeNull();
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(screen.getByText('Still loading')).toBeTruthy();
+    } finally {
+      mockEfficiencyTrend.mockReset();
+    }
+  });
+
+  it('collapses a chart with no data to a compact empty row with its name, reason, and when it shows', () => {
+    mockDegradation.mockReturnValueOnce({ data: [], isLoading: false });
+    const view = renderChart('battery-degradation');
+
+    const row = view.container.querySelector('[data-chart-empty-row="true"]') as HTMLElement;
+    expect(row).toBeTruthy();
+    expect(row).toHaveTextContent('Battery Health');
+    expect(row).toHaveTextContent('No battery health history recorded yet');
+    expect(row).toHaveTextContent('Shows when this period has data.');
+    expect(row.className).toContain('max-h-16');
+    // The frame hides its title row and the chart box while the empty row shows.
+    const frame = view.container.querySelector('[data-chart-frame="true"]') as HTMLElement;
+    expect(frame.className).toContain('has-[[data-chart-empty-row]]:h-auto');
+    const options = screen.getByRole('button', { name: 'Chart options' });
+    expect(options.closest('.group-has-\\[\\[data-chart-empty-row\\]\\]\\/chart-frame\\:hidden')).toBeTruthy();
+  });
+
+  it('keeps the renderer empty state outside a dashboard chart frame', () => {
+    mockDegradation.mockReturnValueOnce({ data: [], isLoading: false });
+    const view = render(
+      <DashboardChartRenderer chartId="battery-degradation" ctx={CTX} height={300} />
+    );
+    expect(view.container.querySelector('[data-chart-empty-row]')).toBeNull();
+    expect(screen.getByText('No battery health history recorded yet')).toBeTruthy();
+  });
+
+  it('puts the title inside the card with one labelled options menu', async () => {
+    renderChart('soc-history');
+    const card = document.querySelector('[data-chart-card="true"]') as HTMLElement;
+    expect(within(card).getByText('soc-history')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Expand chart' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Chart settings' })).toBeNull();
+
+    const trigger = within(card).getByRole('button', { name: 'Chart options' });
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger.className).toContain('h-11');
+    expect(trigger.className).toContain('w-11');
+    expect(trigger.className).not.toMatch(/outline-none|ring-0/);
+
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    const menu = screen.getByRole('menu', { name: 'Chart options' });
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items.map((item) => item.textContent)).toEqual(['Chart settings', 'Full screen']);
+    for (const item of items) expect(item.className).toContain('min-h-11');
+    expect(document.activeElement).toBe(items[0]);
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+
+    openChartSettings();
+    expect(screen.getByRole('dialog', { name: 'Chart settings' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close chart settings' }));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('opens the full-screen viewer from the options menu on desktop', () => {
+    setMatchMedia(false, false);
+    renderChart('soc-history');
+    openFullScreen();
+    const close = screen.getByRole('button', { name: 'Close expanded chart' });
+    expect(close.className).toContain('h-11');
+    expect(close.className).not.toMatch(/outline-none/);
+  });
+
+  it('shows the insight sentence from widget options under the title', () => {
+    renderWidget({
+      ...makeInstance('soc-history'),
+      options: { ...makeInstance('soc-history').options, insight: 'Most charges end at 80%.' },
+    });
+    const insight = document.querySelector('[data-chart-insight="true"]');
+    expect(insight).toHaveTextContent('Most charges end at 80%.');
+    expect(insight?.closest('[data-chart-card="true"]')).toBeTruthy();
+  });
+
+  it('lets a page fill the insight slot through the provider callback', () => {
+    const resolver = vi.fn(({ chartId }: { chartId: string }) =>
+      chartId === 'soc-history' ? 'The battery stayed above 40%.' : null
+    );
+    render(
+      <DashboardChartInsightProvider value={resolver}>
+        <DashboardChartWidget instance={makeInstance('soc-history')} ctx={CTX} />
+      </DashboardChartInsightProvider>
+    );
+    expect(document.querySelector('[data-chart-insight="true"]')).toHaveTextContent(
+      'The battery stayed above 40%.'
+    );
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ chartId: 'soc-history' }));
+  });
+
+  it('hides the chart picker when a widget sets showChartPicker to false', () => {
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: undefined,
+        showPicker: true,
+        showChartPicker: false,
+      },
+    });
+    expect(screen.queryByLabelText('Search charts')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Chart' })).toBeNull();
+    const card = document.querySelector('[data-chart-card="true"]') as HTMLElement;
+    expect(within(card).getByText('Battery Level')).toBeTruthy();
+    expect(within(card).getByRole('button', { name: 'Chart options' })).toBeTruthy();
+  });
+
+  it('hides the chart picker when the page context sets showChartPicker to false', () => {
+    const instance = {
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: undefined,
+        showPicker: true,
+      },
+    };
+    const withPicker = renderWidget(instance);
+    expect(screen.getByLabelText('Search charts')).toBeTruthy();
+    withPicker.unmount();
+
+    renderWidget(instance, { ...CTX, showChartPicker: false } as typeof CTX);
+    expect(screen.queryByLabelText('Search charts')).toBeNull();
+  });
+
+  it('retries a failed chart catalog inside the card', () => {
+    const refetch = vi.fn();
+    mockEffectiveCharts.mockReturnValue({
+      data: [],
+      isSuccess: false,
+      isLoading: false,
+      isError: true,
+      refetch,
+    } as ReturnType<typeof mockEffectiveCharts>);
+    renderWidget(
+      {
+        ...makeInstance('projected-range-mileage', true),
+        options: { page: 'overview' as const, catalogMode: 'assigned', showPicker: true },
+      },
+      { ...CTX, dashboardSlug: 'dashboard' }
+    );
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Unable to load assigned charts.');
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

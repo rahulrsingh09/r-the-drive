@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { AuthTokens } from '@panda/types';
 import { api } from './api';
+import { clearStoredArtwork } from './ownerArtworkStore';
 
 const EXPLICIT_LOGOUT_INTENT_KEY = 'rm-explicit-logout-intent';
 let pendingLogout = false;
@@ -114,6 +115,7 @@ export const useAuth = create<AuthState>()(persist((set, get) => {
     async logout() {
       recordExplicitLogoutIntent();
       get().clearSession();
+      void clearStoredArtwork();
       await api.logout().catch(() => undefined);
     },
     async resumeSession() {

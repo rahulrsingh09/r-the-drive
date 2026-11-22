@@ -95,3 +95,6 @@ export { TripTirePressureChart } from './TripTirePressureChart';
 export type { TripTirePressureChartProps, TripTirePressurePoint } from './TripTirePressureChart';
 export { TirePressureTripsChart } from './TirePressureTripsChart';
 export type { TirePressureTripsChartProps } from './TirePressureTripsChart';
+export { RouteReplayMap, routePointAt } from './RouteReplayMap';
+export type { RouteReplayMapProps, RouteCoordinate } from './RouteReplayMap';
+export { darkLiberty, libertyStyleUrl, loadLibertyStyle, basemapRequest, DARK_LIBERTY_COLORS } from './openFreeMap';

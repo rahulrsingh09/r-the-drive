@@ -217,13 +217,13 @@ describe('dashboard component registry', () => {
       componentType: 'sensor',
       definitionId: 'charging_home_share',
       options: {},
-      layout: { x: 0, y: 4, w: 3, h: 2 },
+      layout: { x: 0, y: 4, w: 6, h: 2 },
     });
     expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000010')).toMatchObject({
       componentType: 'sensor',
       definitionId: 'charging_dc_share',
       options: {},
-      layout: { x: 3, y: 4, w: 3, h: 2 },
+      layout: { x: 0, y: 2, w: 3, h: 2 },
     });
     expect(widgets.some((widget) => widget.definitionId === 'charging_free_sessions')).toBe(false);
     expect(widgets.some((widget) => widget.definitionId === 'charging_range_added')).toBe(false);

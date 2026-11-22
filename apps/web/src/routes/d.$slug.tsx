@@ -1,25 +1,9 @@
-import React from 'react';
 import { createRoute, redirect } from '@tanstack/react-router';
-import { z } from 'zod';
 import { rootRoute } from './__root';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
-import { UserDashboardPage } from '../components/dashboard/UserDashboardPage';
 
-const searchSchema = z.object({
-  edit: z.unknown().transform((): 1 | undefined => undefined).optional(),
-  dashboardId: z.string().uuid().optional(),
-});
-
+/** R has no custom dashboards; Insights replaces them. Keep old links working. */
 export const userDashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/d/$slug',
-  validateSearch: searchSchema,
-  beforeLoad: ({ params, search }) => {
-    if (params.slug === 'dashboard' && !search.dashboardId) throw redirect({ to: '/', replace: true });
-  },
-  component: UserDashboardPageWrapper,
+  beforeLoad: () => { throw redirect({ to: '/insights', replace: true }); },
 });
-
-function UserDashboardPageWrapper() {
-  return <ProtectedRoute><UserDashboardPage /></ProtectedRoute>;
-}

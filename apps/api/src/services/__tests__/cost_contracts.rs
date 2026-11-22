@@ -12,24 +12,27 @@ fn id(value: u128) -> Uuid {
     Uuid::from_u128(value)
 }
 
-fn profile() -> CostProfile {
-    CostProfile {
-        id: id(100),
-        user_id: id(1),
-        name: "Synthetic tariff".into(),
-        billing_type: "per_kwh".into(),
-        rate: 0.25,
-        session_fee: 1.5,
-        currency: "CAD".into(),
-        timezone: Some("UTC".into()),
-        tou_periods: json!([
-            {"label":"Night", "start_minute":0, "end_minute":360, "rate":0.1},
-            {"label":"Day", "start_minute":360, "end_minute":1200, "rate":0.4},
-            {"label":"Evening", "start_minute":1200, "end_minute":1440, "rate":0.0}
-        ]),
-        effective_from: None,
-        effective_to: None,
-        created_at: instant("2026-01-01T00:00:00Z"),
+fn profile() -> ResolvedProfile {
+    ResolvedProfile {
+        profile: CostProfile {
+            id: id(100),
+            user_id: id(1),
+            name: "Synthetic tariff".into(),
+            billing_type: "per_kwh".into(),
+            rate: 0.25,
+            session_fee: 1.5,
+            currency: "CAD".into(),
+            timezone: Some("UTC".into()),
+            tou_periods: json!([
+                {"label":"Night", "start_minute":0, "end_minute":360, "rate":0.1},
+                {"label":"Day", "start_minute":360, "end_minute":1200, "rate":0.4},
+                {"label":"Evening", "start_minute":1200, "end_minute":1440, "rate":0.0}
+            ]),
+            effective_from: None,
+            effective_to: None,
+            created_at: instant("2026-01-01T00:00:00Z"),
+        },
+        source: ProfileSource::Place,
     }
 }
 
@@ -38,6 +41,7 @@ fn inputs() -> CostInputs {
         is_rivian_network: None,
         is_home: None,
         is_free_session: None,
+        charger_type: None,
         network_cost_mode: None,
         cost_override_mode: "automatic".into(),
         cost_override_usd: Some(7.75),
@@ -113,8 +117,8 @@ fn assert_snapshot(name: &str, rows: &[Value], expected: &str) {
 fn cost_contracts_pure_matrix() {
     let mut rows = vec![];
     let p = profile();
-    rows.push(json!({"case":"profile serialization", "profile":p}));
-    let mut extended = serde_json::to_value(&p).unwrap();
+    rows.push(json!({"case":"profile serialization", "profile":p.profile}));
+    let mut extended = serde_json::to_value(&p.profile).unwrap();
     extended["future_field"] = json!(true);
     let decoded: CostProfile = serde_json::from_value(extended).unwrap();
     rows.push(json!({"case":"unknown field roundtrip", "profile":decoded}));
@@ -173,18 +177,18 @@ fn cost_contracts_pure_matrix() {
         for added in energy {
             for used in energy {
                 let mut p = profile();
-                p.billing_type = billing.into();
+                p.profile.billing_type = billing.into();
                 let mut i = inputs();
                 i.energy_added_kwh = added;
                 i.energy_used_kwh = used;
                 rows.push(json!({"case":"energy", "billing":billing, "added":number(added), "used":number(used),
-                    "model":number(compute_cost(&p, added, used, i.duration_minutes, i.started_at, i.ended_at)),
+                    "model":number(compute_cost(&p.profile, added, used, i.duration_minutes, i.started_at, i.ended_at)),
                     "output":computation(&apply_cost_inputs(&i, Some(&p)))}));
             }
         }
         for duration in [-60, 0, 1, 60] {
             let mut p = profile();
-            p.billing_type = billing.into();
+            p.profile.billing_type = billing.into();
             for ended in [
                 None,
                 Some(instant("2026-01-01T04:00:00Z")),
@@ -216,13 +220,13 @@ fn cost_contracts_pure_matrix() {
                 (Some("2026-01-02"), Some("2026-01-02")),
             ] {
                 let mut p = profile();
-                p.timezone = tz.map(str::to_owned);
-                p.effective_from = window.0.map(|v| v.parse::<NaiveDate>().unwrap());
-                p.effective_to = window.1.map(|v| v.parse::<NaiveDate>().unwrap());
+                p.profile.timezone = tz.map(str::to_owned);
+                p.profile.effective_from = window.0.map(|v| v.parse::<NaiveDate>().unwrap());
+                p.profile.effective_to = window.1.map(|v| v.parse::<NaiveDate>().unwrap());
                 let mut i = inputs();
                 i.started_at = instant(start);
                 i.ended_at = Some(i.started_at + Duration::hours(2));
-                p.billing_type = "tou".into();
+                p.profile.billing_type = "tou".into();
                 let without_readings = computation(&apply_cost_inputs(&i, Some(&p)));
                 i.timed_kwh_readings = vec![TimedEnergyPoint {
                     ts: i.started_at,
@@ -230,7 +234,7 @@ fn cost_contracts_pure_matrix() {
                 }];
                 rows.push(
                     json!({"case":"effective dates", "timezone":tz, "start":start, "window":window,
-                    "effective":p.is_effective_at(i.started_at), "time_weighted":without_readings,
+                    "effective":p.profile.is_effective_at(i.started_at), "time_weighted":without_readings,
                     "measured":computation(&apply_cost_inputs(&i, Some(&p)))}),
                 );
             }
@@ -262,7 +266,7 @@ fn cost_contracts_pure_matrix() {
             "Asia/Kolkata",
             "2026-01-01T17:45:13Z",
             "2026-01-03T22:01:29Z",
-            p.tou_periods.clone(),
+            p.profile.tou_periods.clone(),
         ),
         (
             "overlap first match",
@@ -305,9 +309,9 @@ fn cost_contracts_pure_matrix() {
         ),
     ] {
         let mut p = profile();
-        p.billing_type = "tou".into();
-        p.timezone = Some(tz.into());
-        p.tou_periods = periods;
+        p.profile.billing_type = "tou".into();
+        p.profile.timezone = Some(tz.into());
+        p.profile.tou_periods = periods;
         let mut i = inputs();
         i.started_at = instant(start);
         i.ended_at = Some(instant(end));
@@ -335,8 +339,8 @@ fn cost_contracts_pure_matrix() {
                 .collect();
             rows.push(
                 json!({"case":"tou intervals", "name":name, "readings":reading_name,
-                "periods":p.tou_periods(), "time_weighted":weighted,
-                "readings_only":number(compute_tou_cost_from_readings(&p,&i.timed_kwh_readings)),
+                "periods":p.profile.tou_periods(), "time_weighted":weighted,
+                "readings_only":number(compute_tou_cost_from_readings(&p.profile,&i.timed_kwh_readings)),
                 "output":computation(&apply_cost_inputs(&i,Some(&p)))}),
             );
         }
@@ -442,7 +446,7 @@ fn cost_contracts_pure_matrix() {
                 rate: -0.0,
             }],
         ),
-        ("valid", p.tou_periods()),
+        ("valid", p.profile.tou_periods()),
     ] {
         rows.push(
             json!({"case":"validation", "name":name, "result":validate_tou_periods(&periods)}),
@@ -568,7 +572,7 @@ async fn seed_database(pool: &PgPool) {
         (104, 1, "flat", 999.0),
         (105, 1, "tou", 0.0),
     ] {
-        let mut p = profile();
+        let mut p = profile().profile;
         p.id = id(n);
         p.user_id = id(user);
         p.billing_type = billing.into();

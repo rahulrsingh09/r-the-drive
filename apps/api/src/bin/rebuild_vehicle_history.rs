@@ -388,13 +388,10 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                 charger_type = COALESCE(
                     cs.charger_type,
                     CASE
-                        WHEN matched_existing.max_charge_rate_kw < 12 THEN 'ac'
-                        WHEN matched_existing.max_charge_rate_kw < 50 THEN 'ac_l2'
+                        WHEN matched_existing.max_charge_rate_kw < 20 THEN 'ac'
                         WHEN matched_existing.max_charge_rate_kw IS NOT NULL THEN 'dc'
                         WHEN matched_existing.duration_minutes > 0
-                             AND matched_existing.energy_added_wh / 1000.0 / (matched_existing.duration_minutes::float8 / 60.0) < 12 THEN 'ac'
-                        WHEN matched_existing.duration_minutes > 0
-                             AND matched_existing.energy_added_wh / 1000.0 / (matched_existing.duration_minutes::float8 / 60.0) < 50 THEN 'ac_l2'
+                             AND matched_existing.energy_added_wh / 1000.0 / (matched_existing.duration_minutes::float8 / 60.0) < 20 THEN 'ac'
                         WHEN matched_existing.duration_minutes > 0 THEN 'dc'
                     END
                 )
@@ -436,11 +433,9 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                 NULL,
                 'telemetry_repair',
                 CASE
-                    WHEN max_charge_rate_kw < 12 THEN 'ac'
-                    WHEN max_charge_rate_kw < 50 THEN 'ac_l2'
+                    WHEN max_charge_rate_kw < 20 THEN 'ac'
                     WHEN max_charge_rate_kw IS NOT NULL THEN 'dc'
-                    WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 12 THEN 'ac'
-                    WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 50 THEN 'ac_l2'
+                    WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 20 THEN 'ac'
                     WHEN duration_minutes > 0 THEN 'dc'
                 END,
                 'telemetry',

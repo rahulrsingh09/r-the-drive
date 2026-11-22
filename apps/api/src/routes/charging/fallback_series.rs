@@ -49,8 +49,7 @@ pub(super) fn build(
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
     charger_type: Option<&str>,
-    soc_start: f64,
-    soc_end: f64,
+    soc_bounds: Option<(f64, f64)>,
     points: &[RawCurvePointRow],
     cap_kw: f64,
 ) -> Vec<CurveSampleRow> {
@@ -60,30 +59,31 @@ pub(super) fn build(
     let span_minutes = (ended_at - started_at).num_seconds().max(1) as f64 / 60.0;
     let last = &points[points.len() - 1];
     let span_seconds = (last.ts - first.ts).num_seconds().max(1) as f64;
-    let soc = if points.len() == 1 {
-        SocProjection::Midpoint((soc_start + soc_end) / 2.0)
-    } else {
-        SocProjection::Interpolated {
-            first_ts: first.ts,
-            span_seconds,
-            start: soc_start,
-            end: soc_end,
+    let soc_projection = soc_bounds.map(|(soc_start, soc_end)| {
+        if points.len() == 1 {
+            SocProjection::Midpoint((soc_start + soc_end) / 2.0)
+        } else {
+            SocProjection::Interpolated {
+                first_ts: first.ts,
+                span_seconds,
+                start: soc_start,
+                end: soc_end,
+            }
         }
-    };
-    let timeline = FallbackTimeline {
-        started_at,
-        span_minutes,
-        soc,
-    };
+    });
     let mut samples = Vec::with_capacity(points.len());
     for point in points {
-        let (minutes_elapsed, soc) = timeline.locate(point.ts);
+        let elapsed_minutes = (point.ts - started_at).num_seconds() as f64 / 60.0;
+        let minutes_elapsed = elapsed_minutes.clamp(0.0, span_minutes);
+        let soc = point
+            .soc
+            .or_else(|| soc_projection.as_ref().map(|proj| proj.at(point.ts)));
         let charge_rate_kw = point.power_kw.unwrap_or(0.0).clamp(0.0, cap_kw);
         samples.push(CurveSampleRow {
             session_id,
             minutes_elapsed,
             charge_rate_kw,
-            soc: Some(soc),
+            soc,
             sample_source: point.sample_source.clone(),
             charger_type: charger_type.map(ToOwned::to_owned),
             power_method: "recorded",

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, queryKeys, themeClient, useAuth, useAuthReady } from '@panda/hooks';
 import { resolveThemeRuntimeResponse } from '@panda/ui/lib/theme';
 import { APP_TIMEZONE_CHANGE_EVENT, getAppTimezone, setAppTimezone } from '@panda/ui/lib/dateTime';
+import { setUnitPreferences } from '@panda/ui/lib/utils';
 
 function subscribeTimezone(notify: () => void) {
   window.addEventListener(APP_TIMEZONE_CHANGE_EVENT, notify);
@@ -25,6 +26,15 @@ export function useRootPreferences() {
   const timezone = useQuery({
     queryKey: queryKeys.appTimezone.current, queryFn: () => api.getAppTimezone(), enabled: sessionReady,
   });
+  const unitPreferences = useQuery({
+    queryKey: queryKeys.unitPreferences.current,
+    queryFn: () => api.getUnitPreferences(),
+    enabled: sessionReady,
+  });
+  useEffect(() => {
+    const next = unitPreferences.data?.units;
+    if (next) setUnitPreferences(next);
+  }, [unitPreferences.data]);
   useEffect(() => {
     const changedAccount = account.current !== userId;
     account.current = userId;

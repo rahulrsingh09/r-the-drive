@@ -5,4 +5,5 @@ export type * from './api';
 export type * from './timeframe';
 export type * from './charts';
 export type * from './theme';
+export type * from './insights';
 export { DEFAULT_THEME_PREFERENCES } from './theme';

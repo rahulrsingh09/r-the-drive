@@ -6,7 +6,9 @@ pub(super) async fn load_active_charge_snapshot_on(
 ) -> anyhow::Result<Option<ActiveChargeSessionSnapshot>> {
     let rows = sqlx::query_as::<_, LegacyChargeSample>(
         r#"SELECT t.charge_session_id AS session_id,t.ts,t.latitude,t.longitude,
-                  t.battery_level,t.battery_capacity_wh,t.battery_limit,t.power_kw
+                  t.battery_level,t.battery_capacity_wh,t.battery_limit,t.power_kw,
+                  (t.charger_state = 'charging' OR t.power_state = 'charging'
+                      OR t.time_to_end_of_charge_min > 0) AS charging_evidence
            FROM timeseries.telemetry t
            LEFT JOIN panda.charge_sessions cs ON cs.id=t.charge_session_id
            WHERE t.vehicle_id=$1 AND t.charge_session_id IS NOT NULL
@@ -35,6 +37,7 @@ struct LegacyChargeSample {
     battery_capacity_wh: Option<f64>,
     battery_limit: Option<f64>,
     power_kw: Option<f64>,
+    charging_evidence: Option<bool>,
 }
 
 fn reconstruct_legacy_charge(
@@ -50,13 +53,15 @@ fn reconstruct_legacy_charge(
     }
     candidates
         .into_values()
-        .filter(|candidate| candidate.snapshot.last_charge_ts >= cutoff)
-        .max_by_key(|candidate| candidate.snapshot.last_charge_ts)
+        .filter(|candidate| candidate.last_sample_ts >= cutoff)
+        .max_by_key(|candidate| candidate.last_sample_ts)
         .map(LegacyCandidate::finish)
 }
 
 struct LegacyCandidate {
     snapshot: ActiveChargeSessionSnapshot,
+    last_sample_ts: DateTime<Utc>,
+    last_evidence_ts: Option<DateTime<Utc>>,
     power: Vec<(DateTime<Utc>, Option<f64>)>,
 }
 impl LegacyCandidate {
@@ -76,10 +81,16 @@ impl LegacyCandidate {
                 energy_used_wh: 0.0,
                 peak_charge_kw: 0.0,
             },
+            last_sample_ts: row.ts,
+            last_evidence_ts: None,
             power: Vec::new(),
         }
     }
     fn observe(&mut self, row: LegacyChargeSample) {
+        self.last_sample_ts = row.ts;
+        if row.charging_evidence.unwrap_or(false) {
+            self.last_evidence_ts = Some(row.ts);
+        }
         let target = &mut self.snapshot;
         target.last_charge_ts = row.ts;
         if target.location_lat.is_none() {
@@ -108,6 +119,7 @@ impl LegacyCandidate {
             self.snapshot.started_at,
             self.power,
         );
+        self.snapshot.last_charge_ts = self.last_evidence_ts.unwrap_or(self.last_sample_ts);
         self.snapshot.last_power_ts = Some(power.last_power_ts);
         self.snapshot.energy_used_wh = power.energy_used_wh;
         self.snapshot.peak_charge_kw = power.peak_charge_kw;
@@ -316,9 +328,37 @@ pub(super) async fn persist_charge_session(
         present,
         "charge session was canonicalized before optional enrichment"
     );
+    // The R2 sends no charge power on the canonical stream, so its peak comes
+    // from the recorded charging-graph points. The higher peak decides the type.
+    let recorded_peak = match crate::services::charging::recorded_peak_kw(
+        pool,
+        session.vehicle_id,
+        session.session_id,
+        session.started_at,
+        session.ended_at,
+    )
+    .await
+    {
+        Ok(peak) => peak,
+        Err(error) => {
+            tracing::warn!(session_id=%session.session_id, error=%error, "worker.recorded_peak_lookup_failed");
+            None
+        }
+    };
+    let peak_charge_kw = match (session.peak_charge_kw, recorded_peak) {
+        (Some(detected), Some(recorded)) => Some(detected.max(recorded)),
+        (detected, recorded) => detected.or(recorded),
+    };
+    let charger_type = peak_charge_kw
+        .map(|kw| crate::services::charging::classify_charger_type(kw).to_string())
+        .or_else(|| session.charger_type.clone());
+    let mut resolved = session.clone();
+    resolved.peak_charge_kw = peak_charge_kw;
+    resolved.charger_type = charger_type;
+
     persist_charge_session_record(
         &mut conn,
-        session,
+        &resolved,
         location_lat,
         location_lng,
         &location_match,

@@ -30,8 +30,13 @@ const mockRegister = vi.fn();
 const mockResumeSession = vi.fn();
 const mockStartOidc = vi.hoisted(() => vi.fn());
 const mockConsumeExplicitLogoutIntent = vi.hoisted(() => vi.fn(() => false));
-vi.mock('@panda/hooks', async () => ({
-  queryKeys: (await import('../../../../../packages/hooks/src/queryKeys')).queryKeys,
+vi.mock('@panda/hooks', () => ({
+  queryKeys: {
+    auth: {
+      setup: ['auth', 'setup'],
+      config: ['auth-config'],
+    },
+  },
   consumeExplicitLogoutIntent: mockConsumeExplicitLogoutIntent,
   useAuth: () => ({
     login: mockLogin,
@@ -58,7 +63,8 @@ beforeEach(() => {
 describe('LoginPage', () => {
   it('renders the normal sign-in state after initial setup', () => {
     render(<LoginPage />);
-    expect(screen.getByText('R', { exact: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Sign in to R:The Drive' })).toBeInTheDocument();
+    expect(screen.getByText('Your Rivian, understood.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByText(/ask an administrator for an activation link/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /create one/i })).not.toBeInTheDocument();

@@ -88,7 +88,7 @@
       "id": "d1000001-0000-0000-0000-000000000005",
       "componentType": "sensor",
       "definitionId": "avg_efficiency",
-      "title": "Avg Efficiency",
+      "title": "Efficiency",
       "options": {
         "metric": "avg_efficiency",
         "icon": "gauge",
@@ -192,7 +192,7 @@
       "id": "d1000001-0000-0000-0000-000000000105",
       "componentType": "chart",
       "definitionId": "catalog",
-      "title": "Daily Phantom Drain",
+      "title": "Daily Parked Loss",
       "options": {
         "page": "overview",
         "chartId": "phantom-drain",

@@ -1,15 +1,9 @@
-import React from 'react';
-import { createRoute } from '@tanstack/react-router';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
-import { AdminDashboardsPage } from '../components/dashboard/AdminDashboardsPage';
 
+/** R has no custom dashboards; Insights replaces them. Keep old links working. */
 export const adminDashboardsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin/dashboards',
-  component: AdminDashboardsWrapper,
+  beforeLoad: () => { throw redirect({ to: '/insights', replace: true }); },
 });
-
-function AdminDashboardsWrapper() {
-  return <ProtectedRoute><AdminDashboardsPage /></ProtectedRoute>;
-}

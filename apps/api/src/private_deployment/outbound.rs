@@ -23,6 +23,8 @@ pub enum PolicyError {
     VehicleWrite,
     #[error("Optional external traffic is disabled by telemetry-only policy")]
     OptionalTraffic,
+    #[error("Vehicle artwork destination rejected by telemetry-only policy")]
+    ArtworkDestination,
     #[error("Outbound redirects are disabled")]
     Redirect,
     #[error("Upstream response exceeds the size limit")]
@@ -49,6 +51,126 @@ pub fn optional_traffic_allowed() -> bool {
 
 pub fn require_optional_traffic() -> Result<(), PolicyError> {
     Err(PolicyError::OptionalTraffic)
+}
+
+/// The one optional Rivian exchange the owner approved for this deployment:
+/// the vehicle-artwork manifest query (`getVehicleOrderMobileImages` and
+/// `getVehicleMobileImages`) over the existing Rivian account connection, then
+/// a download of the listed images so the server mirrors them and the browser
+/// loads them only from this origin. It does not relax
+/// `optional_traffic_allowed()`: every other optional provider stays denied.
+pub fn vehicle_artwork_allowed() -> bool {
+    true
+}
+
+pub const VEHICLE_IMAGES_OPERATION: &str = "getVehicleImages";
+
+/// The exact approved query. It selects only the two artwork root fields.
+pub const VEHICLE_IMAGES_QUERY: &str = r#"
+      query getVehicleImages($extension: String, $resolution: String, $versionForVehicle: String, $versionForPreOrder: String) {
+        getVehicleOrderMobileImages(resolution: $resolution, extension: $extension, version: $versionForPreOrder) {
+          ...image
+        }
+        getVehicleMobileImages(resolution: $resolution, extension: $extension, version: $versionForVehicle) {
+          ...image
+        }
+      }
+
+      fragment image on VehicleMobileImage {
+          orderId
+          vehicleId
+          url
+          extension
+          resolution
+          size
+          design
+          placement
+          overlays {
+            url
+            overlay
+            zIndex
+          }
+      }
+    "#;
+
+/// Builds the approved artwork request body. Only the art version changes.
+pub fn vehicle_images_request(version: &str) -> Result<serde_json::Value, PolicyError> {
+    require_vehicle_artwork()?;
+    require_telemetry_query(VEHICLE_IMAGES_QUERY)?;
+    if !matches!(version, "2" | "3") {
+        return Err(PolicyError::OptionalTraffic);
+    }
+    Ok(serde_json::json!({
+        "operationName": VEHICLE_IMAGES_OPERATION,
+        "query": VEHICLE_IMAGES_QUERY,
+        "variables": {
+            "extension": serde_json::Value::Null,
+            "resolution": "@3x",
+            "versionForVehicle": version,
+            "versionForPreOrder": version
+        }
+    }))
+}
+
+fn require_vehicle_artwork() -> Result<(), PolicyError> {
+    if vehicle_artwork_allowed() {
+        Ok(())
+    } else {
+        Err(PolicyError::OptionalTraffic)
+    }
+}
+
+/// Artwork files listed by the manifest may come only from Rivian's own HTTPS
+/// hosts on the default port. IP literals, credentials, alternate ports,
+/// fragments and lookalike hosts are rejected before any DNS lookup.
+pub fn validate_vehicle_artwork_url(value: &str) -> Result<url::Url, PolicyError> {
+    require_vehicle_artwork()?;
+    let url = url::Url::parse(value).map_err(|_| PolicyError::ArtworkDestination)?;
+    let host_allowed = match url.host() {
+        Some(url::Host::Domain(host)) => host == "rivian.com" || host.ends_with(".rivian.com"),
+        _ => false,
+    };
+    if url.scheme() != "https"
+        || !host_allowed
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(PolicyError::ArtworkDestination);
+    }
+    Ok(url)
+}
+
+/// A DNS-pinned client for one artwork file: public addresses only, no proxy,
+/// no redirects, bounded timeouts.
+pub async fn vehicle_artwork_client(
+    value: &str,
+) -> Result<(url::Url, reqwest::Client), PolicyError> {
+    let url = validate_vehicle_artwork_url(value)?;
+    let client = crate::services::outbound::outbound_client_for_url(&url, &[])
+        .await
+        .map_err(|_| PolicyError::ArtworkDestination)?;
+    Ok((url, client))
+}
+
+/// Mirrored files are served back from this origin, so only raster image
+/// types are kept. SVG and HTML are rejected.
+pub fn vehicle_artwork_content_type(value: Option<&str>) -> Result<&'static str, PolicyError> {
+    let essence = value
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    match essence.as_str() {
+        "image/webp" => Ok("image/webp"),
+        "image/png" => Ok("image/png"),
+        "image/jpeg" | "image/jpg" => Ok("image/jpeg"),
+        "image/gif" => Ok("image/gif"),
+        _ => Err(PolicyError::ArtworkDestination),
+    }
 }
 
 pub async fn optional_client_for_url(
@@ -110,20 +232,21 @@ fn validated_gateway_url(url: String) -> Result<String, PolicyError> {
 /// Keep client ownership here: caller-supplied redirect/proxy policies must
 /// never affect requests containing Rivian passwords or session headers.
 pub fn rivian_post(url: &str) -> Result<reqwest::RequestBuilder, PolicyError> {
-    let approved = match url {
-        GATEWAY_URL | CHARGING_URL => true,
-        _ => {
-            #[cfg(test)]
-            {
-                MOCK_GATEWAY.try_with(|mock| mock == url).unwrap_or(false)
-            }
-            #[cfg(not(test))]
-            {
-                false
-            }
+    let is_mock = {
+        #[cfg(test)]
+        {
+            MOCK_GATEWAY.try_with(|mock| mock == url).unwrap_or(false)
+        }
+        #[cfg(not(test))]
+        {
+            false
         }
     };
-    if !approved {
+    if !is_mock {
+        validate_http_destination(url)?;
+        // Unit tests never contact Rivian, including background tasks (such
+        // as artwork repair) that run outside a mock-gateway scope.
+        #[cfg(test)]
         return Err(PolicyError::Destination);
     }
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -240,6 +363,117 @@ mod tests {
             "wss://api.rivian.com/gql-consumer-subscriptions/graphql?token=x",
         ] {
             assert!(validate_ws_destination(url).is_err());
+        }
+    }
+
+    #[test]
+    fn optional_traffic_stays_denied_outside_the_artwork_exception() {
+        use crate::services::external_connections::{
+            BASEMAP, ICONIFY, NOMINATIM, OPTIONAL_CONNECTIONS,
+        };
+        assert!(!optional_traffic_allowed());
+        assert!(matches!(
+            require_optional_traffic(),
+            Err(PolicyError::OptionalTraffic)
+        ));
+        for id in [NOMINATIM, BASEMAP, ICONIFY] {
+            assert!(!connection_allowed(id), "{id}");
+            assert!(require_connection_allowed(id).is_err(), "{id}");
+        }
+        assert!(OPTIONAL_CONNECTIONS
+            .iter()
+            .filter(|id| **id != OPEN_METEO)
+            .all(|id| !connection_allowed(id)));
+        assert!(vehicle_artwork_allowed());
+    }
+
+    #[tokio::test]
+    async fn optional_provider_clients_stay_denied() {
+        let url = url::Url::parse("https://tiles.openfreemap.org/styles/liberty").unwrap();
+        assert!(optional_client_for_url(&url, &[]).await.is_err());
+    }
+
+    #[test]
+    fn artwork_request_is_the_fixed_image_query_only() {
+        for version in ["2", "3"] {
+            let body = vehicle_images_request(version).unwrap();
+            assert_eq!(body["operationName"], VEHICLE_IMAGES_OPERATION);
+            assert_eq!(body["query"], VEHICLE_IMAGES_QUERY);
+            assert_eq!(body["variables"]["versionForVehicle"], version);
+        }
+        assert!(require_telemetry_query(VEHICLE_IMAGES_QUERY).is_ok());
+        let roots: Vec<_> = VEHICLE_IMAGES_QUERY
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with('{') && line.contains('('))
+            .filter_map(|line| line.split('(').next())
+            .collect();
+        assert_eq!(
+            roots,
+            [
+                "query getVehicleImages",
+                "getVehicleOrderMobileImages",
+                "getVehicleMobileImages"
+            ]
+        );
+        for version in ["", "1", "4", "2 } mutation x {", "3 "] {
+            assert!(vehicle_images_request(version).is_err(), "{version}");
+        }
+    }
+
+    #[test]
+    fn artwork_downloads_accept_only_rivian_https_hosts() {
+        for url in [
+            "https://rivian.com/mobile/static/img/v1/vehicle/r2/side_light.webp",
+            "https://assets.rivian.com/mobile/r2.png",
+            "https://RIVIAN.com:443/mobile/static/img/example.webp",
+        ] {
+            assert!(validate_vehicle_artwork_url(url).is_ok(), "{url}");
+        }
+        for url in [
+            "http://rivian.com/mobile/static/img/example.webp",
+            "https://rivian.com.evil.test/example.webp",
+            "https://evilrivian.com/example.webp",
+            "https://rivian.com./example.webp",
+            "https://rivian.com@evil.test/example.webp",
+            "https://user:password@rivian.com/example.webp",
+            "https://rivian.com:444/example.webp",
+            "https://rivian.com/example.webp#fragment",
+            "https://127.0.0.1/example.webp",
+            "https://[::1]/example.webp",
+            "https://169.254.169.254/latest/meta-data",
+            "https://tiles.openfreemap.org/styles/liberty",
+            "https://images.example.test/vehicle.webp",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert!(
+                matches!(
+                    validate_vehicle_artwork_url(url),
+                    Err(PolicyError::ArtworkDestination)
+                ),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn artwork_files_keep_only_raster_image_types() {
+        assert_eq!(
+            vehicle_artwork_content_type(Some("image/webp")).unwrap(),
+            "image/webp"
+        );
+        assert_eq!(
+            vehicle_artwork_content_type(Some("Image/PNG; charset=binary")).unwrap(),
+            "image/png"
+        );
+        for value in [
+            None,
+            Some("image/svg+xml"),
+            Some("text/html"),
+            Some("application/octet-stream"),
+        ] {
+            assert!(vehicle_artwork_content_type(value).is_err(), "{value:?}");
         }
     }
 

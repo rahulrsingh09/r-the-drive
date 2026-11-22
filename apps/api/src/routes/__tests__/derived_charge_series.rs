@@ -43,6 +43,7 @@ fn derived_series_full_fallback_contract() {
                     .map(|(i, ms)| RawCurvePointRow {
                         ts: start + chrono::Duration::milliseconds(*ms),
                         power_kw: powers[i % powers.len()],
+                        soc: None,
                         sample_source: if i % 2 == 0 { "parallax" } else { "rivian" }.into(),
                     })
                     .collect();
@@ -51,8 +52,7 @@ fn derived_series_full_fallback_contract() {
                     start,
                     start + chrono::Duration::milliseconds(60999),
                     None,
-                    soc_start,
-                    soc_end,
+                    Some((soc_start, soc_end)),
                     &points,
                     cap,
                 );
@@ -78,6 +78,7 @@ fn derived_series_full_fallback_contract() {
         let points = [RawCurvePointRow {
             ts: start,
             power_kw: power,
+            soc: None,
             sample_source: "".into(),
         }];
         let result = build_fallback_curve_samples(
@@ -85,8 +86,7 @@ fn derived_series_full_fallback_contract() {
             start,
             start,
             Some(" DCFC "),
-            20.0,
-            80.0,
+            Some((20.0, 80.0)),
             &points,
             22.0,
         );
@@ -115,6 +115,7 @@ fn derived_series_invalid_cap_contract() {
         let points = [RawCurvePointRow {
             ts: start,
             power_kw: None,
+            soc: None,
             sample_source: "synthetic".into(),
         }];
         assert!(build_fallback_curve_samples(
@@ -122,8 +123,7 @@ fn derived_series_invalid_cap_contract() {
             start,
             start,
             None,
-            0.0,
-            100.0,
+            Some((0.0, 100.0)),
             &[],
             cap
         )
@@ -133,8 +133,7 @@ fn derived_series_invalid_cap_contract() {
             start,
             start,
             None,
-            0.0,
-            100.0,
+            Some((0.0, 100.0)),
             &points,
             cap
         ))

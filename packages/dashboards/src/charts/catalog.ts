@@ -277,7 +277,7 @@ const DEFINITION_UNIT = Symbol('definition-unit');
 type SettingsAxisPolicy = readonly [DashboardChartAxisId, string, (string | typeof DEFINITION_UNIT)?];
 
 const SETTINGS_AXES: Partial<Record<DashboardChartSource, readonly SettingsAxisPolicy[]>> = {
-  soc_history: [['y', 'State of Charge', DEFINITION_UNIT]],
+  soc_history: [['y', 'Battery level', DEFINITION_UNIT]],
   charging_weekly_energy: [['y', 'Energy charged', DEFINITION_UNIT]],
   charge_session_curve: [['y', 'Charge rate', 'kW'], ['y2', 'Energy added', 'kWh']],
   charging_curve_analysis: [['x', 'Charge level', '%'], ['y', 'Charge rate', 'kW']],

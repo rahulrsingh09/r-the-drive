@@ -42,20 +42,25 @@ impl CurveWindow {
             ),
         }
     }
-    async fn count(&self, pool: &sqlx::PgPool, source: CurveSource) -> Result<i64, AppError> {
-        let query = match source {
-            CurveSource::Linked => sql::LINKED_COUNT,
-            CurveSource::Minute => sql::MINUTE_COUNT,
-        };
-        let mut request = sqlx::query_scalar::<_, i64>(query).bind(self.vehicle_id);
-        if matches!(source, CurveSource::Linked) {
-            request = request.bind(self.session_id);
-        }
-        Ok(request
+    async fn linked_counts(&self, pool: &sqlx::PgPool) -> Result<(i64, i64), AppError> {
+        Ok(sqlx::query_as::<_, (i64, i64)>(sql::LINKED_COUNT)
+            .bind(self.vehicle_id)
+            .bind(self.session_id)
             .bind(self.started_at)
             .bind(self.ended_at)
             .fetch_one(pool)
             .await?)
+    }
+    async fn count(&self, pool: &sqlx::PgPool, source: CurveSource) -> Result<i64, AppError> {
+        match source {
+            CurveSource::Linked => Ok(self.linked_counts(pool).await?.0),
+            CurveSource::Minute => Ok(sqlx::query_scalar::<_, i64>(sql::MINUTE_COUNT)
+                .bind(self.vehicle_id)
+                .bind(self.started_at)
+                .bind(self.ended_at)
+                .fetch_one(pool)
+                .await?),
+        }
     }
     async fn detail_rows(
         &self,
@@ -126,28 +131,39 @@ pub(super) async fn detail(
         ended_at.unwrap_or_else(Utc::now),
         charger_type,
     );
-    let source = if window.count(pool, CurveSource::Linked).await? >= 2 {
+    let (linked_sample_count, linked_power_count) = window.linked_counts(pool).await?;
+
+    // Telemetry power, where the vehicle sends it, has the finest resolution.
+    // Without it (the R2), the recorded charging graph is measured power, and
+    // a state-of-charge estimate is the last resort.
+    let recorded = if linked_power_count < 2 {
+        load_recorded_curve_points(pool, vehicle_id, session_id, started_at, window.ended_at)
+            .await?
+    } else {
+        Vec::new()
+    };
+    if recorded.len() >= 2 {
+        return Ok(recorded_curve_json(&recorded, started_at));
+    }
+
+    let source = if linked_sample_count >= 2 {
         CurveSource::Linked
     } else {
         CurveSource::Minute
     };
-    let mut evidence = DetailEvidence {
+    let evidence = DetailEvidence {
         rows: window.detail_rows(pool, source).await?,
         source: source.label(),
     };
     if evidence.rows.len() < 2 {
-        let stored = sqlx::query_as::<_, CurveRow>(sql::DETAIL_FALLBACK)
-            .bind(vehicle_id)
-            .bind(started_at)
-            .bind(session_id)
-            .bind(window.is_dc)
-            .fetch_all(pool)
-            .await?;
-        if !stored.is_empty() {
-            evidence = DetailEvidence {
-                rows: stored,
-                source: "rivian_charge_curve_points",
-            };
+        let fallback = if linked_power_count < 2 {
+            recorded
+        } else {
+            load_recorded_curve_points(pool, vehicle_id, session_id, started_at, window.ended_at)
+                .await?
+        };
+        if !fallback.is_empty() {
+            return Ok(recorded_curve_json(&fallback, started_at));
         }
     }
     Ok(evidence.project())
@@ -174,8 +190,35 @@ pub(super) async fn analysis(
         ended_at,
         charger_type.as_deref(),
     );
-    for source in [CurveSource::Linked, CurveSource::Minute] {
-        if window.count(pool, source).await? < 2 {
+    let (linked_sample_count, linked_power_count) = window.linked_counts(pool).await?;
+    let recorded = if linked_power_count < 2 {
+        load_recorded_curve_points(pool, vehicle_id, session_id, started_at, ended_at).await?
+    } else {
+        Vec::new()
+    };
+    let soc_bounds = soc_start.zip(soc_end);
+    if recorded.len() >= 2
+        && (soc_bounds.is_some() || recorded.iter().all(|point| point.soc.is_some()))
+    {
+        return Ok(build_fallback_curve_samples(
+            session_id,
+            started_at,
+            ended_at,
+            charger_type.as_deref(),
+            soc_bounds,
+            &recorded,
+            crate::services::charging::PLAUSIBLE_MAX_CHARGE_KW,
+        ));
+    }
+
+    for (source, count) in [
+        (CurveSource::Linked, linked_sample_count),
+        (
+            CurveSource::Minute,
+            window.count(pool, CurveSource::Minute).await?,
+        ),
+    ] {
+        if count < 2 {
             continue;
         }
         let rows = window.analysis_rows(pool, source).await?;
@@ -199,22 +242,23 @@ pub(super) async fn analysis(
             })
             .collect());
     }
-    let stored = sqlx::query_as::<_, RawCurvePointRow>(sql::ANALYSIS_FALLBACK)
-        .bind(vehicle_id)
-        .bind(session_id)
-        .fetch_all(pool)
-        .await?;
-    let Some((start, end)) = soc_start.zip(soc_end) else {
-        return Ok(Vec::new());
+    let fallback = if linked_power_count < 2 {
+        recorded
+    } else {
+        load_recorded_curve_points(pool, vehicle_id, session_id, started_at, ended_at).await?
     };
+    if fallback.is_empty()
+        || (soc_bounds.is_none() && fallback.iter().any(|point| point.soc.is_none()))
+    {
+        return Ok(Vec::new());
+    }
     Ok(build_fallback_curve_samples(
         session_id,
         started_at,
         ended_at,
         charger_type.as_deref(),
-        start,
-        end,
-        &stored,
-        if window.is_dc { 300.0 } else { 22.0 },
+        soc_bounds,
+        &fallback,
+        crate::services::charging::PLAUSIBLE_MAX_CHARGE_KW,
     ))
 }

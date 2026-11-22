@@ -1,0 +1,24 @@
+/* The car turn (Now and Car). Tokens only. The stage keeps the frame aspect (840 × 430); nothing sits on top of the car. */
+.r-orbit-pack,.r-orbit-turn { position: relative; margin: 0; }
+.r-orbit-pack .r-orbit-stage,.r-orbit-turn .r-orbit-stage { position: relative; width: 100%; height: auto; aspect-ratio: 840 / 430; overflow: clip; touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab; }
+.r-orbit-pack .r-orbit-stage[data-grabbing] { cursor: grabbing; }
+.r-orbit-pack .r-orbit-stage::before,.r-orbit-turn .r-orbit-stage::before { content: none; }
+.r-orbit-pack .r-orbit-stage img,.r-orbit-pack .r-orbit-stage canvas,
+.r-orbit-turn .r-orbit-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; scale: 1; pointer-events: none; }
+.r-orbit-pack .r-orbit-hidden { visibility: hidden; }
+.r-orbit-pack .r-orbit-stage:focus-visible,.r-orbit-turn .r-orbit-stage:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--r-signal); }
+.r-orbit-floor { position: absolute; left: 14%; right: 14%; bottom: 8%; height: 9%; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--rm-text-primary) 0%, var(--rm-bg-overlay) 70%), transparent); filter: blur(4px); pointer-events: none; }
+
+/* Owner-image turn: the owner's Rivian images are stacked; the active angle cross-fades in over 180 ms. */
+.r-orbit-stage > img.r-orbit-angle { opacity: 0; transition: opacity 180ms ease; }
+.r-orbit-stage > img.r-orbit-angle[data-active] { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .r-orbit-stage > img.r-orbit-angle { transition: none; } }
+
+/* Placeholder while the owner's images load, or when they are not available: a soft car-sized shape, never another model. */
+.r-orbit-turn .r-orbit-placeholder { cursor: default; }
+.r-orbit-shape { position: absolute; left: 13%; right: 13%; top: 36%; bottom: 17%; border-radius: 42% 46% 14% 14% / 60% 60% 18% 18%;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--rm-text-primary) 5%, transparent) 30%, color-mix(in srgb, var(--rm-text-primary) 11%, transparent) 50%, color-mix(in srgb, var(--rm-text-primary) 5%, transparent) 70%);
+  background-size: 300% 100%; animation: r-orbit-shimmer 1.4s linear infinite; }
+.r-orbit-turn[data-mode="unavailable"] .r-orbit-shape { animation: none; }
+@keyframes r-orbit-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .r-orbit-shape { animation: none; } }

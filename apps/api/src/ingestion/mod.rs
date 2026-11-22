@@ -3,6 +3,7 @@ pub mod closure_motion;
 pub mod location;
 pub mod parser;
 pub mod poller;
+pub mod replay;
 pub mod rivian_auth;
 pub mod rivian_poll;
 pub mod session_store;

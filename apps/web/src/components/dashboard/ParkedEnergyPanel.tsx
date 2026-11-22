@@ -28,21 +28,18 @@ export function ParkedEnergyPanel({
 }) {
   const { data, isLoading } = useParkedEnergy(vehicleId, from, to);
   const samples = data?.samples ?? [];
-  const byWindow = new Map<ParkedEnergyWindow, ParkedEnergySample>();
-  for (const candidate of samples) {
-    if (!byWindow.has(candidate.window)) byWindow.set(candidate.window, candidate);
-  }
   const preferred = chooseDefaultWindow(samples);
-  const [selection, setWindow] = React.useState<ParkedEnergyWindow>(preferred);
-  const window = byWindow.has(selection) ? selection : preferred;
-  if (window !== selection) setWindow(window);
-  const sample = byWindow.get(window) ?? null;
-  const categories = CATEGORIES.map(category => ({
-    ...category,
-    raw: sample?.[category.key] ?? null,
-    value: Math.max(0, sample?.[category.key] ?? 0),
-  }));
-  const categoryTotal = categories.reduce((sum, category) => sum + category.value, 0);
+  const [window, setWindow] = React.useState<ParkedEnergyWindow>(preferred);
+
+  React.useEffect(() => {
+    if (!samples.some((sample) => sample.window === window)) setWindow(preferred);
+  }, [preferred, samples, window]);
+
+  const sample = samples.find((candidate) => candidate.window === window) ?? null;
+  const categoryTotal = CATEGORIES.reduce(
+    (sum, category) => sum + Math.max(0, sample?.[category.key] ?? 0),
+    0,
+  );
 
   return (
     <Card data-testid="parked-energy-panel">
@@ -62,7 +59,7 @@ export function ParkedEnergyPanel({
               key={option.value}
               type="button"
               onClick={() => setWindow(option.value)}
-              disabled={!byWindow.has(option.value)}
+              disabled={!samples.some((candidate) => candidate.window === option.value)}
               aria-pressed={window === option.value}
               className={`min-h-11 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-colors disabled:opacity-35 ${
                 window === option.value
@@ -84,7 +81,7 @@ export function ParkedEnergyPanel({
           </div>
         ) : !sample ? (
           <div className="rounded-xl border border-dashed border-border p-5 text-sm text-fg-secondary">
-            Start the optional Parallax collector to populate Rivian&apos;s parked-energy breakdown.
+            Start the optional live stream collector to populate Rivian&apos;s parked-energy breakdown.
           </div>
         ) : (
           <div className="grid gap-5">
@@ -96,26 +93,27 @@ export function ParkedEnergyPanel({
 
             <div>
               <div className="flex h-4 overflow-hidden rounded-full bg-bg-elevated" aria-label="Parked energy category breakdown">
-                {categories.map((category) => {
-                  const width = categoryTotal > 0 ? (category.value / categoryTotal) * 100 : 0;
+                {CATEGORIES.map((category) => {
+                  const value = Math.max(0, sample[category.key] ?? 0);
+                  const width = categoryTotal > 0 ? (value / categoryTotal) * 100 : 0;
                   return (
                     <div
                       key={category.key}
                       className={category.color}
                       style={{ width: `${width}%` }}
-                      title={`${category.label}: ${formatEnergy(category.value)}`}
+                      title={`${category.label}: ${formatEnergy(value)}`}
                     />
                   );
                 })}
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                {categories.map((category) => (
+                {CATEGORIES.map((category) => (
                   <div key={category.key} className="flex items-center justify-between gap-3 text-xs">
                     <span className="flex items-center gap-2 text-fg-secondary">
                       <span className={`h-2.5 w-2.5 rounded-full ${category.color}`} />
                       {category.label}
                     </span>
-                    <span className="font-medium text-fg">{formatEnergy(category.raw)}</span>
+                    <span className="font-medium text-fg">{formatEnergy(sample[category.key])}</span>
                   </div>
                 ))}
               </div>
@@ -133,20 +131,15 @@ export function ParkedEnergyPanel({
 }
 
 function chooseDefaultWindow(samples: ParkedEnergySample[]): ParkedEnergyWindow {
-  let recentParked = false;
-  let hasDay = false;
-  let inspectedParked = false;
-  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
-  for (const sample of samples) {
-    hasDay ||= sample.window === '24h';
-    if (sample.window !== 'since_parked' || inspectedParked) continue;
-    inspectedParked = true;
-    recentParked = new Date(sample.received_at).getTime() >= cutoff;
+  const sinceParked = samples.find((sample) => sample.window === 'since_parked');
+  if (
+    sinceParked &&
+    Date.now() - new Date(sinceParked.received_at).getTime() <= 6 * 60 * 60 * 1000
+  ) {
+    return 'since_parked';
   }
-  const preferred: ParkedEnergyWindow[] = [];
-  if (recentParked) preferred.push('since_parked');
-  if (hasDay) preferred.push('24h');
-  return preferred[0] ?? samples[0]?.window ?? 'since_parked';
+  if (samples.some((sample) => sample.window === '24h')) return '24h';
+  return samples[0]?.window ?? 'since_parked';
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -159,23 +152,15 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function formatEnergy(value: number | null) {
-  return formatMeasurement(value, 1, 2, 'kWh');
+  return value == null ? '—' : `${value.toFixed(2)} kWh`;
 }
 
 function formatRange(value: number | null) {
-  return formatMeasurement(value, 0.621371, 1, 'mi');
+  return value == null ? '—' : `${(value * 0.621371).toFixed(1)} mi`;
 }
 
 function formatDuration(value: number | null) {
-  const minutes = value == null || value < 60;
-  return minutes
-    ? formatMeasurement(value, 1, null, 'min')
-    : formatMeasurement(value / 60, 1, value % 60 === 0 ? 0 : 1, 'h');
-}
-
-function formatMeasurement(value: number | null, scale: number, digits: number | null, unit: string) {
   if (value == null) return '—';
-  const amount = value * scale;
-  const text = digits === null ? String(amount) : amount.toFixed(digits);
-  return `${text} ${unit}`;
+  if (value < 60) return `${value} min`;
+  return `${(value / 60).toFixed(value % 60 === 0 ? 0 : 1)} h`;
 }

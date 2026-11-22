@@ -107,7 +107,7 @@
   {
     "slug": "charge-level",
     "name": "Charge Level",
-    "description": "State of charge from telemetry.",
+    "description": "Battery level from telemetry.",
     "enabled": true,
     "definition": {
       "schemaVersion": 1,
@@ -154,7 +154,7 @@
   {
     "slug": "charging-curve-analysis",
     "name": "DC Charging Curve Trend",
-    "description": "Verified charge sessions by state of charge.",
+    "description": "Verified charge sessions by battery level.",
     "enabled": true,
     "definition": {
       "schemaVersion": 1,
@@ -501,7 +501,7 @@
   },
   {
     "slug": "phantom-drain",
-    "name": "Daily Phantom Drain",
+    "name": "Daily Parked Loss",
     "description": "Battery lost during validated parked periods.",
     "enabled": true,
     "definition": {
@@ -606,8 +606,8 @@
   },
   {
     "slug": "soc-history",
-    "name": "State of Charge",
-    "description": "State of charge over time.",
+    "name": "Battery Level",
+    "description": "Battery level over time.",
     "enabled": true,
     "definition": {
       "schemaVersion": 1,

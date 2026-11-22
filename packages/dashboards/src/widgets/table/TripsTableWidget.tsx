@@ -6,11 +6,10 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Eraser, Moon, Plus, Save, Sun } from 'lucide-react';
-import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUserPreferences } from '@panda/hooks';
 import { useDocumentTheme } from '@panda/ui/hooks';
-import { DataTable, createTripColumns, type TripRow } from '@panda/ui/tables';
+import { DataTable, TripSelectCheckbox, createTripColumns, isDefaultTripDriveMode, type TripRow } from '@panda/ui/tables';
 import { Badge, Button, SelectPicker, Tooltip } from '@panda/ui/primitives';
 import { TripMapChart, type MapStyleMode } from '@panda/ui/charts';
 import { formatMiles, formatDuration } from '@panda/ui/lib/utils';
@@ -27,39 +26,39 @@ function useIsMobile() {
 function TripCard({
   trip,
   isSelected,
-  onClick,
-  onInfoClick,
+  onOpen,
+  onToggleSelect,
 }: {
   trip: TripRow;
   isSelected: boolean;
-  onClick: () => void;
-  onInfoClick: () => void;
+  onOpen: () => void;
+  onToggleSelect: () => void;
 }) {
   const model = tripPresentation(trip);
   const { start: startLabel, end: endLabel } = model;
+  const showMode = !isDefaultTripDriveMode(trip.drive_mode);
 
   return (
     <div
+      data-trip-card
       className={`relative w-full rounded-xl border px-3 py-2.5 transition-colors ${
         isSelected
           ? 'border-accent/50 bg-accent/10 ring-1 ring-inset ring-accent/30'
           : 'border-border bg-bg-elevated/60 hover:bg-bg-elevated'
       }`}
     >
-      <button
-        type="button"
-        onClick={onInfoClick}
-        className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
-        aria-label="Open trip details"
-      >
-        <LuBadgeInfo className="h-4 w-4" />
-      </button>
-      <button type="button" onClick={onClick} className="w-full text-left pr-9">
+      <TripSelectCheckbox
+        className="absolute right-0 top-0 z-10 m-0"
+        checked={isSelected}
+        onChange={onToggleSelect}
+        label={`Select trip from ${model.date}`}
+      />
+      <button type="button" onClick={onOpen} className="w-full text-left pr-9" aria-label={`Open trip from ${model.date}`}>
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <span className="text-xs text-fg-tertiary">
           {model.date}
         </span>
-        {trip.drive_mode && model.mode && (
+        {showMode && trip.drive_mode && model.mode && (
           <Badge size="sm" className={model.mode.className}>
             {model.mode.label}
           </Badge>
@@ -68,23 +67,23 @@ function TripCard({
       {(startLabel || endLabel) && (
         <div className="flex min-w-0 items-center gap-1 mb-2 text-sm font-medium text-fg">
           {startLabel && <span className="truncate">{startLabel}</span>}
-          {startLabel && endLabel && <PiArrowFatLinesRight className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />}
+          {startLabel && endLabel && <span aria-hidden="true" className="shrink-0 text-fg-tertiary">→</span>}
           {endLabel && <span className="truncate">{endLabel}</span>}
         </div>
       )}
-      <div className="flex items-center gap-3 text-xs text-fg-secondary flex-wrap">
-        <span className="font-mono font-medium text-fg">{formatMiles(trip.distance_mi)}</span>
+      <div className="flex items-center gap-3 text-xs text-fg-secondary flex-wrap tabular-nums">
+        <span className="font-medium text-fg">{formatMiles(trip.distance_mi)}</span>
         <span className="text-fg-tertiary">·</span>
         <span>{formatDuration(trip.duration_min)}</span>
         {model.efficiency !== undefined && (
           <>
             <span className="text-fg-tertiary">·</span>
-            <span className="font-mono">{model.efficiency}</span>
+            <span>{model.efficiency}</span>
           </>
         )}
         {model.soc && (
-          <span className="ml-auto font-mono text-fg-tertiary">
-            {model.soc[0]} <PiArrowFatLinesRight className="inline h-3 w-3" /> {model.soc[1]}
+          <span className="ml-auto text-fg-tertiary">
+            <span className="sr-only">Battery </span>{model.soc[0]} → {model.soc[1]}
           </span>
         )}
       </div>
@@ -220,7 +219,9 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const { selectedIds, tripRegistry } = useTripSelection();
   const { tags: batchTagIds, pending: pendingBatchAction, stage: setBatchTagIds, run: runBatchTagAction, updateAssignments } = useTripTagBatch(ctx.vehicleId, selectedIds);
   const isMobile = useIsMobile();
-  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim(), ctx.tripTagFilter);
+  const tripsQuery = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim(), ctx.tripTagFilter);
+  const { data, isLoading } = tripsQuery;
+  const loadFailed = tripsQuery.isError && data == null;
   const placesQuery = useQuery({
     queryKey: ['places'],
     queryFn: () => api.listPlaces(),
@@ -230,14 +231,21 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const selectedSet = new Set(selectedIds);
   const trips = (data?.items ?? []) as TripRow[];
   const hasVisibleTags = trips.some((trip) => (trip.tags?.length ?? 0) > 0);
+  const hasNonDefaultMode = trips.some((trip) => !isDefaultTripDriveMode(trip.drive_mode));
+  const openTrip = React.useCallback(
+    (tripId: string) => navigate({ to: '/trips/$tripId', params: { tripId } }),
+    [navigate],
+  );
+  const isTripSelected = React.useCallback((tripId: string) => selectedSet.has(tripId), [selectedIds]);
   const columns = React.useMemo(
     () => createTripColumns(placesQuery.data ?? [], {
       includeTags: hasVisibleTags,
-      onInfoClick: (tripId) => {
-        navigate({ to: '/trips/$tripId', params: { tripId } });
-      },
+      includeMode: hasNonDefaultMode,
+      onOpenTrip: openTrip,
+      onToggleSelect: toggleTripSelection,
+      isSelected: isTripSelected,
     }),
-    [hasVisibleTags, navigate, placesQuery.data],
+    [hasNonDefaultMode, hasVisibleTags, isTripSelected, openTrip, placesQuery.data],
   );
 
   React.useEffect(() => {
@@ -362,7 +370,15 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
         </div>
       ) : null}
 
-      {isMobile ? (
+      {loadFailed ? (
+        <div role="alert" data-table-state="error" className="flex flex-wrap items-center justify-center gap-1 rounded-lg border border-status-danger/30 bg-status-danger/10 px-4 py-6 text-center text-sm text-status-danger">
+          <span>Could not load trips</span>{' '}
+          <span aria-hidden="true">·</span>{' '}
+          <button type="button" onClick={() => void tripsQuery.refetch()} className="inline-flex min-h-11 items-center font-medium underline underline-offset-2">
+            Retry
+          </button>
+        </div>
+      ) : isMobile ? (
         <div className="flex flex-col gap-2">
           {isLoading
             ? Array.from({ length: 5 }).map((_, i) => (
@@ -375,8 +391,8 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
                   key={trip.id}
                   trip={trip}
                   isSelected={selectedSet.has(trip.id)}
-                  onClick={() => toggleTripSelection(trip.id)}
-                  onInfoClick={() => navigate({ to: '/trips/$tripId', params: { tripId: trip.id } })}
+                  onOpen={() => openTrip(trip.id)}
+                  onToggleSelect={() => toggleTripSelection(trip.id)}
                 />
               ))
           }
@@ -387,7 +403,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
           columns={columns}
           loading={isLoading}
           loadingRows={pageSize}
-          onRowClick={(row) => toggleTripSelection(row.original.id)}
+          onRowClick={(row) => openTrip(row.original.id)}
           getRowIsSelected={(row) => selectedSet.has(row.original.id)}
           emptyTitle="No trips found"
           emptyDescription={deferredSearch.trim() ? 'No trips match that start, destination, or tag.' : 'Trips will appear here once your vehicle has been driven.'}

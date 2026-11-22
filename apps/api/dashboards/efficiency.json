@@ -14,7 +14,7 @@
       "id": "d3000003-0000-0000-0000-000000000001",
       "componentType": "sensor",
       "definitionId": "avg_efficiency",
-      "title": "Avg Consumption (net)",
+      "title": "Efficiency (net)",
       "options": {
         "metric": "avg_efficiency",
         "icon": "gauge",
@@ -56,7 +56,7 @@
       "id": "d3000003-0000-0000-0000-000000000003",
       "componentType": "sensor",
       "definitionId": "avg_gross_efficiency",
-      "title": "Avg Consumption (gross)",
+      "title": "Efficiency (gross)",
       "options": {
         "metric": "avg_gross_efficiency",
         "icon": "zap",

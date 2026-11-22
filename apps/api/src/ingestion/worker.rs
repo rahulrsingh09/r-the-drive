@@ -55,6 +55,7 @@ use stewardship::{
     increment_counter, CounterBatch,
 };
 use trip_completion::persist_trip;
+pub(crate) use trip_completion::{persist_recovered_trip, RecoveredSave};
 mod charge_capture;
 mod durable_charge_restart;
 mod durable_processing;

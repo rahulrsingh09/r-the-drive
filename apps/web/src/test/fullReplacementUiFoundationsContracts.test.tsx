@@ -92,7 +92,7 @@ describe('foundation baseline contracts', () => {
     const charge = { id: 'synthetic', started_at: '2026-01-01T12:00:00Z', ended_at: null, duration_min: 30, energy_added_kwh: 10, soc_start: 30, soc_end: 40, peak_power_kw: 21, cost_usd: null, charger_type: null, network_vendor: 'Tesla', location_name: null, live_time_elapsed_seconds: 750, live_soc_pct: 43, live_power_kw: 30, live_total_charged_kwh: 12 } as ChargeSessionRow;
     const period = { period_start: '2026-01-01T12:00:00Z', period_end: null, duration_hours: 3.25, sleep_share_pct: .5, state_coverage_pct: .9, soc_start: 50, soc_end: 49, soc_lost_pct: 1, drain_pct_per_hour: .33, range_lost_mi: 2, range_lost_per_hour_mi: .5, energy_drained_kwh: 1, avg_power_w: 1100, has_reduced_range: true, validation_reason: 'low_coverage' } as PhantomDrainRow;
     expect([
-      renderToStaticMarkup(<DataTable data={[trip]} columns={createTripColumns([], { onInfoClick: vi.fn() })} />),
+      renderToStaticMarkup(<DataTable data={[trip]} columns={createTripColumns([])} />),
       renderToStaticMarkup(<DataTable data={[charge, { ...charge, ended_at: '2026-01-01T12:30:00Z', network_vendor: null, charger_type: 'AC', cost_usd: 2.5 }]} columns={chargingColumns} />),
       renderToStaticMarkup(<DataTable data={[period]} columns={phantomDrainColumns} />),
       renderToStaticMarkup(<PhantomDrainPeriodCard period={period} />),

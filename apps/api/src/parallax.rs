@@ -23,7 +23,7 @@ use tokio::{
     sync::{broadcast, mpsc, watch},
     task::JoinHandle,
 };
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, protocol::CloseFrame, Message};
 use uuid::Uuid;
 
 use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
@@ -45,6 +45,10 @@ const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const SUBSCRIPTION_ID: &str = "panda-parallax-collector";
 const SCHEMA_VERSION: i32 = 1;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+// Parked vehicles can stay quiet for hours, so a silent subscription is
+// renewed rather than treated as a failure. Renewal is cheap: Rivian also
+// ends every connection after a few minutes.
+const MAX_SUBSCRIPTION_SILENCE: Duration = Duration::from_secs(15 * 60);
 static TELEMETRY_FORWARD_DROP_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 const VEHICLE_STATE_TOPICS: &[&str] = &[
     "vehicle.network.state",
@@ -793,63 +797,157 @@ where
         + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
         + Unpin,
 {
-    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
-    heartbeat.tick().await;
-    loop {
-        tokio::select! {
-            message = websocket.next() => {
-                let Some(message) = message else {
-                    anyhow::bail!("Parallax socket ended");
-                };
-                match SocketAction::classify(message?) {
-                    SocketAction::Reply(message) => websocket.send(message).await?,
-                    SocketAction::Envelope(envelope) => {
-                        let context = active_sessions.borrow_and_update().clone();
-                        if persist_envelope(pool, session.vehicle_id, &envelope, &context, telemetry_tx).await.is_err() {
-                            tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
-                            let _ = sqlx::query("UPDATE panda.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
-                                .bind(session.vehicle_id).execute(pool).await;
-                        }
-                    }
-                    SocketAction::Rejected => {
-                        ingestion_capture::record(session.vehicle_id, CaptureKind::ParallaxConnection,
-                            json!({ "event": "subscription_rejected" }));
-                        anyhow::bail!("Parallax subscription rejected")
-                    }
-                    SocketAction::Completed => {
-                        ingestion_capture::record(session.vehicle_id, CaptureKind::ParallaxConnection,
-                            json!({ "event": "subscription_completed" }));
-                        anyhow::bail!("Parallax subscription completed")
-                    }
-                    SocketAction::Closed(frame) => {
-                        // Rivian closes every subscription when its connection
-                        // TTL runs out. That is a routine renewal, not a
-                        // failure: returning Ok resets the backoff so the
-                        // collector resubscribes immediately instead of
-                        // sitting offline for up to two minutes.
-                        let renewal =
-                            crate::ingestion::ws_client::is_rivian_connection_ttl_expired(frame.as_ref());
-                        ingestion_capture::record(
-                            session.vehicle_id,
-                            CaptureKind::ParallaxConnection,
-                            json!({
-                                "event": if renewal { "ttl_expired" } else { "closed" },
-                                "close_code": frame.as_ref().map(|f| u16::from(f.code)),
-                                "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
-                            }),
-                        );
-                        set_collector_state(pool, session.vehicle_id, "disconnected", None)
-                            .await?;
-                        if renewal {
-                            return Ok(());
-                        }
-                        anyhow::bail!("Parallax socket closed: {frame:?}");
-                    }
-                    SocketAction::Ignore => {}
+    let mut receiver = SubscriptionReceiver::new(MAX_SUBSCRIPTION_SILENCE).await;
+    let end = loop {
+        match receiver.next(&mut *websocket).await? {
+            SubscriptionEvent::Envelope(envelope) => {
+                let context = active_sessions.borrow_and_update().clone();
+                if persist_envelope(pool, session.vehicle_id, &envelope, &context, telemetry_tx)
+                    .await
+                    .is_err()
+                {
+                    tracing::debug!(vehicle_id=%session.vehicle_id, "Parallax frame rejected by typed decoder");
+                    let _ = sqlx::query("UPDATE panda.parallax_collector_state SET decode_error_count=decode_error_count+1,last_frame_at=now(),updated_at=now() WHERE vehicle_id=$1")
+                        .bind(session.vehicle_id).execute(pool).await;
                 }
             }
-            _ = heartbeat.tick() => {
+            SubscriptionEvent::Heartbeat => {
                 touch_collector_heartbeat(pool, session.vehicle_id).await?;
+            }
+            SubscriptionEvent::End(end) => break end,
+        }
+    };
+    match end {
+        SubscriptionEnd::Rejected => {
+            ingestion_capture::record(
+                session.vehicle_id,
+                CaptureKind::ParallaxConnection,
+                json!({ "event": "subscription_rejected" }),
+            );
+            anyhow::bail!("Parallax subscription rejected")
+        }
+        SubscriptionEnd::Completed => {
+            ingestion_capture::record(
+                session.vehicle_id,
+                CaptureKind::ParallaxConnection,
+                json!({ "event": "subscription_completed" }),
+            );
+            anyhow::bail!("Parallax subscription completed")
+        }
+        SubscriptionEnd::Silent => {
+            tracing::info!(
+                vehicle_id = %session.vehicle_id,
+                silent_minutes = MAX_SUBSCRIPTION_SILENCE.as_secs() / 60,
+                "Parallax subscription silent; renewing"
+            );
+            ingestion_capture::record(
+                session.vehicle_id,
+                CaptureKind::ParallaxConnection,
+                json!({ "event": "silence_renewal" }),
+            );
+            // A silent peer may never answer; do not wait long for it.
+            let _ = tokio::time::timeout(Duration::from_secs(5), websocket.close()).await;
+            set_collector_state(pool, session.vehicle_id, "disconnected", None).await?;
+            Ok(())
+        }
+        SubscriptionEnd::Closed(frame) => {
+            // Rivian closes every subscription when its connection
+            // TTL runs out. That is a routine renewal, not a
+            // failure: returning Ok resets the backoff so the
+            // collector resubscribes immediately instead of
+            // sitting offline for up to two minutes.
+            let renewal =
+                crate::ingestion::ws_client::is_rivian_connection_ttl_expired(frame.as_ref());
+            ingestion_capture::record(
+                session.vehicle_id,
+                CaptureKind::ParallaxConnection,
+                json!({
+                    "event": if renewal { "ttl_expired" } else { "closed" },
+                    "close_code": frame.as_ref().map(|f| u16::from(f.code)),
+                    "close_reason": frame.as_ref().map(|f| f.reason.to_string()),
+                }),
+            );
+            set_collector_state(pool, session.vehicle_id, "disconnected", None).await?;
+            if renewal {
+                return Ok(());
+            }
+            anyhow::bail!("Parallax socket closed: {frame:?}");
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum SubscriptionEnd {
+    Rejected,
+    Completed,
+    Closed(Option<CloseFrame>),
+    /// No frame for this subscription within the silence limit. The socket
+    /// can stay open, answering pings, after the subscription stops
+    /// delivering; only a new subscription recovers it.
+    Silent,
+}
+
+#[derive(Debug, PartialEq)]
+enum SubscriptionEvent {
+    Envelope(Value),
+    Heartbeat,
+    End(SubscriptionEnd),
+}
+
+/// Reads one subscription, reporting its envelopes, a heartbeat every
+/// `HEARTBEAT_INTERVAL`, and how it ended.
+struct SubscriptionReceiver {
+    heartbeat: tokio::time::Interval,
+    silence_limit: Duration,
+    silent_at: tokio::time::Instant,
+}
+
+impl SubscriptionReceiver {
+    async fn new(silence_limit: Duration) -> Self {
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.tick().await;
+        Self {
+            heartbeat,
+            silence_limit,
+            silent_at: tokio::time::Instant::now() + silence_limit,
+        }
+    }
+
+    async fn next<S>(&mut self, websocket: &mut S) -> Result<SubscriptionEvent>
+    where
+        S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
+            + Unpin,
+    {
+        loop {
+            let message = tokio::select! {
+                // A frame that is already waiting wins over the deadline.
+                biased;
+                message = websocket.next() => message,
+                _ = self.heartbeat.tick() => return Ok(SubscriptionEvent::Heartbeat),
+                _ = tokio::time::sleep_until(self.silent_at) => {
+                    return Ok(SubscriptionEvent::End(SubscriptionEnd::Silent));
+                }
+            };
+            let Some(message) = message else {
+                anyhow::bail!("Parallax socket ended");
+            };
+            match SocketAction::classify(message?) {
+                SocketAction::Reply(reply) => websocket.send(reply).await?,
+                SocketAction::Envelope(envelope) => {
+                    self.silent_at = tokio::time::Instant::now() + self.silence_limit;
+                    return Ok(SubscriptionEvent::Envelope(envelope));
+                }
+                SocketAction::Rejected => {
+                    return Ok(SubscriptionEvent::End(SubscriptionEnd::Rejected));
+                }
+                SocketAction::Completed => {
+                    return Ok(SubscriptionEvent::End(SubscriptionEnd::Completed));
+                }
+                SocketAction::Closed(frame) => {
+                    return Ok(SubscriptionEvent::End(SubscriptionEnd::Closed(frame)));
+                }
+                SocketAction::Ignore => {}
             }
         }
     }
@@ -2388,6 +2486,98 @@ mod tests {
             matching_active_session(&terminal, started + chrono::Duration::minutes(2)),
             None
         );
+    }
+
+    async fn socket_pair() -> (
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    ) {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        (
+            tokio_tungstenite::WebSocketStream::from_raw_socket(client, Role::Client, None).await,
+            tokio_tungstenite::WebSocketStream::from_raw_socket(server, Role::Server, None).await,
+        )
+    }
+
+    fn frame() -> Message {
+        Message::Text(
+            json!({
+                "id": SUBSCRIPTION_ID,
+                "type": "next",
+                "payload": { "data": { "parallaxMessages": { "rvm": "vehicle.power.state" } } },
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_subscription_is_renewed_while_the_socket_stays_open() {
+        let (mut client, mut server) = socket_pair().await;
+        let started = tokio::time::Instant::now();
+        let peer = tokio::spawn(async move {
+            // The socket stays busy with traffic for other operations.
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let other = json!({ "type": "ka" }).to_string();
+                if server.send(Message::Text(other.into())).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut receiver = SubscriptionReceiver::new(MAX_SUBSCRIPTION_SILENCE).await;
+        let mut heartbeats = 0;
+        let end = loop {
+            match receiver.next(&mut client).await.unwrap() {
+                SubscriptionEvent::Heartbeat => heartbeats += 1,
+                SubscriptionEvent::Envelope(_) => panic!("no subscription frame was sent"),
+                SubscriptionEvent::End(end) => break end,
+            }
+        };
+        assert_eq!(end, SubscriptionEnd::Silent);
+        assert!(started.elapsed() >= MAX_SUBSCRIPTION_SILENCE);
+        assert!(started.elapsed() < MAX_SUBSCRIPTION_SILENCE + Duration::from_secs(1));
+        // The last heartbeat and the deadline fall on the same instant.
+        assert!((29..=30).contains(&heartbeats), "{heartbeats}");
+        peer.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn subscription_frames_postpone_renewal_until_rivian_closes() {
+        let (mut client, mut server) = socket_pair().await;
+        let peer = tokio::spawn(async move {
+            for _ in 0..4 {
+                tokio::time::sleep(Duration::from_secs(10 * 60)).await;
+                server.send(frame()).await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            server
+                .close(Some(CloseFrame {
+                    code: 4420.into(),
+                    reason: "Connection TTL expired".into(),
+                }))
+                .await
+                .unwrap();
+        });
+        let mut receiver = SubscriptionReceiver::new(MAX_SUBSCRIPTION_SILENCE).await;
+        let mut envelopes = 0;
+        let end = loop {
+            match receiver.next(&mut client).await.unwrap() {
+                SubscriptionEvent::Heartbeat => {}
+                SubscriptionEvent::Envelope(envelope) => {
+                    assert_eq!(envelope["rvm"], "vehicle.power.state");
+                    envelopes += 1;
+                }
+                SubscriptionEvent::End(end) => break end,
+            }
+        };
+        let SubscriptionEnd::Closed(frame) = end else {
+            panic!("expected Rivian's close, got {end:?}");
+        };
+        assert!(crate::ingestion::ws_client::is_rivian_connection_ttl_expired(frame.as_ref()));
+        assert_eq!(envelopes, 4);
+        peer.await.unwrap();
     }
 }
 

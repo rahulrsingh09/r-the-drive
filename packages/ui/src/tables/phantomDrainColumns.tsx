@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { createColumnHelper, type CellContext } from '@tanstack/react-table';
-import { cellText, socRange } from './cellPresentation';
+import { createColumnHelper } from '@tanstack/react-table';
 import { Tooltip } from '../primitives/Tooltip';
 import { formatKwh, formatMiles, formatPercent, formatSmartNumber } from '../lib/utils';
 import { formatAppDateTime } from '../lib/dateTime';
@@ -34,41 +33,27 @@ export interface PhantomDrainRow {
 
 const col = createColumnHelper<PhantomDrainRow>();
 
-function dateCell(info: CellContext<PhantomDrainRow, string | null>) {
-  const raw = info.getValue();
-  const text = raw && formatAppDateTime(raw);
-  const display = text ? { title: text, children: text } : { children: '-' };
-  return <span className="whitespace-nowrap text-fg" {...display} />;
+function formatDateTime(value: string | null) {
+  if (!value) return '-';
+  return formatAppDateTime(value);
 }
 
-function drainNumber(value: number | null, decimals: number, suffix: string, factor = 1) {
-  return value == null || Number.isNaN(value) ? '-' : `${formatSmartNumber(value / factor, decimals)}${suffix}`;
-}
 export function formatDurationHours(value: number | null) {
-  return drainNumber(value, 1, ' h');
+  if (value == null || Number.isNaN(value)) return '-';
+  return `${formatSmartNumber(value, 1)} h`;
 }
+
 export function formatPowerWatts(value: number | null) {
-  const kilo = value != null && Math.abs(value) >= 1000;
-  return drainNumber(value, kilo ? 2 : 0, kilo ? ' kW' : ' W', kilo ? 1000 : 1);
+  if (value == null || Number.isNaN(value)) return '-';
+  if (Math.abs(value) >= 1000) {
+    return `${formatSmartNumber(value / 1000, 2)} kW`;
+  }
+  return `${formatSmartNumber(value, 0)} W`;
 }
+
 export function formatRatioPercent(value: number | null, decimals = 0) {
-  return value == null || Number.isNaN(value) ? '-' : formatPercent(value * 100, decimals);
-}
-const DRAIN_METRICS = {
-  sleep_share_pct: { empty: 'Unknown', className: 'font-mono text-fg-secondary', format: (value: number) => formatRatioPercent(value, 0) },
-  state_coverage_pct: { empty: '-', className: 'font-mono text-fg-secondary', format: (value: number) => formatRatioPercent(value, 0) },
-  soc_lost_pct: { empty: '-', className: 'font-mono text-fg', format: (value: number) => `-${formatPercent(value, 2)}` },
-  drain_pct_per_hour: { empty: '-', className: 'font-mono text-fg', format: (value: number) => `${formatPercent(value, 2)} / h` },
-  range_lost_mi: { empty: '-', className: 'font-mono text-fg', format: formatMiles },
-  range_lost_per_hour_mi: { empty: '-', className: 'font-mono text-fg-secondary', format: (value: number) => `${formatMiles(value, 2)} / h` },
-} as const;
-function metricCell(field: keyof typeof DRAIN_METRICS) {
-  const contract = DRAIN_METRICS[field];
-  return (info: CellContext<PhantomDrainRow, number | null>) => {
-    const value = info.getValue();
-    const missing = value == null || Number.isNaN(value);
-    return <span className={missing ? 'text-fg-tertiary' : contract.className}>{missing ? contract.empty : contract.format(value)}</span>;
-  };
+  if (value == null || Number.isNaN(value)) return '-';
+  return formatPercent(value * 100, decimals);
 }
 
 function infoHeader(label: string, description: string) {
@@ -88,7 +73,8 @@ function infoHeader(label: string, description: string) {
 }
 
 function reasonLabel(value: string | null) {
-  return (value || '-').split('_').join(' ');
+  if (!value) return '-';
+  return value.replaceAll('_', ' ');
 }
 
 export const phantomDrainColumns = [
@@ -99,7 +85,14 @@ export const phantomDrainColumns = [
       cellClassName: 'w-[9.25rem]',
       columnLabel: 'Start',
     },
-    cell: dateCell,
+    cell: (info) => {
+      const value = info.getValue();
+      return (
+        <span className="whitespace-nowrap text-fg" title={value ? formatAppDateTime(value) : undefined}>
+          {formatDateTime(value)}
+        </span>
+      );
+    },
   }),
   col.accessor('period_end', {
     header: 'End',
@@ -108,7 +101,14 @@ export const phantomDrainColumns = [
       cellClassName: 'w-[9.25rem]',
       columnLabel: 'End',
     },
-    cell: dateCell,
+    cell: (info) => {
+      const value = info.getValue();
+      return (
+        <span className="whitespace-nowrap text-fg" title={value ? formatAppDateTime(value) : undefined}>
+          {formatDateTime(value)}
+        </span>
+      );
+    },
   }),
   col.accessor('duration_hours', {
     header: 'Dur',
@@ -131,7 +131,11 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Sleep',
     },
-    cell: metricCell('sleep_share_pct'),
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">Unknown</span>;
+      return <span className="font-mono text-fg-secondary">{formatRatioPercent(value, 0)}</span>;
+    },
   }),
   col.accessor('state_coverage_pct', {
     header: () => infoHeader(
@@ -144,31 +148,45 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'State Coverage',
     },
-    cell: metricCell('state_coverage_pct'),
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
+      return <span className="font-mono text-fg-secondary">{formatRatioPercent(value, 0)}</span>;
+    },
   }),
   col.accessor('soc_start', {
     id: 'soc_range',
-    header: 'SoC',
+    header: 'Battery',
     enableSorting: false,
     meta: {
       headerClassName: 'w-[7.75rem] text-center',
       cellClassName: 'w-[7.75rem] whitespace-nowrap text-center',
       headerContentClassName: 'w-full justify-center',
-      columnLabel: 'SoC',
+      columnLabel: 'Battery',
     },
     cell: (info) => {
-      return socRange(info.row.original.soc_start, info.row.original.soc_end, true);
+      const row = info.row.original;
+      if (row.soc_start == null || row.soc_end == null) return <span className="text-fg-tertiary">-</span>;
+      return (
+        <span className="inline-flex items-center gap-1 whitespace-nowrap font-mono text-fg">
+          {formatPercent(row.soc_start, 0)} → {formatPercent(row.soc_end, 0)}
+        </span>
+      );
     },
   }),
   col.accessor('soc_lost_pct', {
-    header: () => infoHeader('SoC Diff', 'Battery percentage dropped during this validated parked session.'),
+    header: () => infoHeader('Battery lost', 'Battery percentage lost during this validated parked session.'),
     meta: {
       headerClassName: 'w-[5.25rem] text-center',
       cellClassName: 'w-[5.25rem] whitespace-nowrap text-center',
       headerContentClassName: 'w-full justify-center',
-      columnLabel: 'SoC Diff',
+      columnLabel: 'Battery lost',
     },
-    cell: metricCell('soc_lost_pct'),
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
+      return <span className="font-mono text-fg">-{formatPercent(value, 2)}</span>;
+    },
   }),
   col.accessor('drain_pct_per_hour', {
     header: () => infoHeader('Drain / h', 'Validated battery percentage lost per parked hour during this session.'),
@@ -178,12 +196,16 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Drain / h',
     },
-    cell: metricCell('drain_pct_per_hour'),
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
+      return <span className="font-mono text-fg">{formatPercent(value, 2)} / h</span>;
+    },
   }),
   col.accessor('range_lost_mi', {
     header: () => infoHeader(
       'Range',
-      'Validated range loss from boundary samples. Values are hidden when the range anchors do not agree with the SoC-backed drain math.',
+      'Validated range loss from boundary samples. Values are hidden when the range anchors do not agree with the battery-level drain math.',
     ),
     meta: {
       headerClassName: 'w-[5.75rem] text-center',
@@ -191,7 +213,11 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Range',
     },
-    cell: metricCell('range_lost_mi'),
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
+      return <span className="font-mono text-fg">{formatMiles(value)}</span>;
+    },
   }),
   col.accessor('range_lost_per_hour_mi', {
     header: () => infoHeader('Range / h', 'Estimated miles of range lost per hour over this validated parked session.'),
@@ -201,7 +227,11 @@ export const phantomDrainColumns = [
       headerContentClassName: 'w-full justify-center',
       columnLabel: 'Range / h',
     },
-    cell: metricCell('range_lost_per_hour_mi'),
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
+      return <span className="font-mono text-fg-secondary">{`${formatMiles(value, 2)} / h`}</span>;
+    },
   }),
   col.accessor('energy_drained_kwh', {
     header: 'kWh',
@@ -216,7 +246,7 @@ export const phantomDrainColumns = [
   col.accessor('avg_power_w', {
     header: () => infoHeader(
       'Power',
-      'Average power draw inferred from validated SoC loss and estimated battery capacity during this session.',
+      'Average power draw inferred from validated battery loss and estimated battery capacity during this session.',
     ),
     meta: {
       headerClassName: 'w-[5.5rem] text-center',
@@ -244,8 +274,17 @@ export const phantomDrainColumns = [
       columnLabel: 'Reduced range',
     },
     cell: (info) => {
-      const states = [cellText(null, '', ' '), <span key="reduced" role="img" aria-label="Reduced range conditions" title="Estimated range loss may be impacted by reduced-range conditions." className="text-accent">{'\u2744'}</span>];
-      return states[Number(Boolean(info.getValue()))];
+      if (!info.getValue()) return <span className="text-fg-tertiary"> </span>;
+      return (
+        <span
+          role="img"
+          aria-label="Reduced range conditions"
+          title="Estimated range loss may be impacted by reduced-range conditions."
+          className="text-accent"
+        >
+          {'\u2744'}
+        </span>
+      );
     },
   }),
 ];

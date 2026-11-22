@@ -1,15 +1,9 @@
-import React from 'react';
-import { createRoute } from '@tanstack/react-router';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { BatteryDashboardPage } from '../components/dashboard/BatteryDashboardPage';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 
+/** Battery moved to the Battery tab of Insights. Keep old links working. */
 export const batteryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/battery',
-  component: () => (
-    <ProtectedRoute>
-      <BatteryDashboardPage navKey="battery" slug="battery" title="Battery" />
-    </ProtectedRoute>
-  ),
+  beforeLoad: () => { throw redirect({ to: '/insights/$tab', params: { tab: 'battery' }, replace: true }); },
 });
