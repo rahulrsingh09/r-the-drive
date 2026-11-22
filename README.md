@@ -13,6 +13,7 @@ R:The Drive is a private, self-hosted application for understanding your Rivian.
 
 [Deploy with the setup script](./scripts/deploy.py) · [Installation guide](./docs/guides/getting-started.md) · [Documentation](./docs/index.md)
 
+
 ## What you can do
 
 - **See your vehicle:** View charge level, estimated range, lock state, temperatures, tire pressure and software information alongside an interactive vehicle view.
@@ -84,19 +85,7 @@ The installer retains data and keys on failure and rechecks the selected Docker 
 
 ## A look inside
 
-These screenshots use synthetic vehicle data.
-
-| Desktop, light | Desktop, dark |
-| --- | --- |
-| ![R:The Drive overview in light mode](./docs/assets/readme/overview-desktop-light.png) | ![R:The Drive overview in dark mode](./docs/assets/readme/overview-desktop-dark.png) |
-
-| Charging, light | Charging, dark |
-| --- | --- |
-| ![R:The Drive charging in light mode](./docs/assets/readme/charging-desktop-light.png) | ![R:The Drive charging in dark mode](./docs/assets/readme/charging-desktop-dark.png) |
-
-| Mobile overview | Mobile charging |
-| --- | --- |
-| <img src="./docs/assets/readme/overview-mobile-light.png" alt="R:The Drive overview on mobile" width="240" /> | <img src="./docs/assets/readme/charging-mobile-dark.png" alt="R:The Drive charging on mobile" width="240" /> |
+https://github.com/user-attachments/assets/8cce2271-66e9-43dd-9d07-6ae6c45e72b1
 
 ## Security and privacy
 
