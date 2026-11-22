@@ -63,6 +63,8 @@ import type {
   StartRestoreResponse,
   UploadBackupResponse,
   IdleDrainResponse,
+  TripGapsResponse,
+  RecoveredTrip,
   VehicleMember,
   AddVehicleMemberBody,
   UpdateVehicleMemberBody,
@@ -1679,6 +1681,43 @@ export class AuthenticatedTransport extends RequestTransport {
       path: '/v1/admin/rivian/stewardship',
     });
   }
+
+  async getTripGaps(vehicleId: string): Promise<TripGapsResponse> {
+    return this.execute({
+      method: 'GET',
+      path: `/v1/vehicles/${vehicleId}/trip-gaps`,
+      retryOnUnauthorized: true,
+      reportErrors: false,
+    });
+  }
+
+  async recoverTripGap(vehicleId: string, gapId: string): Promise<RecoveredTrip> {
+    return this.execute({
+      method: 'POST',
+      path: `/v1/vehicles/${vehicleId}/trip-gaps/${encodeURIComponent(gapId)}/recover`,
+      retryOnUnauthorized: true,
+      reportErrors: false,
+    });
+  }
+
+  async revokeOtherAuthSessions(): Promise<{ revoked: number }> {
+    return this.execute({
+      method: 'POST',
+      path: '/v1/auth/sessions/revoke-others',
+    });
+  }
+
+  async applyChargePlaceTag(
+    vehicleId: string,
+    sessionId: string,
+    tag: 'home' | 'office' | 'other',
+  ): Promise<{ tag: string; place_id: string | null; updated: number; session_ids: string[] }> {
+    return this.execute({
+      method: 'POST',
+      path: `/v1/vehicles/${vehicleId}/charging-sessions/${sessionId}/place-tag`,
+      body: { tag },
+    });
+  }
 }
 
 export const transport = new AuthenticatedTransport();
@@ -1722,7 +1761,8 @@ export const authClient = client(
   'updateDashboardChartFavorite',
   'getAppTimezone',
   'updateAppTimezone',
-  'getAppVersion'
+  'getAppVersion',
+  'revokeOtherAuthSessions'
 );
 
 export const vehicleClient = client(
@@ -1772,13 +1812,16 @@ export const tripClient = client(
   'createTripTag',
   'updateTripTag',
   'deleteTripTag',
-  'updateTripTagAssignments'
+  'updateTripTagAssignments',
+  'getTripGaps',
+  'recoverTripGap'
 );
 
 export const chargingClient = client(
   'listChargeSessions',
   'getChargeSession',
   'updateChargeSession',
+  'applyChargePlaceTag',
   'listChargingNetworkPreferences',
   'updateChargingNetworkPreference',
   'getChargeCurve',

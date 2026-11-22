@@ -52,16 +52,15 @@ pub(super) fn totals() -> String {
         .map(|(alias, reduction)| format!("{} AS {alias}", reduction.sql()))
         .collect::<Vec<_>>()
         .join(",");
+    let charger_sql = crate::charger_type_sql!("cs");
     format!("WITH normalized AS (
-        SELECT COALESCE(kwh_added,energy_added_wh/1000.0) AS energy_kwh,
-            is_home,charger_type,network_vendor,charge_limit,cost_usd,energy_used_wh,is_free_session,range_added_km,rivian_paid_total,
-            COALESCE(max_charge_rate_kw,avg_charge_rate_kw,CASE WHEN duration_minutes>0
-                THEN COALESCE(kwh_added,energy_added_wh/1000.0)/(duration_minutes::float8/60.0) END) AS rate_kw
-        FROM panda.charge_sessions WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
+        SELECT COALESCE(cs.kwh_added,cs.energy_added_wh/1000.0) AS energy_kwh,
+            cs.is_home,cs.charger_type,cs.network_vendor,cs.charge_limit,cs.cost_usd,cs.energy_used_wh,cs.is_free_session,cs.range_added_km,cs.rivian_paid_total,
+            COALESCE(cs.max_charge_rate_kw,cs.avg_charge_rate_kw,CASE WHEN cs.duration_minutes>0
+                THEN COALESCE(cs.kwh_added,cs.energy_added_wh/1000.0)/(cs.duration_minutes::float8/60.0) END) AS rate_kw,
+            {charger_sql} AS derived_type
+        FROM panda.charge_sessions cs WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3
     ), typed AS (
-        SELECT *,COALESCE(charger_type,CASE
-            WHEN lower(COALESCE(network_vendor,''))=ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-            WHEN rate_kw<12 THEN 'ac' WHEN rate_kw<50 THEN 'ac_l2' WHEN rate_kw IS NOT NULL THEN 'dc'
-        END) AS derived_type FROM normalized
+        SELECT * FROM normalized
     ) SELECT {projection} FROM typed")
 }

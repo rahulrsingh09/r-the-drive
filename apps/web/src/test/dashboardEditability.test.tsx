@@ -1,7 +1,8 @@
 // The canonical dashboard controller is exercised independently of the R presentation.
 vi.mock('../features/r-experience/RDashboardSurface', () => ({ RDashboardSurface: ({ children }: { children: React.ReactNode }) => children }));
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardConfig } from '@panda/dashboards';
 
@@ -172,9 +173,31 @@ vi.mock('@panda/ui/primitives', () => ({
 }));
 
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
-import { userDashboardRoute } from '../routes/d.$slug';
 
-const RouteComponent = userDashboardRoute.options.component as React.ComponentType;
+
+async function expectEditableDashboard(widgetId: string, widgetCount: number, editableWidgetCount = widgetCount) {
+  expect(screen.queryByTestId(`widget-overlay-right-${widgetId}`)).toBeNull();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Edit dashboard' }));
+
+  const editOverlay = await screen.findByTestId(`widget-overlay-right-${widgetId}`);
+  const editButton = within(editOverlay).getByRole('button', { name: 'Edit widget settings' });
+  const host = screen.getByTestId(`widget-host-${widgetId}`);
+  const gridItem = host.closest('.react-grid-item');
+  const editFrames = document.querySelectorAll('[data-widget-frame="edit"]');
+
+  expect(editFrames).toHaveLength(widgetCount);
+  expect(screen.getAllByRole('button', { name: 'Edit widget settings' })).toHaveLength(editableWidgetCount);
+  expect(host.closest('[data-widget-frame="edit"]')).toHaveAttribute('data-widget-id', widgetId);
+  expect(host.closest('[data-widget-frame="edit"]')).toHaveAttribute('data-widget-resizable', 'true');
+  expect(editOverlay).toHaveAttribute('data-widget-edit-control', 'true');
+  expect(gridItem?.querySelector('.react-resizable-handle')).not.toBeNull();
+
+  await userEvent.click(editButton);
+
+  expect(await screen.findByText('Editing')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Remove component' })).toBeInTheDocument();
+}
 
 describe('dashboard editability', () => {
   beforeEach(() => {
@@ -190,45 +213,15 @@ describe('dashboard editability', () => {
     localStorage.setItem('rm-show-dashboard-edit-button:anonymous', 'true');
   });
 
-  it.each(['dashboard', 'battery', 'charging', 'efficiency', 'trips'])('keeps %s in view mode even when edit is requested', (slug) => {
-    const onEditModeChange = vi.fn();
-    const state = vi.fn();
-    render(<DashboardPageShell navKey={slug} slug={slug} title={slug} isEditMode enableDashboardEditing onEditModeChange={onEditModeChange} renderActions={state} />);
-    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Save dashboard changes' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Discard dashboard changes' })).toBeNull();
-    expect(document.querySelector('[data-widget-frame="edit"]')).toBeNull();
-    expect(document.querySelector('.react-resizable-handle')).toBeNull();
-    const latest = state.mock.calls.at(-1)![0];
-    expect(latest.isEditMode).toBe(false);
-    expect(latest.activeConfig).toBe(latest.savedConfig);
-    expect(latest).not.toHaveProperty('setLocalConfig');
-    expect(latest).not.toHaveProperty('enterEdit');
-    expect(latest.ctx).not.toHaveProperty('updateWidgetLayout');
-    expect(onEditModeChange).not.toHaveBeenCalled();
-    expect(dashboardMocks.updateDashboard).not.toHaveBeenCalled();
-    expect(dashboardMocks.updateAdminDashboard).not.toHaveBeenCalled();
-    expect(dashboardMocks.createDashboard).not.toHaveBeenCalled();
-  });
+  it.each([
+    ['dashboard', 'd1000001-0000-0000-0000-000000000002', 15, 14],
+    ['battery', 'd2000002-0000-0000-0000-000000000001', 14, 14],
+    ['charging', 'd4000004-0000-0000-0000-000000000001', 12, 12],
+    ['efficiency', 'd3000003-0000-0000-0000-000000000001', 9, 9],
+    ['trips', 'd5000005-0000-0000-0000-000000000005', 6, 6],
+  ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId, widgetCount, editableWidgetCount) => {
+    render(<DashboardPageShell navKey={slug} slug={slug} title={slug} />);
 
-  it('renders the saved custom dashboard unchanged for a manually entered edit query', () => {
-    dashboardMocks.routeSearch = { edit: 1, dashboardId: 'custom-dashboard-id' };
-    render(<RouteComponent />);
-    expect(screen.getByTestId('widget-host-custom-widget')).toHaveTextContent('Custom miles');
-    expect(document.querySelector('[data-widget-frame="edit"]')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Duplicate' })).toBeNull();
-    expect(screen.queryByTitle('Import from YAML')).toBeNull();
-    expect(screen.getByTitle('Export as YAML')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Customize' })).toBeNull();
-    expect(dashboardMocks.cloneDashboard).not.toHaveBeenCalled();
-    expect(dashboardMocks.navigate).not.toHaveBeenCalled();
-  });
-
-  it('hides the page edit shortcut when the dashboard setting is off', () => {
-    localStorage.removeItem('rm-show-dashboard-edit-button:anonymous');
-
-    render(<RouteComponent />);
-
-    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).toBeNull();
+    await expectEditableDashboard(widgetId, widgetCount, editableWidgetCount);
   });
 });

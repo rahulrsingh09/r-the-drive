@@ -1,7 +1,16 @@
-//! Cost profile resolution service.
+//! Charge cost resolution service.
 //!
-//! Resolution priority is explicit session correction, configured network,
-//! upstream Rivian amount/free status, then the normal profile resolution.
+//! Resolution order, first match wins:
+//!
+//! 1. The owner's correction on the charge: free or a total.
+//! 2. A network that the owner marked free.
+//! 3. A charge that Rivian marks free.
+//! 4. Rivian's paid total for a known paid network that is not at home.
+//! 5. A cost profile: the charge's own profile, then the place profile, then
+//!    the vehicle default profile. The vehicle default never prices a public
+//!    DC charge (charger type DC and not at home): that charge stays
+//!    "unknown" so that the owner enters the price.
+//! 6. Otherwise "unknown", with no cost.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -16,11 +25,40 @@ use crate::{
     },
 };
 
+/// Every value that `apply_cost_inputs` writes to `charge_sessions.cost_method`.
+pub const COST_METHODS: [&str; 8] = [
+    "user_free",
+    "user_manual",
+    "network_free",
+    "rivian_free_session",
+    "rivian_paid_total",
+    "profile",
+    "profile_pending",
+    "unknown",
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChargeCostComputation {
     pub cost_profile_id: Option<Uuid>,
     pub cost_method: String,
     pub cost_usd: Option<f64>,
+}
+
+/// The tier that supplied a cost profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileSource {
+    /// A profile on the charge that is not the place or vehicle default.
+    Session,
+    /// The profile of the place where the charge happened.
+    Place,
+    /// The vehicle default profile.
+    VehicleDefault,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedProfile {
+    pub profile: CostProfile,
+    pub source: ProfileSource,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -39,6 +77,7 @@ struct ChargeSessionCostRow {
     is_rivian_network: Option<bool>,
     is_home: Option<bool>,
     is_free_session: Option<bool>,
+    charger_type: Option<String>,
     network_cost_mode: Option<String>,
     cost_override_mode: String,
     cost_override_usd: Option<f64>,
@@ -50,7 +89,11 @@ pub struct CostInputs {
     pub is_rivian_network: Option<bool>,
     pub is_home: Option<bool>,
     pub is_free_session: Option<bool>,
+    /// Shared charger classification (`charger_type_sql!`): `dc`, `ac` or none.
+    pub charger_type: Option<String>,
+    /// Network preference: `automatic` or `free`.
     pub network_cost_mode: Option<String>,
+    /// Charge correction: `automatic`, `free` or `manual`.
     pub cost_override_mode: String,
     pub cost_override_usd: Option<f64>,
     pub rivian_paid_total: Option<f64>,
@@ -67,6 +110,12 @@ pub struct CostInputs {
     pub timed_kwh_readings: Vec<TimedEnergyPoint>,
 }
 
+/// A DC charge that is not at home. The vehicle default profile (usually the
+/// home rate) must not price it.
+pub fn is_public_dc(is_home: Option<bool>, charger_type: Option<&str>) -> bool {
+    is_home != Some(true) && charger_type == Some("dc")
+}
+
 /// Pure computation: given session inputs and an optional cost profile, return
 /// the cost method, resolved profile id, and computed cost_usd.
 ///
@@ -81,9 +130,12 @@ pub struct CostInputs {
 /// `is_public` is intentionally excluded from this decision: Rivian returns
 /// `isPublic=true` for home sessions too (it means "visible to account
 /// owner," not "you paid for it").
+///
+/// A `VehicleDefault` profile is ignored for a public DC charge
+/// (`is_public_dc`), so that charge resolves to `unknown`.
 pub fn apply_cost_inputs(
     inputs: &CostInputs,
-    profile: Option<&CostProfile>,
+    profile: Option<&ResolvedProfile>,
 ) -> ChargeCostComputation {
     CostBasis::select(inputs, profile).evaluate(inputs)
 }
@@ -102,7 +154,7 @@ enum CostBasis<'profile> {
 }
 
 impl<'profile> CostBasis<'profile> {
-    fn select(inputs: &CostInputs, profile: Option<&'profile CostProfile>) -> Self {
+    fn select(inputs: &CostInputs, profile: Option<&'profile ResolvedProfile>) -> Self {
         let fixed = match inputs.cost_override_mode.as_str() {
             "free" => Some(("user_free", Some(0.0))),
             "manual" => Some(("user_manual", inputs.cost_override_usd)),
@@ -115,15 +167,19 @@ impl<'profile> CostBasis<'profile> {
         if let Some((method, amount)) = fixed {
             return Self::Fixed { method, amount };
         }
+        let filtered_profile = profile.filter(|resolved| {
+            resolved.source != ProfileSource::VehicleDefault
+                || !is_public_dc(inputs.is_home, inputs.charger_type.as_deref())
+        });
         if inputs.is_rivian_network == Some(true) && inputs.is_home != Some(true) {
             if let Some(amount) = inputs.rivian_paid_total {
                 return Self::Provider {
                     amount,
-                    profile_id: profile.map(|profile| profile.id),
+                    profile_id: filtered_profile.map(|resolved| resolved.profile.id),
                 };
             }
         }
-        profile.map_or(Self::Unknown, Self::Profile)
+        filtered_profile.map_or(Self::Unknown, |resolved| Self::Profile(&resolved.profile))
     }
 
     fn evaluate(self, inputs: &CostInputs) -> ChargeCostComputation {
@@ -163,6 +219,23 @@ impl<'profile> CostBasis<'profile> {
     }
 }
 
+/// Classify a profile found on the charge itself. `recompute` writes the
+/// resolved profile id back to the charge, so a charge profile can be a copy
+/// of the place profile or of the vehicle default.
+fn session_profile_source(
+    profile_id: Uuid,
+    place_profile_id: Option<Uuid>,
+    vehicle_default_id: Option<Uuid>,
+) -> ProfileSource {
+    if Some(profile_id) == place_profile_id {
+        ProfileSource::Place
+    } else if Some(profile_id) == vehicle_default_id {
+        ProfileSource::VehicleDefault
+    } else {
+        ProfileSource::Session
+    }
+}
+
 /// Resolve an effective pinned, geofence-linked, or vehicle-owner default profile.
 /// Profile owners must still manage the vehicle when its cost is resolved.
 pub async fn resolve_profile(
@@ -172,15 +245,68 @@ pub async fn resolve_profile(
     vehicle_id: Uuid,
     started_at: DateTime<Utc>,
 ) -> Result<Option<CostProfile>> {
-    let sources = [
-        ProfileSource::Pinned(explicit_id),
-        ProfileSource::Geofence(geofence_id),
-        ProfileSource::VehicleOwner(vehicle_id),
+    Ok(
+        resolve_profile_with_source(pool, explicit_id, geofence_id, vehicle_id, started_at, true)
+            .await?
+            .map(|resolved| resolved.profile),
+    )
+}
+
+/// Resolve the cost profile and the tier that supplied it.
+///
+/// `allow_vehicle_default` — `false` skips every candidate that is the vehicle
+///   default profile (used for public DC charges), so a later tier can apply.
+pub async fn resolve_profile_with_source(
+    pool: &PgPool,
+    explicit_id: Option<Uuid>,
+    geofence_id: Option<Uuid>,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    allow_vehicle_default: bool,
+) -> Result<Option<ResolvedProfile>> {
+    let place_profile_id: Option<Uuid> = match geofence_id {
+        Some(gf_id) => sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT cost_profile_id FROM panda.geofences WHERE id = $1",
+        )
+        .bind(gf_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
+        None => None,
+    };
+
+    let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
+    let vehicle_default_id: Option<Uuid> = if let Some(owner_id) = owner_id {
+        sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT default_cost_profile_id
+             FROM panda.vehicle_user_settings
+             WHERE vehicle_id = $1 AND user_id = $2",
+        )
+        .bind(vehicle_id)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+    } else {
+        None
+    };
+
+    // Tier 1: profile on the charge; tier 2: place; tier 3: vehicle default.
+    let candidates = [
+        explicit_id.map(|id| {
+            (
+                id,
+                session_profile_source(id, place_profile_id, vehicle_default_id),
+            )
+        }),
+        place_profile_id.map(|id| (id, ProfileSource::Place)),
+        vehicle_default_id.map(|id| (id, ProfileSource::VehicleDefault)),
     ];
-    for source in sources {
-        let Some(id) = source.profile_id(pool).await? else {
+
+    for (id, source) in candidates.into_iter().flatten() {
+        if source == ProfileSource::VehicleDefault && !allow_vehicle_default {
             continue;
-        };
+        }
         let Some(profile) = fetch_profile(pool, id).await? else {
             continue;
         };
@@ -198,47 +324,10 @@ pub async fn resolve_profile(
             continue;
         }
         if profile.is_effective_at(started_at) {
-            return Ok(Some(profile));
+            return Ok(Some(ResolvedProfile { profile, source }));
         }
     }
     Ok(None)
-}
-
-enum ProfileSource {
-    Pinned(Option<Uuid>),
-    Geofence(Option<Uuid>),
-    VehicleOwner(Uuid),
-}
-
-impl ProfileSource {
-    async fn profile_id(self, pool: &PgPool) -> Result<Option<Uuid>> {
-        match self {
-            Self::Pinned(id) => Ok(id),
-            Self::Geofence(None) => Ok(None),
-            Self::Geofence(Some(id)) => Ok(sqlx::query_scalar::<_, Option<Uuid>>(
-                "SELECT cost_profile_id FROM panda.geofences WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-            .flatten()),
-            Self::VehicleOwner(vehicle_id) => {
-                let Some(owner_id) = get_vehicle_owner_id(pool, vehicle_id).await? else {
-                    return Ok(None);
-                };
-                Ok(sqlx::query_scalar::<_, Option<Uuid>>(
-                    "SELECT default_cost_profile_id
-             FROM panda.vehicle_user_settings
-             WHERE vehicle_id = $1 AND user_id = $2",
-                )
-                .bind(vehicle_id)
-                .bind(owner_id)
-                .fetch_optional(pool)
-                .await?
-                .flatten())
-            }
-        }
-    }
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -322,12 +411,13 @@ pub async fn recompute_charge_session_cost(
     let Some(session) = load_cost_session(pool, session_id).await? else {
         return Ok(None);
     };
-    let profile = resolve_profile(
+    let profile = resolve_profile_with_source(
         pool,
         session.cost_profile_id,
         session.geofence_id,
         session.vehicle_id,
         session.started_at,
+        !is_public_dc(session.is_home, session.charger_type.as_deref()),
     )
     .await?;
     let readings = collect_cost_evidence(pool, &session).await;
@@ -341,10 +431,13 @@ async fn load_cost_session(
     pool: &PgPool,
     session_id: Uuid,
 ) -> Result<Option<ChargeSessionCostRow>> {
-    let session = sqlx::query_as::<_, ChargeSessionCostRow>(
+    let session = sqlx::query_as::<_, ChargeSessionCostRow>(concat!(
         r#"SELECT cs.id, cs.vehicle_id, cs.geofence_id, cs.cost_profile_id, cs.started_at, cs.ended_at,
-                  duration_minutes, kwh_added, energy_added_wh, energy_used_wh,
-                  rivian_paid_total, is_rivian_network, is_home, is_free_session,
+                  cs.duration_minutes, cs.kwh_added, cs.energy_added_wh, cs.energy_used_wh,
+                  cs.rivian_paid_total, cs.is_rivian_network, cs.is_home, cs.is_free_session,
+                  "#,
+        crate::charger_type_sql!("cs"),
+        r#" AS charger_type,
                   COALESCE(pref.cost_mode, 'automatic') AS network_cost_mode,
                   cs.cost_override_mode, cs.cost_override_usd
            FROM panda.charge_sessions cs
@@ -352,7 +445,7 @@ async fn load_cost_session(
              ON pref.vehicle_id = cs.vehicle_id
             AND pref.vendor_normalized = lower(trim(COALESCE(cs.network_vendor, '')))
            WHERE cs.id = $1"#,
-    )
+    ))
     .bind(session_id)
     .fetch_optional(pool)
     .await?;
@@ -371,6 +464,7 @@ impl ChargeSessionCostRow {
             is_rivian_network: self.is_rivian_network,
             is_home: self.is_home,
             is_free_session: self.is_free_session,
+            charger_type: self.charger_type.clone(),
             network_cost_mode: self.network_cost_mode.clone(),
             cost_override_mode: self.cost_override_mode.clone(),
             cost_override_usd: self.cost_override_usd,
@@ -514,11 +608,23 @@ mod tests {
         }
     }
 
+    fn resolved(profile: &CostProfile, source: ProfileSource) -> ResolvedProfile {
+        ResolvedProfile {
+            profile: profile.clone(),
+            source,
+        }
+    }
+
+    fn at_place(profile: &CostProfile) -> ResolvedProfile {
+        resolved(profile, ProfileSource::Place)
+    }
+
     fn home_inputs(kwh: f64, duration_min: i32) -> CostInputs {
         CostInputs {
             is_rivian_network: Some(false),
             is_home: Some(true),
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -540,7 +646,7 @@ mod tests {
     fn home_session_ignores_rivian_paid_total() {
         let profile = make_profile("per_kwh", 0.12, 0.0);
         let inputs = home_inputs(50.0, 600);
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         // Must use profile cost, NOT rivian_paid_total (999.99)
         assert_eq!(result.cost_method, "profile");
         let cost = result.cost_usd.expect("cost should be computed");
@@ -554,6 +660,7 @@ mod tests {
             is_rivian_network: Some(true),
             is_home: Some(false),
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -565,7 +672,7 @@ mod tests {
             ended_at: None,
             timed_kwh_readings: vec![],
         };
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "rivian_paid_total");
         assert_eq!(result.cost_usd, Some(12.50));
     }
@@ -590,13 +697,13 @@ mod tests {
         inputs.rivian_paid_total = Some(99.0);
         inputs.cost_override_mode = "manual".into();
         inputs.cost_override_usd = Some(4.25);
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "user_manual");
         assert_eq!(result.cost_usd, Some(4.25));
 
         inputs.cost_override_mode = "free".into();
         inputs.cost_override_usd = None;
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "user_free");
         assert_eq!(result.cost_usd, Some(0.0));
     }
@@ -606,13 +713,13 @@ mod tests {
         let profile = make_profile("per_kwh", 1.0, 0.0);
         let mut inputs = home_inputs(10.0, 30);
         inputs.network_cost_mode = Some("free".into());
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "network_free");
         assert_eq!(result.cost_usd, Some(0.0));
 
         inputs.network_cost_mode = None;
         inputs.is_free_session = Some(true);
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "rivian_free_session");
         assert_eq!(result.cost_usd, Some(0.0));
     }
@@ -624,6 +731,7 @@ mod tests {
             is_rivian_network: Some(false),
             is_home: Some(true),
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -635,7 +743,7 @@ mod tests {
             ended_at: None,
             timed_kwh_readings: vec![],
         };
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "profile_pending");
         assert!(result.cost_usd.is_none());
     }
@@ -647,6 +755,7 @@ mod tests {
             is_rivian_network: None,
             is_home: None,
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -658,7 +767,7 @@ mod tests {
             ended_at: None,
             timed_kwh_readings: vec![],
         };
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "profile");
         let cost = result.cost_usd.unwrap();
         assert!((cost - 2.0).abs() < 0.001);
@@ -678,6 +787,7 @@ mod tests {
             is_rivian_network: Some(true),
             is_home: Some(true),
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -689,7 +799,7 @@ mod tests {
             ended_at: None,
             timed_kwh_readings: vec![],
         };
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         // Must use profile (50.4 × 0.12 = $6.048), NOT $508.88.
         assert_eq!(result.cost_method, "profile");
         let cost = result.cost_usd.expect("cost should be computed");
@@ -715,6 +825,7 @@ mod tests {
             is_rivian_network: Some(false),
             is_home: Some(true),
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -726,7 +837,7 @@ mod tests {
             ended_at: Some(end),
             timed_kwh_readings: vec![],
         };
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "profile");
         assert_eq!(result.cost_usd, Some(0.0));
     }
@@ -798,6 +909,7 @@ mod tests {
             is_rivian_network: Some(false),
             is_home: Some(true),
             is_free_session: None,
+            charger_type: None,
             network_cost_mode: None,
             cost_override_mode: "automatic".into(),
             cost_override_usd: None,
@@ -809,7 +921,7 @@ mod tests {
             ended_at: Some(end),
             timed_kwh_readings: readings,
         };
-        let result = apply_cost_inputs(&inputs, Some(&profile));
+        let result = apply_cost_inputs(&inputs, Some(&at_place(&profile)));
         assert_eq!(result.cost_method, "profile");
         // Time-weighted (old) path would give ~$4.50. Reading-based path must give $0.
         assert_eq!(
@@ -817,6 +929,162 @@ mod tests {
             Some(0.0),
             "expected $0 since all charging is in free periods"
         );
+    }
+
+    // ── Public DC rule and profile tiers ──
+
+    fn public_dc_inputs(kwh: f64) -> CostInputs {
+        let mut inputs = home_inputs(kwh, 30);
+        inputs.is_home = Some(false);
+        inputs.charger_type = Some("dc".into());
+        inputs.rivian_paid_total = None;
+        inputs
+    }
+
+    #[test]
+    fn vehicle_default_does_not_price_a_public_dc_charge() {
+        let profile = make_profile("per_kwh", 0.12, 0.0);
+        let default = resolved(&profile, ProfileSource::VehicleDefault);
+
+        let inputs = public_dc_inputs(30.0);
+        let result = apply_cost_inputs(&inputs, Some(&default));
+        assert_eq!(result.cost_method, "unknown");
+        assert_eq!(result.cost_usd, None);
+        assert_eq!(result.cost_profile_id, None);
+
+        // Unknown home status counts as not at home.
+        let mut unknown_place = public_dc_inputs(30.0);
+        unknown_place.is_home = None;
+        let result = apply_cost_inputs(&unknown_place, Some(&default));
+        assert_eq!(result.cost_method, "unknown");
+    }
+
+    #[test]
+    fn vehicle_default_still_prices_home_and_public_ac_charges() {
+        let profile = make_profile("per_kwh", 0.12, 0.0);
+        let default = resolved(&profile, ProfileSource::VehicleDefault);
+
+        let mut home_dc = home_inputs(10.0, 30);
+        home_dc.charger_type = Some("dc".into());
+        let result = apply_cost_inputs(&home_dc, Some(&default));
+        assert_eq!(result.cost_method, "profile");
+        assert_eq!(result.cost_profile_id, Some(profile.id));
+
+        let mut public_ac = public_dc_inputs(10.0);
+        public_ac.charger_type = Some("ac".into());
+        let result = apply_cost_inputs(&public_ac, Some(&default));
+        assert_eq!(result.cost_method, "profile");
+
+        let mut public_unclassified = public_dc_inputs(10.0);
+        public_unclassified.charger_type = None;
+        let result = apply_cost_inputs(&public_unclassified, Some(&default));
+        assert_eq!(result.cost_method, "profile");
+    }
+
+    #[test]
+    fn place_and_charge_profiles_still_price_a_public_dc_charge() {
+        let profile = make_profile("per_kwh", 0.4, 0.0);
+        let inputs = public_dc_inputs(10.0);
+        for source in [ProfileSource::Place, ProfileSource::Session] {
+            let result = apply_cost_inputs(&inputs, Some(&resolved(&profile, source)));
+            assert_eq!(result.cost_method, "profile", "{source:?}");
+            assert!((result.cost_usd.unwrap() - 4.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn corrections_and_rivian_amounts_still_price_a_public_dc_charge() {
+        let profile = make_profile("per_kwh", 0.12, 0.0);
+        let default = resolved(&profile, ProfileSource::VehicleDefault);
+
+        let mut manual = public_dc_inputs(30.0);
+        manual.cost_override_mode = "manual".into();
+        manual.cost_override_usd = Some(14.4);
+        let result = apply_cost_inputs(&manual, Some(&default));
+        assert_eq!(result.cost_method, "user_manual");
+        assert_eq!(result.cost_usd, Some(14.4));
+
+        let mut paid = public_dc_inputs(30.0);
+        paid.is_rivian_network = Some(true);
+        paid.rivian_paid_total = Some(11.25);
+        let result = apply_cost_inputs(&paid, Some(&default));
+        assert_eq!(result.cost_method, "rivian_paid_total");
+        assert_eq!(result.cost_usd, Some(11.25));
+        // The dropped default is not reported as the profile.
+        assert_eq!(result.cost_profile_id, None);
+    }
+
+    #[test]
+    fn public_dc_rule_needs_a_dc_charger_away_from_home() {
+        assert!(is_public_dc(Some(false), Some("dc")));
+        assert!(is_public_dc(None, Some("dc")));
+        assert!(!is_public_dc(Some(true), Some("dc")));
+        assert!(!is_public_dc(Some(false), Some("ac")));
+        assert!(!is_public_dc(Some(false), None));
+    }
+
+    #[test]
+    fn a_charge_profile_copy_keeps_the_tier_it_came_from() {
+        let charge = Uuid::new_v4();
+        let place = Uuid::new_v4();
+        let default = Uuid::new_v4();
+        assert_eq!(
+            session_profile_source(place, Some(place), Some(default)),
+            ProfileSource::Place
+        );
+        assert_eq!(
+            session_profile_source(default, Some(place), Some(default)),
+            ProfileSource::VehicleDefault
+        );
+        // A place that shares the default profile is still a place price.
+        assert_eq!(
+            session_profile_source(default, Some(default), Some(default)),
+            ProfileSource::Place
+        );
+        assert_eq!(
+            session_profile_source(charge, Some(place), Some(default)),
+            ProfileSource::Session
+        );
+    }
+
+    #[test]
+    fn every_resolution_branch_writes_a_documented_cost_method() {
+        let profile = make_profile("per_kwh", 0.12, 0.0);
+        let place = at_place(&profile);
+        let mut produced = std::collections::BTreeSet::new();
+        let mut record = |inputs: &CostInputs, profile: Option<&ResolvedProfile>| {
+            let method = apply_cost_inputs(inputs, profile).cost_method;
+            assert!(COST_METHODS.contains(&method.as_str()), "{method}");
+            produced.insert(method);
+        };
+
+        for mode in ["free", "manual"] {
+            let mut inputs = public_dc_inputs(10.0);
+            inputs.cost_override_mode = mode.into();
+            inputs.cost_override_usd = (mode == "manual").then_some(3.0);
+            record(&inputs, None);
+        }
+        let mut inputs = public_dc_inputs(10.0);
+        inputs.network_cost_mode = Some("free".into());
+        record(&inputs, None);
+        let mut inputs = public_dc_inputs(10.0);
+        inputs.is_free_session = Some(true);
+        record(&inputs, None);
+        let mut inputs = public_dc_inputs(10.0);
+        inputs.is_rivian_network = Some(true);
+        inputs.rivian_paid_total = Some(5.0);
+        record(&inputs, None);
+        record(&home_inputs(10.0, 60), Some(&place));
+        let mut inputs = home_inputs(10.0, 60);
+        inputs.energy_added_kwh = None;
+        record(&inputs, Some(&place));
+        record(&home_inputs(10.0, 60), None);
+
+        let expected: std::collections::BTreeSet<String> = COST_METHODS
+            .iter()
+            .map(|method| method.to_string())
+            .collect();
+        assert_eq!(produced, expected);
     }
 }
 

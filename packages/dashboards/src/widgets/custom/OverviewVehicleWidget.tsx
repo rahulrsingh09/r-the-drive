@@ -1,20 +1,17 @@
-import { formatWidgetChargeTime } from '../widgetLifecycle';
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Package, PackageOpen, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, useVehicleArtwork } from '@panda/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@panda/hooks';
 import { formatDriveMode } from '@panda/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@panda/ui/lib/utils';
-import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@panda/ui/lib/vehicleTires';
+import { DEFAULT_TARGET_TIRE_PRESSURE_PSI, formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@panda/ui/lib/vehicleTires';
 import { Tooltip } from '@panda/ui/primitives';
 import { isVehicleCharging } from '@panda/types';
 import type { VehicleImages, VehicleStatus } from '@panda/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
-import { overviewArtwork, useVehicleArtworkFrame, closurePresentation } from './vehiclePresentation';
-import { useWidgetBounds } from '../widgetLifecycle';
-import { useWidgetVehicle } from './useWidgetVehicle';
+import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -58,8 +55,22 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
 };
 
 function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
-  const snapshot = useWidgetVehicle(ctx.vehicleId);
-  return <CurrentVehicleStatePanel {...snapshot} />;
+  const { defaultVehicleId } = useAuth();
+  const vehicleId = ctx.vehicleId ?? defaultVehicleId;
+  const { data: status } = useCurrentVehicleStatus(vehicleId);
+  const { data: vehicles } = useVehicles();
+  const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
+
+  return (
+    <CurrentVehicleStatePanel
+      status={status}
+      images={activeVehicle?.images}
+      vehicleName={activeVehicle?.display_name}
+      vehicleModel={activeVehicle?.model}
+      isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false}
+      targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
+    />
+  );
 }
 
 export function CurrentVehicleStatePanel({
@@ -78,15 +89,34 @@ export function CurrentVehicleStatePanel({
   targetTirePressurePsi?: number | null | undefined;
 }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
-  const { baseOverheadLight, baseOverheadDark, apiOverheadFallback, localOverheadFallback, overheadArtworkAvailable, isR2RealArtwork, overlaysLight, overlaysDark, tires } = overviewArtwork(images, vehicleModel, status, isDemoVehicle, targetTirePressurePsi);
-  const anchors = isR2RealArtwork ? R2_REAL_ARTWORK_ANCHORS : OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
-  const { ref: imageStageRef, height: imageStageHeight, width: imageStageWidth } = useWidgetBounds();
+  const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
+  const baseOverheadLight = resolvedOverhead.light;
+  const baseOverheadDark = resolvedOverhead.dark;
+  const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark;
+  const localOverheadFallback = resolvedOverhead.fallback;
+  const overheadArtworkAvailable = Boolean(apiOverheadFallback ?? localOverheadFallback);
+  const isR2RealArtwork = (vehicleModel === 'R2' || vehicleModel === 'R2S') && !isDemoVehicle && Boolean(apiOverheadFallback);
+  const anchors = isR2RealArtwork
+    ? R2_REAL_ARTWORK_ANCHORS
+    : OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
+  const openDoorStates = getOpenDoorStates(status);
+  const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
+  const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
+  const imageStageRef = useRef<HTMLDivElement | null>(null);
+  const [imageStageHeight, setImageStageHeight] = useState(0);
+  const [imageStageWidth, setImageStageWidth] = useState(0);
   const locksKnown = [
     status?.door_front_left_locked,
     status?.door_front_right_locked,
     status?.door_rear_left_locked,
     status?.door_rear_right_locked,
   ].some((value) => value !== null && value !== undefined);
+  const tires = {
+    fl: makeTireDisplay(status?.tire_fl_psi, status?.tire_fl_status, targetTirePressurePsi),
+    fr: makeTireDisplay(status?.tire_fr_psi, status?.tire_fr_status, targetTirePressurePsi),
+    rl: makeTireDisplay(status?.tire_rl_psi, status?.tire_rl_status, targetTirePressurePsi),
+    rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
+  };
   const stats = [
     { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" style={{ color: 'var(--rm-dm-everyday)' }} /> },
     { label: 'Altitude', value: formatAltitude(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" style={{ color: 'var(--rm-chart-teal)' }} /> },
@@ -106,6 +136,19 @@ export function CurrentVehicleStatePanel({
   const demoArtworkNudgeRight = isDemoVehicle
     && (vehicleModel === 'R1S' || vehicleModel === 'R1T' || vehicleModel === 'R2' || vehicleModel === 'R2S');
 
+  useEffect(() => {
+    const element = imageStageRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const update = () => {
+      const bounds = element.getBoundingClientRect();
+      setImageStageHeight(bounds.height);
+      setImageStageWidth(bounds.width);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <section
@@ -144,7 +187,7 @@ export function CurrentVehicleStatePanel({
           </div>
           <div className="flex min-w-0 flex-col justify-between gap-4">
             <div>
-              <span className="text-xs uppercase tracking-[0.16em] text-fg-tertiary">SoC</span>
+              <span className="text-xs uppercase tracking-[0.16em] text-fg-tertiary">Battery</span>
               <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg">{formatPercent(status?.battery_level)}</p>
             </div>
             <div className="grid gap-2 text-sm">
@@ -217,24 +260,19 @@ function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function ChargingGlyph({ status }: { status: VehicleStatus | null | undefined }) {
-  const connection = Number(isVehiclePluggedIn(status));
-  const activity = Number(isCharging(status));
-  const { state, label, tone } = [
-    { state: 'disconnected', label: 'Not connected', tone: 'text-fg-tertiary' },
-    { state: 'connected', label: 'Connected, not charging', tone: 'text-fg-tertiary' },
-    { state: 'charging', label: 'Charging', tone: 'text-accent' },
-    { state: 'charging', label: 'Charging', tone: 'text-accent' },
-  ][activity * 2 + connection]!;
-  const Icon = [PiPlugsFill, PiPlugsConnectedFill][connection]!;
+  const charging = isCharging(status);
+  const pluggedIn = isVehiclePluggedIn(status);
+  const state = charging ? 'charging' : pluggedIn ? 'connected' : 'disconnected';
+  const label = charging ? 'Charging' : pluggedIn ? 'Connected, not charging' : 'Not connected';
   return (
     <span
       data-testid="overview-charging-glyph"
       data-charging-state={state}
       aria-label={label}
       title={label}
-      className={`inline-flex items-center justify-center ${tone}`}
+      className={`inline-flex items-center justify-center ${charging ? 'text-accent' : 'text-fg-tertiary'}`}
     >
-      <Icon className="h-4 w-4" />
+      {pluggedIn ? <PiPlugsConnectedFill className="h-4 w-4" /> : <PiPlugsFill className="h-4 w-4" />}
     </span>
   );
 }
@@ -271,12 +309,13 @@ function VehicleLabel({
 }
 
 function LockLabel({ className, locked, title }: { className: string; locked: boolean | null | undefined; title?: string }) {
-  const presentation = closurePresentation(locked);
-  const Icon = presentation.open ? Unlock : Lock;
+  const known = locked !== null && locked !== undefined;
+  const unlocked = known && locked === false;
+  const Icon = unlocked ? Unlock : Lock;
   return (
     <span
       title={title}
-      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${presentation.className} ${className}`}
+      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${unlocked ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
     >
       <Icon className="h-3.5 w-3.5" />
     </span>
@@ -284,12 +323,14 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
 }
 
 function ClosureLabel({ className, closed, title }: { className: string; closed: boolean | null | undefined; title: string }) {
-  const presentation = closurePresentation(closed);
-  const Icon = presentation.open ? PackageOpen : Package;
+  const known = closed !== null && closed !== undefined;
+  const open = known && closed === false;
+  const Icon = open ? PackageOpen : Package;
+  const stateLabel = known ? (open ? 'open' : 'closed') : 'unavailable';
   return (
     <span
-      title={`${title}: ${presentation.label}`}
-      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${presentation.className} ${className}`}
+      title={`${title}: ${stateLabel}`}
+      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${open ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
     >
       <Icon className="h-3.5 w-3.5" />
     </span>
@@ -312,8 +353,20 @@ function VehicleArtFrame({
   const artwork = useVehicleArtwork(source);
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
   const frameArtworkSrc = artwork.src ?? fallbackArtwork.src;
-  const { frameHeight, frameWidth } = useVehicleArtworkFrame(frameArtworkSrc, widthPx, heightPx);
-
+  const [rotatedAspectRatio, setRotatedAspectRatio] = useState(2.25);
+  useEffect(() => {
+    const image = new Image();
+    image.onload = () => {
+      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+        setRotatedAspectRatio(image.naturalHeight / image.naturalWidth);
+      }
+    };
+    if (frameArtworkSrc) image.src = frameArtworkSrc;
+  }, [frameArtworkSrc]);
+  const maxHeight = heightPx > 0 ? Math.max(120, (heightPx - 34) / 1.12) : 216;
+  const maxWidth = widthPx > 0 ? Math.max(260, (widthPx - 34) / 1.04) : 520;
+  const frameHeight = Math.round(Math.min(maxHeight, maxWidth / rotatedAspectRatio));
+  const frameWidth = Math.round(frameHeight * rotatedAspectRatio);
   return (
     <div
       data-testid="overview-vehicle-art-frame"
@@ -349,37 +402,47 @@ function VehicleOverheadLayers({
   isR1tFallback: boolean;
   artworkNudgeRight: boolean;
 }) {
-  const [layerMode, reportFallback] = React.useReducer(
-    (_mode: 'primary' | 'fallback', fallback: boolean) => fallback ? 'fallback' : 'primary',
-    'primary'
-  );
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
     width: 'var(--vehicle-frame-height)',
     left: '50%',
     transform: 'translate(-50%, -50%) rotate(90deg)',
   } as React.CSSProperties;
-  const fallbackTransforms = [imageStyle.transform];
-  if (isR1tFallback) fallbackTransforms.push(`scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`);
   const fallbackProps = {
     style: {
       ...imageStyle,
+      // The shared rear/front lock anchors sit at 4% and 102%. Center only
+      // the packaged demo fallback at their midpoint, leaving Rivian artwork
+      // and all annotations on their established coordinates.
       left: artworkNudgeRight ? '53%' : '50%',
-      transform: fallbackTransforms.join(' '),
+      transform: isR1tFallback
+        ? `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`
+        : imageStyle.transform,
     },
   };
-  const layers = [
-    { key: 'base', source: base, alt: vehicleName ?? 'Rivian vehicle',
-      fallbackSource: fallbackBase, fallbackProps, onFallbackChange: reportFallback },
-    ...overlays.map((source) => ({ key: `overlay:${source}`, source, alt: '' })),
-  ].filter((_layer, index) => index === 0 || layerMode === 'primary');
+  const [usingFallback, setUsingFallback] = useState(false);
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
-      {layers.map(({ key, ...props }) => (
-        <AuthenticatedVehicleArtwork key={key} {...props}
-          className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
-          style={imageStyle} />
-      ))}
+      <AuthenticatedVehicleArtwork
+        source={base}
+        fallbackSource={fallbackBase}
+        alt={vehicleName ?? 'Rivian vehicle'}
+        className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
+        style={imageStyle}
+        fallbackProps={fallbackProps}
+        onFallbackChange={setUsingFallback}
+      />
+      {!usingFallback
+        ? overlays.map((overlayUrl) => (
+            <AuthenticatedVehicleArtwork
+              key={overlayUrl}
+              source={overlayUrl}
+              alt=""
+              className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
+              style={imageStyle}
+            />
+          ))
+        : null}
     </div>
   );
 }
@@ -389,7 +452,12 @@ function formatPercent(value: number | null | undefined) {
 }
 
 function formatTimeToFull(minutes: number | null | undefined) {
-  return formatWidgetChargeTime(minutes, '-');
+  if (minutes === null || minutes === undefined || minutes <= 0) return '-';
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (hours === 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
 }
 
 function isCharging(status: VehicleStatus | null | undefined) {
@@ -404,15 +472,13 @@ function renderDriverMode(driveMode: string | null | undefined, gearStatus: stri
 }
 
 function formatSoftware(status: VehicleStatus | null | undefined) {
-  const available = status?.ota_available_version, current = status?.ota_current_version;
-  const updateState = status?.ota_status ?? status?.software_update_status ?? status?.ota_current_status;
-  const versions = Boolean(available || current || updateState);
-  const newer = Boolean(available && available !== '0.0.0' && available !== current);
-  switch (versions ? newer ? 'update' : 'current' : 'missing') {
-    case 'missing': return '-';
-    case 'current': return 'Up to date';
-    default: return updateState && !['idle', 'unknown'].includes(updateState.toLowerCase()) ? prettify(updateState) : 'Available ' + available;
-  }
+  const otaStatus = status?.ota_status ?? status?.software_update_status ?? status?.ota_current_status;
+  const available = status?.ota_available_version;
+  const current = status?.ota_current_version;
+  if (!otaStatus && !available && !current) return '-';
+  if (!available || available === '0.0.0' || available === current) return 'Up to date';
+  if (otaStatus && !['idle', 'unknown'].includes(otaStatus.toLowerCase())) return prettify(otaStatus);
+  return `Available ${available}`;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -424,25 +490,31 @@ function prettify(value: string | null | undefined) {
   return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function makeTireDisplay(psi: number | null | undefined, status: string | null | undefined, targetTirePressurePsi?: number | null) {
+  return {
+    value: formatTireLabel(psi, status),
+    tone: getTireHealthTone({ psi, status, targetPsi: targetTirePressurePsi }),
+  };
+}
+
 function TireHealthTooltipContent({ targetTirePressurePsi }: { targetTirePressurePsi?: number | null | undefined }) {
   const entries = getTireHealthLegend(targetTirePressurePsi);
-  const tones = {
-    success: { Icon: CheckCircle2, className: 'bg-status-positive/12 text-status-positive' },
-    warning: { Icon: TriangleAlert, className: 'bg-status-warning/12 text-status-warning' },
-    danger: { Icon: CircleAlert, className: 'bg-status-danger/12 text-status-danger' },
-  };
   return (
     <div className="grid gap-2">
       <div className="grid gap-0.5">
         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fg-tertiary">Tire Pressure Health</p>
         <p className="text-sm font-medium text-fg">Target: {targetTirePressurePsi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI} psi</p>
       </div>
-      {entries.map((entry) => {
-        const { Icon, className } = tones[entry.tone as keyof typeof tones] ?? tones.danger;
-        return (
+      {entries.map((entry) => (
         <div key={entry.tone} className="flex items-start gap-2 rounded-lg border border-border/70 bg-bg-surface/65 px-2.5 py-2">
-          <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${className}`}>
-            <Icon className="h-3.5 w-3.5" />
+          <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+            entry.tone === 'success'
+              ? 'bg-status-positive/12 text-status-positive'
+              : entry.tone === 'warning'
+                ? 'bg-status-warning/12 text-status-warning'
+                : 'bg-status-danger/12 text-status-danger'
+          }`}>
+            {entry.tone === 'success' ? <CheckCircle2 className="h-3.5 w-3.5" /> : entry.tone === 'warning' ? <TriangleAlert className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -452,8 +524,7 @@ function TireHealthTooltipContent({ targetTirePressurePsi }: { targetTirePressur
             <p className="text-[11px] text-fg-secondary">{entry.detail}</p>
           </div>
         </div>
-        );
-      })}
+      ))}
     </div>
   );
 }

@@ -36,11 +36,6 @@
 .r-orbit-stage img,.r-orbit-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; scale: 1.1; pointer-events: none; }
 .r-orbit-hidden { visibility: hidden; }
 .r-orbit-poster { animation: r-car-arrive 850ms cubic-bezier(.22,1,.36,1); }
-.r-orbit-controls { display: flex; gap: 4px; align-items: center; justify-content: flex-end; font-size: 11px; color: var(--rm-text-secondary); margin: -32px 24px 0; position: relative; }
-.r-orbit-controls span { margin-right: auto; }
-.r-orbit-controls button { display: grid; place-items: center; min-width: 44px; height: 44px; border-radius: 50%; }
-.r-orbit-controls button:hover { background: var(--rm-bg-elevated); }
-.r-orbit-controls svg { width: 16px; height: 16px; }
 .r-static-car { width: 100%; height: clamp(310px,42dvh,440px); display: grid; place-items: center; }
 .r-static-car img { max-height: 100%; width: 100%; object-fit: contain; }
 .r-car-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; color: var(--rm-text-secondary); margin-top: 8px; }
@@ -106,7 +101,6 @@
   .r-tires dd { font-size: 19px; }
   .r-orbit { margin-inline: -20px; }
   .r-orbit-stage,.r-static-car { height: clamp(170px,28svh,280px); }
-  .r-orbit-controls { margin-inline: 20px; font-size: 10px; }
   .r-car-foot { font-size: 11px; }
   .r-distance-card { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 0; border-block: 1px solid var(--rm-border-default); }
   .r-distance-card strong { font-size: clamp(28px,8vw,38px); letter-spacing: -1px; }

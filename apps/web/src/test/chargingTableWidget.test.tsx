@@ -27,11 +27,12 @@ const sessions: ChargeSessionRow[] = Array.from({ length: 39 }, (_, index) => ({
   rivian_paid_total: null,
 }));
 
+const sessionsQuery = vi.hoisted(() => ({ failed: false, refetch: vi.fn() }));
+
 vi.mock('@panda/hooks', () => ({
-  useChargeSessions: () => ({
-    data: { items: sessions, total: 39, page: 1, per_page: 100 },
-    isLoading: false,
-  }),
+  useChargeSessions: () => sessionsQuery.failed
+    ? { data: undefined, isLoading: false, isError: true, refetch: sessionsQuery.refetch }
+    : { data: { items: sessions, total: 39, page: 1, per_page: 100 }, isLoading: false, isError: false, refetch: sessionsQuery.refetch },
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -61,6 +62,20 @@ describe('ChargingTableWidget', () => {
     expect(container.firstElementChild).toHaveClass('!h-auto');
   });
 
+  it('gives the search field and pagination buttons a 44 px target', () => {
+    render(
+      <ChargingTableWidget
+        instance={{} as never}
+        ctx={{ vehicleId: 'vehicle-1', from: '2024-01-01', to: '2024-01-31' }}
+      />,
+    );
+
+    expect(screen.getByRole('searchbox', { name: 'Search locations' })).toHaveClass('h-11');
+    for (const name of ['Prev', 'Next']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-h-11', 'min-w-11');
+    }
+  });
+
   it('uses live fallbacks and pending cost for an active desktop row', () => {
     sessions[0] = {
       ...sessions[0]!, ended_at: null, energy_added_kwh: null, duration_min: null, soc_end: null,
@@ -84,5 +99,27 @@ describe('ChargingTableWidget', () => {
     expect(screen.getByText('8.2 kWh · Live')).toBeInTheDocument();
     expect(screen.getByText('10m · Live')).toBeInTheDocument();
     expect(screen.getByText('Power 6.1 kW')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['desktop', false],
+    ['phone', true],
+  ])('shows Could not load charges · Retry on %s when the read fails, not an empty list', (_label, phone) => {
+    sessionsQuery.failed = true;
+    sessionsQuery.refetch.mockClear();
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: phone, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
+    try {
+      render(<ChargingTableWidget instance={{} as never} ctx={{ vehicleId: 'vehicle-1', from: null, to: null }} />);
+
+      expect(screen.getByRole('alert')).toHaveTextContent('Could not load charges · Retry');
+      expect(screen.queryByText(/No charging sessions/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Sessions will appear here/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('table')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(sessionsQuery.refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      sessionsQuery.failed = false;
+      vi.restoreAllMocks();
+    }
   });
 });

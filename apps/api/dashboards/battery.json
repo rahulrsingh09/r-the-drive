@@ -127,7 +127,7 @@
       "id": "d2000002-0000-0000-0000-000000000101",
       "componentType": "chart",
       "definitionId": "catalog",
-      "title": "State of Charge",
+      "title": "Battery Level",
       "options": {
         "page": "battery",
         "chartId": "soc-history",
@@ -211,7 +211,7 @@
       "id": "d2000002-0000-0000-0000-000000000105",
       "componentType": "chart",
       "definitionId": "catalog",
-      "title": "Daily Phantom Drain",
+      "title": "Daily Parked Loss",
       "options": {
         "page": "battery",
         "chartId": "phantom-drain",

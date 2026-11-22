@@ -13,10 +13,10 @@
     {
       "id": "d4000004-0000-0000-0000-000000000001",
       "componentType": "sensor",
-      "definitionId": "charging_sessions_summary",
-      "title": "Sessions",
+      "definitionId": "charging_cycles_summary",
+      "title": "Charges",
       "options": {
-        "icon": "gg:list"
+        "icon": "material-symbols:ev-station"
       },
       "layout": {
         "x": 0,
@@ -29,7 +29,7 @@
       "id": "d4000004-0000-0000-0000-000000000002",
       "componentType": "sensor",
       "definitionId": "charging_total_energy",
-      "title": "Total Energy",
+      "title": "Energy added",
       "options": {
         "icon": "hugeicons:energy"
       },
@@ -41,13 +41,11 @@
       }
     },
     {
-      "id": "d4000004-0000-0000-0000-000000000005",
+      "id": "d4000004-0000-0000-0000-000000000010",
       "componentType": "sensor",
-      "definitionId": "charging_cycles_summary",
-      "title": "Charges",
-      "options": {
-        "icon": "material-symbols:ev-station"
-      },
+      "definitionId": "charging_dc_share",
+      "title": "DC fast",
+      "options": {},
       "layout": {
         "x": 0,
         "y": 2,
@@ -77,20 +75,7 @@
       "layout": {
         "x": 0,
         "y": 4,
-        "w": 3,
-        "h": 2
-      }
-    },
-    {
-      "id": "d4000004-0000-0000-0000-000000000010",
-      "componentType": "sensor",
-      "definitionId": "charging_dc_share",
-      "title": "DC Fast Charging",
-      "options": {},
-      "layout": {
-        "x": 3,
-        "y": 4,
-        "w": 3,
+        "w": 6,
         "h": 2
       }
     },
@@ -178,7 +163,7 @@
       "id": "d4000004-0000-0000-0000-000000000004",
       "componentType": "sensor",
       "definitionId": "charging_avg_session",
-      "title": "Avg / Session",
+      "title": "Average per charge",
       "options": {},
       "visibility": [
         {

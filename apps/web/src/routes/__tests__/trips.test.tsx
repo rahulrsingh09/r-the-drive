@@ -1,132 +1,249 @@
-// The canonical dashboard controller is exercised independently of the R presentation.
-vi.mock('../../features/r-experience/RDashboardSurface', () => ({ RDashboardSurface: ({ children }: { children: React.ReactNode }) => children }));
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { vi, describe, it, expect } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@panda/ui/primitives', async () => {
-  const m = await import('../../test/mockPrimitives');
-  return m;
-});
+vi.mock('@panda/ui/primitives', async () => import('../../test/mockPrimitives'));
 
-const mockNavigate = vi.fn();
-
+const navigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
-  return { ...actual, useNavigate: () => mockNavigate, useSearch: () => ({}) };
+  return {
+    ...actual,
+    useNavigate: () => navigate,
+    Link: ({ children, to, params, search: _search, ...rest }: { children: React.ReactNode; to: string; params?: Record<string, string>; search?: unknown }) => (
+      <a href={Object.entries(params ?? {}).reduce((path, [key, value]) => path.replace(`$${key}`, value), to)} {...rest}>{children}</a>
+    ),
+  };
 });
 
-vi.mock('@tanstack/react-query', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
-  return { ...actual, useQuery: () => ({ data: undefined }), useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
-});
+vi.mock('../../features/r-experience/RMissedDrives', () => ({ RMissedDriveBanner: () => <div data-testid="missed-drive-banner" /> }));
+vi.mock('@panda/ui/charts', () => ({
+  RouteReplayMap: ({ progress }: { progress: number | null }) => <div data-testid="route-replay-map" data-progress={progress ?? ''} />,
+}));
+vi.mock('@panda/ui/hooks', () => ({ useDocumentTheme: () => true }));
 
-vi.mock('@panda/ui/tables', () => ({
-  tripColumns: [],
-  DataTable: ({ data, emptyTitle, onRowClick }: { data: Array<{ id: string; name?: string }>; emptyTitle?: string; onRowClick?: (row: unknown) => void }) => (
-    <div data-testid="trips-table">
-      {data.length === 0 ? (
-        <span>{emptyTitle}</span>
-      ) : (
-        data.map((row) => (
-          <button key={row.id} onClick={() => onRowClick?.({ original: row })}>
-            Open {row.id}
-          </button>
-        ))
-      )}
-    </div>
-  ),
+const HOME = { lat: 47.6769, lng: -122.2060 };
+const now = Date.now();
+const iso = (hoursAgo: number) => new Date(now - hoursAgo * 3_600_000).toISOString();
+
+const trips = [
+  {
+    id: 't1', vehicle_id: 'v1', started_at: iso(2), ended_at: iso(1.5), distance_mi: 12, duration_min: 30, energy_used_kwh: 3.84,
+    efficiency_wh_mi: 320, max_speed_mph: 10, drive_mode: 'all_purpose', soc_start: 78, soc_end: 74,
+    start_odometer_mi: 1000, end_odometer_mi: 1012, start_lat: HOME.lat, start_lng: HOME.lng, end_lat: 47.61, end_lng: -122.20,
+    start_place: null, end_place: null, start_address: null, end_address: null, outside_temp_c: 12,
+  },
+  {
+    id: 't2', vehicle_id: 'v1', started_at: iso(5), ended_at: iso(4.8), distance_mi: 1.2, duration_min: 10, energy_used_kwh: null,
+    efficiency_wh_mi: null, max_speed_mph: null, drive_mode: null, soc_start: 78, soc_end: 78,
+    start_odometer_mi: 997, end_odometer_mi: 998.2, start_lat: 47.61, start_lng: -122.20, end_lat: HOME.lat, end_lng: HOME.lng,
+    start_place: null, end_place: null, start_address: null, end_address: null,
+  },
+];
+const charges = [
+  {
+    id: 'c1', vehicle_id: 'v1', started_at: iso(20), ended_at: iso(18), location_name: 'Home', charger_type: 'ac', energy_added_kwh: 20,
+    duration_min: 120, soc_start: 55, soc_end: 80, peak_power_kw: 11, cost_usd: 3.78, cost_method: 'profile', location_lat: HOME.lat, location_lng: HOME.lng,
+  },
+  {
+    id: 'c2', vehicle_id: 'v1', started_at: iso(30), ended_at: iso(29.5), location_name: null, charger_type: 'dc', energy_added_kwh: 40,
+    duration_min: 30, soc_start: 28, soc_end: 72, peak_power_kw: 190, cost_usd: null, cost_method: 'unknown', location_lat: 45.8151, location_lng: -122.7426,
+  },
+];
+const places = [{
+  id: 'p-home', name: 'Home', latitude: HOME.lat, longitude: HOME.lng, radius_m: 100, is_home: true, is_work: false, address: null,
+  charging: { id: 'cp', name: 'Home', billing_type: 'per_kwh', rate: 0.189119, session_fee: 0, currency: 'USD', timezone: 'UTC', tou_periods: [] },
+}];
+
+const mocks = vi.hoisted(() => ({
+  api: {
+    listTrips: vi.fn(), listChargeSessions: vi.fn(), getTripMap: vi.fn(),
+    apiFetch: vi.fn(),
+  },
+  updateCost: vi.fn(),
 }));
 
 vi.mock('@panda/hooks', () => ({
-  useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
-  useMe: () => ({ data: { role: 'user' } }),
-  useTrips: () => ({
-    data: {
-      items: [
-        {
-          id: 'trip-1',
-          started_at: '2024-01-01T12:00:00Z',
-          ended_at: '2024-01-01T13:00:00Z',
-          distance_mi: 18.3,
-          energy_used_kwh: 6.5,
-          efficiency_wh_mi: 355,
-        },
-      ],
-      total: 26,
-      page: 1,
-      per_page: 25,
-    },
+  api: mocks.api,
+  useAuthReady: () => true,
+  useAuth: (select?: (state: { accessToken: string }) => unknown) => (select ? select({ accessToken: 'token' }) : { accessToken: 'token' }),
+  useSavedPlaces: () => ({ data: places }),
+  useBasemapConfig: () => ({ data: undefined }),
+  useResolvedVehicleSelection: () => ({ vehicles: [{ id: 'v1', battery_capacity_kwh: 88 }] }),
+  invalidateChargingData: vi.fn(),
+  useUpdateChargeSession: () => ({ mutate: mocks.updateCost, isPending: false }),
+  useChargeCurve: () => ({
     isLoading: false,
+    data: Array.from({ length: 8 }, (_, index) => ({ minutes_elapsed: index * 4, soc_pct: 28 + index * 6, power_kw: 150 - index * 10, power_method: 'soc_delta' })),
   }),
-  useCurrentVehicleStatus: () => ({ data: null }),
-  useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Forest R1S' }] }),
-  useResolvedVehicleSelection: () => ({
-    authReady: true,
-    effectiveVehicleId: 'vehicle-1',
-    vehicleSelectionReady: true,
-    vehicles: [{ id: 'vehicle-1', display_name: 'Forest R1S' }],
-  }),
+  useChargeSession: (id: string) => ({ data: charges.find((charge) => charge.id === id), isError: false }),
+  useTripDetailData: (id: string) => detailFor(id),
 }));
 
-vi.mock('@panda/dashboards', () => ({
-  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
-    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
-  findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
-    dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null),
-  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
-    config.isDefault && !config.ownerId,
-  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
-  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
-    ...draft,
-    ...(owned ?? {}),
-    isDefault: false,
-    isLocked: false,
-  }),
-  DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
-  useDashboardBySlug: () => ({ data: { schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }, isLoading: false }),
-  useDashboardById: () => ({ data: undefined, isLoading: false }),
-  useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
-  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
-  useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
-  useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
-  getDefaultBySlug: () => ({ schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }),
-  downloadDashboardYaml: vi.fn(),
-  importDashboardYaml: vi.fn(),
-}));
+const detailCache = new Map<string, unknown>();
+function detailFor(id: string) {
+  if (!detailCache.has(id)) detailCache.set(id, {
+    isError: false,
+    data: {
+      trip: trips.find((trip) => trip.id === id),
+      sample_interval_seconds: 60,
+      samples: Object.fromEntries(['elapsed_s', 'lat', 'lng', 'altitude_m', 'speed_mph', 'power_kw', 'regen_power_kw', 'battery_level', 'outside_temp_c',
+        'cabin_temp_c', 'driver_temp_c', 'hvac_active', 'tire_fl_psi', 'tire_fr_psi', 'tire_rl_psi', 'tire_rr_psi'].map((name) => [name,
+        Array.from({ length: 31 }, (_, index) => (name === 'elapsed_s' ? index * 60 : name === 'lat' ? HOME.lat - index * 0.002 : name === 'lng' ? HOME.lng
+          : name === 'battery_level' ? 78 - index * 0.13 : name === 'altitude_m' ? 30 + index : null))])),
+      outside_temperature: { source: 'unavailable', attribution: null, samples: [] },
+    },
+  });
+  return detailCache.get(id);
+}
 
-vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock('../../lib/dates', () => ({
-  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
-  presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
-  rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
-  getTimeframeRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
-  timeframeToQuery: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
-  loadDashboardTimeframe: () => null,
-  saveDashboardTimeframe: vi.fn(),
-  DEFAULT_PRESET: '30d',
-}));
+import { ActivityPage } from '../../features/trips/activity/ActivityPage';
 
-import { TripsContent } from '../trips';
+function renderPage(props: Partial<React.ComponentProps<typeof ActivityPage>> = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <ActivityPage vehicleId="v1" selection={null} search={{}} canManage {...props} />
+    </QueryClientProvider>,
+  );
+}
 
-describe('Trips page', () => {
-  it('renders the trips dashboard shell', () => {
-    render(<TripsContent />);
+beforeEach(() => {
+  mocks.api.listTrips.mockResolvedValue({ items: trips, total: trips.length, page: 1, per_page: 200 });
+  mocks.api.listChargeSessions.mockResolvedValue({ items: charges, total: charges.length, page: 1, per_page: 200 });
+  mocks.api.getTripMap.mockResolvedValue({ routes: [{ trip_id: 't1', tags: [], coordinates: [[HOME.lng, HOME.lat], [-122.203, 47.64], [-122.20, 47.61]] }] });
+  mocks.api.apiFetch.mockResolvedValue({ tag: 'home', place_id: 'p-home', updated: 1, session_ids: ['c2'] });
+});
+afterEach(() => vi.clearAllMocks());
 
-    expect(screen.getByText('Trips')).toBeInTheDocument();
-    expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
-    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+describe('Activity list', () => {
+  it('shows the summary and a day-grouped timeline of trips, charges, parked time and odometer gaps', async () => {
+    renderPage();
+    expect(await screen.findByText('Home → Bellevue')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByTestId('missed-drive-banner')).toBeInTheDocument();
+    const summary = document.querySelector('[data-activity-summary="trips"]')!;
+    expect(summary).toHaveTextContent('13mi');
+    expect(summary).toHaveTextContent('2 trips');
+    expect(screen.getByText('Short trip')).toBeInTheDocument();
+    expect(screen.getByText('320 Wh/mi')).toBeInTheDocument();
+    expect(screen.getByText('Odometer moved 1.8 mi with no trip recorded')).toBeInTheDocument();
+    expect(screen.getByText('Parked 13 h')).toBeInTheDocument();
+    expect(screen.getByText('−2.0%')).toBeInTheDocument();
+    expect(screen.getByText('$3.78')).toBeInTheDocument();
+    expect(screen.getByText('DC fast · Ridgefield')).toBeInTheDocument();
+    expect(screen.getByText('Add cost')).toBeInTheDocument();
+    expect(screen.getByText('Home → Bellevue').closest('a')).toHaveAttribute('href', '/trips/t1');
   });
 
-  it('renders the trips dashboard renderer', () => {
-    render(<TripsContent />);
-    // Trips table is a widget rendered via DashboardRenderer, not a direct child
-    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+  it('shows the charge summary with the Charges filter and the place chip from Insights', async () => {
+    renderPage({ search: { place: 'Home' } });
+    const summary = await waitFor(() => {
+      const element = document.querySelector('[data-activity-summary="charges"]');
+      if (!element) throw new Error('no summary');
+      return element;
+    });
+    expect(summary).toHaveTextContent('20kWh');
+    expect(summary).toHaveTextContent('1 sessions');
+    expect(screen.queryByText('Home → Bellevue')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all activity' }));
+    expect(navigate).toHaveBeenCalledWith({ to: '/trips', search: {} });
   });
 
-  it('renders the date range picker', () => {
-    render(<TripsContent />);
-    expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
+  it('changes the period through the URL', async () => {
+    renderPage();
+    await screen.findByText('Home → Bellevue');
+    fireEvent.change(screen.getByLabelText('Period'), { target: { value: '7' } });
+    expect(navigate).toHaveBeenCalledWith({ to: '/trips', search: { p: '7' } });
+  });
+});
+
+describe('Trip detail', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(performance.now()), 16) as unknown as number);
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('opens the trip with position, replay, odometer check, battery chart and details', async () => {
+    renderPage({ selection: { kind: 'trip', id: 't1' } });
+    expect(await screen.findByRole('heading', { name: 'Home → Bellevue' })).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('[data-detail-position]')).toHaveTextContent('Trip · 1 of 4'));
+    expect(screen.getByLabelText('Older')).toHaveAttribute('href', '/trips/t2');
+    expect(document.querySelector('[data-odometer-result]')).toHaveTextContent('Matches the trip');
+    expect(screen.getByTestId('trip-efficiency')).toHaveTextContent('320 Wh/mi');
+    expect(screen.getByTestId('trip-battery-chart')).toBeInTheDocument();
+    const details = document.querySelector('[data-trip-details]')!;
+    // The top speed reading (10 mph) is below the average speed (24 mph), so it stays hidden.
+    expect(within(details as HTMLElement).getByText('Top speed').nextSibling).toHaveTextContent('–');
+    expect(within(details as HTMLElement).getByText('Average speed').nextSibling).toHaveTextContent('24 mph');
+    expect(screen.getByText('Bellevue is the nearest town, not an address.')).toBeInTheDocument();
+  });
+
+  it('plays, pauses, scrubs and changes the replay speed', async () => {
+    renderPage({ selection: { kind: 'trip', id: 't1' } });
+    const play = await screen.findByRole('button', { name: 'Play replay' });
+    const readout = document.querySelector('[data-replay-readout]')!;
+    expect(readout.querySelector('[data-readout="distance"]')).toHaveTextContent('12.0 mi');
+    fireEvent.change(screen.getByLabelText('Replay position'), { target: { value: '500' } });
+    expect(readout.querySelector('[data-readout="distance"]')).not.toHaveTextContent('12.0 mi');
+    expect(readout.querySelector('[data-readout="battery"]')).toHaveTextContent('76%');
+    expect(document.querySelector('[data-chart-cursor]')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '240×' }));
+    expect(screen.getByRole('button', { name: '240×' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(play);
+    expect(await screen.findByRole('button', { name: 'Pause replay' })).toBeInTheDocument();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+    fireEvent.click(screen.getByRole('button', { name: 'Pause replay' }));
+    expect(screen.getByRole('button', { name: 'Play replay' })).toBeInTheDocument();
+  });
+});
+
+describe('Charge detail', () => {
+  it('shows the place tag, the cost entry and the charge charts', async () => {
+    renderPage({ selection: { kind: 'charge', id: 'c2' } });
+    expect(await screen.findByRole('heading', { name: 'DC fast · Ridgefield' })).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('[data-detail-position]')).toHaveTextContent('Charge · 4 of 4'));
+    expect(document.querySelector('[data-charge-cost]')).toHaveTextContent('Not set');
+    expect(screen.getByText('This place has no rate. Enter what you paid.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Other' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('charge-level-chart')).toBeInTheDocument();
+    expect(document.querySelector('[data-power-note]')).toHaveTextContent('Estimated from the battery-level change and a 88.0 kWh pack.');
+
+    fireEvent.change(screen.getByLabelText('Total paid'), { target: { value: '18.40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mocks.updateCost).toHaveBeenCalledWith({ sessionId: 'c2', cost_mode: 'manual', cost_usd: 18.4 }, expect.anything());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Price per kWh' }));
+    fireEvent.change(screen.getByLabelText('Price per kWh'), { target: { value: '0.48' } });
+    expect(screen.getByText('= $19.20')).toBeInTheDocument();
+  });
+
+  it('tags the place Home for every charge there through the place-tag API, after the owner confirms', async () => {
+    renderPage({ selection: { kind: 'charge', id: 'c2' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Home' }));
+    const confirm = await screen.findByRole('group', { name: /^Tag .+ as Home\?$/ });
+    expect(confirm).toHaveTextContent(/at .+ (moves|move) to Home/);
+    expect(mocks.api.apiFetch).not.toHaveBeenCalledWith('POST', expect.stringContaining('/place-tag'), expect.anything());
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Tag as Home' }));
+    await waitFor(() => expect(mocks.api.apiFetch).toHaveBeenCalledWith('POST', '/v1/vehicles/v1/charging-sessions/c2/place-tag', { tag: 'home' }));
+  });
+
+  it('does not save a place tag when the owner cancels', async () => {
+    renderPage({ selection: { kind: 'charge', id: 'c2' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Office' }));
+    const confirm = await screen.findByRole('group', { name: /^Tag .+ as Office\?$/ });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: /^Tag .+ as Office\?$/ })).toBeNull();
+    expect(mocks.api.apiFetch).not.toHaveBeenCalledWith('POST', expect.stringContaining('/place-tag'), expect.anything());
+  });
+
+  it('asks for an Office place when none is saved and the tag fails', async () => {
+    mocks.api.apiFetch.mockRejectedValueOnce(new Error('Save an Office place first'));
+    renderPage({ selection: { kind: 'charge', id: 'c2' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Office' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Tag as Office' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Set your Office rate in Settings first.');
   });
 });

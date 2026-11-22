@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockCollector = vi.hoisted(() => ({
   running: true,
+  noPeriods: false,
 }));
 
 vi.mock('@panda/ui/primitives', async () => {
@@ -65,7 +66,7 @@ vi.mock('@panda/hooks', async (importOriginal) => {
         },
       },
     }),
-    usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'vehicle-1', periods: [period] }, isLoading: false }),
+    usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'vehicle-1', periods: mockCollector.noPeriods ? [] : [period] }, isLoading: false }),
     useParkedEnergy: () => ({
       data: {
         vehicle_id: 'vehicle-1',
@@ -189,11 +190,12 @@ import { BatteryPhantomDrainPage } from '../../components/dashboard/BatteryPhant
 
 afterEach(() => {
   mockCollector.running = true;
+  mockCollector.noPeriods = false;
 });
 
 describe('BatteryPhantomDrainPage', () => {
   it('renders the shared chart above unified table controls', async () => {
-    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
+    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Parked loss" />);
 
     const chart = screen.getByTestId('phantom-drain-chart-widget');
     const tableSearch = screen.getByPlaceholderText('Search periods');
@@ -203,7 +205,8 @@ describe('BatteryPhantomDrainPage', () => {
     expect(screen.getByTestId('phantom-drain-periods-table')).not.toHaveClass('bg-bg-elevated');
     expect(screen.getByText('Parked Energy')).toBeInTheDocument();
     expect(screen.getByText('Rivian reported')).toBeInTheDocument();
-    expect(screen.getByText('R:The Drive battery-change estimate')).toBeInTheDocument();
+    expect(screen.getByText('Battery lost while parked. Estimated from the battery level.')).toBeInTheDocument();
+    expect(screen.getByText('Tap or drag across the chart for details')).toBeInTheDocument();
     expect(screen.getByTestId('parked-energy-metrics')).toHaveClass('grid', 'grid-cols-3');
 
     expect(screen.getByPlaceholderText('Search periods')).toBeInTheDocument();
@@ -229,15 +232,26 @@ describe('BatteryPhantomDrainPage', () => {
     ).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('Search periods'), { target: { value: '999' } });
-    expect(await screen.findAllByText('No matching phantom drain periods')).toHaveLength(2);
+    expect(await screen.findAllByText('No matching parked periods')).toHaveLength(2);
   });
 
   it('hides the Parked Energy panel when the Parallax collector is not running', () => {
     mockCollector.running = false;
 
-    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
+    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Parked loss" />);
 
     expect(screen.queryByTestId('parked-energy-panel')).not.toBeInTheDocument();
-    expect(screen.getByText('R:The Drive battery-change estimate')).toBeInTheDocument();
+    expect(screen.getByText('Battery lost while parked. Estimated from the battery level.')).toBeInTheDocument();
+  });
+
+  it('names phantom drain once as a subtitle and hides the chart hint when there are no parked periods', () => {
+    mockCollector.noPeriods = true;
+
+    const { container } = render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Parked loss" />);
+
+    expect(within(screen.getByTestId('parked-loss-lead')).getByText('Phantom drain')).toBeInTheDocument();
+    expect(container.textContent?.match(/phantom drain/gi) ?? []).toHaveLength(1);
+    expect(screen.queryByText('Tap or drag across the chart for details')).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain('R:The Drive battery-change estimate');
   });
 });

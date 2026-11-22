@@ -16,6 +16,8 @@ export interface DashboardDataRequirements {
 
 export interface WidgetCtx {
   vehicleId: string | null;
+  /** When false, chart widgets hide the "Search charts" picker and show the active chart as a titled card. Default: shown. */
+  showChartPicker?: boolean;
   dashboardSlug?: string;
   dashboardConfigId?: string;
   timeframe?: DashboardTimeframe;

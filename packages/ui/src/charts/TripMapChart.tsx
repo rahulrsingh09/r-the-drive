@@ -122,8 +122,8 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig, preferen
   if (!basemap.enabled) return neutral;
   const attribution = basemap.attributions ? Array.from(basemap.attributions, item => item.label).join(' | ') : basemap.attribution ?? '';
   return { version: 8 as const,
-    sources: { 'carto-base': { type: 'raster' as const, tiles: [selection.url], tileSize: 256, attribution } },
-    layers: [{ id: 'background', type: 'raster' as const, source: 'carto-base' }],
+    sources: { 'basemap-raster': { type: 'raster' as const, tiles: [selection.url], tileSize: 256, attribution } },
+    layers: [{ id: 'background', type: 'raster' as const, source: 'basemap-raster' }],
   };
 }
 

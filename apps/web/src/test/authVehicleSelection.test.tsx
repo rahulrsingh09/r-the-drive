@@ -115,4 +115,38 @@ describe('resolved vehicle selection', () => {
     expect(useAuth.getState().activeVehicleId).toBeNull();
     expect(useAuth.getState().defaultVehicleId).toBe('vehicle-1');
   });
+  it('leaves demo vehicles out of the list and the selection when a real vehicle exists', async () => {
+    useAuth.setState({
+      accessToken: 'token-123', isAuthenticated: true, isBootstrapping: false, userId: 'user-1',
+      defaultVehicleId: 'demo-r1s', activeVehicleId: null,
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        vehicles: [
+          { id: 'demo-r1s', model: 'R1S', display_name: 'Demo R1S', is_demo: true },
+          { id: 'owner-r2', model: 'R2', display_name: 'Bumble Beee', is_demo: false },
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }) as Response,
+    );
+    const { result } = renderHook(() => useResolvedVehicleSelection(), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.vehiclesQuery.isSuccess).toBe(true));
+    expect(result.current.vehicles.map(vehicle => vehicle.id)).toEqual(['owner-r2']);
+    expect(result.current.effectiveVehicleId).toBe('owner-r2');
+    // The stored default stays: the account still owns the demo vehicle.
+    expect(useAuth.getState().defaultVehicleId).toBe('demo-r1s');
+  });
+
+  it('keeps a demo vehicle when the account has no real vehicle', async () => {
+    useAuth.setState({
+      accessToken: 'token-123', isAuthenticated: true, isBootstrapping: false, userId: 'user-1',
+      defaultVehicleId: null, activeVehicleId: null,
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ vehicles: [{ id: 'demo-r1s', model: 'R1S', display_name: 'Demo R1S', is_demo: true }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }) as Response,
+    );
+    const { result } = renderHook(() => useResolvedVehicleSelection(), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.effectiveVehicleId).toBe('demo-r1s'));
+    expect(result.current.vehicles).toHaveLength(1);
+  });
 });

@@ -1,15 +1,11 @@
-import React from 'react';
-import { createRoute } from '@tanstack/react-router';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { ChargingDashboardPage } from '../components/dashboard/ChargingDashboardPage';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 
+/** The charging list lives in Activity now: /charging opens Activity with the Charges filter. */
 export const chargingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/charging',
-  component: () => (
-    <ProtectedRoute>
-      <ChargingDashboardPage navKey="charging" slug="charging" title="Charging" />
-    </ProtectedRoute>
-  ),
+  beforeLoad: () => {
+    throw redirect({ to: '/trips', search: { f: 'charges' }, replace: true });
+  },
 });

@@ -1,4 +1,3 @@
-import { usePhantomDrainTable } from './usePhantomDrainTable';
 import React from 'react';
 import { DashboardChartWidget, SensorChipSummary, type WidgetInstance } from '@panda/dashboards';
 import { usePhantomDrainPeriods, useVehicleHealth } from '@panda/hooks';
@@ -23,38 +22,30 @@ const PHANTOM_DRAIN_CHART_INSTANCE: WidgetInstance = {
   },
 };
 
-const PERIOD_SEARCH_FIELDS = [
-  ['duration_hours', 'decimal', 1, '', ' h'],
-  ['sleep_share_pct', 'ratio', 0, '', ''],
-  ['state_coverage_pct', 'ratio', 0, '', ' coverage'],
-  ['soc_start', 'percent', 0, '', ''],
-  ['soc_end', 'percent', 0, '', ''],
-  ['soc_lost_pct', 'percent', 2, '-', ''],
-  ['drain_pct_per_hour', 'percent', 2, 'drain ', ' / h'],
-  ['range_lost_mi', 'decimal', 1, '', ' mi'],
-  ['energy_drained_kwh', 'decimal', 2, '', ' kWh'],
-  ['avg_power_w', 'decimal', 0, '', ' W'],
-] as const;
+function formatRatioPercent(value: number | null | undefined, decimals = 0) {
+  if (value == null || Number.isNaN(value)) return null;
+  return formatPercent(value * 100, decimals);
+}
 
 function formatPeriodSearchText(period: PhantomDrainPeriod) {
-  const parts: string[] = [];
-  const append = (text: string | null | undefined) => { if (text) parts.push(text); };
-  append(period.period_start);
-  append(period.period_end);
-  for (const [field, format, digits, prefix, suffix] of PERIOD_SEARCH_FIELDS) {
-    const value = period[field];
-    if (value == null) continue;
-    let text: string | null;
-    switch (format) {
-      case 'decimal': text = value.toFixed(digits); break;
-      case 'percent': text = formatPercent(value, digits); break;
-      case 'ratio': text = Number.isNaN(value) ? null : formatPercent(value * 100, digits); break;
-    }
-    append(prefix || suffix ? `${prefix}${text}${suffix}` : text);
-  }
-  if (period.has_reduced_range) append('reduced range');
-  append(period.validation_reason);
-  return parts.join(' ').toLowerCase();
+  const parts = [
+    period.period_start,
+    period.period_end,
+    period.duration_hours == null ? null : `${period.duration_hours.toFixed(1)} h`,
+    formatRatioPercent(period.sleep_share_pct, 0),
+    period.state_coverage_pct == null ? null : `${formatRatioPercent(period.state_coverage_pct, 0)} coverage`,
+    period.soc_start == null ? null : formatPercent(period.soc_start, 0),
+    period.soc_end == null ? null : formatPercent(period.soc_end, 0),
+    period.soc_lost_pct == null ? null : `-${formatPercent(period.soc_lost_pct, 2)}`,
+    period.drain_pct_per_hour == null ? null : `drain ${formatPercent(period.drain_pct_per_hour, 2)} / h`,
+    period.range_lost_mi == null ? null : `${period.range_lost_mi.toFixed(1)} mi`,
+    period.energy_drained_kwh == null ? null : `${period.energy_drained_kwh.toFixed(2)} kWh`,
+    period.avg_power_w == null ? null : `${period.avg_power_w.toFixed(0)} W`,
+    period.has_reduced_range ? 'reduced range' : null,
+    period.validation_reason,
+  ];
+
+  return parts.filter((part): part is string => !!part).join(' ').toLowerCase();
 }
 
 function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }) {
@@ -64,9 +55,31 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
   const parallaxCollectorRunning =
     health?.vehicle_id === vehicleId && health.extended_telemetry.collector?.running === true;
   const periods = data?.periods ?? [];
-  const { search, setSearch, page, pageSize, setPageSize, filteredPeriods, pagedPeriods, totalPages, previousPage, nextPage } = usePhantomDrainTable(
-    periods, JSON.stringify([ctx.from, ctx.to, ctx.vehicleId]), formatPeriodSearchText,
-  );
+  const [search, setSearch] = React.useState('');
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(15);
+  const deferredSearch = React.useDeferredValue(search);
+
+  React.useEffect(() => {
+    setPage(1);
+  }, [ctx.from, ctx.to, ctx.vehicleId, pageSize, deferredSearch]);
+
+  const filteredPeriods = React.useMemo(() => {
+    const query = deferredSearch.trim().toLowerCase();
+    if (!query) return periods;
+    return periods.filter((period) => formatPeriodSearchText(period).includes(query));
+  }, [deferredSearch, periods]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredPeriods.length / pageSize));
+
+  React.useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  const pagedPeriods = React.useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredPeriods.slice(start, start + pageSize);
+  }, [filteredPeriods, page, pageSize]);
 
   const summary = React.useMemo(() => summarizePhantomDrainPeriods(periods), [periods]);
   const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
@@ -76,32 +89,31 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
         <ParkedEnergyPanel vehicleId={vehicleId} from={ctx.from} to={ctx.to} />
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="text-base font-semibold text-fg">R:The Drive battery-change estimate</h2>
-          <p className="text-xs text-fg-tertiary">
-            Derived from validated parked sessions and retained when Rivian&apos;s breakdown is unavailable.
-          </p>
-        </div>
+      <div data-testid="parked-loss-lead">
+        <p className="text-xs font-medium text-fg-tertiary">Phantom drain</p>
+        <p className="text-sm text-fg-secondary">Battery lost while parked. Estimated from the battery level.</p>
       </div>
 
       <div className="grid min-w-0 grid-cols-2 gap-3 xl:grid-cols-4">
-        {summaryCards.map(({ key, dataAccent, title, value, icon, ...optional }) => (
+        {summaryCards.map((card) => (
           <SensorChipSummary
-            key={key}
-            title={title}
-            value={value}
-            icon={icon}
-            dataAccent={dataAccent}
+            key={card.key}
+            title={card.title}
+            value={card.value}
+            icon={card.icon}
+            dataAccent={card.dataAccent}
             valueColor="data"
             valueSize="sm"
-            {...optional}
+            {...(card.accentBorder === undefined ? {} : { accentBorder: card.accentBorder })}
+            {...(card.secondary === undefined ? {} : { secondary: card.secondary })}
           />
         ))}
       </div>
 
       <section className="min-w-0" aria-label="Battery history">
-        <p className="mb-2 text-xs text-fg-secondary md:hidden">Tap or drag across the chart for details</p>
+        {!isLoading && periods.length > 0 ? (
+          <p className="mb-2 text-xs text-fg-secondary md:hidden">Tap or drag across the chart for details</p>
+        ) : null}
         <div className="h-[340px] min-w-0 sm:h-[380px]" data-testid="phantom-drain-chart-section">
         <DashboardChartWidget instance={PHANTOM_DRAIN_CHART_INSTANCE} ctx={ctx} />
         </div>
@@ -127,7 +139,7 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
           columns={phantomDrainColumns}
           loading={isLoading}
           loadingRows={pageSize}
-          emptyTitle={search ? 'No matching phantom drain periods' : 'No phantom drain periods'}
+          emptyTitle={search ? 'No matching parked periods' : 'No parked periods'}
           emptyDescription={search ? 'No parked periods match that search.' : 'No qualifying parked periods were found in this date range.'}
           columnVisibilityMenu
           fixedLayout
@@ -143,7 +155,7 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
             <button
               type="button"
               disabled={page <= 1}
-              onClick={previousPage}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
               className="min-h-11 rounded-lg border border-border px-4 py-2 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               Prev
@@ -151,7 +163,7 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
             <button
               type="button"
               disabled={page >= totalPages || totalPages <= 1}
-              onClick={nextPage}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
               className="min-h-11 rounded-lg border border-border px-4 py-2 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               Next
@@ -169,6 +181,7 @@ export function BatteryPhantomDrainPage({ navKey, slug, title }: DashboardPagePr
       navKey={navKey}
       slug={slug}
       title={title}
+      enableDashboardEditing={false}
       renderBeforeDashboard={(state) => <PhantomDrainContent state={state} />}
       renderDashboard={() => false}
     />

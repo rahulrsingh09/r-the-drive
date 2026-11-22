@@ -55,6 +55,8 @@ export { invalidateChargingData, useChargeSessions, useChargeSession, useSavedPl
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp, useEfficiencyByTag } from './useEfficiency';
 export type { TripTagFilters } from './useTrips';
 export { useSummaryStats } from './useStats';
+export { fetchInsights, insightsQueryKey, useInsights } from './useInsights';
+export { useTripGaps, useRecoverTripGap } from './useTripGaps';
 export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } from './useMetrics';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
@@ -64,5 +66,15 @@ export type { BasemapConfigPayload } from './useBasemapConfig';
 export { useUserPreferences, useUpdateMapStyle } from './useUserPreferences';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
-export { getVehicleArtworkFallback, normalizeVehicleArtworkModel, resolveVehicleArtwork } from './vehicleArtworkFallback';
-export type { ResolvedVehicleArtwork, VehicleArtworkFallbackModel, VehicleArtworkUsage } from './vehicleArtworkFallback';
+export { getVehicleArtworkFallback, normalizeVehicleArtworkModel, resolveVehicleArtwork, resolveVehicleAngleSet } from './vehicleArtworkFallback';
+export type { ResolvedVehicleArtwork, VehicleArtworkFallbackModel, VehicleArtworkUsage, VehicleTurnAngle, VehicleAngleImage } from './vehicleArtworkFallback';
+export { carDataHealthKeys, fetchChargeGaps, fetchLifetimeTrips, normalizeChargeGaps, useChargeGaps, useChargeHistoryBackfillStatus, useLifetimeTrips, useRecoverMissedCharges } from './useCarDataHealth';
+export {
+  chargeBackfillQueryKey,
+  useChargeBackfillStatus,
+  useRevokeOtherAuthSessions,
+  useTriggerChargeBackfill,
+} from './useRAccount';
+export {
+  clearStoredArtwork, isImmutableArtwork, readStoredVehicleImages, storeVehicleImages,
+} from './ownerArtworkStore';

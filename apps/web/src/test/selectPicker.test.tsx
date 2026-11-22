@@ -31,6 +31,18 @@ describe('SelectPicker', () => {
     expect(onChange).toHaveBeenCalledWith('r1t');
   });
 
+  it('keeps a 44 px tall trigger at both sizes', () => {
+    render(
+      <>
+        <SelectPicker value="15" onChange={vi.fn()} aria-label="Rows per page" size="sm" options={[{ value: '15', label: '15' }]} />
+        <SelectPicker value="r1s" onChange={vi.fn()} aria-label="Select vehicle" options={[{ value: 'r1s', label: 'R1S' }]} />
+      </>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Rows per page' })).toHaveClass('h-11', 'text-xs');
+    expect(screen.getByRole('button', { name: 'Select vehicle' })).toHaveClass('h-11', 'text-sm');
+  });
+
   it('closes the picker before its parent dialog and restores keyboard focus', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

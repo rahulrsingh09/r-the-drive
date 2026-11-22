@@ -109,6 +109,7 @@ describe('TripsMapWidget batched route behavior', () => {
     render(<TripsMapWidget instance={{} as never} ctx={ctx} />);
 
     expect(screen.getByTestId('trip-map-chart')).toHaveTextContent('trip-1,trip-2');
-    expect(screen.getByRole('button', { name: 'Open trip' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open trip' })).toHaveClass('min-h-11');
+    expect(screen.getByRole('button', { name: /^Switch to (light|dark) map$/ })).toHaveClass('h-11', 'w-11');
   });
 });

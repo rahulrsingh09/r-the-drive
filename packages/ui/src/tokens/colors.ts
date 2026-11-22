@@ -50,10 +50,20 @@ export const colors = {
   border: {
     default: 'var(--rm-border-default)',
     strong:  'var(--rm-border-strong)',
+    /** Edge of inputs, selects and the date-range trigger (>= 3:1 in R themes). */
+    control: 'var(--rm-border-control, var(--rm-border-strong))',
     accent:  'var(--rm-border-accent)',
     focus:   'var(--rm-accent)',
   },
 } as const;
+
+/**
+ * Tailwind class for the edge of a form control (input, select, date-range
+ * trigger). R themes set `--rm-border-control`; other themes fall back to
+ * `--rm-border-strong`. Keep this a literal so Tailwind can scan it.
+ */
+export const controlBorderClassName =
+  'border-[color:var(--rm-border-control,var(--rm-border-strong))]';
 
 export type DataVizKey = keyof typeof colors.dataViz;
 export const dataViz = colors.dataViz;

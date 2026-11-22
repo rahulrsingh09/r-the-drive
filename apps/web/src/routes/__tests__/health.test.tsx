@@ -458,8 +458,10 @@ vi.mock('../../components/layout/AuthGuard', () => ({
 }));
 
 import { healthRoute } from '../health';
+import { VehicleHealthContent } from '../../features/health/VehicleHealthPage';
 
-const HealthContent = healthRoute.options.component as React.ComponentType;
+// The route renders the R composition; this suite keeps covering the retained upstream page.
+const HealthContent = VehicleHealthContent;
 
 describe('/vehicle-health page cleanup', () => {
   beforeEach(() => {

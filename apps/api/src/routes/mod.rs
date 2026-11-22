@@ -24,12 +24,15 @@ use crate::middleware::{
     rate_limit::{self, RateLimitClass},
 };
 
+pub mod account_sessions;
 pub mod api_keys;
 pub mod app_info;
 pub mod auth;
 pub mod backfill;
 pub mod backups;
 pub mod battery;
+pub mod charge_gaps;
+pub mod charge_place_tags;
 pub mod charging;
 mod charging_sql;
 pub mod charts;
@@ -41,6 +44,7 @@ pub mod external_connections;
 pub mod grafana;
 pub mod health;
 pub mod idle_drain;
+pub mod insights;
 pub mod live;
 pub mod locations;
 pub mod metrics;
@@ -53,6 +57,7 @@ pub mod schedules;
 pub mod settings;
 pub mod state_timeline;
 pub mod themes;
+pub mod trip_recovery;
 pub mod trip_tag_filter;
 pub mod trip_tags;
 pub mod trips;
@@ -519,6 +524,12 @@ fn registrations() -> Vec<(RouteScope, RouteFactory)> {
         (Common, auth::protected_router),
         (Common, settings::router),
         (Common, users::router),
+        (Common, account_sessions::router),
+        (Common, charge_gaps::router),
+        (Common, charge_place_tags::router),
+        (Common, insights::router),
+        (Common, trip_recovery::router),
+        (Common, trip_recovery::read_router),
     ]
 }
 

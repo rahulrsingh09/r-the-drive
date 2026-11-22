@@ -5,10 +5,12 @@ export const queryKeys = {
   vehicles: {
     all: ['vehicles'] as const,
     status: (vehicleId: string | null) => ['vehicles', 'status', vehicleId] as const,
+    tripGaps: (vehicleId: string | null) => ['vehicles', 'trip-gaps', vehicleId] as const,
   },
   vehicle: {
     health: (vehicleId: string | null) => ['vehicles', 'health', vehicleId] as const,
     images: (vehicleId: string | null) => ['vehicles', 'images', vehicleId] as const,
+    tripGaps: (vehicleId: string | null) => ['vehicles', 'trip-gaps', vehicleId] as const,
   },
   apiKeys: { all: ['api-keys'] as const },
   apiCatalog: { all: ['api-catalog'] as const },

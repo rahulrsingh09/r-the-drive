@@ -437,7 +437,7 @@ describe('TripMapChart', () => {
     );
   });
 
-  it('authenticates only Panda basemap proxy requests without fetching configuration', async () => {
+  it('authenticates only R:The Drive basemap proxy requests without fetching configuration', async () => {
     const mockMap = new MockMap();
     const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
     const mapLoader = vi.fn(async () => ({ Map: mapConstructor }));
@@ -564,7 +564,7 @@ describe('TripMapChart', () => {
 
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
     const initialStyle = (mapConstructor.mock.calls[0]?.[0] as { style: { sources: Record<string, { tiles: string[] }> } }).style;
-    expect(initialStyle.sources['carto-base']?.tiles[0]).toContain('v=1710000000000');
+    expect(initialStyle.sources['basemap-raster']?.tiles[0]).toContain('v=1710000000000');
     expect(JSON.stringify(initialStyle)).not.toContain('carto-secret');
     await act(async () => { mockMap.emit('load'); });
 
@@ -577,7 +577,7 @@ describe('TripMapChart', () => {
 
     await waitFor(() => expect(mockMap.setStyle).toHaveBeenCalledWith(expect.objectContaining({
       sources: expect.objectContaining({
-        'carto-base': expect.objectContaining({ tiles: ['/v1/external/basemap/raster/dark/{z}/{x}/{y}.png?v=1710000000001'] }),
+        'basemap-raster': expect.objectContaining({ tiles: ['/v1/external/basemap/raster/dark/{z}/{x}/{y}.png?v=1710000000001'] }),
       }),
     })));
   });

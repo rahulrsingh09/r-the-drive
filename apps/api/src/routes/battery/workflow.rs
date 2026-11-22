@@ -172,6 +172,14 @@ impl CapacityReference {
             Self::Observed(value) => *value,
         }
     }
+
+    pub(super) fn source(&self) -> Option<&'static str> {
+        match self {
+            Self::Stored(_) => Some("factory"),
+            Self::Observed(Some(_)) => Some("highest_seen"),
+            Self::Observed(None) => None,
+        }
+    }
 }
 
 struct MileageProjection {
@@ -271,6 +279,7 @@ impl HealthEvidence {
             .zip(self.charging.total_used_kwh)
             .filter(|(_, used)| *used > 0.0)
             .map(|(added, used)| added / used * 100.0);
+        let new_capacity_source = self.reference.source();
         serde_json::json!({
             "usable_now_kwh": now, "usable_new_kwh": new, "battery_health_pct": health,
             "estimated_degradation_pct": health.map(|pct| (100.0-pct).max(0.0)),
@@ -278,6 +287,8 @@ impl HealthEvidence {
             "total_energy_added_kwh": self.charging.total_added_kwh,
             "total_energy_used_kwh": self.charging.total_used_kwh,
             "charging_efficiency_pct": efficiency,
+            "new_capacity_kwh": new,
+            "new_capacity_source": new_capacity_source,
         })
     }
 }

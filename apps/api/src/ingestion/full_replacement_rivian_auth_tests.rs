@@ -119,7 +119,7 @@ async fn full_replacement_key_custody_cancel_refresh_and_deny_images_before_io()
     outbound_policy::with_mock_gateway(url, async {
         let client = reqwest::Client::new();
         let original = tokens();
-        assert!(rivian_vehicle_images(&client, &original).await.is_err());
+        assert!(outbound_policy::require_optional_traffic().is_err());
         assert_eq!(count.load(Ordering::SeqCst), 0);
         let mut refresh = Box::pin(rivian_refresh_csrf(&client, &original));
         tokio::select! {

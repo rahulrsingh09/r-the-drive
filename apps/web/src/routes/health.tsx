@@ -1,5 +1,5 @@
 import { createRoute } from '@tanstack/react-router';
-import { VehicleHealthContent } from '../features/health/VehicleHealthPage';
+import { RVehicleHealth } from '../features/r-experience/RVehicleHealth';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { rootRoute } from './__root';
 
@@ -10,5 +10,5 @@ export const healthRoute = createRoute({
 });
 
 function VehicleHealthPage() {
-  return <ProtectedRoute><VehicleHealthContent /></ProtectedRoute>;
+  return <ProtectedRoute><RVehicleHealth /></ProtectedRoute>;
 }

@@ -15,11 +15,7 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use std::{
-    collections::BTreeMap,
-    path::{Path as StdPath, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use crate::{
     db::users::require_admin_or_super_user,
@@ -1911,6 +1907,9 @@ async fn vehicle_images(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    // An empty or incomplete cache (for example, a vehicle enrolled while the
+    // artwork exception was off) starts a background repair here.
+    queue_vehicle_artwork_repair(&state, vid).await;
     Ok(Json(
         fetch_vehicle_images_json(&state.pool, &state.config, vid).await?,
     ))
@@ -1922,7 +1921,7 @@ async fn cache_vehicle_images(
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
 ) {
-    if !crate::services::outbound_policy::optional_traffic_allowed() {
+    if !crate::services::outbound_policy::vehicle_artwork_allowed() {
         return;
     }
     let client = reqwest::Client::builder()
@@ -2007,7 +2006,7 @@ async fn ensure_vehicle_images_cached(
     age_key: &str,
     force_manifest_refresh: bool,
 ) {
-    if !crate::services::outbound_policy::optional_traffic_allowed() {
+    if !crate::services::outbound_policy::vehicle_artwork_allowed() {
         return;
     }
     let rows = sqlx::query_as::<_, VehicleImageRow>(
@@ -2142,34 +2141,34 @@ fn infer_extension(source_url: &str, content_type: Option<&str>) -> &'static str
     }
 }
 
-fn guess_mime_type(path: &StdPath) -> &'static str {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-    {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        _ => "image/webp",
-    }
-}
-
+/// Downloads one artwork file under the owner-approved artwork exception:
+/// Rivian HTTPS hosts only, DNS-pinned public addresses, no redirects, raster
+/// image types only, at most 5 MiB.
 async fn download_and_store_asset(
-    client: &reqwest::Client,
     config: &crate::config::Config,
     vehicle_id: Uuid,
     source_url: &str,
 ) -> Result<MirroredFileAsset, anyhow::Error> {
-    crate::services::outbound_policy::require_optional_traffic()?;
-    let upstream = client.get(source_url).send().await?.error_for_status()?;
-    let mime = upstream
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|header| header.to_str().ok())
-        .map(str::to_owned);
+    let (url, client) =
+        crate::services::outbound_policy::vehicle_artwork_client(source_url).await?;
+    let upstream = client.get(url).send().await?;
+    let content_type = crate::services::outbound_policy::vehicle_artwork_content_type(
+        upstream
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|header| header.to_str().ok()),
+    );
     let bytes = crate::services::outbound_policy::read_limited(upstream, 5 * 1024 * 1024).await?;
-    let asset = MirroredFileAsset::identify(vehicle_id, source_url, &bytes, mime);
+    let content_type = content_type?;
+    if bytes.is_empty() {
+        anyhow::bail!("empty vehicle artwork file");
+    }
+    let asset = MirroredFileAsset::identify(
+        vehicle_id,
+        source_url,
+        &bytes,
+        Some(content_type.to_owned()),
+    );
     let path = mirror_file_path(config, &asset.mirror_relpath);
     if let Some(directory) = path.parent() {
         tokio::fs::create_dir_all(directory).await?;
@@ -2179,13 +2178,12 @@ async fn download_and_store_asset(
 }
 
 async fn mirror_vehicle_image_assets(
-    client: &reqwest::Client,
     config: &crate::config::Config,
     vehicle_id: Uuid,
     source_url: &str,
     overlays: &[VehicleImageOverlay],
 ) -> Result<serde_json::Value, anyhow::Error> {
-    let primary = download_and_store_asset(client, config, vehicle_id, source_url).await?;
+    let primary = download_and_store_asset(config, vehicle_id, source_url).await?;
     let mut manifest = serde_json::json!({
         "source_url":source_url,"mirror_status":"ready","mirror_key":primary.mirror_key,
         "mirror_relpath":primary.mirror_relpath,"mime_type":primary.mime_type,"sha256":primary.sha256,
@@ -2195,7 +2193,7 @@ async fn mirror_vehicle_image_assets(
         .as_array_mut()
         .expect("overlay list");
     for overlay in overlays {
-        let asset = download_and_store_asset(client, config, vehicle_id, &overlay.url).await?;
+        let asset = download_and_store_asset(config, vehicle_id, &overlay.url).await?;
         assets.push(serde_json::to_value(MirroredOverlayAsset {
             source_url: overlay.url.clone(),
             mirror_key: asset.mirror_key,
@@ -2263,18 +2261,13 @@ async fn mirror_vehicle_images(
         }
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-
     for row in rows
         .into_iter()
         .filter(|row| vehicle_image_needs_local_mirror(config, row))
     {
         let overlays = overlay_entries_from_value(&row.overlays);
         let revision = match mirror_vehicle_image_assets(
-            &client, config, vehicle_id, &row.url, &overlays,
+            config, vehicle_id, &row.url, &overlays,
         )
         .await
         {
@@ -2436,7 +2429,12 @@ async fn vehicle_image_cache_asset(
     let metadata = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await?;
     let asset = CachedArtwork::read(&state.config, metadata.as_ref()).await;
     if matches!(asset, CachedArtwork::Restoring) {
-        queue_vehicle_artwork_repair(&state, vehicle_id).await;
+        queue_vehicle_artwork_repair_with_mode(
+            &state,
+            vehicle_id,
+            ArtworkRepairTrigger::MissingFile,
+        )
+        .await;
     }
     Ok(asset.respond())
 }
@@ -2458,7 +2456,7 @@ fn vehicle_artwork_placeholder_response() -> Response {
 }
 
 fn vehicle_artwork_restoring_response() -> Response {
-    match crate::services::outbound_policy::optional_traffic_allowed() {
+    match crate::services::outbound_policy::vehicle_artwork_allowed() {
         false => axum::http::StatusCode::NOT_FOUND.into_response(),
         true => {
             let mut response = vehicle_artwork_placeholder_response();
@@ -2511,18 +2509,28 @@ async fn vehicle_artwork_cache_complete(
     total > 0 && total == ready
 }
 
-async fn claim_vehicle_artwork_repair(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
+/// Claims one repair run. Page loads queue repairs, so an unforced claim waits
+/// for `next_attempt_at`: 15 minutes after the first run, doubling with each
+/// attempt up to 6 hours. This bounds Rivian artwork queries when repair fails.
+async fn claim_vehicle_artwork_repair(pool: &sqlx::PgPool, vehicle_id: Uuid, force: bool) -> bool {
     sqlx::query_scalar::<_, Uuid>(
         r#"INSERT INTO panda.vehicle_artwork_cache_state
               (vehicle_id, status, next_attempt_at, updated_at)
-           VALUES ($1, 'pending', now(), now())
+           VALUES ($1, 'pending', now() + interval '15 minutes', now())
            ON CONFLICT (vehicle_id) DO UPDATE SET
-             status = 'pending', next_attempt_at = now(), updated_at = now()
-           WHERE panda.vehicle_artwork_cache_state.status <> 'repairing'
-              OR panda.vehicle_artwork_cache_state.last_repair_attempt_at < now() - interval '5 minutes'
+             status = 'pending',
+             next_attempt_at = now() + LEAST(
+               interval '6 hours',
+               interval '15 minutes' * power(2, LEAST(panda.vehicle_artwork_cache_state.attempts, 5))
+             ),
+             updated_at = now()
+           WHERE ($2 OR panda.vehicle_artwork_cache_state.next_attempt_at <= now())
+             AND (panda.vehicle_artwork_cache_state.status <> 'repairing'
+              OR panda.vehicle_artwork_cache_state.last_repair_attempt_at < now() - interval '5 minutes')
            RETURNING vehicle_id"#,
     )
     .bind(vehicle_id)
+    .bind(force)
     .fetch_optional(pool)
     .await
     .ok()
@@ -2530,18 +2538,71 @@ async fn claim_vehicle_artwork_repair(pool: &sqlx::PgPool, vehicle_id: Uuid) -> 
     .is_some()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArtworkRepairTrigger {
+    /// A vehicle list, status or image read. Trusts a `ready` state.
+    PageRead,
+    /// A mirrored file is missing or changed on disk.
+    MissingFile,
+    /// An administrator asked for a fresh manifest.
+    Forced,
+}
+
+/// Cheap pre-check so frequent page reads do not hash mirrored files or reach
+/// Rivian while the cache is ready or the repair backoff is running.
+async fn vehicle_artwork_repair_due(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    trigger: ArtworkRepairTrigger,
+) -> bool {
+    if trigger == ArtworkRepairTrigger::Forced {
+        return true;
+    }
+    let state = sqlx::query_as::<_, (String, chrono::DateTime<Utc>)>(
+        "SELECT status, next_attempt_at FROM panda.vehicle_artwork_cache_state
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await;
+    match state {
+        Ok(None) => true,
+        Ok(Some((status, next_attempt_at))) => {
+            artwork_repair_due(trigger, &status, next_attempt_at, Utc::now())
+        }
+        Err(_) => false,
+    }
+}
+
+fn artwork_repair_due(
+    trigger: ArtworkRepairTrigger,
+    status: &str,
+    next_attempt_at: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    match trigger {
+        ArtworkRepairTrigger::Forced => true,
+        ArtworkRepairTrigger::PageRead if status == "ready" => false,
+        _ => next_attempt_at <= now,
+    }
+}
+
 async fn queue_vehicle_artwork_repair(state: &AppState, vehicle_id: Uuid) {
-    queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await;
+    queue_vehicle_artwork_repair_with_mode(state, vehicle_id, ArtworkRepairTrigger::PageRead).await;
 }
 
 async fn queue_vehicle_artwork_repair_with_mode(
     state: &AppState,
     vehicle_id: Uuid,
-    force_manifest_refresh: bool,
+    trigger: ArtworkRepairTrigger,
 ) {
-    if !crate::services::outbound_policy::optional_traffic_allowed() {
+    if !crate::services::outbound_policy::vehicle_artwork_allowed() {
         return;
     }
+    if !vehicle_artwork_repair_due(&state.pool, vehicle_id, trigger).await {
+        return;
+    }
+    let force_manifest_refresh = trigger == ArtworkRepairTrigger::Forced;
     let is_demo =
         sqlx::query_scalar::<_, String>("SELECT rivian_vehicle_id FROM panda.vehicles WHERE id=$1")
             .bind(vehicle_id)
@@ -2595,13 +2656,14 @@ async fn repair_vehicle_artwork(
 }
 
 /// Starts a bounded repair pass after the API has loaded its encrypted vehicle
-/// credentials. Browser requests only read local files; they never trigger this.
+/// credentials. Vehicle list, status and image reads also queue a repair; the
+/// claim backoff bounds how often any of them reach Rivian.
 pub fn start_vehicle_artwork_repair_worker(
     pool: sqlx::PgPool,
     config: crate::config::Config,
     age_key: String,
 ) {
-    if !crate::services::outbound_policy::optional_traffic_allowed() {
+    if !crate::services::outbound_policy::vehicle_artwork_allowed() {
         return;
     }
     tokio::spawn(async move {
@@ -2944,8 +3006,15 @@ impl MirroredFileAsset {
         let extension = infer_extension(source, mime.as_deref());
         let mirror_key = format!("{source_hash}-{}.{extension}", &sha256[..16]);
         let mirror_relpath = format!("{vehicle}/{mirror_key}");
-        let mime_type =
-            mime.unwrap_or_else(|| guess_mime_type(StdPath::new(&mirror_relpath)).to_owned());
+        let mime_type = mime.unwrap_or_else(|| {
+            match extension {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                _ => "image/webp",
+            }
+            .to_owned()
+        });
         Self {
             mirror_key,
             mirror_relpath,
@@ -3132,9 +3201,13 @@ impl ArtworkMaintenance {
         let mut result = serde_json::json!({"ok":true,"vehicle_id":vehicle});
         match self {
             Self::Remirror => {
-                crate::services::outbound_policy::require_optional_traffic()
-                    .map_err(|_| AppError::ExternalConnectionDisabled("vehicle artwork".into()))?;
-                queue_vehicle_artwork_repair_with_mode(state, vehicle, true).await;
+                if !crate::services::outbound_policy::vehicle_artwork_allowed() {
+                    return Err(AppError::ExternalConnectionDisabled(
+                        "vehicle artwork".into(),
+                    ));
+                }
+                queue_vehicle_artwork_repair_with_mode(state, vehicle, ArtworkRepairTrigger::Forced)
+                    .await;
                 result["queued"] = serde_json::Value::Bool(true);
             }
             Self::Purge => {
@@ -3168,9 +3241,10 @@ impl ArtworkJob {
         refresh: bool,
     ) -> Option<Self> {
         if !refresh && vehicle_artwork_cache_complete(pool, config, vehicle).await {
+            refresh_vehicle_artwork_cache_state(pool, config, vehicle, None).await;
             return None;
         }
-        if !claim_vehicle_artwork_repair(pool, vehicle).await {
+        if !claim_vehicle_artwork_repair(pool, vehicle, refresh).await {
             return None;
         }
         Some(Self {

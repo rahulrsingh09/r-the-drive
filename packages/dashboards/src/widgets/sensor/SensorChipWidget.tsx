@@ -23,7 +23,8 @@ import {
   type MiniSparklineType,
   type TimeFilterWindow,
 } from '@panda/ui/charts';
-import { Badge, Card, Tooltip } from '@panda/ui/primitives';
+import { useRouter } from '@tanstack/react-router';
+import { Badge, Card, Skeleton, Tooltip } from '@panda/ui/primitives';
 import { useDocumentPalette, useDocumentTheme } from '@panda/ui/hooks';
 import {
   cn,
@@ -44,6 +45,7 @@ import {
   useDashboardDataSelector,
   useDashboardMetric,
   type DashboardDataRequirements,
+  type DashboardDataSource,
 } from '../../dashboardData';
 import { resolveIconId } from '../../editor/iconMigration';
 import { seriesToDailyDeltas, seriesToDailyTotals } from '../../editor/dailyDelta';
@@ -59,11 +61,11 @@ import {
   getSensorDefinition,
   getSensorDataAccent,
   resolveSensorColorToken,
-  resolveSensorValueColor,
   SENSOR_DEFINITIONS,
   type SensorDefinition,
   type SensorChartType,
   type SensorDataSource,
+  type SensorEmptyState,
   type SensorIconKey,
   type SensorValueColor,
 } from './sensorDefinitions';
@@ -133,7 +135,6 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const options = readOptions(instance, automaticColor);
   const isDark = useDocumentTheme();
   const metricColor = resolveSensorVisualColor(rawOptions.curveColor, automaticColor, isDark);
-  const metricValueColor = resolveSensorValueColor(rawOptions.curveColor, automaticColor, metricColor, isDark);
   const metricDataAccent = getSensorDataAccent(options.metric, definition);
   const hasVisualMetricColor = Boolean(metricDataAccent || rawOptions.curveColor);
   const metric = options.dataSource === 'metric' ? options.metric : null;
@@ -158,35 +159,71 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const dashboardCharging = useDashboardDataSelector((snapshot) => snapshot.chargingSummary);
   const dashboardEfficiency = useDashboardDataSelector((snapshot) => snapshot.efficiencySummary);
   const dashboardRefreshing = useDashboardDataSelector((snapshot) => snapshot.isRefreshing) ?? false;
-  const { data: fetchedValue } = useMetricValue(
+  const dashboardFailed = useDashboardDataSelector((snapshot) => snapshot.failed);
+  const dashboardRetry = useDashboardDataSelector((snapshot) => snapshot.retry);
+  const valueQuery = useMetricValue(
     dashboardDataAvailable ? null : ctx.vehicleId,
     dashboardDataAvailable ? null : metric,
     ctx.from,
     ctx.to,
   );
-  const { data: fetchedSeries = [] } = useMetricSeries(
+  const seriesQuery = useMetricSeries(
     dashboardDataAvailable ? null : ctx.vehicleId,
     dashboardDataAvailable ? null : metric,
     ctx.from,
     ctx.to,
   );
-  const { data: fetchedEfficiencySummary } = useEfficiencySummary(
+  const efficiencyQuery = useEfficiencySummary(
     !dashboardDataAvailable && needsEfficiency ? ctx.vehicleId : null,
     ctx.from,
     ctx.to,
     ctx.tripTagFilter,
   );
-  const { data: fetchedHealth, isLoading: healthLoading } = useBatteryHealth(
+  const healthQuery = useBatteryHealth(
     !dashboardDataAvailable && needsHealth ? ctx.vehicleId : null
   );
-  const { data: fetchedChargingSummary, isLoading: chargingLoading } = useChargingSummary(
+  const chargingQuery = useChargingSummary(
     !dashboardDataAvailable && needsCharging ? ctx.vehicleId : null,
     ctx.from,
     ctx.to
   );
-  const { data: fetchedStatus, isLoading: statusLoading } = useCurrentVehicleStatus(
+  const statusQuery = useCurrentVehicleStatus(
     !dashboardDataAvailable && needsStatus ? ctx.vehicleId : null
   );
+  const { data: fetchedValue, isLoading: metricLoading } = valueQuery;
+  const { data: fetchedSeries = [] } = seriesQuery;
+  const { data: fetchedEfficiencySummary } = efficiencyQuery;
+  const { data: fetchedHealth, isLoading: healthLoading } = healthQuery;
+  const { data: fetchedChargingSummary, isLoading: chargingLoading } = chargingQuery;
+  const { data: fetchedStatus, isLoading: statusLoading } = statusQuery;
+  const valueQueries: SensorQueryState[] = dashboardDataAvailable
+    ? []
+    : options.dataSource === 'metric'
+      ? [valueQuery, ...(needsEfficiency ? [efficiencyQuery] : [])]
+      : options.dataSource === 'batteryHealth'
+        ? [healthQuery, ...(needsStatus ? [statusQuery] : [])]
+        : options.dataSource === 'chargingSummary'
+          ? [chargingQuery, ...(needsStatus ? [statusQuery] : [])]
+          : options.dataSource === 'vehicleStatus'
+            ? [statusQuery]
+            : options.dataSource === 'efficiencySummary'
+              ? [efficiencyQuery, ...(needsStatus ? [statusQuery] : [])]
+              : [];
+  const failedQueries = valueQueries.filter((query) => query.isError && query.data == null);
+  const providerSources: DashboardDataSource[] = !dashboardDataAvailable
+    ? []
+    : options.dataSource === 'metric'
+      ? ['batch', ...(needsEfficiency ? ['efficiencySummary' as const] : [])]
+      : options.dataSource === 'batteryHealth'
+        ? ['batteryHealth', ...(needsStatus ? ['status' as const] : [])]
+        : options.dataSource === 'chargingSummary'
+          ? ['chargingSummary', ...(needsStatus ? ['status' as const] : [])]
+          : options.dataSource === 'vehicleStatus'
+            ? ['status']
+            : options.dataSource === 'efficiencySummary'
+              ? ['efficiencySummary', ...(needsStatus ? ['status' as const] : [])]
+              : [];
+  const providerFailed = providerSources.some((source) => dashboardFailed?.[source] === true);
   const value = dashboardDataAvailable ? dashboardMetric?.value : fetchedValue;
   const series = dashboardDataAvailable ? dashboardMetric?.series ?? [] : fetchedSeries;
   const efficiencySummary = dashboardDataAvailable ? dashboardEfficiency : fetchedEfficiencySummary;
@@ -199,9 +236,13 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const timeframeScope = options.timeframeScope;
   const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
   const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
-  const isLoading = sensorSourceLoading(options.dataSource, dashboardDataAvailable, dashboardRefreshing, {
-    health: healthLoading, charging: chargingLoading, status: statusLoading, needsStatus,
-  });
+  const isLoading = options.dataSource === 'metric'
+    ? dashboardDataAvailable
+      ? dashboardRefreshing && dashboardMetric == null
+      : metricLoading === true
+    : sensorSourceLoading(options.dataSource, dashboardDataAvailable, dashboardRefreshing, {
+        health: healthLoading, charging: chargingLoading, status: statusLoading, needsStatus,
+      });
   const samples = sensorSamples(series);
   const hasFiniteSeriesPoint = samples.available;
   const resolvedMetricValue = allowLatestFallback || hasFiniteSeriesPoint ? (value?.value ?? null) : null;
@@ -211,24 +252,37 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         ? (efficiencySummary?.avg ?? (allowLatestFallback ? (value?.value ?? null) : null))
         : resolvedMetricValue
       : resolveConfiguredValue(options, sourceValues);
+  const loadFailed = (failedQueries.length > 0 || providerFailed) && activeTripSelectionStat == null;
+  const retryFailedQueries = () => {
+    if (providerFailed) dashboardRetry?.();
+    for (const query of failedQueries) void query.refetch();
+  };
   const statusPresentation =
-    options.dataSource === 'vehicleStatus'
+    options.dataSource === 'vehicleStatus' && !loadFailed
       ? presentVehicleStatusDefinition(instance.definitionId, status)
       : null;
   const unit = options.dataSource === 'metric' ? value?.unit : options.unit;
-  const { displayValue, inlineSecondary, secondary } = sensorReadout({
-    presentation: statusPresentation, loading: isLoading, selection: activeTripSelectionStat,
-    selectedValue: selectionValue, value: resolvedValue, unit, options, values: sourceValues,
+  const isEditing = ctx.visibilityState != null;
+  const hasValue = statusPresentation != null
+    || (activeTripSelectionStat ? isFiniteNumber(selectionValue) : isFiniteNumber(resolvedValue));
+  const isEmpty = !isLoading && !hasValue && !loadFailed;
+  const emptyState = isEmpty
+    ? resolveEmptyState(definition?.emptyState, {
+        isEditing,
+        isSelection: activeTripSelectionStat != null,
+      })
+    : null;
+  const readout = sensorReadout({
+    presentation: statusPresentation, loading: isLoading, empty: isEmpty, failed: loadFailed,
+    hasValue, selection: activeTripSelectionStat, selectedValue: selectionValue,
+    value: resolvedValue, unit, options, values: sourceValues,
   });
+  const { displayValue, inlineSecondary, secondary } = readout;
   const lastUpdatedLabel = activeTripSelectionStat ? null : statusPresentation?.lastUpdatedLabel ?? null;
+  // Numbers use primary ink. Only vehicle-status tones colour a value.
   const valueToneClass = statusPresentation
     ? statusToneClass(statusPresentation.variant)
-    : options.valueColor === 'accent'
-      ? 'text-accent'
-      : 'text-fg';
-  const valueToneStyle = !statusPresentation && options.valueColor === 'data'
-    ? { color: metricValueColor }
-    : undefined;
+    : 'text-fg';
   const helpContent = getHelpContent(options.helpText, metric, efficiencySummary);
 
   const isDailyDelta = options.chartType === 'daily_delta';
@@ -243,8 +297,14 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         allowLatestFallback ? resolvedValue : null,
         value?.ts ?? ctx.to ?? new Date().toISOString()
       );
-  const showSprite = options.showSprite && options.chartType !== 'none' && !activeTripSelectionStat;
+  const showSprite = options.showSprite && options.chartType !== 'none' && !activeTripSelectionStat && !isEmpty && !loadFailed;
   const spriteColor = metricColor;
+
+  if (isEmpty && !emptyState) {
+    // Hidden in dashboard view: no placeholder value. The grid cell keeps its
+    // slot; `data-sensor-empty` lets the grid collapse it.
+    return <div hidden aria-hidden="true" data-sensor-empty="hidden" data-testid="sensor-chip-hidden" />;
+  }
 
   return (
     <Card
@@ -257,6 +317,9 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       )}
       style={options.accentBorder ? { borderColor: metricColor } : undefined}
       data-testid="sensor-chip"
+      {...(isLoading && !loadFailed ? { 'aria-busy': true } : {})}
+      {...(loadFailed ? { 'data-sensor-error': 'true' } : {})}
+      {...(isEmpty ? { 'data-sensor-empty': emptyState?.action ? 'action' : 'reason' } : {})}
     >
       {showSprite ? (
         <div
@@ -298,7 +361,9 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
                   <button
                     type="button"
                     aria-label={`${title} help`}
-                    className="inline-flex shrink-0 rounded text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                    // The ::before draws a 44 × 44 hit area around the small icon. It
+                    // sits lower than centre so the clipped card edge cannot cut it.
+                    className="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded text-fg-tertiary transition-colors before:absolute before:left-1/2 before:top-[-10px] before:h-11 before:w-11 before:-translate-x-1/2 before:content-[''] hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
                   >
                     <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
@@ -326,11 +391,20 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         </div>
 
         <div className="mt-1.5 flex items-baseline gap-1">
-          {renderStatusValue({
+          {loadFailed ? (
+            <SensorLoadError onRetry={retryFailedQueries} />
+          ) : isLoading && !statusPresentation ? (
+            <Skeleton
+              aria-hidden="true"
+              data-testid="sensor-value-skeleton"
+              className={cn('w-20', valueSize(options.valueSize))}
+            />
+          ) : emptyState ? (
+            <SensorEmptyLine state={emptyState} />
+          ) : renderStatusValue({
             presentation: statusPresentation,
             displayValue,
             valueToneClass,
-            ...(valueToneStyle ? { valueToneStyle } : {}),
             valueSize: options.valueSize,
           })}
           {inlineSecondary ? (
@@ -350,15 +424,87 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   );
 }
 
+/** The parts of a React Query result that the tile error needs. */
+interface SensorQueryState {
+  data?: unknown;
+  isError: boolean;
+  refetch: () => unknown;
+}
+
+/** In-place read failure. The tile stays visible and never shows a placeholder value. */
+function SensorLoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <span role="alert" className="flex min-w-0 items-center gap-1 text-sm text-status-danger" data-testid="sensor-load-error">
+      <span className="truncate">Could not load</span>{' '}
+      <span aria-hidden="true">·</span>{' '}
+      <button
+        type="button"
+        onClick={onRetry}
+        className="inline-flex min-h-11 items-center font-medium underline underline-offset-2"
+      >
+        Retry
+      </button>
+    </span>
+  );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Skeleton height that matches the value line for each value size. */
+function valueSize(size: Required<SensorChipOptions>['valueSize']) {
+  return size === 'sm' ? 'h-7' : size === 'lg' ? 'h-9' : 'h-8';
+}
+
+/**
+ * A definition's own empty state wins. The editor and a trip selection show a
+ * reason line so the tile stays visible; dashboard view hides the rest.
+ */
+function resolveEmptyState(
+  definitionState: SensorEmptyState | undefined,
+  { isEditing, isSelection }: { isEditing: boolean; isSelection: boolean },
+): SensorEmptyState | null {
+  if (definitionState) return definitionState;
+  if (isSelection) return { message: 'No data for these trips' };
+  if (isEditing) return { message: 'No data in this range' };
+  return null;
+}
+
+function SensorEmptyLine({ state }: { state: SensorEmptyState }) {
+  const router = useRouter({ warn: false });
+  const action = state.action;
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5 text-sm" data-testid="sensor-empty-line">
+      {state.message ? <span className="truncate text-fg-secondary">{state.message}</span> : null}
+      {action ? (
+        <a
+          href={`${action.to}?${new URLSearchParams(action.search).toString()}`}
+          className="inline-flex min-h-11 items-center self-start font-medium text-accent underline underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          onClick={(event) => {
+            if (!router || event.defaultPrevented || event.button !== 0) return;
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            void router.navigate({ to: action.to, search: action.search });
+          }}
+        >
+          {action.label}
+        </a>
+      ) : null}
+    </span>
+  );
+}
+
 function sensorReadout(input: {
   presentation: ReturnType<typeof presentVehicleStatusDefinition> | null;
-  loading: boolean; selection: ReturnType<typeof getTripStatKind>; selectedValue: number | null;
+  loading: boolean; empty: boolean; failed: boolean; hasValue: boolean;
+  selection: ReturnType<typeof getTripStatKind>; selectedValue: number | null;
   value: number | null | undefined; unit: string | null | undefined;
   options: Required<SensorChipOptions>; values: Record<string, unknown>;
 }) {
   const result = { displayValue: '', inlineSecondary: '', secondary: '' };
   if (input.presentation) return { ...result, displayValue: input.presentation.label, secondary: input.presentation.secondaryText ?? '' };
-  if (input.loading) return { ...result, displayValue: '...' };
+  if (input.loading || input.empty || input.failed || !input.hasValue) return result;
   if (input.selection) return { ...result, displayValue: formatTripStat(input.selection, input.selectedValue) };
   return {
     displayValue: formatMetricValue(input.value, input.unit),
@@ -492,7 +638,8 @@ function isEventTotalMetric(metric: string) {
 }
 
 function formatMetricValue(value: number | null | undefined, unit: string | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return '-';
+  // Callers render no value line for a missing value; never a "-" placeholder.
+  if (value == null || !Number.isFinite(value)) return '';
   const formatter = { mi: formatMiles, kWh: formatKwh, USD: formatCurrency, 'Wh/mi': formatEfficiency, min: formatDuration, psi: formatPressure, mph: formatMph, C: formatTemp }[unit ?? ''];
   if (formatter) return formatter(value);
   switch (unit) {
@@ -506,13 +653,11 @@ function renderStatusValue({
   presentation,
   displayValue,
   valueToneClass,
-  valueToneStyle,
   valueSize,
 }: {
   presentation: ReturnType<typeof presentVehicleStatusDefinition> | null;
   displayValue: string;
   valueToneClass: string;
-  valueToneStyle?: React.CSSProperties;
   valueSize: Required<SensorChipOptions>['valueSize'];
 }) {
   const unavailable = presentation?.renderUnavailableChip;
@@ -533,7 +678,7 @@ function renderStatusValue({
         valueToneClass,
         valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
       )}
-      style={{ textShadow: 'var(--rm-value-halo)', ...valueToneStyle }}
+      style={{ textShadow: 'var(--rm-value-halo)' }}
     >
       {numericValue
         ? <><span>{numericValue[1]}</span>{' '}<span data-sensor-unit>{numericValue[2]}</span></>
@@ -612,6 +757,7 @@ for (const definition of SENSOR_DEFINITIONS) {
     defaultOptions: registeredSensorOptions(definition),
     editor: {
       category: 'Sensors',
+      ...(definition.deprecated ? { deprecated: true } : {}),
       description:
         definition.dataSource === 'metric'
           ? 'Resizable sensor chip backed by the metric catalog.'

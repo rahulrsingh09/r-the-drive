@@ -58,28 +58,32 @@ pub(super) async fn response(
     .fetch_all(&state.pool)
     .await?;
 
-    let network_breakdown = sqlx::query_as::<_, NetworkBreakdownRow>(
-        "SELECT
+    let network_breakdown = sqlx::query_as::<_, NetworkBreakdownRow>(concat!(
+        "WITH typed AS (
+            SELECT cs.*, ",
+        crate::charger_type_sql!("cs"),
+        " AS derived_type
+            FROM panda.charge_sessions cs
+            WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3
+         )
+         SELECT
                 CASE
                     WHEN is_home = true THEN 'Home Charging'
                     WHEN network_vendor IS NOT NULL THEN network_vendor
-                    WHEN charger_type IN ('ac', 'ac_l2') THEN 'Other AC'
+                    WHEN derived_type = 'ac' THEN 'Other AC'
                     ELSE NULL
                 END AS network_vendor,
                 COUNT(*) AS session_count,
                 SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS energy_kwh,
                 SUM(cost_usd) AS cost_usd,
                 COUNT(*) FILTER (WHERE is_free_session) AS free_sessions
-         FROM panda.charge_sessions
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND (
-               is_home = true
-               OR network_vendor IS NOT NULL
-               OR charger_type IN ('ac', 'ac_l2')
-           )
+         FROM typed
+         WHERE is_home = true
+            OR network_vendor IS NOT NULL
+            OR derived_type = 'ac'
          GROUP BY 1
          ORDER BY energy_kwh DESC NULLS LAST",
-    )
+    ))
     .bind(vehicle_id)
     .bind(from)
     .bind(to)

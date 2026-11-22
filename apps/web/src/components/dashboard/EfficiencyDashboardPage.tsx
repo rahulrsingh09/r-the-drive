@@ -14,36 +14,8 @@ export function EfficiencyDashboardPage({
   widgetCtx,
 }: DashboardPageProps & { widgetCtx?: Pick<WidgetCtx, 'tripTagFilter' | 'canManageTripTags'> }) {
   const filter = widgetCtx?.tripTagFilter;
-  const hasActiveFilter = (filter?.tagIds.length ?? 0) > 0 || filter?.untagged === true;
-  const [visibility, toggleVisibility] = React.useReducer(
-    (current: 'open' | 'closed') => current === 'open' ? 'closed' : 'open',
-    hasActiveFilter ? 'open' : 'closed',
-  );
-  let controls: React.ReactNode = null;
-  let content: ((state: { vehicleId: string | null }) => React.ReactNode) | undefined;
-  if (filter?.setFilter) {
-    const showTagFilters = visibility === 'open';
-    const label = `${showTagFilters ? 'Hide' : 'Show'} efficiency filters`;
-    const tone = showTagFilters || hasActiveFilter
-      ? 'border-accent/40 bg-accent/10 text-accent'
-      : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong hover:text-fg';
-    controls = (
-      <Tooltip content={label}>
-        <button
-          type="button"
-          className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent ${tone}`}
-          onClick={toggleVisibility}
-          aria-label={label}
-          aria-expanded={showTagFilters}
-          aria-controls="efficiency-tag-filters"
-          title={label}
-        >
-          <Filter className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </Tooltip>
-    );
-    if (showTagFilters) content = ({ vehicleId }) => <EfficiencyTagFilterBar vehicleId={vehicleId} filter={filter} />;
-  }
+  const hasActiveFilter = Boolean(filter?.tagIds.length || filter?.untagged);
+  const [showTagFilters, setShowTagFilters] = React.useState(hasActiveFilter);
 
   return (
     <DashboardPageShell
@@ -51,9 +23,28 @@ export function EfficiencyDashboardPage({
       slug={slug}
       title={title}
       showEfficiencyDisplayToggle
-      renderLeadingActions={() => controls}
+      renderLeadingActions={() => filter?.setFilter ? (
+        <Tooltip content={showTagFilters ? 'Hide efficiency filters' : 'Show efficiency filters'}>
+          <button
+            type="button"
+            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent ${showTagFilters || hasActiveFilter ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-bg-elevated text-fg-secondary hover:border-border-strong hover:text-fg'}`}
+            onClick={() => setShowTagFilters((value) => !value)}
+            aria-label={showTagFilters ? 'Hide efficiency filters' : 'Show efficiency filters'}
+            aria-expanded={showTagFilters}
+            aria-controls="efficiency-tag-filters"
+            title={showTagFilters ? 'Hide efficiency filters' : 'Show efficiency filters'}
+          >
+            <Filter className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </Tooltip>
+      ) : null}
       {...(widgetCtx ? { widgetCtx } : {})}
-      {...(content ? { renderBeforeDashboard: content } : {})}
+      renderBeforeDashboard={(state) => filter?.setFilter && showTagFilters ? (
+        <EfficiencyTagFilterBar
+          vehicleId={state.vehicleId}
+          filter={filter}
+        />
+      ) : null}
     />
   );
 }
@@ -65,26 +56,12 @@ function EfficiencyTagFilterBar({
   vehicleId: string | null;
   filter: TripTagFilter;
 }) {
-  type FilterAction = { type: 'clear' | 'untagged' } | { type: 'tags'; ids: string[] } | { type: 'match'; match: 'all' | 'any' };
-  const changeFilter = (action: FilterAction) => {
-    const next = action.type === 'match'
-      ? { ...filter, tagMatch: action.match }
-      : {
-        tagIds: action.type === 'tags' ? action.ids : [],
-        tagMatch: action.type === 'tags' ? filter.tagMatch : 'all' as const,
-        untagged: action.type === 'untagged' && !filter.untagged,
-      };
-    filter.setFilter?.(next);
-  };
-  const count = filter.tagIds.length;
-  const summaries = { all: 'All trips', untagged: 'Untagged trips', tags: `${count} tag${count === 1 ? '' : 's'} selected` };
-  const filterSummary = summaries[filter.untagged ? 'untagged' : count ? 'tags' : 'all'];
-  const matchDisabled = filter.untagged || count === 0;
-  const matchClasses = {
-    all: 'text-fg-tertiary hover:text-fg',
-    any: 'text-fg-tertiary hover:text-fg',
-  };
-  matchClasses[filter.tagMatch] = 'bg-bg-surface text-fg shadow-sm';
+  const clear = () => filter.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: false });
+  const filterSummary = filter.untagged
+    ? 'Untagged trips'
+    : filter.tagIds.length
+      ? `${filter.tagIds.length} tag${filter.tagIds.length === 1 ? '' : 's'} selected`
+      : 'All trips';
 
   return (
     <section id="efficiency-tag-filters" className="mb-4 rounded-xl border border-border bg-bg-elevated/40 p-3" aria-label="Efficiency tag filters">
@@ -99,7 +76,7 @@ function EfficiencyTagFilterBar({
             vehicleId={vehicleId}
             canManage={false}
             selectedIds={filter.tagIds}
-            onChange={(tagIds) => changeFilter({ type: 'tags', ids: tagIds })}
+            onChange={(tagIds) => filter.setFilter?.({ tagIds, tagMatch: filter.tagMatch, untagged: false })}
             label="Filter efficiency by tags"
             mode="inline"
             inlineClassName="rounded-lg border-2 border-transparent bg-bg-surface px-2 py-1 focus-within:border-accent focus-within:ring-0"
@@ -111,9 +88,9 @@ function EfficiencyTagFilterBar({
             <button
               key={match}
               type="button"
-              disabled={matchDisabled}
-              onClick={() => changeFilter({ type: 'match', match })}
-              className={`h-9 rounded-md px-3 font-medium capitalize transition-colors ${matchClasses[match]} disabled:opacity-40`}
+              disabled={filter.untagged || filter.tagIds.length === 0}
+              onClick={() => filter.setFilter?.({ ...filter, tagMatch: match })}
+              className={`relative h-9 min-w-11 rounded-md px-3 font-medium capitalize transition-colors before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']  ${filter.tagMatch === match ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-tertiary hover:text-fg'} disabled:opacity-40`}
             >
               {match}
             </button>
@@ -121,7 +98,7 @@ function EfficiencyTagFilterBar({
           </div>
           <button
             type="button"
-            onClick={() => changeFilter({ type: 'untagged' })}
+            onClick={() => filter.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: !filter.untagged })}
             className={`h-11 rounded-lg border px-3 text-sm font-medium transition-colors ${filter.untagged ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-fg-secondary hover:bg-bg-surface'}`}
             aria-pressed={filter.untagged}
           >
@@ -132,7 +109,7 @@ function EfficiencyTagFilterBar({
               <button
                 type="button"
                 className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-fg-secondary transition-colors hover:border-border-strong hover:bg-bg-surface hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-                onClick={() => changeFilter({ type: 'clear' })}
+                onClick={clear}
                 aria-label="Clear filters"
                 title="Clear filters"
               >

@@ -1,15 +1,9 @@
-import React from 'react';
-import { createRoute } from '@tanstack/react-router';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { BatteryPhantomDrainPage } from '../components/dashboard/BatteryPhantomDrainPage';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 
+/** Parked loss is a card on the Battery tab of Insights. Keep old links working. */
 export const batteryPhantomDrainRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/battery/phantom-drain',
-  component: () => (
-    <ProtectedRoute>
-      <BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />
-    </ProtectedRoute>
-  ),
+  beforeLoad: () => { throw redirect({ to: '/insights/$tab', params: { tab: 'battery' }, replace: true }); },
 });

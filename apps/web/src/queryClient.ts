@@ -35,6 +35,26 @@ function cacheKey(userId: string) {
   return `rm-query-cache-v2-${userId}`;
 }
 
+const MAX_QUERY_RETRIES = 2;
+
+/**
+ * Retry policy for every query.
+ * - 401, 403 and AUTH_EXPIRED: no retry. The user must sign in again.
+ * - 404: no retry. The resource does not exist, so a retry gives the same answer.
+ * - 429: no retry. A retry makes the throttle worse.
+ * - Network errors, 5xx and errors without a status: retry up to 2 times.
+ */
+export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  const e = error as { status?: unknown; code?: unknown } | null;
+  if (e && typeof e === 'object') {
+    const status = Number(e.status);
+    if (status === 401 || status === 403 || e.code === 'AUTH_EXPIRED') return false;
+    if (status === 404) return false;
+    if (status === 429) return false;
+  }
+  return failureCount < MAX_QUERY_RETRIES;
+}
+
 export const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error, query) => {
@@ -58,12 +78,7 @@ export const queryClient = new QueryClient({
   }),
   defaultOptions: {
     queries: {
-      retry: (failureCount, error) => {
-        const failure = error as { status?: unknown; code?: unknown } | null;
-        const terminal = failure?.code === 'AUTH_EXPIRED'
-          || [401, 403, 429].includes(Number(failure?.status));
-        return !terminal && failureCount < 2;
-      },
+      retry: shouldRetryQuery,
       staleTime: 30 * 1000,
       gcTime: 24 * 60 * 60 * 1000,
       refetchOnReconnect: false,

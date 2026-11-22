@@ -20,7 +20,7 @@ use crate::{
 
 // Advance this whenever a bundled system dashboard changes so existing
 // installations receive the new baseline on their next startup.
-const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 9;
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 10;
 
 const RETIRED_TRIPS_MANAGED_WIDGETS: &[(&str, &str)] = &[(
     "trips.tire-pressure-timeline",

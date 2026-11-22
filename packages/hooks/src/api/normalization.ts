@@ -40,6 +40,12 @@ export function normalizeTrip(raw: unknown): Trip {
     ...recordIdentity(row),
     ...numberFields(row, 'max_speed_mph', 'soc_start', 'soc_end'),
     ...stringFields(row, 'start_address', 'end_address'),
+    ...(row.start_odometer_mi !== undefined ? { start_odometer_mi: finiteNumber(row.start_odometer_mi) ?? null } : {}),
+    ...(row.end_odometer_mi !== undefined ? { end_odometer_mi: finiteNumber(row.end_odometer_mi) ?? null } : {}),
+    ...(row.outside_temp_c !== undefined ? { outside_temp_c: finiteNumber(row.outside_temp_c) ?? null } : {}),
+    ...(typeof row.outside_temp_source === 'string'
+      ? { outside_temp_source: row.outside_temp_source as NonNullable<Trip['outside_temp_source']> }
+      : {}),
     distance_mi: distance,
     duration_min:
       finiteNumber(row.duration_min) ?? (durationSeconds === undefined ? 0 : durationSeconds / 60),
@@ -76,6 +82,7 @@ export function normalizeChargeSession(raw: unknown): ChargeSession {
       'soc_start',
       'soc_end',
       'cost_usd',
+      'cost_rate_per_kwh',
       'range_added_km',
       'rivian_paid_total',
       'live_current_price',

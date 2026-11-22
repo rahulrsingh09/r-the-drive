@@ -719,4 +719,222 @@ mod tests {
         drop(conn);
         db.finish().await;
     }
+
+    /// Legacy-only readings of a drive while Parallax is quiet: odometer, GPS
+    /// and battery every minute, no power state and no speed.
+    async fn insert_quiet_drive(db: &TestDb, start: DateTime<Utc>, steps: i64) {
+        sqlx::query(
+            "INSERT INTO timeseries.telemetry(ts,vehicle_id,odometer_miles,latitude,longitude,battery_level) \
+             VALUES($1,$2,100.0,30.0,-97.0,70.0)",
+        )
+        .bind(start - Duration::hours(1))
+        .bind(db.vehicle_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        for step in 0..steps {
+            sqlx::query(
+                "INSERT INTO timeseries.telemetry(ts,vehicle_id,odometer_miles,latitude,longitude,battery_level) \
+                 VALUES($1,$2,$3,30.0,$4,$5)",
+            )
+            .bind(start + Duration::minutes(step))
+            .bind(db.vehicle_id)
+            .bind(100.62 + 0.62 * step as f64)
+            .bind(-97.0 + 0.01 * step as f64)
+            .bind(70.0 - 0.3 * step as f64)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        let parked = 100.62 + 0.62 * (steps - 1) as f64;
+        for minute in [steps + 3, steps + 8] {
+            sqlx::query(
+                "INSERT INTO timeseries.telemetry(ts,vehicle_id,odometer_miles,latitude,longitude,battery_level) \
+                 VALUES($1,$2,$3,30.0,$4,64.0)",
+            )
+            .bind(start + Duration::minutes(minute))
+            .bind(db.vehicle_id)
+            .bind(parked)
+            .bind(-97.0 + 0.01 * (steps - 1) as f64)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+    async fn missed_drive_is_listed_recovered_once_and_linked() {
+        use crate::services::trip_gaps::{find_trip_gaps, recover_trip_gap, RecoverError};
+        use chrono::DurationRound;
+        let db = TestDb::new().await;
+        let start = (Utc::now() - Duration::days(2))
+            .duration_trunc(Duration::minutes(1))
+            .unwrap();
+        insert_quiet_drive(&db, start, 20).await;
+
+        let gaps = find_trip_gaps(&db.pool, db.vehicle_id).await.unwrap();
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        let gap = &gaps[0];
+        assert_eq!(gap.started_at, start);
+        assert!(
+            (gap.distance_miles - 12.4).abs() < 1e-6,
+            "{}",
+            gap.distance_miles
+        );
+
+        let trip_id = recover_trip_gap(&db.pool, db.vehicle_id, &gap.id)
+            .await
+            .unwrap();
+        let (linked, unlinked): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE trip_id = $1), count(*) FILTER (WHERE trip_id IS NULL) \
+             FROM timeseries.telemetry WHERE vehicle_id = $2",
+        )
+        .bind(trip_id)
+        .bind(db.vehicle_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(linked >= 20, "{linked}");
+        assert!(
+            unlinked >= 1,
+            "parked readings outside the trip stay unlinked"
+        );
+        assert_eq!(db.counts().await, (1, 0, 1));
+        assert!(matches!(
+            recover_trip_gap(&db.pool, db.vehicle_id, &gap.id).await,
+            Err(RecoverError::NotFound)
+        ));
+        assert!(find_trip_gaps(&db.pool, db.vehicle_id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(db.counts().await, (1, 0, 1));
+        db.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+    async fn recovered_trip_is_refused_while_a_drive_is_captured() {
+        let db = TestDb::new().await;
+        let mut trip = drain_fixture_trip(db.vehicle_id);
+        let margin = Duration::minutes(2);
+        // A live completion is pending: recovery waits for it.
+        sqlx::query("INSERT INTO panda.pending_trip_completions(trip_id,vehicle_id,trip) VALUES($1,$2,'{}')")
+            .bind(Uuid::new_v4())
+            .bind(db.vehicle_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            super::super::persist_recovered_trip(&db.pool, &trip, 5.0, margin)
+                .await
+                .unwrap(),
+            super::super::RecoveredSave::Pending
+        );
+        assert_eq!(db.counts().await, (0, 1, 0));
+        db.pool
+            .execute("DELETE FROM panda.pending_trip_completions")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            super::super::persist_recovered_trip(&db.pool, &trip, 5.0, margin)
+                .await
+                .unwrap(),
+            super::super::RecoveredSave::Saved
+        );
+        // The same drive again, with new boundaries inside the margin.
+        trip.trip_id = Uuid::new_v4();
+        trip.started_at += Duration::seconds(90);
+        assert_eq!(
+            super::super::persist_recovered_trip(&db.pool, &trip, 5.0, margin)
+                .await
+                .unwrap(),
+            super::super::RecoveredSave::Overlap
+        );
+        assert_eq!(db.counts().await, (1, 0, 1));
+        db.finish().await;
+    }
+
+    fn drain_fixture_trip(vehicle_id: Uuid) -> CompletedTripData {
+        let at = DateTime::parse_from_rfc3339("2026-10-05T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut detector = TripDetectorState::new(vehicle_id);
+        detector.process(&event(vehicle_id, 0, 10.0, PowerState::Drive));
+        detector.process(&event(vehicle_id, 60, 12.0, PowerState::Drive));
+        match detector.process(&event(vehicle_id, 120, 15.0, PowerState::Sleep)) {
+            TripEvent::TripEnded { trip } => {
+                assert_eq!(trip.started_at, at);
+                trip
+            }
+            other => panic!("expected a completed trip, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicit isolated synthetic TimescaleDB"]
+    async fn saved_session_takes_its_peak_and_type_from_the_recorded_charging_graph() {
+        let db = TestDb::new().await;
+        let session_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(3);
+        // R2 shape: the detector saw no power and classified from its average.
+        let session = crate::ingestion::charge_detector::CompletedChargeSession {
+            session_id,
+            vehicle_id: db.vehicle_id,
+            started_at,
+            ended_at: started_at + Duration::minutes(16),
+            location_lat: None,
+            location_lng: None,
+            soc_start: Some(28.0),
+            soc_end: Some(72.0),
+            charge_limit: Some(80.0),
+            battery_capacity_wh: Some(91_500.0),
+            energy_used_wh: None,
+            energy_added_wh: Some(40_260.0),
+            peak_charge_kw: None,
+            avg_charge_rate_kw: Some(15.0),
+            charger_type: Some("ac".to_string()),
+        };
+        sqlx::query(
+            "INSERT INTO panda.charge_sessions(id,vehicle_id,started_at,source) VALUES($1,$2,$3,'telemetry')",
+        )
+        .bind(session_id)
+        .bind(db.vehicle_id)
+        .bind(started_at)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        for (index, (seconds, kw)) in [(2_i64, 26.2_f64), (245, 189.5), (910, 116.5), (930, 950.0)]
+            .into_iter()
+            .enumerate()
+        {
+            sqlx::query("INSERT INTO timeseries.parallax_charge_curve_points(vehicle_id,source_at,segment_index,charge_session_id,power_kw) VALUES($1,$2,$3,$4,$5)")
+                .bind(db.vehicle_id)
+                .bind(started_at + Duration::seconds(seconds))
+                .bind(index as i32)
+                .bind(session_id)
+                .bind(kw)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        super::super::persist_charge_session(&db.pool, &session)
+            .await
+            .unwrap();
+
+        let (charger_type, peak, voltage): (Option<String>, Option<f64>, Option<f64>) =
+            sqlx::query_as("SELECT charger_type, max_charge_rate_kw, peak_voltage FROM panda.charge_sessions WHERE id=$1")
+                .bind(session_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(charger_type.as_deref(), Some("dc"));
+        // The implausible 950 kW reading is ignored.
+        assert_eq!(peak, Some(189.5));
+        assert_eq!(voltage, None, "no kW in the volts column");
+        db.finish().await;
+    }
 }

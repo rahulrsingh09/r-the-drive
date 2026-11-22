@@ -1,6 +1,6 @@
 use super::CurveSource;
 
-pub(super) const LINKED_COUNT: &str = r#"SELECT COUNT(*)::int8
+pub(super) const LINKED_COUNT: &str = r#"SELECT COUNT(*)::int8, COUNT(power_kw)::int8
            FROM timeseries.telemetry
            WHERE vehicle_id=$1
              AND charge_session_id=$2

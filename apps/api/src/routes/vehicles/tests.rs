@@ -80,10 +80,14 @@ fn requires_authorized_connected_runtime_before_reporting_refresh_ready() {
 // Run with: cargo test -- --ignored
 
 #[tokio::test]
-async fn outbound_policy_blocks_artwork_downloads_including_saved_private_urls() {
+async fn artwork_exception_downloads_only_from_rivian_https_hosts() {
+    // The owner-approved artwork exception is on: a missing mirror reports
+    // "restoring" while the background repair runs.
+    let restoring = super::vehicle_artwork_restoring_response();
+    assert_eq!(restoring.status(), StatusCode::ACCEPTED);
     assert_eq!(
-        super::vehicle_artwork_restoring_response().status(),
-        StatusCode::NOT_FOUND
+        restoring.headers()["x-panda-artwork-state"],
+        "restoring"
     );
     let state = make_helper_state("redis://127.0.0.1/".into());
     for source in [
@@ -91,20 +95,36 @@ async fn outbound_policy_blocks_artwork_downloads_including_saved_private_urls()
         "http://127.0.0.1:1/vehicle.webp",
         "http://169.254.169.254/latest/meta-data",
         "https://user:password@images.example.test/vehicle.webp",
+        "https://user:password@rivian.com/vehicle.webp",
+        "http://rivian.com/vehicle.webp",
+        "https://rivian.com.evil.test/vehicle.webp",
+        "https://rivian.com:8443/vehicle.webp",
     ] {
-        let result = super::download_and_store_asset(
-            &reqwest::Client::new(),
-            &state.config,
-            Uuid::new_v4(),
-            source,
-        )
-        .await;
-        let error = result.expect_err("artwork must be denied");
-        assert!(matches!(
-            error.downcast_ref::<crate::services::outbound_policy::PolicyError>(),
-            Some(crate::services::outbound_policy::PolicyError::OptionalTraffic)
-        ));
+        let result = super::download_and_store_asset(&state.config, Uuid::new_v4(), source).await;
+        let error = result.err().expect("artwork must be denied");
+        assert!(
+            matches!(
+                error.downcast_ref::<crate::services::outbound_policy::PolicyError>(),
+                Some(crate::services::outbound_policy::PolicyError::ArtworkDestination)
+            ),
+            "{source}"
+        );
     }
+}
+
+#[test]
+fn artwork_repair_backoff_bounds_page_triggered_rivian_queries() {
+    use super::{artwork_repair_due, ArtworkRepairTrigger::*};
+    let now = chrono::Utc::now();
+    let later = now + chrono::Duration::minutes(15);
+    let earlier = now - chrono::Duration::minutes(1);
+    assert!(!artwork_repair_due(PageRead, "ready", earlier, now));
+    assert!(!artwork_repair_due(PageRead, "failed", later, now));
+    assert!(artwork_repair_due(PageRead, "failed", earlier, now));
+    assert!(artwork_repair_due(PageRead, "pending", now, now));
+    assert!(artwork_repair_due(MissingFile, "ready", earlier, now));
+    assert!(!artwork_repair_due(MissingFile, "ready", later, now));
+    assert!(artwork_repair_due(Forced, "repairing", later, now));
 }
 
 pub(super) fn make_helper_state(redis_url: String) -> crate::middleware::auth::AppState {

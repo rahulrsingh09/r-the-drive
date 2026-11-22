@@ -687,7 +687,7 @@ fn charging_workflow_pure_boundary_contract() {
                 Some(300.0),
                 Some(f64::NAN),
             ] {
-                rows.push(json!({"kind":kind,"vendor":vendor,"power":power,"result":normalize_chart_charger_type(kind,vendor,power)}));
+                rows.push(json!({"kind":kind,"vendor":vendor,"power":power,"result":normalize_chart_charger_type(kind)}));
             }
         }
     }
@@ -699,10 +699,11 @@ fn charging_workflow_pure_boundary_contract() {
                     .map(|i| RawCurvePointRow {
                         ts: start + chrono::Duration::seconds(i * 120 - 60),
                         power_kw: Some(if i == 0 { -1.0 } else { 350.0 }),
+                        soc: None,
                         sample_source: "synthetic".into(),
                     })
                     .collect::<Vec<_>>();
-                rows.push(json!({"count":count,"end_seconds":end_seconds,"cap":cap,"result":build_fallback_curve_samples(id(100),start,start+chrono::Duration::seconds(end_seconds),Some("dc"),20.0,80.0,&points,cap)}));
+                rows.push(json!({"count":count,"end_seconds":end_seconds,"cap":cap,"result":build_fallback_curve_samples(id(100),start,start+chrono::Duration::seconds(end_seconds),Some("dc"),Some((20.0,80.0)),&points,cap)}));
             }
         }
     }
@@ -726,8 +727,6 @@ fn charging_workflow_pure_boundary_contract() {
                     cost_usd: None,
                     location_name: None,
                     charger_type: None,
-                    network_vendor: None,
-                    peak_power_kw: None,
                 })
                 .collect::<Vec<_>>();
             if reverse {

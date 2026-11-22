@@ -50,7 +50,9 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0',
+    // Loopback only by default. DEV_WEB_HOST widens the bind on purpose
+    // (for example, to test on a phone on the same network).
+    host: process.env.DEV_WEB_HOST?.trim() || '127.0.0.1',
     port: 5173,
     proxy: {
       '/v1/restore-runtime': {

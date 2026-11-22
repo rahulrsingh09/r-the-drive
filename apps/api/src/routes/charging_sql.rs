@@ -47,15 +47,14 @@ pub(super) fn session_query(projection: SessionProjection) -> String {
             WHERE t.vehicle_id=cs.vehicle_id AND t.ts BETWEEN cs.started_at AND COALESCE(cs.ended_at,now())
             ) telem ON true {TELEM}"), "cs.id=$1 AND cs.vehicle_id=$2"),
     };
+    let cost_sql = super::charging::COST_RESOLUTION_SQL;
+    let charger_sql = crate::charger_type_sql!("cs");
     format!("SELECT cs.id,cs.started_at,
         TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM panda.system_config WHERE key='app_timezone'),'UTC'))::date,'YYYY-MM-DD') AS session_day_local,
         cs.ended_at,cs.location_lat,cs.location_lng,cs.source_location_lat,cs.source_location_lng,
-        cs.location_override_mode,cs.cost_override_mode,cs.cost_override_usd,
+        cs.location_override_mode,cs.cost_override_mode,cs.cost_override_usd,{cost_sql},
         COALESCE(g.name,a.display_name,CASE WHEN cs.is_home THEN 'Home' END) AS location_name,
-        cs.is_home,COALESCE(cs.charger_type, CASE
-            WHEN lower(COALESCE(cs.network_vendor,''))=ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-            WHEN rate.kw<12 THEN 'ac' WHEN rate.kw<50 THEN 'ac_l2' WHEN rate.kw IS NOT NULL THEN 'dc'
-        END) AS charger_type,
+        cs.is_home,{charger_sql} AS charger_type,
         energy.kwh AS kwh_added,cs.soc_start,cs.soc_end,rate.kw AS max_charge_rate_kw,cs.duration_minutes,
         {COST},cs.network_vendor,cs.range_added_km,cs.is_free_session,cs.is_rivian_network,cs.rivian_paid_total,cs.source,
         cs.rivian_charger_type,cs.currency_code,cs.rivian_city,cs.is_public,cs.charger_id,{live}

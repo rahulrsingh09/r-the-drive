@@ -6,8 +6,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { formatSmartNumber } from '../lib/utils';
-import { chargeTooltip } from './chartPresentation';
+import { formatPercent, formatKwh, formatSmartNumber } from '../lib/utils';
 
 export interface ChargeCurvePoint {
   soc: number;
@@ -40,7 +39,7 @@ export function ChargeCurveChart({
           tickLine={false}
           axisLine={false}
           tickFormatter={(v: number) => `${Math.round(v)}%`}
-          label={{ value: 'State of Charge', position: 'insideBottom', offset: -2, ...TICK_STYLE }}
+          label={{ value: 'Battery', position: 'insideBottom', offset: -2, ...TICK_STYLE }}
         />
         <YAxis
           tick={TICK_STYLE}
@@ -52,7 +51,11 @@ export function ChargeCurveChart({
         <Tooltip
           content={
             <ChartTooltip
-              formatter={chargeTooltip}
+              formatter={(v, name) =>
+                name === 'power_kw'
+                  ? [formatKwh(v ?? 0), 'Power']
+                  : [formatPercent(v ?? 0), 'Battery']
+              }
             />
           }
           cursor={TOOLTIP_CURSOR_STYLE}

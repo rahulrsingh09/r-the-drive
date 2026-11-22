@@ -6,7 +6,7 @@ import { predictWeightedLine } from './weightedRegression';
 import { useWidgetDialogDismiss, useCompatibleWidgetMedia } from '../widgetLifecycle';
 import { mileageProjection } from './mileageProjection';
 import { canonicalSeriesStyle, chartDomain, chartMark, projectTimestampValues } from './chartProjection';
-import { prepareSessionCurve, sessionHourSplits } from './sessionCurve';
+import { prepareSessionCurve } from './sessionCurve';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Maximize2, SlidersHorizontal, X } from 'lucide-react';
@@ -91,6 +91,7 @@ interface DashboardChartOptions {
   chartIds?: string[];
   page?: DashboardChartPage;
   showPicker?: boolean;
+  showChartPicker?: boolean;
   /** The widget keeps its layout, but its available charts come from the page catalog. */
   managed?: boolean;
   catalogMode?: 'assigned' | 'fixed' | 'legacy';
@@ -372,6 +373,18 @@ function DashboardChartCatalogState({
   );
 }
 
+export type DashboardChartInsightResolver = (input: {
+  chartId: string;
+  title: string;
+}) => string | null | undefined;
+
+const DashboardChartInsightContext = React.createContext<DashboardChartInsightResolver | null>(
+  null,
+);
+
+/** Supplies a one-line observation above the chart body for the active chart. */
+export const DashboardChartInsightProvider = DashboardChartInsightContext.Provider;
+
 interface DashboardChartFrameProps {
   instance: WidgetInstance;
   options: ResolvedDashboardChartOptions;
@@ -412,6 +425,8 @@ function DashboardChartFrame({
   onUpdateSettings,
   renderChart,
 }: DashboardChartFrameProps) {
+  const resolveInsight = React.useContext(DashboardChartInsightContext);
+  const insight = resolveInsight?.({ chartId, title: chartTitle }) ?? null;
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [viewerOpen, setViewerOpen] = React.useState(false);
   const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
@@ -474,6 +489,11 @@ function DashboardChartFrame({
       ) : (
         <div className="absolute right-0 top-0 z-10">{controls}</div>
       )}
+      {insight ? (
+        <p className="mb-2 text-xs text-fg-secondary" data-chart-insight>
+          {insight}
+        </p>
+      ) : null}
       {!viewerOpen ? (
         <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
           {renderChart(height)}
@@ -1327,6 +1347,21 @@ function ChargingSessionsChart({
   );
 }
 
+/**
+ * Time-axis ticks for a charge session, in Unix seconds. A DC fast charge
+ * lasts minutes and an AC charge lasts hours, so the step follows the span:
+ * about two to six ticks either way.
+ */
+export function chargeSessionTimeSplits(startSeconds: number, endSeconds: number): number[] {
+  const span = endSeconds - startSeconds;
+  const step = span <= 45 * 60 ? 5 * 60 : span <= 2 * 3600 ? 15 * 60 : span <= 8 * 3600 ? 3600 : 2 * 3600;
+  const splits: number[] = [];
+  for (let tick = Math.ceil(startSeconds / step) * step; tick <= endSeconds; tick += step) {
+    splits.push(tick);
+  }
+  return splits;
+}
+
 function ChargeSessionCurveChart({
   definition,
   chartDefinition,
@@ -1356,7 +1391,15 @@ function ChargeSessionCurveChart({
 }) {
   const isDark = useDocumentTheme();
   const { points, rateValues, energyValues, useTime } = React.useMemo(() => prepareSessionCurve(data, startedAt, sessionEnergyKwh), [data, startedAt, sessionEnergyKwh]);
-  const xSplits = React.useMemo(() => sessionHourSplits(points, useTime), [points, useTime]);
+  const xSplits = React.useMemo(() => {
+    if (!useTime || points.length < 2) return undefined;
+    const xSeconds = points
+      .map((point) => new Date(String(point.ts)).getTime() / 1000)
+      .filter((value) => Number.isFinite(value));
+    if (xSeconds.length < 2) return undefined;
+    const splits = chargeSessionTimeSplits(xSeconds[0]!, xSeconds[xSeconds.length - 1]!);
+    return splits.length >= 2 ? splits : undefined;
+  }, [points, useTime]);
 
   const configured = configuredRichSeries(
     chartDefinition,

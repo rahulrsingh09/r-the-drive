@@ -19,6 +19,38 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a 500 whose body has no message without crashing the error formatter', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const failure = await api.vehicleStatus('vehicle-1').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String((failure as Error).message)).not.toMatch(/Cannot read properties/);
+  });
+
+  it('turns a string error body into a string code and message, never "500 undefined:"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'boom' }), { status: 500, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const failure = await api.vehicleStatus('vehicle-1').catch((error: unknown) => error) as Error & {
+      code?: unknown;
+      detail?: { code?: unknown; message?: unknown };
+    };
+    expect(failure.code).toBe('HTTP_500');
+    expect(failure.detail).toMatchObject({ code: 'HTTP_500', message: 'boom' });
+    expect(failure.message).toBe('500 HTTP_500: boom');
+    expect(failure.message).not.toContain('undefined');
+  });
+
+  it('keeps the server code and message of a structured error body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 'boom', message: 'boom' } }), { status: 500, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const failure = await api.vehicleStatus('vehicle-1').catch((error: unknown) => error) as Error & { code?: unknown };
+    expect(failure.code).toBe('boom');
+    expect(failure.message).toBe('500 boom: boom');
+  });
+
   it('rejects incomplete metric JSON without treating a partial document as success', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"values":[],"series":[', { status: 200 }));
     await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ code: 'INCOMPLETE_RESPONSE' });
@@ -480,7 +512,7 @@ describe('api client dashboard contracts', () => {
       detail: { requestId: 'request-123' },
     });
     expect(consoleWarn).toHaveBeenCalledWith(
-      expect.stringContaining('[Panda client] api.request_failed:'),
+      expect.stringContaining('[R:The Drive client] api.request_failed:'),
       expect.objectContaining({
         event: 'api.request_failed',
         path: '/v1/external/basemap/config',
@@ -688,53 +720,140 @@ describe('api client dashboard contracts', () => {
     window.removeEventListener('panda:auth-expired', authExpired);
   });
 
-  it('emits distinct toast messages for nginx vs api 429 responses', async () => {
+  it('does not toast background read failures, including 429 and 404', async () => {
     const toast = vi.fn();
     window.addEventListener('panda:toast', toast as EventListener);
+    try {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } }, 429, {
+          'x-panda-ratelimit-source': 'nginx',
+          'x-panda-ratelimit-class': 'test_read_nginx',
+          'retry-after': '2',
+        })
+      );
+      await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ status: 429 });
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' },
-        }),
-        {
-          status: 429,
-          headers: {
-            'Content-Type': 'application/json',
-            'x-panda-ratelimit-source': 'nginx',
-            'retry-after': '2',
-          },
-        }
-      ) as Response
-    );
-    await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ status: 429 });
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } }, 429, {
+          'x-panda-ratelimit-source': 'api',
+          'x-panda-ratelimit-class': 'test_read_api',
+          'retry-after': '2',
+        })
+      );
+      await expect(api.me()).rejects.toMatchObject({ status: 429 });
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' },
-        }),
-        {
-          status: 429,
-          headers: {
-            'Content-Type': 'application/json',
-            'x-panda-ratelimit-source': 'api',
-            'x-panda-ratelimit-class': 'auth_metadata',
-            'retry-after': '2',
-          },
-        }
-      ) as Response
-    );
-    await expect(api.me()).rejects.toMatchObject({ status: 429 });
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { message: 'This endpoint is unavailable in the local preview.' } }, 404)
+      );
+      await expect(
+        api.getChargeCurveAnalysis('vehicle-1', '2026-10-01T00:00:00Z', '2026-10-31T00:00:00Z')
+      ).rejects.toMatchObject({ status: 404 });
 
-    const details = toast.mock.calls
-      .map(([event]) => (event as CustomEvent).detail?.message)
-      .filter((message): message is string => typeof message === 'string');
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404)
+      );
+      await expect(api.getMetricBatch({ vehicle_id: 'vehicle-1', metrics: [] } as never)).rejects.toMatchObject({
+        status: 404,
+      });
 
-    expect(details.some((message) => message.includes('Edge proxy rate limit reached'))).toBe(true);
-    expect(details.some((message) => message.includes('API rate limit reached'))).toBe(true);
+      vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      await expect(api.getChargingSummary('vehicle-1', null, null)).rejects.toMatchObject({
+        code: 'NETWORK_ERROR',
+      });
 
-    window.removeEventListener('panda:toast', toast as EventListener);
+      expect(toast).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('panda:toast', toast as EventListener);
+    }
+  });
+
+  it('emits distinct toast messages for nginx vs api 429 mutation responses', async () => {
+    const toast = vi.fn();
+    window.addEventListener('panda:toast', toast as EventListener);
+    try {
+      // Dedicated limiter classes keep these cooldowns away from other tests.
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } }, 429, {
+          'x-panda-ratelimit-source': 'nginx',
+          'x-panda-ratelimit-class': 'test_nginx',
+          'retry-after': '2',
+        })
+      );
+      await expect(
+        api.updateChargingNetworkPreference('vehicle-1', 'tesla', 'free')
+      ).rejects.toMatchObject({ status: 429 });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' } }, 429, {
+          'x-panda-ratelimit-source': 'api',
+          'x-panda-ratelimit-class': 'test_api',
+          'retry-after': '2',
+        })
+      );
+      await expect(
+        api.updateChargingNetworkPreference('vehicle-1', 'tesla', 'free')
+      ).rejects.toMatchObject({ status: 429 });
+
+      const details = toast.mock.calls
+        .map(([event]) => (event as CustomEvent).detail?.message)
+        .filter((message): message is string => typeof message === 'string');
+
+      expect(details).toContain('Try again in about 2s.');
+      expect(details.some((message) => message.includes('Edge proxy'))).toBe(false);
+      expect(details.some((message) => message.includes('API rate limit reached'))).toBe(true);
+    } finally {
+      window.removeEventListener('panda:toast', toast as EventListener);
+    }
+  });
+
+  it('names the owner action when a mutation gets a 404', async () => {
+    const toast = vi.fn();
+    window.addEventListener('panda:toast', toast as EventListener);
+    try {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'not_found', message: 'charging session not found' } }, 404)
+      );
+      await expect(
+        api.updateChargeSession('vehicle-1', 'charge-1', { cost_mode: 'manual', cost_usd: 4.2 })
+      ).rejects.toMatchObject({ status: 404 });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'not_found', message: 'place not found' } }, 404)
+      );
+      await expect(api.deletePlace('place-1')).rejects.toMatchObject({ status: 404 });
+
+      const details = toast.mock.calls.map(([event]) => (event as CustomEvent).detail);
+      expect(details).toEqual([
+        expect.objectContaining({ title: 'Could not save the charge cost', variant: 'error' }),
+        expect.objectContaining({ title: 'Could not delete the place', variant: 'error' }),
+      ]);
+      for (const detail of details) {
+        expect(detail.title).not.toBe('Not found');
+        expect(detail.message).not.toContain('The requested resource could not be found.');
+      }
+    } finally {
+      window.removeEventListener('panda:toast', toast as EventListener);
+    }
+  });
+
+  it('keeps the session-expired toast for a background read', async () => {
+    api.setToken('expired-token');
+    const toast = vi.fn();
+    window.addEventListener('panda:toast', toast as EventListener);
+    try {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        jsonResponse({ error: { code: 'unauthorized', message: 'expired' } }, 401)
+      );
+      await expect(api.getChargingSummary('vehicle-1', null, null)).rejects.toMatchObject({
+        code: 'AUTH_EXPIRED',
+      });
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect((toast.mock.calls[0]?.[0] as CustomEvent).detail).toMatchObject({
+        title: 'Session expired',
+      });
+    } finally {
+      window.removeEventListener('panda:toast', toast as EventListener);
+    }
   });
 
   it('backs off repeated requests against the same exhausted limiter bucket', async () => {
@@ -804,3 +923,10 @@ describe('api client OIDC account contracts', () => {
     expect(result.authorization_url).toBe('https://idp.example/authorize');
   });
 });
+
+function jsonResponse(body: unknown, status: number, headers: Record<string, string> = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  }) as Response;
+}

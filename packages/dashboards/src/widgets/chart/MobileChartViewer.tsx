@@ -78,7 +78,7 @@ export function MobileChartViewer({
           ref={closeRef}
           type="button"
           onClick={close}
-          className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+          className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary shadow-sm transition-colors hover:border-border-strong hover:text-fg"
           aria-label="Close expanded chart"
         >
           <X className="h-5 w-5" />

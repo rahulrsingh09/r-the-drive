@@ -128,6 +128,7 @@ describe('Efficiency dashboard page', () => {
     const filterButton = screen.getByRole('button', { name: 'Show efficiency filters' });
     const vehiclePicker = screen.getByLabelText('Select vehicle');
     expect(filterButton).toHaveAttribute('aria-expanded', 'false');
+    expect(filterButton).toHaveClass('h-11', 'w-11');
     expect(screen.queryByLabelText('Efficiency tag filters')).not.toBeInTheDocument();
     expect(filterButton.compareDocumentPosition(vehiclePicker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
@@ -140,6 +141,10 @@ describe('Efficiency dashboard page', () => {
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('border-2'));
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('focus-within:ring-0'));
     expect(screen.getByRole('textbox', { name: 'Filter efficiency by tags' })).toBeInTheDocument();
+    // The All/Any segments stay 36 px inside the 44 px group; ::before fills the group height.
+    for (const name of ['all', 'any']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-w-11', 'before:absolute', 'before:-inset-y-1');
+    }
   });
 
   it('opens the tag section when the URL-backed filter is already active', () => {

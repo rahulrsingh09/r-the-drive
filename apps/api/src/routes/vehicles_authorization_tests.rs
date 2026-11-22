@@ -311,3 +311,86 @@ async fn authorization_concurrent_enrollment_creates_only_one_owner() {
     assert_eq!(vehicles, 1);
     f.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "requires disposable TimescaleDB DATABASE_URL and REDIS_URL"]
+async fn authorization_vehicle_image_reads_queue_one_bounded_artwork_repair() {
+    let f = Fixture::new().await;
+    let owner = f.user("user").await;
+    let stranger = f.user("user").await;
+    let vehicle = f.vehicle(owner, "artwork-empty-cache").await;
+    let path = format!("/v1/vehicles/{vehicle}/images");
+
+    let response = f
+        .request("GET", &path, &f.token(stranger), serde_json::Value::Null)
+        .await;
+    assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    let state_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM panda.vehicle_artwork_cache_state WHERE vehicle_id = $1",
+    )
+    .bind(vehicle)
+    .fetch_one(&f.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(state_rows, 0);
+
+    let response = f
+        .request("GET", &path, &f.token(owner), serde_json::Value::Null)
+        .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["all"], serde_json::json!([]));
+    for angle in ["side", "front", "rear", "overhead"] {
+        assert!(body[angle].is_object(), "{angle}");
+    }
+    let (status, next_attempt_at): (String, chrono::DateTime<Utc>) = sqlx::query_as(
+        "SELECT status, next_attempt_at FROM panda.vehicle_artwork_cache_state
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle)
+    .fetch_one(&f.state.pool)
+    .await
+    .unwrap();
+    assert!(["pending", "repairing", "failed"].contains(&status.as_str()));
+    assert!(next_attempt_at > Utc::now() + chrono::Duration::minutes(10));
+
+    // A second read inside the backoff does not claim another repair.
+    let response = f
+        .request("GET", &path, &f.token(owner), serde_json::Value::Null)
+        .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let again: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT next_attempt_at FROM panda.vehicle_artwork_cache_state WHERE vehicle_id = $1",
+    )
+    .bind(vehicle)
+    .fetch_one(&f.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(again, next_attempt_at);
+
+    // A due claim doubles the backoff with each recorded attempt.
+    sqlx::query(
+        "UPDATE panda.vehicle_artwork_cache_state
+            SET status = 'failed', attempts = 3, next_attempt_at = now() - interval '1 minute'
+          WHERE vehicle_id = $1",
+    )
+    .bind(vehicle)
+    .execute(&f.state.pool)
+    .await
+    .unwrap();
+    assert!(super::claim_vehicle_artwork_repair(&f.state.pool, vehicle, false).await);
+    let backoff: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT next_attempt_at FROM panda.vehicle_artwork_cache_state WHERE vehicle_id = $1",
+    )
+    .bind(vehicle)
+    .fetch_one(&f.state.pool)
+    .await
+    .unwrap();
+    let minutes = (backoff - Utc::now()).num_minutes();
+    assert!((115..=120).contains(&minutes), "{minutes}");
+    assert!(!super::claim_vehicle_artwork_repair(&f.state.pool, vehicle, false).await);
+    f.cleanup().await;
+}

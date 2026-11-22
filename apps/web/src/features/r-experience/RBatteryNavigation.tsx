@@ -1,10 +1,10 @@
 import React from 'react';
 import { Link } from '@tanstack/react-router';
-import { batterySections } from './navigationModel';
 
 export function RBatteryNavigation({ pathname }: { pathname: string }) {
-  if (!batterySections.some(section => section.to === pathname)) return null;
+  if (pathname !== '/battery' && pathname !== '/battery/phantom-drain') return null;
   return <nav className="r-battery-navigation" aria-label="Battery sections">
-    {batterySections.map(section => <Link key={section.to} to={section.to} activeOptions={{ exact: true }}>{section.label}</Link>)}
+    <Link to="/battery" activeOptions={{ exact: true }}>Battery overview</Link>
+    <Link to="/battery/phantom-drain" activeOptions={{ exact: true }}>Parked loss</Link>
   </nav>;
 }

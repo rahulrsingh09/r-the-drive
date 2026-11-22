@@ -179,6 +179,8 @@ struct TripRow {
     drive_mode: Option<String>,
     soc_start: Option<f64>,
     soc_end: Option<f64>,
+    start_odometer_mi: Option<f64>,
+    end_odometer_mi: Option<f64>,
     start_lat: Option<f64>,
     start_lng: Option<f64>,
     end_lat: Option<f64>,

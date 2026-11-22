@@ -97,7 +97,7 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
   const deferredSearch = React.useDeferredValue(search);
   const normalizedSearch = deferredSearch.trim();
   const isMobile = useIsMobile();
-  const { data, isLoading } = useChargeSessions(
+  const sessionsQuery = useChargeSessions(
     ctx.vehicleId,
     ctx.from,
     ctx.to,
@@ -106,6 +106,8 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
     normalizedSearch,
     ctx.chargeSessionDayLocal ?? null,
   );
+  const { data, isLoading } = sessionsQuery;
+  const loadFailed = sessionsQuery.isError && data == null;
   const sessions = (data?.items ?? []) as unknown as ChargeSessionRow[];
   const paginationState = pageNavigation(page, data);
   const totalSessions = data?.total ?? 0;
@@ -127,14 +129,14 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
         <button
           disabled={paginationState.previous.disabled}
           onClick={() => send({ type: 'page', value: paginationState.previous.page })}
-          className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
+          className="min-h-11 min-w-11 rounded-lg border border-border px-4 py-2 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Prev
         </button>
         <button
           disabled={paginationState.next.disabled}
           onClick={() => send({ type: 'page', value: paginationState.next.page })}
-          className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
+          className="min-h-11 min-w-11 rounded-lg border border-border px-4 py-2 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Next
         </button>
@@ -153,7 +155,7 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search location"
-            className="w-full rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
+            className="h-11 w-full rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
           />
         </label>
         {!isMobile && (
@@ -172,7 +174,9 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
       </div>
 
       {/* Table content */}
-      {isMobile ? (
+      {loadFailed ? (
+        <ChargesLoadError onRetry={() => void sessionsQuery.refetch()} />
+      ) : isMobile ? (
         <div className="flex flex-col gap-1 min-h-0 flex-1 overflow-y-auto">
           {isLoading
             ? Array.from({ length: 5 }).map((_, i) => (
@@ -206,6 +210,19 @@ export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: Wi
 
       {/* Pagination */}
       {pagination}
+    </div>
+  );
+}
+
+/** In-place read failure for the charge list. It replaces the rows and never says that no charges exist. */
+function ChargesLoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div role="alert" data-table-state="error" className="flex flex-wrap items-center justify-center gap-1 rounded-lg border border-status-danger/30 bg-status-danger/10 px-4 py-6 text-center text-sm text-status-danger">
+      <span>Could not load charges</span>{' '}
+      <span aria-hidden="true">·</span>{' '}
+      <button type="button" onClick={onRetry} className="inline-flex min-h-11 items-center font-medium underline underline-offset-2">
+        Retry
+      </button>
     </div>
   );
 }

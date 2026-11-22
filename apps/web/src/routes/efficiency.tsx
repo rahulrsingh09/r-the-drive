@@ -1,29 +1,9 @@
-import { useTripPageContext } from '../components/dashboard/useTripPageContext';
-import React from 'react';
-import { createRoute } from '@tanstack/react-router';
+import { createRoute, redirect } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { EfficiencyDashboardPage } from '../components/dashboard/EfficiencyDashboardPage';
-import { ProtectedRoute } from '../components/layout/ProtectedRoute';
-import { tripTagSearchSchema } from '../features/trip-tags/tripTagFilter';
 
-function EfficiencyContent() {
-  const widgetCtx = useTripPageContext('/efficiency');
-
-  return (
-    <ProtectedRoute>
-      <EfficiencyDashboardPage
-        navKey="efficiency"
-        slug="efficiency"
-        title="Efficiency"
-        widgetCtx={widgetCtx}
-      />
-    </ProtectedRoute>
-  );
-}
-
+/** Efficiency moved to the Efficiency tab of Insights. Keep old links working. */
 export const efficiencyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/efficiency',
-  validateSearch: tripTagSearchSchema,
-  component: EfficiencyContent,
+  beforeLoad: () => { throw redirect({ to: '/insights/$tab', params: { tab: 'efficiency' }, replace: true }); },
 });

@@ -166,6 +166,9 @@ impl Fixture {
                 crate::routes::vehicles::router()
                     .merge(crate::routes::users::router())
                     .merge(crate::routes::live::router())
+                    .merge(crate::routes::charge_gaps::router())
+                    .merge(crate::routes::charge_place_tags::router())
+                    .merge(crate::routes::account_sessions::router())
                     .merge(crate::routes::auth::router())
                     .merge(crate::routes::auth::metadata_router()),
             )

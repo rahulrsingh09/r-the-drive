@@ -1,7 +1,7 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
 import { cn } from '@panda/ui/lib/utils';
-import { Card } from '@panda/ui/primitives';
+import { Card, Skeleton } from '@panda/ui/primitives';
 import {
   CHART_COLORS,
   getChartColor,
@@ -10,21 +10,33 @@ import {
   type TimeFilterWindow,
 } from '@panda/ui/charts';
 import { resolveIconId } from '../../editor/iconMigration';
-import { useDocumentPalette, useDocumentTheme } from '@panda/ui/hooks';
-import { resolveSensorValueColor, type SensorDataAccent, type SensorIconKey, type SensorValueColor } from './sensorDefinitions';
+import { useDocumentPalette } from '@panda/ui/hooks';
+import type { SensorDataAccent, SensorIconKey, SensorValueColor } from './sensorDefinitions';
 
 type SensorChipHistoryPoint = { ts?: string; value: number | null | undefined };
 type SensorValueTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 
+/** Dash placeholders that callers used before the no-placeholder tile rule. */
+const PLACEHOLDER_VALUES = new Set(['', '-', '—', '–', '...', '…']);
+
 export interface SensorChipSummaryProps {
   title: string;
-  value: string;
+  /**
+   * Formatted value. `null`, an empty string, or a dash placeholder shows the
+   * `emptyText` reason line instead of a value. Never a "-" value.
+   */
+  value: string | null | undefined;
+  /** Reason line for a tile with no value. Default: "No data". */
+  emptyText?: string;
+  /** Shows a skeleton value line and sets `aria-busy`. */
+  loading?: boolean;
   icon?: SensorIconKey;
   secondary?: string | undefined;
   labelSuffix?: string;
   subtitle?: string;
   accentBorder?: boolean;
   dataAccent?: SensorDataAccent;
+  /** Kept for callers. The number always renders in primary ink. */
   valueColor?: SensorValueColor;
   valueTone?: SensorValueTone;
   valueSize?: 'sm' | 'md' | 'lg';
@@ -38,12 +50,13 @@ export function SensorChipSummary({
   title,
   value,
   icon = 'lucide:activity',
+  emptyText = 'No data',
+  loading = false,
   secondary,
   labelSuffix,
   subtitle,
   accentBorder = false,
   dataAccent,
-  valueColor = 'accent',
   valueTone,
   valueSize = 'md',
   history,
@@ -52,18 +65,8 @@ export function SensorChipSummary({
   historyTimeFilter,
 }: SensorChipSummaryProps) {
   const palette = useDocumentPalette();
-  const automaticColor = palette === 'rad' && dataAccent ? dataAccent : 'accent';
-  const metricColor = getChartColor(automaticColor);
-  const isDark = useDocumentTheme();
-  const metricValueColor = resolveSensorValueColor(
-    undefined,
-    automaticColor,
-    metricColor,
-    isDark,
-  );
-  const tone = valueTone && { success: 'text-status-positive', warning: 'text-status-warning', danger: 'text-status-danger', info: 'text-status-info', neutral: undefined }[valueTone];
-  const iconTone = tone ?? (dataAccent ? 'text-fg' : 'text-accent');
-  const numberTone = tone ?? (valueColor === 'accent' ? 'text-accent' : 'text-fg');
+  const metricColor = getChartColor(palette === 'rad' && dataAccent ? dataAccent : 'accent');
+  const isEmpty = !loading && (value == null || PLACEHOLDER_VALUES.has(value.trim()));
   const resolvedHistoryColor = historyColor ?? metricColor ?? CHART_COLORS.accent;
   return (
     <Card
@@ -76,6 +79,8 @@ export function SensorChipSummary({
       )}
       style={accentBorder ? { borderColor: metricColor } : undefined}
       data-testid="sensor-chip"
+      {...(loading ? { 'aria-busy': true } : {})}
+      {...(isEmpty ? { 'data-sensor-empty': 'reason' } : {})}
     >
       {history?.length ? (
         <div
@@ -116,25 +121,53 @@ export function SensorChipSummary({
             icon={resolveIconId(icon)}
             className={cn(
               'h-4 w-4 shrink-0',
-              iconTone
+              valueTone === 'success'
+                ? 'text-status-positive'
+                : valueTone === 'warning'
+                  ? 'text-status-warning'
+                  : valueTone === 'danger'
+                    ? 'text-status-danger'
+                    : valueTone === 'info'
+                      ? 'text-status-info'
+                      : dataAccent ? 'text-fg' : 'text-accent'
             )}
             style={dataAccent && !valueTone ? { color: metricColor } : undefined}
           />
         </div>
 
         <div className="mt-1.5 flex items-baseline gap-1">
-          <span
-            className={cn(
-              'font-mono font-semibold tabular-nums tracking-tight',
-              numberTone,
-              valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
-            )}
-            style={{ textShadow: 'var(--rm-value-halo)', ...(valueColor === 'data' && !valueTone ? { color: metricValueColor } : {}) }}
-          >
-            {value}
-          </span>
+          {loading ? (
+            <Skeleton
+              aria-hidden="true"
+              data-testid="sensor-value-skeleton"
+              className={cn('w-20', valueSize === 'sm' ? 'h-7' : valueSize === 'lg' ? 'h-9' : 'h-8')}
+            />
+          ) : isEmpty ? (
+            <span className="truncate text-sm text-fg-secondary" data-testid="sensor-empty-line">{emptyText}</span>
+          ) : (
+            <span
+              data-sensor-value
+              className={cn(
+                'font-mono font-semibold tabular-nums tracking-tight',
+                // Primary ink; only status tones colour a value.
+                valueTone === 'success'
+                  ? 'text-status-positive'
+                  : valueTone === 'warning'
+                    ? 'text-status-warning'
+                    : valueTone === 'danger'
+                      ? 'text-status-danger'
+                      : valueTone === 'info'
+                        ? 'text-status-info'
+                        : 'text-fg',
+                valueSize === 'sm' ? 'text-xl' : valueSize === 'lg' ? 'text-3xl' : 'text-2xl'
+              )}
+              style={{ textShadow: 'var(--rm-value-halo)' }}
+            >
+              {value}
+            </span>
+          )}
         </div>
-        {secondary ? <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p> : null}
+        {secondary && !loading ? <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p> : null}
       </div>
     </Card>
   );

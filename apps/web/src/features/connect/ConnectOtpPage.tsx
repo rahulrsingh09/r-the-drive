@@ -1,184 +1,49 @@
 import React from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import type { ConnectedRivianVehicle } from '@panda/types';
-import { PageLayout, Button, Input, Card } from '@panda/ui/primitives';
-import { AppLayout } from '../../components/layout/AppLayout';
-import { ConnectedVehicleSuccess } from '../../components/connect/ConnectedVehicleSuccess';
-import { formatVehicleName, useConnectionFlow } from './useConnectionFlow';
-import { Car, Check, KeyRound, ShieldCheck } from 'lucide-react';
+import { api } from '@panda/hooks';
+import { connectErrorMessage } from '../../components/connect/connectError';
+import { RCarStep, RCodeStep, RDoneStep, RFirstRunFrame, RRatesStep, rFirstRunSteps, type RFirstRunStep } from './RFirstRun';
+import { useConnectFlow } from './ConnectPage';
+import { useRivianConnect } from './useRivianConnect';
 
+/** /connect/otp: the Rivian code, then the car, rates and done steps. */
 export function ConnectOtpContent() {
   const navigate = useNavigate();
   const { challenge_id, email, mode, vehicle_id } = useSearch({ from: '/connect/otp' });
-  const refreshVehicleId = mode === 'refresh' ? vehicle_id : undefined;
-  const { error, loading, vehicles, successVehicleName, successVehicleId, successWaitingMessage, refreshVehicle, submitOtp, selectVehicle } = useConnectionFlow(refreshVehicleId, `${challenge_id}:${refreshVehicleId ?? ''}`);
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const code = String(new FormData(event.currentTarget).get('otp') ?? '');
-    void submitOtp(challenge_id, code);
+  const connect = useRivianConnect(mode, vehicle_id);
+  const flow = useConnectFlow(connect.refreshVehicleId, connect.vehiclesLoaded, connect.firstRun) ?? 'add';
+  const steps = rFirstRunSteps(flow);
+  const [ratesDone, setRatesDone] = React.useState(false);
+  const refresh = flow === 'refresh';
+  const step: RFirstRunStep = connect.connected
+    ? (refresh || ratesDone ? 'done' : 'rates')
+    : connect.candidates.length ? 'car' : 'code';
+
+  async function submit(code: string) {
+    connect.setError('');
+    connect.setLoading(true);
+    try {
+      const result = await api.connectRivianOtp(challenge_id, code);
+      await connect.handleResult(result, 'Rivian verification succeeded, but no vehicles were returned for this account.');
+    } catch (failure) {
+      connect.reportError(connectErrorMessage(failure));
+    } finally {
+      connect.setLoading(false);
+    }
   }
 
-  return (
-    <AppLayout activeKey="settings">
-      <PageLayout
-        title={refreshVehicle ? 'Refresh Rivian Login' : 'Add a Vehicle'}
-        subtitle={
-          refreshVehicle
-            ? `Complete verification to update credentials for ${refreshVehicle.display_name}.`
-            : 'Complete Rivian verification so encrypted vehicle access can be saved.'
-        }
-        className="min-h-[calc(100vh-3rem)] justify-center [&>div:first-child]:justify-center [&>div:first-child>div]:text-center"
-      >
-        <div className="mx-auto w-full max-w-2xl">
-          <Card padding="lg" className="shadow-lg">
-            <ConnectOtpProgress loading={loading} success={Boolean(successVehicleName)} />
-
-            {successVehicleName ? (
-              <ConnectedVehicleSuccess
-                vehicleId={successVehicleId}
-                vehicleName={successVehicleName}
-                initialWaitingMessage={successWaitingMessage}
-                onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
-              />
-            ) : vehicles.length > 1 ? (
-              <VehiclePicker
-                vehicles={vehicles}
-                loading={loading}
-                error={error}
-                onSelect={selectVehicle}
-              />
-            ) : (
-              <>
-                <div className="mt-8">
-                  <p className="text-sm font-medium text-fg">Verification code</p>
-                  <p className="mt-1 text-sm text-fg-secondary">
-                    {email ? (
-                      <>
-                        Enter the code Rivian sent for{' '}
-                        <span className="font-medium text-fg">{email}</span>.
-                      </>
-                    ) : (
-                      'Enter the code from your Rivian email or authenticator app.'
-                    )}
-                  </p>
-                </div>
-
-                <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-4">
-                  <Input
-                    label="Verification Code"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    name="otp"
-                    autoComplete="one-time-code"
-                    placeholder="123456"
-                    required
-                    autoFocus
-                  />
-                  {error && <p className="text-xs text-status-danger">{error}</p>}
-                  <Button
-                    type="submit"
-                    loading={loading}
-                    iconLeft={<ShieldCheck className="h-4 w-4" />}
-                  >
-                    {loading ? 'Verifying code' : 'Verify and Connect'}
-                  </Button>
-                </form>
-              </>
-            )}
-          </Card>
-        </div>
-      </PageLayout>
-    </AppLayout>
-  );
-}
-
-function ConnectOtpProgress({ loading, success }: { loading: boolean; success: boolean }) {
-  const items = [
-    { label: 'Credentials accepted', icon: Check, complete: true },
-    {
-      label: loading ? 'Verifying code' : 'MFA required',
-      icon: loading ? ShieldCheck : KeyRound,
-      complete: false,
-    },
-    { label: success ? 'Vehicle saved' : 'Save vehicle', icon: Car, complete: success },
-  ];
+  const onBack = step === 'code'
+    ? () => navigate({ to: '/connect', search: { mode, vehicle_id } })
+    : undefined;
 
   return (
-    <div aria-label="Add vehicle progress">
-      <div className="h-2 overflow-hidden rounded-full bg-bg-elevated">
-        <div className="h-full w-full rounded-full bg-accent transition-all duration-300" />
-      </div>
-      <div className="mt-5 grid grid-cols-3 items-stretch gap-3">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div
-              key={item.label}
-              className="flex gap-3 rounded-lg border border-accent/50 bg-accent-muted/20 p-3"
-            >
-              <div
-                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                  item.complete ? 'bg-accent text-fg-on-accent' : 'bg-bg-surface text-accent'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-fg">{item.label}</p>
-                <p className="mt-1 text-xs leading-5 text-fg-tertiary">
-                  {item.complete
-                    ? 'Rivian accepted the account credentials.'
-                    : 'This protects accounts that use email codes or authenticator apps.'}
-                </p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function VehiclePicker({
-  vehicles,
-  loading,
-  error,
-  onSelect,
-}: {
-  vehicles: ConnectedRivianVehicle[];
-  loading: boolean;
-  error: string;
-  onSelect: (vehicle: ConnectedRivianVehicle) => void;
-}) {
-  return (
-    <div className="mt-8">
-      <p className="text-sm font-medium text-fg">Choose a vehicle</p>
-      <p className="mt-1 text-xs leading-5 text-fg-tertiary">
-        Rivian returned multiple vehicles for this account. Pick the one to add first.
-      </p>
-      <div className="mt-4 grid gap-3">
-        {vehicles.map((vehicle) => (
-          <button
-            key={vehicle.id}
-            type="button"
-            disabled={loading}
-            onClick={() => onSelect(vehicle)}
-            className="flex items-center justify-between rounded-lg border border-border bg-bg-elevated/40 p-4 text-left transition hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span>
-              <span className="block text-sm font-medium text-fg">
-                {formatVehicleName(vehicle)}
-              </span>
-              <span className="mt-1 block text-xs text-fg-tertiary">
-                {vehicle.vin ?? vehicle.id}
-              </span>
-            </span>
-            <Car className="h-5 w-5 text-accent" />
-          </button>
-        ))}
-      </div>
-      {error && <p className="mt-4 text-xs text-status-danger">{error}</p>}
-    </div>
+    <RFirstRunFrame steps={steps} step={step} onBack={onBack}>
+      {step === 'code' && <RCodeStep email={email} loading={connect.loading} error={connect.error} onSubmit={(code) => { void submit(code); }} />}
+      {step === 'car' && <RCarStep vehicles={connect.candidates} loading={connect.loading} error={connect.error}
+        onConfirm={(vehicle) => { void connect.confirmVehicle(vehicle); }} />}
+      {step === 'rates' && <RRatesStep onDone={() => setRatesDone(true)} />}
+      {step === 'done' && connect.connected && <RDoneStep refresh={refresh} connected={connect.connected}
+        onOpen={() => navigate({ to: refresh ? '/settings' : '/' })} />}
+    </RFirstRunFrame>
   );
 }

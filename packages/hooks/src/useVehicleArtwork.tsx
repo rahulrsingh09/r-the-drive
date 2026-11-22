@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { api } from './api';
 import { isLocalArtworkSource } from './outboundPolicy';
+import { readStoredArtwork, storeArtwork } from './ownerArtworkStore';
 
 type ArtworkAsset = {
   blob: Blob;
@@ -25,9 +26,12 @@ type AuthenticatedVehicleArtworkProps = Omit<
 };
 
 async function loadArtwork(source: string): Promise<ArtworkAsset> {
+  const stored = await readStoredArtwork(source);
+  if (stored) return { blob: stored, restoring: false };
   const response = await api.authenticatedAsset(source);
   const restoring = response.status === 202;
   const blob = await response.blob();
+  if (!restoring && response.ok) void storeArtwork(source, blob);
   return { blob, restoring };
 }
 
@@ -83,8 +87,13 @@ export function AuthenticatedVehicleArtwork({
     dispatch({ kind: 'source' });
   }, [source]);
 
-  const primaryReady = Boolean(primaryArtwork.src) && !primaryArtwork.isError;
-  const selection = [primaryFailed, primaryArtwork.restoring, !primaryReady].some(Boolean) && fallbackArtwork.src ? 'fallback' : 'primary';
+  const showFallback =
+    (primaryFailed ||
+      primaryArtwork.restoring ||
+      primaryArtwork.isError ||
+      (!primaryArtwork.src && !primaryArtwork.isLoading)) &&
+    Boolean(fallbackArtwork.src);
+  const selection = showFallback ? 'fallback' : 'primary';
   const usingFallback = selection === 'fallback';
   const artwork = { primary: primaryArtwork, fallback: fallbackArtwork }[selection];
 
