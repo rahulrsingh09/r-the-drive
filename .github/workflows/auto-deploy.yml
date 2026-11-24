@@ -38,3 +38,4 @@ jobs:
           SHORT_SHA="${COMMIT_SHA:0:12}"
           curl --fail --silent --show-error --max-time 20 \
             -X POST "${NORTHFLANK_DEPLOY_WEBHOOK}?sha=${COMMIT_SHA}&name=GitHub+${SHORT_SHA}"
+          echo "Triggered Northflank build and auto-deploy for \`${COMMIT_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
