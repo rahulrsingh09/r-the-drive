@@ -42,7 +42,6 @@ export function CostTab({ data }: { data: InsightsData }) {
   React.useEffect(() => setDraft({ mpg: String(gas.mpg), price: String(gas.price) }), [gas]);
   const gasTotal = gasCost(miles, gas);
   const tag = usePlaceTag(vehicleId);
-  // A tag moves every charge at the place at once: it saves only after the owner confirms.
   const [confirm, setConfirm] = React.useState<{ key: string; category: Category } | null>(null);
   const latestUnpriced = unpriced[unpriced.length - 1];
 
@@ -102,35 +101,42 @@ export function CostTab({ data }: { data: InsightsData }) {
           rows={weeks.map(week => [monthDay(week), ...CATEGORIES.map(c => usd(weekCost(week, c))), usd(weekCost(week))])} />} />
       </Card>
 
-      <Card title="Places" sub="tag each place" wide index={3}>
+      <Card title="Places" sub="by place" wide index={3}>
         {groups.length ? (
           <div className="ri-places">
-            {groups.map(group => (
-              <div key={group.key} className="ri-place">
-                <AppLink className="ri-pl-name" href={`${ACTIVITY_PATH}?${new URLSearchParams(activityPlaceSearch(group.name))}`}>
-                  <b>{group.name}</b>
-                  <span className="ri-muted">{group.charges.length} {group.charges.length === 1 ? 'charge' : 'charges'} · {n0(group.kwh)} kWh · {group.unpriced ? 'cost not set' : group.cost === 0 ? 'free' : usd(group.cost)}</span>
-                </AppLink>
-                <Seg small label={`Tag ${group.name}`} value={confirm?.key === group.key ? confirm.category : group.category} options={TAG_OPTIONS}
-                  disabled={tag.pending != null} onChange={category => setConfirm(category === group.category ? null : { key: group.key, category })} />
-                {confirm?.key === group.key ? (() => {
-                  const text = placeTagConfirm(group.name, group.charges.length, confirm.category, places);
-                  return (
-                    <div className="ri-confirm" role="group" aria-label={text.title}>
-                      <p><b>{text.title}</b> {text.body}</p>
-                      <div className="ri-confirm-actions">
-                        <button type="button" className="ri-btn" onClick={() => { setConfirm(null); void tag.apply(group, confirm.category); }}>{text.action}</button>
-                        <button type="button" className="ri-btn ri-ghost" onClick={() => setConfirm(null)}>Cancel</button>
+            {groups.map(group => {
+              const singleCharge = group.charges.length === 1;
+              return (
+                <div key={group.key} className="ri-place">
+                  <AppLink className="ri-pl-name" href={`${ACTIVITY_PATH}?${new URLSearchParams(activityPlaceSearch(group.name))}`}>
+                    <b>{group.name}</b>
+                    <span className="ri-muted">{group.charges.length} {singleCharge ? 'charge' : 'charges'} · {n0(group.kwh)} kWh · {group.unpriced ? 'cost not set' : group.cost === 0 ? 'free' : usd(group.cost)}</span>
+                  </AppLink>
+                  {singleCharge ? (
+                    <Seg small label={`Tag ${group.name}`} value={confirm?.key === group.key ? confirm.category : group.category} options={TAG_OPTIONS}
+                      disabled={tag.pending != null} onChange={category => setConfirm(category === group.category ? null : { key: group.key, category })} />
+                  ) : (
+                    <span className="ri-muted">{CATEGORY_LABEL[group.category]} · per charge</span>
+                  )}
+                  {singleCharge && confirm?.key === group.key ? (() => {
+                    const text = placeTagConfirm(group.name, group.charges.length, confirm.category, places);
+                    return (
+                      <div className="ri-confirm" role="group" aria-label={text.title}>
+                        <p><b>{text.title}</b> {text.body}</p>
+                        <div className="ri-confirm-actions">
+                          <button type="button" className="ri-btn" onClick={() => { setConfirm(null); void tag.apply(group, confirm.category); }}>{text.action}</button>
+                          <button type="button" className="ri-btn ri-ghost" onClick={() => setConfirm(null)}>Cancel</button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })() : null}
-              </div>
-            ))}
+                    );
+                  })() : null}
+                </div>
+              );
+            })}
           </div>
         ) : <p className="ri-empty">No charges yet.</p>}
         {tag.message && <p className={`ri-note${tag.message.error ? ' ri-error' : ''}`} role="status">{tag.message.text}</p>}
-        <p className="ri-note">Choose what kind of place each one is. Home and Office use the rates in Settings. Everything else is Other, and you enter its price per charge. The tag applies to every charge at the place, after you confirm.</p>
+        <p className="ri-note">Home and Office are auto-selected when you charge there and use the rates in Settings. Open any charge to change its tag or cost individually without affecting previous charges.</p>
       </Card>
 
       <Card title="Compared with gas" sub="estimate" index={4}>

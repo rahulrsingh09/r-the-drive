@@ -118,10 +118,23 @@ describe('Insights', () => {
     expect(mocks.applyChargePlaceTag).not.toHaveBeenCalled();
     fireEvent.click(within(group).getByRole('button', { name: 'Home' }));
     fireEvent.click(within(places).getByRole('button', { name: 'Tag as Home' }));
-    await waitFor(() => expect(mocks.applyChargePlaceTag).toHaveBeenCalledWith('v1', 'c-mill-1', 'home'));
+    await waitFor(() => expect(mocks.applyChargePlaceTag).toHaveBeenCalledWith('v1', 'c-mill-1', 'home', 'session'));
     expect(await screen.findByText('Mill Creek is now tagged Home. 1 charge was updated.')).toBeInTheDocument();
     fireEvent.click(within(group).getByRole('button', { name: 'Other' }));
     expect(mocks.applyChargePlaceTag).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cost: prevents bulk re-tagging when a place has multiple charges', () => {
+    mocks.charges = [
+      ...sessions,
+      { ...sessions[0]!, id: 'c-home-2', started_at: '2026-10-08T04:00:00Z', ended_at: '2026-10-08T06:00:00Z' },
+    ];
+    renderTab('cost');
+    const placesCard = screen.getByRole('region', { name: 'Places' });
+    expect(within(placesCard).getByText(/2 charges ·/)).toBeInTheDocument();
+    expect(within(placesCard).queryByRole('group', { name: 'Tag Home' })).toBeNull();
+    expect(within(placesCard).getByText('Home · per charge')).toBeInTheDocument();
+    expect(within(placesCard).getByRole('group', { name: 'Tag Mill Creek' })).toBeInTheDocument();
   });
 
   it('Cost: the gas comparison is stored per user', () => {

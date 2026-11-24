@@ -1,4 +1,4 @@
-//! Place tags for charges: Home, Office or Other for every charge at a place.
+//! Place tags for charges: Home, Office or Other per charge session (or per place when explicitly requested).
 
 use axum::{
     extract::{Path, State},
@@ -37,9 +37,9 @@ enum PlaceTag {
 #[serde(rename_all = "snake_case")]
 enum PlaceTagScope {
     /// Tag only the requested charge session without disturbing any other sessions.
+    #[default]
     Session,
     /// Tag this charge and charges physically within 150 m of its source GPS.
-    #[default]
     Place,
 }
 
@@ -68,12 +68,12 @@ struct TagPlaceRow {
     cost_profile_id: Option<Uuid>,
 }
 
-/// Applies Home, Office or Other to the selected charge (`scope = "session"`),
+/// Applies Home, Office or Other to the selected charge (`scope = "session"`, default),
 /// or to every charge of this vehicle physically within 150 m of its reported
-/// location (`scope = "place"`, default). Home and Office link the user's saved
-/// Home or Office place, so its cost profile prices the charges. Other removes
-/// the saved place and its rate, keeps the reported location, and stops
-/// automatic re-matching. Free and manual cost overrides keep their precedence.
+/// location when `scope = "place"` is explicitly requested. Home and Office link
+/// the user's saved Home or Office place, so its cost profile prices the charges.
+/// Other removes the saved place and its rate, keeps the reported location, and
+/// stops automatic re-matching. Free and manual cost overrides keep their precedence.
 async fn apply_place_tag(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -230,14 +230,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn place_tag_body_defaults_to_place_and_accepts_session_scope() {
+    fn place_tag_body_defaults_to_session_and_accepts_explicit_scopes() {
         let default_body: PlaceTagBody = serde_json::from_str(r#"{"tag":"home"}"#).unwrap();
         assert_eq!(default_body.tag, PlaceTag::Home);
-        assert_eq!(default_body.scope, PlaceTagScope::Place);
+        assert_eq!(default_body.scope, PlaceTagScope::Session);
 
         let session_body: PlaceTagBody =
             serde_json::from_str(r#"{"tag":"office","scope":"session"}"#).unwrap();
         assert_eq!(session_body.tag, PlaceTag::Office);
         assert_eq!(session_body.scope, PlaceTagScope::Session);
+
+        let place_body: PlaceTagBody =
+            serde_json::from_str(r#"{"tag":"other","scope":"place"}"#).unwrap();
+        assert_eq!(place_body.tag, PlaceTag::Other);
+        assert_eq!(place_body.scope, PlaceTagScope::Place);
     }
 }

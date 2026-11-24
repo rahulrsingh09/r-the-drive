@@ -45,8 +45,9 @@ export function profileInput(profile: PlaceChargingProfile | null | undefined): 
 }
 
 /**
- * Applies a tag to every charge at a place with the place-tag API: Home and Office link the charges to the
- * saved Home or Office place (its rate prices them); Other removes the place and its rate.
+ * Applies a tag to a single-charge place with session scope: Home and Office link the charge to the
+ * saved Home or Office place (its rate prices it); Other removes the place and its rate.
+ * Multi-charge groups are never bulk-tagged so previous charges stay untouched.
  */
 export function usePlaceTag(vehicleId: string) {
   const queryClient = useQueryClient();
@@ -54,11 +55,11 @@ export function usePlaceTag(vehicleId: string) {
   const [message, setMessage] = React.useState<{ text: string; error: boolean } | null>(null);
   const apply = React.useCallback(async (group: PlaceGroup, category: Category) => {
     const anchor = group.charges[0];
-    if (!anchor || group.category === category) return;
+    if (!anchor || group.charges.length !== 1 || group.category === category) return;
     setPending(group.key);
     setMessage(null);
     try {
-      const result = await api.applyChargePlaceTag(vehicleId, anchor.id, category);
+      const result = await api.applyChargePlaceTag(vehicleId, anchor.id, category, 'session');
       const count = result.updated;
       setMessage({ text: `${group.name} is now tagged ${CATEGORY_LABEL[category]}. ${count} ${count === 1 ? 'charge was' : 'charges were'} updated.`, error: false });
     } catch (cause) {

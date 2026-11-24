@@ -1711,11 +1711,12 @@ export class AuthenticatedTransport extends RequestTransport {
     vehicleId: string,
     sessionId: string,
     tag: 'home' | 'office' | 'other',
+    scope: 'session' | 'place' = 'session',
   ): Promise<{ tag: string; place_id: string | null; updated: number; session_ids: string[] }> {
     return this.execute({
       method: 'POST',
       path: `/v1/vehicles/${vehicleId}/charging-sessions/${sessionId}/place-tag`,
-      body: { tag },
+      body: { tag, scope },
     });
   }
 }
