@@ -1,0 +1,40 @@
+name: Auto-deploy mainline to Northflank
+
+on:
+  push:
+    branches: [mainline]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: northflank-mainline-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.repository == 'rahulrsingh09/r-the-drive' &&
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !contains(github.event.head_commit.message, '[ci skip]') &&
+      !contains(github.event.head_commit.message, '[no ci]') &&
+      !contains(github.event.head_commit.message, '[skip nf]')
+    name: Trigger Northflank build and deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enqueue Northflank build for mainline commit
+        env:
+          NORTHFLANK_DEPLOY_WEBHOOK: ${{ secrets.NORTHFLANK_DEPLOY_WEBHOOK }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test -n "$NORTHFLANK_DEPLOY_WEBHOOK"
+          SHORT_SHA="${COMMIT_SHA:0:12}"
+          curl --fail --silent --show-error --max-time 20 \
+            -X POST "${NORTHFLANK_DEPLOY_WEBHOOK}?sha=${COMMIT_SHA}&name=GitHub+${SHORT_SHA}"

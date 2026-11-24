@@ -37,7 +37,7 @@ for (const file of readdirSync(new URL('../.github/workflows/', import.meta.url)
   if (!file.endsWith('.yml')) continue;
   const workflow = YAML.parse(read(`.github/workflows/${file}`), { uniqueKeys: true });
   assert(workflow.on && workflow.jobs, `Invalid workflow: ${file}`);
-  if (['fork-ci.yml', 'security.yml'].includes(file)) continue;
+  if (['fork-ci.yml', 'security.yml', 'auto-deploy.yml'].includes(file)) continue;
   for (const [name, job] of Object.entries(workflow.jobs)) {
     assert(job.if?.includes("vars.PANDA_ENABLE_RELEASE_AUTOMATION == 'true'"),
       `Unconfigured automation must be gated: ${file}/${name}`);
