@@ -9,14 +9,11 @@
   <p><strong>Your Rivian. Your history. Your server.</strong></p>
 
   <p>
-    A private, self-hosted telemetry companion for R1T, R1S, and R2 owners.<br />
-    Live vehicle state, interactive trip replay, curve-level charging with per-session costing, and long-term battery health — with desktop and mobile light/dark modes and zero third-party analytics.
+    A private, self-hosted telemetry application for Rivian owners.<br />
+    Live vehicle state, interactive trip replay, curve-level charging with per-session costing, and long-term battery health — responsive across desktop and mobile in light and dark modes, with zero third-party analytics.
   </p>
 
   <p>
-    <a href="https://codespaces.new/rahulrsingh09/r-the-drive?quickstart=1">
-      <img src="https://github.com/codespaces/badge.svg" alt="Open in GitHub Codespaces" />
-    </a>
     <a href="./LICENSE">
       <img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="GPL-3.0 License" />
     </a>
@@ -37,7 +34,7 @@
 
 ## See it in action
 
-Explore the live vehicle stage, trip replay, charging curve analysis, and Insights hubs in this walkthrough:
+Explore the `Now` vehicle stage, `Activity` trip &amp; charge replay, `Insights` hubs, and `Car` diagnostics in this walkthrough:
 
 https://github.com/user-attachments/assets/8cce2271-66e9-43dd-9d07-6ae6c45e72b1
 
@@ -45,74 +42,67 @@ https://github.com/user-attachments/assets/8cce2271-66e9-43dd-9d07-6ae6c45e72b1
 
 ## Quick start
 
-Pick the launch path that fits where you want to run **R:The Drive**:
+Choose the setup path that matches where you want to run **R:The Drive**:
 
-| Path | Best for | Setup effort | Built-in Demo R1T / R1S / R2 |
+| Path | Target environment | Prerequisites | Command |
 | --- | --- | --- | --- |
-| [**GitHub Codespaces**](#option-1--one-click-in-your-browser-codespaces) | Instant browser preview with zero local install | **1 click** | Yes |
-| [**Docker Self-Host**](#option-2--one-command-self-hosted-production-install) | Private 24/7 home server, NAS, or VPS | **1 command** | Yes |
-| [**Local Dev Stack**](#option-3--one-command-local-trial) | Trying or developing on macOS / Linux | **1 command** | Yes |
-| [**Cloud Free Tier**](#free-tier-cloud-blueprint-northflank--cloudflare) | Managed cloud hosting behind Cloudflare Access SSO | **Guided** | Yes |
+| [**Self-Hosted Production**](#option-1--one-command-self-hosted-production-install) | Linux/macOS host, home server, NAS, or VPS | Git, Python 3, Docker Compose v2, and an HTTPS reverse proxy/tunnel to `127.0.0.1:8080` | `python3 scripts/deploy.py` |
+| [**Local Dev Stack**](#option-2--one-command-local-development-stack) | macOS, Linux, or Windows workstation | Docker, Rust (`cargo`), Node `24.18+`, and `pnpm` `11.15+` | `pnpm dev:stack` |
+| [**Cloud Free Tier**](#option-3--cloud-free-tier-blueprint-northflank--cloudflare) | Managed container + Zero-Trust edge SSO | Northflank Sandbox + Cloudflare Workers &amp; Access | Guided below |
 
-### Option 1 — One-click in your browser (Codespaces)
+### Option 1 — One-command self-hosted production install
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rahulrsingh09/r-the-drive?quickstart=1)
-
-Clicking **Open in GitHub Codespaces** uses [the devcontainer configuration](./.devcontainer/devcontainer.json) to provision Docker, Node 24, Rust, TimescaleDB, and Redis and automatically run `pnpm dev:stack`. Open the forwarded port `5173` URL to explore **Demo R1T / R1S / R2** vehicles immediately or test with your Rivian account.
-
-### Option 2 — One-command self-hosted production install
-
-Run directly on a trusted Linux or macOS server with Git, Python 3, Docker Engine, and Docker Compose v2, fronted by an authenticated HTTPS gateway (Cloudflare Tunnel, Tailscale, Caddy, or Nginx) pointing to `http://127.0.0.1:8080`:
+Run directly on the Docker host you manage, fronted by an authenticated HTTPS gateway (Cloudflare Tunnel, Tailscale, Caddy, or Nginx) forwarding to `http://127.0.0.1:8080`:
 
 ```bash
 git clone https://github.com/rahulrsingh09/r-the-drive.git && cd r-the-drive && python3 scripts/deploy.py --project r-the-drive --origin https://drive.yourdomain.com
 ```
 
-What this single installer command does automatically:
+What [`scripts/deploy.py`](./scripts/deploy.py) automates end-to-end:
 
-1. **Builds & hardens the stack** — Builds the unified app/API image, creates an isolated read-only `r-the-drive-keys` volume with RSA and AGE custody keys, and provisions separate database bootstrap, restricted application (`panda`), and Redis credentials.
-2. **Creates your owner account** — Prompts once in the terminal for your email and password (16+ characters), registers the owner, and deletes the one-time setup token (`PANDA_SETUP_TOKEN`).
-3. **Binds privately to `127.0.0.1:8080`** — Open your HTTPS origin, sign in, and connect your Rivian account. Back up the `r-the-drive-keys` volume off-host using the [key-custody runbook](./docs/runbooks/key-custody.md).
+1. **Builds &amp; isolates credentials** — Builds the unified production container from [`compose/Dockerfile`](./compose/Dockerfile), creates an external read-only `r-the-drive-keys` Docker volume holding generated RSA signing and AGE encryption keys, and provisions separate PostgreSQL/TimescaleDB bootstrap (`panda_bootstrap`), restricted runtime (`panda`), and Redis credentials in owner-only (`0600`) `.env` and `.deploy/` files.
+2. **Registers the first owner** — Starts the stack, prompts locally for your owner email and password (at least 16 characters), verifies registration over `127.0.0.1:8080`, and atomically removes the one-time `PANDA_SETUP_TOKEN` from `.env`.
+3. **Keeps services private** — Publishes only `127.0.0.1:8080` (database and Redis ports stay unpublished). Open your HTTPS address, sign in, and complete the guided Rivian OTP connection flow. Back up the `r-the-drive-keys` volume separately using the [key-custody runbook](./docs/runbooks/key-custody.md).
 
 <details>
-<summary>Installer flags, retries, updates &amp; Synology DSM setup</summary>
+<summary>Installer options, retries, updates &amp; Synology DSM guide</summary>
 
 | Flag / Command | Default | Purpose |
 | --- | --- | --- |
-| `--origin` | Required on setup | Exact HTTPS gateway origin, e.g. `https://drive.yourdomain.com`. |
-| `--project` | `vehicle-history` | Namespaces containers and volumes (`r-the-drive` creates `r-the-drive-keys`). |
-| `--port` | `8080` | Localhost bind port (`127.0.0.1:<port>`). |
-| `--image` | Local build | Optional prebuilt digest (`registry/image@sha256:...`). |
-| `python3 scripts/deploy.py start` | — | Safely resumes startup or owner registration without overwriting data or keys. |
+| `--origin` | Required on setup | Exact HTTPS gateway origin (no path, query, or fragment), e.g. `https://drive.yourdomain.com`. |
+| `--project` | `vehicle-history` | Namespaces Docker containers and volumes (`--project r-the-drive` creates `r-the-drive-keys`). |
+| `--port` | `8080` | Loopback port (`127.0.0.1:<port>`, `1024`–`65535`). |
+| `--image` | Local build (`<project>:local`) | Optional digest-pinned image (`registry/image@sha256:...`) instead of building locally. |
+| `python3 scripts/deploy.py start` | — | Safely resumes database provisioning, container startup, or owner registration using saved `.deploy/settings.json` without overwriting data or keys. |
 
-- Full walkthrough & prerequisites: [Installation guide](./docs/guides/getting-started.md) and [Secure deployment guide](./docs/guides/secure-deployment.md).
-- Synology NAS walkthrough: [Synology DSM guide](./docs/guides/synology.md).
-- Host migration, upgrades & rollbacks: [Deployment and updates](./docs/guides/deployment.md).
+- Step-by-step host &amp; gateway setup: [Installation guide](./docs/guides/getting-started.md) and [Secure deployment guide](./docs/guides/secure-deployment.md).
+- Synology NAS installation: [Synology DSM guide](./docs/guides/synology.md).
+- Upgrades, logs &amp; host migration: [Deployment and updates](./docs/guides/deployment.md).
 
 </details>
 
-### Option 3 — One-command local trial
+### Option 2 — One-command local development stack
 
-Run locally on macOS or Linux with Docker Desktop and Node 24:
+To run or develop locally on macOS, Linux, or Windows (requires Docker, Rust/`cargo`, Node `24.18+`, and `pnpm` `11.15+`; on Linux also install `pkg-config` and OpenSSL development headers):
 
 ```bash
 git clone https://github.com/rahulrsingh09/r-the-drive.git && cd r-the-drive && corepack enable && pnpm install && pnpm dev:stack
 ```
 
-Open `http://localhost:5173` — the dev stack automatically starts local TimescaleDB and Redis containers, applies migrations, and lets you spin up a Demo R1T, R1S, or R2 immediately without vehicle credentials.
+[`scripts/dev.mjs`](./scripts/dev.mjs) starts local TimescaleDB, Redis, and Garage S3 containers via [`compose/docker-compose.dev.yml`](./compose/docker-compose.dev.yml), compiles and supervises `panda-api` and `panda-restore-agent`, and launches the Vite web app at `http://localhost:5173`.
 
-### Free-tier cloud blueprint (Northflank + Cloudflare)
+### Option 3 — Cloud free-tier blueprint (Northflank + Cloudflare)
 
 <details>
-<summary>Run 24/7 in the cloud for $0/mo using Northflank Sandbox + Cloudflare Zero Trust</summary>
+<summary>Run 24/7 in the cloud on free tiers using Northflank Sandbox + Cloudflare Access</summary>
 
-This repository also ships everything needed to host privately behind Cloudflare Access at zero monthly infrastructure cost:
+R:The Drive can run in a managed cloud environment within Northflank and Cloudflare free-tier limits:
 
-- **Application & database (Northflank):** Build and run the unified container from [compose/Dockerfile](./compose/Dockerfile) alongside managed PostgreSQL/TimescaleDB and Redis instances, bound behind private gateway verification.
-- **Zero-Trust Edge Proxy (Cloudflare Workers + Access):** Deploy the included gateway worker ([apps/private-gateway/wrangler.example.json](./apps/private-gateway/wrangler.example.json)) so only allowlisted emails authenticated via Cloudflare Access can reach your origin.
-- **Automated pushes:** [auto-deploy.yml](./.github/workflows/auto-deploy.yml) can trigger Northflank builds automatically on pushes to `mainline` via a webhook secret.
+1. **Northflank Sandbox (`nf-compute-20`):** Deploy the unified container built from [`compose/Dockerfile`](./compose/Dockerfile) alongside a TimescaleDB/PostgreSQL addon and Redis service, with `PANDA_REQUIRE_GATEWAY=true` and a shared gateway token enforcing edge authentication.
+2. **Cloudflare Access + Private Gateway Worker:** Put [`apps/private-gateway`](./apps/private-gateway/wrangler.example.json) in front of the Northflank origin on a `workers.dev` or custom domain protected by a Cloudflare Access email allowlist, injecting `X-Panda-Edge` only after RS256 Access JWT verification.
+3. **Automatic `git push` deploys:** Enable [`.github/workflows/auto-deploy.yml`](./.github/workflows/auto-deploy.yml) with a Northflank deploy webhook repository secret so pushes to `mainline` automatically trigger Northflank image builds and rollouts (skipping pure `*.md` / `docs/**` edits and `[skip nf]` commits).
 
-See [Private deployment architecture](./docs/architecture/private-deployment.md) and [Deployment options](./docs/guides/deployment.md#deployment-options-and-moving-hosts) before provisioning cloud resources.
+Review [Private deployment architecture](./docs/architecture/private-deployment.md) and [Deployment options](./docs/guides/deployment.md#deployment-options-and-moving-hosts) for full details.
 
 </details>
 
@@ -120,24 +110,24 @@ See [Private deployment architecture](./docs/architecture/private-deployment.md)
 
 ## Interface preview
 
-Screenshots automatically adapt to your GitHub light or dark theme.
+Rendered directly from the `R` web application (automatically switches between dark and light themes on GitHub; uses illustrative, non-personal vehicle data).
 
 <table>
   <tr>
-    <th width="68%">Desktop Overview (<code>Now</code> Stage)</th>
-    <th width="32%">Mobile Experience</th>
+    <th width="68%">Desktop — <code>Now</code> Stage &amp; <code>Insights · Cost</code></th>
+    <th width="32%">Mobile</th>
   </tr>
   <tr>
     <td align="center">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/overview-desktop-dark.png" />
-        <img src="./docs/assets/readme/overview-desktop-light.png" alt="R:The Drive desktop overview dashboard" width="100%" />
+        <img src="./docs/assets/readme/overview-desktop-light.png" alt="R:The Drive desktop Now stage" width="100%" />
       </picture>
     </td>
     <td align="center">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/overview-mobile-dark.png" />
-        <img src="./docs/assets/readme/overview-mobile-light.png" alt="R:The Drive mobile overview dashboard" width="100%" />
+        <img src="./docs/assets/readme/overview-mobile-light.png" alt="R:The Drive mobile Now stage" width="100%" />
       </picture>
     </td>
   </tr>
@@ -145,37 +135,34 @@ Screenshots automatically adapt to your GitHub light or dark theme.
     <td align="center">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/charging-desktop-dark.png" />
-        <img src="./docs/assets/readme/charging-desktop-light.png" alt="R:The Drive desktop charging dashboard" width="100%" />
+        <img src="./docs/assets/readme/charging-desktop-light.png" alt="R:The Drive desktop Insights Cost tab" width="100%" />
       </picture>
     </td>
     <td align="center">
       <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/charging-mobile-dark.png" alt="R:The Drive mobile charging dashboard" width="100%" />
+        <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/charging-mobile-dark.png" />
+        <img src="./docs/assets/readme/charging-mobile-light.png" alt="R:The Drive mobile Insights Cost tab" width="100%" />
       </picture>
     </td>
   </tr>
 </table>
 
-<p align="center">
-  <img src="./assets/vehicles_generated/r1t/three_quarter.png" alt="Rivian R1T" width="31%" />
-  <img src="./assets/vehicles_generated/r1s/three_quarter.png" alt="Rivian R1S" width="31%" />
-  <img src="./assets/vehicles_generated/r2s/three_quarter.png" alt="Rivian R2" width="31%" />
-</p>
-
-<p align="center"><sub>Interactive 360° vehicle renders included for R1T, R1S, and R2.</sub></p>
-
 ---
 
 ## What you can do
 
-- **Live Vehicle Stage (`Now`):** Interactive 360° vehicle view alongside live charge level, estimated range, lock &amp; closure state, cabin/outside temperatures, tire pressures, odometer, software version, and recent activity.
-- **Trip Replay &amp; Activity (`Activity`):** Full-history timeline pairing trips, charges, and parked periods with route replay, odometer reconciliation, elevation/regen estimates, efficiency, and tag filtering.
-- **Curve-Level Charging &amp; Smart Costing:** Inspect AC/DC charging curves, energy added, active charge minutes, and real-time cost tracking — with automatic geofence matching for **Home** and **Office** plus individual **per-session** place tag and cost overrides that never disturb prior sessions.
-- **Insights Hubs (`Insights`):** Dedicated **Cost**, **Charging**, **Battery**, **Efficiency**, and **Lifetime** tabs covering gas-savings comparisons, DC/AC mix, usable battery capacity trends, validated parked drain, and monthly totals.
-- **Multi-Vehicle &amp; Access Control:** Connect multiple Rivian vehicles, switch seamlessly between them, and invite additional users with per-vehicle owner, manager, or viewer roles.
-- **Backup, Recovery &amp; Demo Vehicles:** Built-in encrypted backup/restore tooling plus offline **Demo R1T, R1S, and R2** modes to evaluate everything without linking a vehicle account.
+- **`Now` (`/`):** Live parked, charging, or driving view — interactive 360° vehicle stage, battery state of charge with charge-limit marker, estimated range, drive mode, cabin/outside temperatures, tire pressures, lock/closure status, software version, latest drive &amp; charge cards, 7-day strip, and 30-day summary.
+- **`Activity` (`/trips`):** Chronological feed of recorded drives, charge sessions, and 10h+ parked periods with interactive GPS route replay, charge-level and power curves, odometer reconciliation, per-session **Home / Office / Other** place tagging, and per-session manual or free (`$0`) cost overrides that leave previous sessions untouched.
+- **`Insights` (`/insights`):** Five dedicated views:
+  - **Cost:** Total charging spend, cents per mile, Home/Office/Other energy split, weekly cost bars, per-place summaries, and gas-car savings calculator.
+  - **Charging:** Total kWh, AC vs. DC session breakdown, pack-equivalent cycles, charging calendar, and session time windows.
+  - **Battery:** Usable capacity health tracking over time and validated 30-day parked battery loss.
+  - **Efficiency:** Distance-weighted `Wh/mi` or `mi/kWh` trends across speed and outside-temperature bands (excluding sub-3-mile coarse trips).
+  - **Lifetime:** Odometer coverage vs. recorded trip miles and monthly mileage/energy ledger.
+- **`Car` (`/vehicle-health`):** Per-wheel tire pressures, door/frunk/liftgate lock and closure states, 12V and thermal indicators, live collector health, and OTA software history.
+- **Settings, Backups &amp; Multi-User Access (`/settings`):** Guided Rivian OTP sign-in and missed-charge backfill recovery, Home &amp; Office kWh rates, unit and theme preferences, encrypted local/S3 backups, and multi-user invitations with per-vehicle `owner`, `manager`, or `viewer` roles.
 
-> **Honest telemetry:** Sleeping vehicles and unavailable signals naturally leave gaps. Missing readings are shown honestly rather than fabricated as measured data.
+> **Honest telemetry:** The application displays the readings Rivian makes available. Sleeping vehicles and unavailable signals naturally leave gaps; missing readings are never presented as measured values.
 
 ---
 
@@ -190,21 +177,21 @@ flowchart LR
   Keys["Read-Only Keys Volume (RSA + AGE)"] --> App
 ```
 
-- **Read-only vehicle connectivity:** Connects to Rivian telemetry strictly read-only — no remote lock, climate, or vehicle control commands are ever sent.
-- **Defense in depth:** Gateway header &amp; origin enforcement, Argon2id password hashing, JWT rotation, AGE-encrypted vehicle credentials stored outside raw SQL backups, and least-privilege runtime database roles.
-- **Zero hidden data sharing:** No telemetry leaves your database unless you explicitly opt in (e.g. approximate-coordinate Open-Meteo weather enrichment or S3-compatible backups). API map/geocoding providers stay disabled unless explicitly configured via your edge gateway.
+- **Read-only vehicle connectivity:** Connects to Rivian strictly read-only — no remote lock, climate, or vehicle control commands exist.
+- **Defense in depth:** Gateway edge-token &amp; origin enforcement, Argon2id password hashing, RS256 access tokens with rotating refresh-token families, AGE-encrypted vehicle credentials backed by external read-only keys, and least-privilege runtime database roles (non-superuser, history-deletion privileges revoked).
+- **Explicit external connections:** Your telemetry stays in the database and backups you operate, with no product analytics trackers. Weather enrichment (approximate coordinates to fixed Open-Meteo endpoints) and S3 backups start disabled; API map/geocoding providers cannot be enabled in Settings unless supplied by a separately configured gateway.
 
-Review [Security architecture](./docs/security.md), [Privacy details](./docs/privacy.md), [External connections](./docs/guides/external-connections.md), [Backup and restore](./docs/guides/backup-and-restore.md), and [Bootstrap validation](./BOOTSTRAP_VALIDATION.md).
+See [Security](./docs/security.md), [Privacy details](./docs/privacy.md), [External connections](./docs/guides/external-connections.md), [Backup and restore](./docs/guides/backup-and-restore.md), and [Bootstrap validation](./BOOTSTRAP_VALIDATION.md).
 
 ---
 
 ## Documentation & development
 
-- [Documentation Hub](./docs/index.md): Full installation, usage, operations, and API guides.
-- [Getting Started](./docs/guides/getting-started.md): Standard self-hosted installation walkthrough.
-- [Vehicle Account Setup](./docs/guides/rivian-account.md): Connect your Rivian account and handle MFA / token renewal.
-- [Configuration Reference](./docs/guides/configuration.md): Environment variables, keys, and optional integrations.
-- [Development Guide](./docs/development.md) &amp; [Contributor Setup](./CLAUDE.md): Monorepo structure, local stack commands, and verification suites.
+- [Documentation Hub](./docs/index.md): Installation, usage, operations, and reference material.
+- [Installation Guide](./docs/guides/getting-started.md): Standard Docker Compose setup and owner registration.
+- [Vehicle Account Setup](./docs/guides/rivian-account.md): Connect an account and complete MFA or credential renewal.
+- [Configuration Reference](./docs/guides/configuration.md) &amp; [Environment Variables](./docs/environment-variables.md): Runtime settings, keys, and optional integrations.
+- [Development Guide](./docs/development.md) &amp; [Contributor Setup](./CLAUDE.md): Local stack commands, architecture guards, and test suites.
 
 ---
 
