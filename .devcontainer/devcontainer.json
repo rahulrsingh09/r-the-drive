@@ -1,0 +1,27 @@
+{
+  "name": "R:The Drive",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24.18.0"
+    },
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "1.97.1"
+    }
+  },
+  "postCreateCommand": "corepack enable && pnpm install --frozen-lockfile",
+  "postAttachCommand": "pnpm dev:stack",
+  "forwardPorts": [5173, 3001],
+  "portsAttributes": {
+    "5173": {
+      "label": "R:The Drive Web App",
+      "onAutoForward": "openBrowser"
+    },
+    "3001": {
+      "label": "R:The Drive API"
+    }
+  }
+}
