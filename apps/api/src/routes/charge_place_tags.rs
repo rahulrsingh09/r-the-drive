@@ -33,9 +33,21 @@ enum PlaceTag {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PlaceTagScope {
+    /// Tag only the requested charge session without disturbing any other sessions.
+    Session,
+    /// Tag this charge and charges physically within 150 m of its source GPS.
+    #[default]
+    Place,
+}
+
 #[derive(Debug, Deserialize)]
 struct PlaceTagBody {
     tag: PlaceTag,
+    #[serde(default)]
+    scope: PlaceTagScope,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,12 +68,12 @@ struct TagPlaceRow {
     cost_profile_id: Option<Uuid>,
 }
 
-/// Applies Home, Office or Other to the selected charge and to every charge of
-/// this vehicle at the same place: the same saved place, or a reported
-/// location within 150 m. Home and Office link the user's saved Home or Office
-/// place, so its cost profile prices the charges. Other removes the saved
-/// place and its rate, keeps the reported location, and stops automatic
-/// re-matching. Free and manual cost overrides keep their precedence.
+/// Applies Home, Office or Other to the selected charge (`scope = "session"`),
+/// or to every charge of this vehicle physically within 150 m of its reported
+/// location (`scope = "place"`, default). Home and Office link the user's saved
+/// Home or Office place, so its cost profile prices the charges. Other removes
+/// the saved place and its rate, keeps the reported location, and stops
+/// automatic re-matching. Free and manual cost overrides keep their precedence.
 async fn apply_place_tag(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -102,35 +114,49 @@ async fn apply_place_tag(
     };
 
     let mut tx = state.pool.begin().await?;
-    let session_ids = sqlx::query_scalar::<_, Uuid>(
-        r#"WITH anchor AS (
-               SELECT id, geofence_id,
-                      COALESCE(source_location_lat, location_lat) AS lat,
-                      COALESCE(source_location_lng, location_lng) AS lng
-                 FROM panda.charge_sessions
-                WHERE id = $1 AND vehicle_id = $2
-           )
-           SELECT cs.id
-             FROM panda.charge_sessions cs, anchor a
-            WHERE cs.vehicle_id = $2
-              AND (cs.id = a.id
-                   OR (a.geofence_id IS NOT NULL AND cs.geofence_id = a.geofence_id)
-                   OR (a.lat IS NOT NULL AND a.lng IS NOT NULL
-                       AND COALESCE(cs.source_location_lat, cs.location_lat) IS NOT NULL
-                       AND COALESCE(cs.source_location_lng, cs.location_lng) IS NOT NULL
-                       AND panda.earth_distance(
-                             panda.ll_to_earth(a.lat, a.lng),
-                             panda.ll_to_earth(COALESCE(cs.source_location_lat, cs.location_lat),
-                                                   COALESCE(cs.source_location_lng, cs.location_lng))
-                           ) <= $3))
-            ORDER BY cs.started_at
-            FOR UPDATE OF cs"#,
-    )
-    .bind(session_id)
-    .bind(vehicle_id)
-    .bind(PLACE_TAG_RADIUS_M)
-    .fetch_all(&mut *tx)
-    .await?;
+    let session_ids = match body.scope {
+        PlaceTagScope::Session => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM panda.charge_sessions
+                  WHERE id = $1 AND vehicle_id = $2
+                  FOR UPDATE",
+            )
+            .bind(session_id)
+            .bind(vehicle_id)
+            .fetch_all(&mut *tx)
+            .await?
+        }
+        PlaceTagScope::Place => {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"WITH anchor AS (
+                       SELECT id,
+                              COALESCE(source_location_lat, location_lat) AS lat,
+                              COALESCE(source_location_lng, location_lng) AS lng
+                         FROM panda.charge_sessions
+                        WHERE id = $1 AND vehicle_id = $2
+                   )
+                   SELECT cs.id
+                     FROM panda.charge_sessions cs, anchor a
+                    WHERE cs.vehicle_id = $2
+                      AND (cs.id = a.id
+                           OR (a.lat IS NOT NULL AND a.lng IS NOT NULL
+                               AND COALESCE(cs.source_location_lat, cs.location_lat) IS NOT NULL
+                               AND COALESCE(cs.source_location_lng, cs.location_lng) IS NOT NULL
+                               AND panda.earth_distance(
+                                     panda.ll_to_earth(a.lat, a.lng),
+                                     panda.ll_to_earth(COALESCE(cs.source_location_lat, cs.location_lat),
+                                                       COALESCE(cs.source_location_lng, cs.location_lng))
+                                   ) <= $3))
+                    ORDER BY cs.started_at
+                    FOR UPDATE OF cs"#,
+            )
+            .bind(session_id)
+            .bind(vehicle_id)
+            .bind(PLACE_TAG_RADIUS_M)
+            .fetch_all(&mut *tx)
+            .await?
+        }
+    };
     if session_ids.is_empty() {
         return Err(AppError::NotFound);
     }
@@ -158,13 +184,21 @@ async fn apply_place_tag(
         None => {
             sqlx::query(
                 "UPDATE panda.charge_sessions
-                    SET geofence_id = NULL, is_home = FALSE, cost_profile_id = NULL,
+                    SET geofence_id = NULL, address_id = NULL, is_home = FALSE, cost_profile_id = NULL,
                         location_lat = COALESCE(source_location_lat, location_lat),
                         location_lng = COALESCE(source_location_lng, location_lng),
                         location_override_mode = 'none'
                   WHERE vehicle_id = $1 AND id = ANY($2)",
             )
             .bind(vehicle_id)
+            .bind(&session_ids)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE panda.charge_session_user_annotations
+                    SET geofence_id = NULL, address_id = NULL, is_home = FALSE, updated_at = now()
+                  WHERE charge_session_id = ANY($1)",
+            )
             .bind(&session_ids)
             .execute(&mut *tx)
             .await?;
@@ -190,3 +224,20 @@ async fn apply_place_tag(
 #[cfg(test)]
 #[path = "charge_place_tags_authorization_tests.rs"]
 mod authorization_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_tag_body_defaults_to_place_and_accepts_session_scope() {
+        let default_body: PlaceTagBody = serde_json::from_str(r#"{"tag":"home"}"#).unwrap();
+        assert_eq!(default_body.tag, PlaceTag::Home);
+        assert_eq!(default_body.scope, PlaceTagScope::Place);
+
+        let session_body: PlaceTagBody =
+            serde_json::from_str(r#"{"tag":"office","scope":"session"}"#).unwrap();
+        assert_eq!(session_body.tag, PlaceTag::Office);
+        assert_eq!(session_body.scope, PlaceTagScope::Session);
+    }
+}

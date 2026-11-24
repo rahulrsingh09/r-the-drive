@@ -21,18 +21,25 @@ export function placeTagPath(vehicleId: string, sessionId: string) {
 }
 
 /**
- * Tags a charge's place Home, Office or Other. The API applies the tag to this
- * charge and every charge of the vehicle at the same place (the same saved
- * place, or within 150 m): Home and Office link the saved Home or Office place
- * and its rate; Other removes the saved place and its rate. The API answers 422
- * when no Home or Office place is saved.
+ * Tags a charge's place Home, Office or Other. By default (`scope = 'session'`),
+ * only this single charge is updated so other sessions are untouched. Callers
+ * that explicitly pass `scope = 'place'` apply the tag to every charge
+ * physically within 150 m. The API answers 422 when no Home or Office place
+ * is saved.
  */
 export function usePlaceTag(vehicleId: string | null) {
   const queryClient = useQueryClient();
-  return useMutation<PlaceTagResponse, Error, { sessionId: string; category: PlaceCategory }>({
-    mutationFn: ({ sessionId, category }) => {
+  return useMutation<
+    PlaceTagResponse,
+    Error,
+    { sessionId: string; category: PlaceCategory; scope?: 'session' | 'place' }
+  >({
+    mutationFn: ({ sessionId, category, scope = 'session' }) => {
       if (!vehicleId) throw new Error('vehicle_id is required');
-      return api.apiFetch<PlaceTagResponse>('POST', placeTagPath(vehicleId, sessionId), { tag: placeTagName(category) });
+      return api.apiFetch<PlaceTagResponse>('POST', placeTagPath(vehicleId, sessionId), {
+        tag: placeTagName(category),
+        scope,
+      });
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['places'] });

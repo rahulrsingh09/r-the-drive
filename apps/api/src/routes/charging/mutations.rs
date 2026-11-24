@@ -98,23 +98,34 @@ async fn apply_location(
         .fetch_optional(pool)
         .await?
     }, LocationChange::Clear => {
-        sqlx::query_scalar::<_, Uuid>(
+        let cleared = sqlx::query_scalar::<_, Uuid>(
             "UPDATE panda.charge_sessions
-               SET geofence_id=NULL,
-                   address_id=NULL,
-                   is_home=NULL,
-                   location_lat=NULL,
-                   location_lng=NULL,
-                   cost_profile_id=$1,
-                   location_override_mode='none'
-             WHERE id=$2 AND vehicle_id=$3
-             RETURNING id",
+                SET geofence_id=NULL,
+                    address_id=NULL,
+                    is_home=FALSE,
+                    location_lat=COALESCE(source_location_lat, location_lat),
+                    location_lng=COALESCE(source_location_lng, location_lng),
+                    cost_profile_id=$1,
+                    location_override_mode='none'
+              WHERE id=$2 AND vehicle_id=$3
+              RETURNING id",
         )
         .bind(cost_profile_for_location(LocationOverrideMode::None, None))
         .bind(session_id)
         .bind(vehicle_id)
         .fetch_optional(pool)
-        .await?
+        .await?;
+        if let Some(cleared_id) = cleared {
+            sqlx::query(
+                "UPDATE panda.charge_session_user_annotations
+                    SET geofence_id=NULL, address_id=NULL, is_home=FALSE, updated_at=now()
+                  WHERE charge_session_id=$1",
+            )
+            .bind(cleared_id)
+            .execute(pool)
+            .await?;
+        }
+        cleared
     }, LocationChange::Automatic => {
         sqlx::query_scalar::<_, Uuid>(
             r#"UPDATE panda.charge_sessions cs

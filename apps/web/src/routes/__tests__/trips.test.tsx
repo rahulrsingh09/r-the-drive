@@ -41,7 +41,12 @@ const trips = [
     start_place: null, end_place: null, start_address: null, end_address: null,
   },
 ];
-const charges = [
+const charges: Array<{
+  id: string; vehicle_id: string; started_at: string; ended_at: string; location_name: string | null;
+  charger_type: string; energy_added_kwh: number; duration_min: number; soc_start: number; soc_end: number;
+  peak_power_kw: number; cost_usd: number | null; cost_method: string; location_lat: number; location_lng: number;
+  cost_override_mode?: 'automatic' | 'free' | 'manual';
+}> = [
   {
     id: 'c1', vehicle_id: 'v1', started_at: iso(20), ended_at: iso(18), location_name: 'Home', charger_type: 'ac', energy_added_kwh: 20,
     duration_min: 120, soc_start: 55, soc_end: 80, peak_power_kw: 11, cost_usd: 3.78, cost_method: 'profile', location_lat: HOME.lat, location_lng: HOME.lng,
@@ -99,6 +104,7 @@ function detailFor(id: string) {
 }
 
 import { ActivityPage } from '../../features/trips/activity/ActivityPage';
+import { toActivityCharge } from '../../features/trips/activity/activityModel';
 
 function renderPage(props: Partial<React.ComponentProps<typeof ActivityPage>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -220,30 +226,54 @@ describe('Charge detail', () => {
     expect(screen.getByText('= $19.20')).toBeInTheDocument();
   });
 
-  it('tags the place Home for every charge there through the place-tag API, after the owner confirms', async () => {
+  it('tags only this charge Home immediately through the place-tag API with session scope', async () => {
     renderPage({ selection: { kind: 'charge', id: 'c2' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Home' }));
-    const confirm = await screen.findByRole('group', { name: /^Tag .+ as Home\?$/ });
-    expect(confirm).toHaveTextContent(/at .+ (moves|move) to Home/);
-    expect(mocks.api.apiFetch).not.toHaveBeenCalledWith('POST', expect.stringContaining('/place-tag'), expect.anything());
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Tag as Home' }));
-    await waitFor(() => expect(mocks.api.apiFetch).toHaveBeenCalledWith('POST', '/v1/vehicles/v1/charging-sessions/c2/place-tag', { tag: 'home' }));
+    await waitFor(() => expect(mocks.api.apiFetch).toHaveBeenCalledWith(
+      'POST',
+      '/v1/vehicles/v1/charging-sessions/c2/place-tag',
+      { tag: 'home', scope: 'session' },
+    ));
   });
 
-  it('does not save a place tag when the owner cancels', async () => {
+  it('allows Mark free ($0) on an individual charge', async () => {
     renderPage({ selection: { kind: 'charge', id: 'c2' } });
-    fireEvent.click(await screen.findByRole('button', { name: 'Office' }));
-    const confirm = await screen.findByRole('group', { name: /^Tag .+ as Office\?$/ });
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('group', { name: /^Tag .+ as Office\?$/ })).toBeNull();
-    expect(mocks.api.apiFetch).not.toHaveBeenCalledWith('POST', expect.stringContaining('/place-tag'), expect.anything());
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark free ($0)' }));
+    expect(mocks.updateCost).toHaveBeenCalledWith({ sessionId: 'c2', cost_mode: 'free' }, expect.anything());
+  });
+
+  it('allows manual cost editing and Use automatic rate on a Home-tagged charge', async () => {
+    charges.push({
+      ...charges[0]!,
+      id: 'c3',
+      cost_method: 'user_manual',
+      cost_override_mode: 'manual',
+      cost_usd: 4.5,
+    });
+    try {
+      renderPage({ selection: { kind: 'charge', id: 'c3' } });
+      expect(await screen.findByRole('button', { name: 'Mark free ($0)' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Use automatic rate' }));
+      expect(mocks.updateCost).toHaveBeenCalledWith({ sessionId: 'c3', cost_mode: 'automatic' }, expect.anything());
+    } finally {
+      charges.pop();
+    }
+  });
+
+  it('keeps a charge with location_override_mode=none in Other even at Home coordinates', () => {
+    const converted = toActivityCharge({
+      ...(charges[0] as unknown as Parameters<typeof toActivityCharge>[0]),
+      location_name: null,
+      location_override_mode: 'none',
+    }, places as unknown as Parameters<typeof toActivityCharge>[1]);
+    expect(converted?.category).toBe('public');
+    expect(converted?.savedPlace).toBeNull();
   });
 
   it('asks for an Office place when none is saved and the tag fails', async () => {
     mocks.api.apiFetch.mockRejectedValueOnce(new Error('Save an Office place first'));
     renderPage({ selection: { kind: 'charge', id: 'c2' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Office' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Tag as Office' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Set your Office rate in Settings first.');
   });
 });

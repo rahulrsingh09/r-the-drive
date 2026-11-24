@@ -168,7 +168,7 @@ export function toActivityCharge(session: ChargeSession, places: Place[]): Activ
   const start = new Date(session.started_at);
   if (Number.isNaN(start.getTime())) return null;
   const end = session.ended_at ? new Date(session.ended_at) : start;
-  const savedPlace = matchChargePlace(session, places);
+  const savedPlace = session.location_override_mode === 'none' ? null : matchChargePlace(session, places);
   const place = chargePlace(session, savedPlace);
   return {
     kind: 'charge', id: session.id, start, end, day: dayKey(start),

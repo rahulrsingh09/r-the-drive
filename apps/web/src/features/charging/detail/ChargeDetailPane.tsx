@@ -10,7 +10,6 @@ import { ExpandableChart, LineChart } from '../../trips/activity/ActivityCharts'
 import { Segmented } from '../../trips/activity/Segmented';
 import { costEntry, type CostEntryMode } from './chargeDetailModel';
 import { usePlaceTag } from './usePlaceTag';
-import { placeTagConfirm } from '../../../lib/placeTagCopy';
 
 export const CATEGORY_COLOR: Record<PlaceCategory, string> = {
   home: 'var(--r-act-home)', office: 'var(--r-act-office)', public: 'var(--r-act-public)',
@@ -81,8 +80,6 @@ export function ChargeDetailPane({ sessionId, vehicleId, canManage, charges, hea
     );
   }
 
-  const atPlace = charges.filter((item) => item.place === charge.place);
-  const here = Math.max(1, atPlace.length);
   const curve = (curveQuery.data ?? []).filter((point) => point.minutes_elapsed != null);
   const estimated = curve.length > 0 && curve.every((point) => point.power_method !== 'recorded');
   const minutes = charge.session.duration_min ?? (charge.end.getTime() - charge.start.getTime()) / 60_000;
@@ -126,7 +123,7 @@ export function ChargeDetailPane({ sessionId, vehicleId, canManage, charges, hea
         </div>
 
         <h2 className="r-act-h2">Place</h2>
-        <PlaceCard charge={charge} here={here} places={places} vehicleId={vehicleId} canManage={canManage} />
+        <PlaceCard charge={charge} places={places} vehicleId={vehicleId} canManage={canManage} />
 
         <h2 className="r-act-h2">Cost</h2>
         <CostCard charge={charge} places={places} vehicleId={vehicleId} canManage={canManage} />
@@ -179,55 +176,38 @@ export function ChargeDetailPane({ sessionId, vehicleId, canManage, charges, hea
   );
 }
 
-function PlaceCard({ charge, here, places, vehicleId, canManage }: {
-  charge: ActivityCharge; here: number; places: Place[]; vehicleId: string; canManage: boolean;
+function PlaceCard({ charge, places, vehicleId, canManage }: {
+  charge: ActivityCharge; places: Place[]; vehicleId: string; canManage: boolean;
 }) {
   const tag = usePlaceTag(vehicleId);
   const [pending, setPending] = React.useState<PlaceCategory | null>(null);
   const [tried, setTried] = React.useState<PlaceCategory | null>(null);
-  // A tag moves every charge at the place at once: it saves only after the owner confirms.
-  const [confirm, setConfirm] = React.useState<PlaceCategory | null>(null);
-  const shown = pending ?? confirm ?? charge.category;
+  const shown = pending ?? charge.category;
   const missing = (category: PlaceCategory) => category !== 'public'
     && !places.some((place) => (category === 'home' ? place.is_home : place.is_work) || place.name.trim().toLocaleLowerCase() === (category === 'home' ? 'home' : 'office'));
   return (
     <section className="r-act-card pad" data-place-card>
-      <div className="r-act-ctitle"><b>{shortPlace(charge.place)}</b><span className="muted">{here} charge{here > 1 ? 's' : ''} here</span></div>
+      <div className="r-act-ctitle"><b>{shortPlace(charge.place)}</b><span className="muted">This charge only</span></div>
       <Segmented
-        label="Tag this place"
+        label="Tag this charge"
         value={shown}
         disabled={!canManage || tag.isPending}
         options={(['home', 'office', 'public'] as const).map((category) => ({ value: category, label: CATEGORY_LABEL[category] }))}
         buttonProps={(option) => ({ 'data-tag': option.value })}
         onChange={(value) => {
           const category = value as PlaceCategory;
-          setConfirm(category === charge.category ? null : category);
+          if (category === charge.category) return;
+          setPending(category);
+          setTried(category);
+          tag.mutate({ sessionId: charge.id, category, scope: 'session' }, { onSettled: () => setPending(null) });
         }}
       />
-      {confirm ? (() => {
-        const text = placeTagConfirm(shortPlace(charge.place), here, confirm === 'public' ? 'other' : confirm, places);
-        return (
-          <div className="r-act-confirm" role="group" aria-label={text.title}>
-            <p><b>{text.title}</b> {text.body}</p>
-            <div className="r-act-confirm-actions">
-              <Button type="button" size="sm" className="min-h-11" onClick={() => {
-                const category = confirm;
-                setConfirm(null);
-                setPending(category);
-                setTried(category);
-                tag.mutate({ sessionId: charge.id, category }, { onSettled: () => setPending(null) });
-              }}>{text.action}</Button>
-              <Button type="button" size="sm" variant="secondary" className="min-h-11" onClick={() => setConfirm(null)}>Cancel</Button>
-            </div>
-          </div>
-        );
-      })() : null}
       {tag.isError ? (
         <p className="r-act-note r-act-error" role="alert">
           {tried && missing(tried) ? `Set your ${CATEGORY_LABEL[tried]} rate in Settings first.` : 'The tag did not save. Try again.'}
         </p>
       ) : null}
-      <p className="r-act-note">Choose what kind of place this is. Home and Office use your rates in Settings. Other needs the price you paid. The tag applies to every charge at this place, after you confirm.</p>
+      <p className="r-act-note">Choose Home, Office, or Other for this charge only — other charges are not changed. Home and Office use your rates in Settings unless you set a cost for this charge below.</p>
       {charge.placeApproximate ? <p className="r-act-note">{shortPlace(charge.place)} is the nearest town, not an address.</p> : null}
     </section>
   );
@@ -236,12 +216,18 @@ function PlaceCard({ charge, here, places, vehicleId, canManage }: {
 function CostCard({ charge, places, vehicleId, canManage }: { charge: ActivityCharge; places: Place[]; vehicleId: string; canManage: boolean }) {
   const update = useUpdateChargeSession(vehicleId);
   const manual = charge.session.cost_method === 'user_manual' && charge.session.cost_usd != null;
+  const hasOverride = charge.session.cost_override_mode === 'manual' || charge.session.cost_override_mode === 'free';
   const [mode, setMode] = React.useState<CostEntryMode>('total');
   const [input, setInput] = React.useState(manual ? charge.session.cost_usd!.toFixed(2) : '');
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setInput(manual ? charge.session.cost_usd!.toFixed(2) : '');
+    setMessage(null);
+    setError(null);
+  }, [charge.id, manual, charge.session.cost_usd]);
   const entry = costEntry(mode, input, charge.kwh);
-  const editable = canManage && !charge.active && (charge.category === 'public' || manual);
+  const editable = canManage && !charge.active;
   const inputId = React.useId();
 
   const save = (event: React.FormEvent) => {
@@ -279,6 +265,44 @@ function CostCard({ charge, places, vehicleId, canManage }: { charge: ActivityCh
               data-cost-input
             />
             <button type="submit" className="r-act-btn" disabled={update.isPending}>Save</button>
+          </div>
+          <div className="r-act-confirm-actions">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="min-h-11"
+              disabled={update.isPending || charge.session.cost_override_mode === 'free'}
+              onClick={() => {
+                setError(null);
+                setMessage(null);
+                update.mutate({ sessionId: charge.id, cost_mode: 'free' }, {
+                  onSuccess: () => { setInput(''); setMessage('Marked free ($0.00).'); },
+                  onError: () => setError('The cost did not save. Try again.'),
+                });
+              }}
+            >
+              Mark free ($0)
+            </Button>
+            {hasOverride ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="min-h-11"
+                disabled={update.isPending}
+                onClick={() => {
+                  setError(null);
+                  setMessage(null);
+                  update.mutate({ sessionId: charge.id, cost_mode: 'automatic' }, {
+                    onSuccess: () => { setInput(''); setMessage('Reverted to automatic rate.'); },
+                    onError: () => setError('The cost did not save. Try again.'),
+                  });
+                }}
+              >
+                Use automatic rate
+              </Button>
+            ) : null}
           </div>
           {error ? <p className="r-act-note r-act-error" role="alert">{error}</p>
             : message ? <p className="r-act-note" role="status">{message}</p>
