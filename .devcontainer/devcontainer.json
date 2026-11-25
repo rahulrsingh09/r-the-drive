@@ -1,0 +1,47 @@
+{
+  "name": "R:The Drive (Dev & Evaluation)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb",
+    "storage": "32gb"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    },
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "latest",
+      "profile": "minimal"
+    }
+  },
+  "containerEnv": {
+    "SQLX_OFFLINE": "true",
+    "TURBO_TELEMETRY_DISABLED": "1",
+    "DO_NOT_TRACK": "1"
+  },
+  "forwardPorts": [5173, 3001],
+  "portsAttributes": {
+    "5173": {
+      "label": "R:The Drive Web App",
+      "onAutoForward": "openBrowser"
+    },
+    "3001": {
+      "label": "Panda API",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev postgresql-client && corepack enable && pnpm install --frozen-lockfile && cargo fetch --manifest-path apps/api/Cargo.toml",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  }
+}

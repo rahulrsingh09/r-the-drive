@@ -119,4 +119,16 @@ describe('network proxy URL resolution', () => {
 
     expect(baseUrl).toBe('ws://api.panda.test');
   });
+
+  it('routes REST and WebSocket calls same-origin over HTTPS in GitHub Codespaces', () => {
+    const codespaceLocation = {
+      hostname: 'shiny-space-5173.app.github.dev',
+      origin: 'https://shiny-space-5173.app.github.dev',
+    };
+
+    expect(resolveApiBaseUrl('http://localhost:3001', codespaceLocation)).toBe('');
+    expect(getWebSocketBaseUrl('http://localhost:3001', codespaceLocation)).toBe(
+      'wss://shiny-space-5173.app.github.dev'
+    );
+  });
 });

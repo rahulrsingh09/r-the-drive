@@ -14,6 +14,9 @@
   </p>
 
   <p>
+    <a href="https://codespaces.new/rahulrsingh09/r-the-drive?quickstart=1">
+      <img src="https://github.com/codespaces/badge.svg" alt="Open in GitHub Codespaces" height="20" />
+    </a>
     <a href="./LICENSE">
       <img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="GPL-3.0 License" />
     </a>
@@ -46,9 +49,10 @@ Choose the setup path that matches where you want to run **R:The Drive**:
 
 | Path | Target environment | Prerequisites | Command |
 | --- | --- | --- | --- |
-| [**Self-Hosted Production**](#option-1--one-command-self-hosted-production-install) | Linux/macOS host, home server, NAS, or VPS | Git, Python 3, Docker Compose v2, and an HTTPS reverse proxy/tunnel to `127.0.0.1:8080` | `python3 scripts/deploy.py` |
+| [**Self-Hosted Production**](#option-1--one-command-self-hosted-production-install) | Linux/macOS host, home server, NAS, or VPS *(24/7)* | Git, Python 3, Docker Compose v2, and an HTTPS reverse proxy/tunnel to `127.0.0.1:8080` | `python3 scripts/deploy.py` |
 | [**Local Dev Stack**](#option-2--one-command-local-development-stack) | macOS, Linux, or Windows workstation | Docker, Rust (`cargo`), Node `24.18+`, and `pnpm` `11.15+` | `pnpm dev:stack` |
-| [**Cloud Free Tier**](#option-3--cloud-free-tier-blueprint-northflank--cloudflare) | Managed container + Zero-Trust edge SSO | Northflank Sandbox + Cloudflare Workers &amp; Access | Guided below |
+| [**Cloud Free Tier**](#option-3--cloud-free-tier-blueprint-northflank--cloudflare) | Managed container + Zero-Trust edge SSO *(24/7)* | Northflank Sandbox + Cloudflare Workers &amp; Access | Guided below |
+| [**GitHub Codespaces**](#option-4--try-or-develop-in-github-codespaces) | Browser dev &amp; evaluation *(ephemeral, not 24/7)* | GitHub account *(uses your own free monthly quota)* | `pnpm dev:stack` |
 
 ### Option 1 — One-command self-hosted production install
 
@@ -103,6 +107,24 @@ R:The Drive can run in a managed cloud environment within Northflank and Cloudfl
 3. **Automatic `git push` deploys:** Enable [`.github/workflows/auto-deploy.yml`](./.github/workflows/auto-deploy.yml) with a Northflank deploy webhook repository secret so pushes to `mainline` automatically trigger Northflank image builds and rollouts (skipping pure `*.md` / `docs/**` edits and `[skip nf]` commits).
 
 Review [Private deployment architecture](./docs/architecture/private-deployment.md) and [Deployment options](./docs/guides/deployment.md#deployment-options-and-moving-hosts) for full details.
+
+</details>
+
+### Option 4 — Try or develop in GitHub Codespaces
+
+<details>
+<summary>Launch an isolated browser dev environment with zero local installation</summary>
+
+1. Open a fresh Codespace at [codespaces.new/rahulrsingh09/r-the-drive](https://codespaces.new/rahulrsingh09/r-the-drive?quickstart=1) (runs inside **your** GitHub account's monthly free quota with a blank, private TimescaleDB instance).
+2. Wait for [`.devcontainer/devcontainer.json`](./.devcontainer/devcontainer.json) to finish installing Docker-in-Docker, Rust, Node `24`, `pnpm`, OpenSSL build headers, and workspace dependencies, then start the stack in the Codespace terminal:
+
+```bash
+pnpm dev:stack
+```
+
+3. On first boot, Cargo compiles `panda-api` and `panda-restore-agent` (~4–7 minutes; cached on subsequent restarts). [`scripts/dev.mjs`](./scripts/dev.mjs) and [`apps/web/vite.config.ts`](./apps/web/vite.config.ts) automatically allow your forwarded `*.app.github.dev` HTTPS origin and open port `5173` privately in your browser.
+
+> **Important:** Codespaces hibernate after inactivity, which pauses background vehicle telemetry collection. Use Codespaces for evaluation or code contributions — use **Option 1** or **Option 3** for 24/7 vehicle logging, and delete finished test Codespaces at [github.com/codespaces](https://github.com/codespaces) so disk storage drops back to `0 GB`.
 
 </details>
 

@@ -3,6 +3,12 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
+const isCodespaces =
+  process.env.CODESPACES === 'true' || Boolean(process.env.CODESPACE_NAME?.trim());
+const codespacesDomain = (
+  process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN?.trim() || 'app.github.dev'
+).replace(/^\.+/, '');
+
 export default defineConfig({
   envDir: path.resolve(__dirname, '../..'),
   test: {
@@ -51,9 +57,16 @@ export default defineConfig({
   },
   server: {
     // Loopback only by default. DEV_WEB_HOST widens the bind on purpose
-    // (for example, to test on a phone on the same network).
-    host: process.env.DEV_WEB_HOST?.trim() || '127.0.0.1',
+    // (for example, to test on a phone on the same network); GitHub Codespaces
+    // binds inside the devcontainer and permits its forwarded HTTPS domain.
+    host: process.env.DEV_WEB_HOST?.trim() || (isCodespaces ? '0.0.0.0' : '127.0.0.1'),
     port: 5173,
+    ...(isCodespaces
+      ? {
+          allowedHosts: [`.${codespacesDomain}`],
+          hmr: { clientPort: 443 },
+        }
+      : {}),
     proxy: {
       '/v1/restore-runtime': {
         target: process.env.VITE_RESTORE_AGENT_URL ?? 'http://127.0.0.1:3002',

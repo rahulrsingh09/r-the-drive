@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DevelopmentStack,
   allocateDistinctRuntimePorts,
+  codespaceOrigin,
   deriveDevComposeProjectName,
+  extractViteLocalUrl,
   parseComposeIdentityMetadata,
   parseComposePortMetadata,
 } from './dev.mjs';
@@ -134,4 +137,35 @@ test('reuses running shared infrastructure ports and reserves them from host por
     api: 15433, postgres: 15432, redis: 16379, garageApi: 13900, garageAdmin: 13903,
   });
   assert.deepEqual(probes, [{ start: 15432, label: 'API', reserved: [15432, 16379, 13900, 13903] }]);
+});
+
+test('parses both localhost and 127.0.0.1 Vite startup banners', () => {
+  assert.equal(extractViteLocalUrl('  ➜  Local:   http://127.0.0.1:5173/\n'), 'http://127.0.0.1:5173');
+  assert.equal(extractViteLocalUrl('  ➜  Local:   http://localhost:5173/\n'), 'http://localhost:5173');
+});
+
+test('derives validated GitHub Codespaces origins only when CODESPACE_NAME is valid', () => {
+  assert.equal(codespaceOrigin(5173, {}), null);
+  assert.equal(codespaceOrigin(5173, { CODESPACE_NAME: 'bad/name' }), null);
+  assert.equal(
+    codespaceOrigin(5173, { CODESPACE_NAME: 'Shiny-Space-42' }),
+    'https://shiny-space-42-5173.app.github.dev',
+  );
+  assert.equal(
+    codespaceOrigin(5174, {
+      CODESPACE_NAME: 'shiny-space-42',
+      GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'preview.app.github.dev',
+    }),
+    'https://shiny-space-42-5174.preview.app.github.dev',
+  );
+
+  const localStack = new DevelopmentStack({ env: {}, log: () => {} });
+  assert.equal(localStack.origins().some(origin => origin.includes('app.github.dev')), false);
+  assert.equal(localStack.origins().includes('http://127.0.0.1:5173'), true);
+
+  const codespaceStack = new DevelopmentStack({
+    env: { CODESPACE_NAME: 'shiny-space-42' },
+    log: () => {},
+  });
+  assert.equal(codespaceStack.origins().includes('https://shiny-space-42-5173.app.github.dev'), true);
 });

@@ -6,6 +6,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - '*.md'
+      - '.devcontainer/**'
+      - 'scripts/dev.mjs'
+      - 'scripts/dev.test.mjs'
   workflow_dispatch:
 
 permissions:

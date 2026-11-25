@@ -99,11 +99,18 @@ export function parseComposeIdentityMetadata(output, expectedComposeFile) {
 }
 export function extractViteLocalUrl(output) {
   const clean = stripAnsi(output);
-  for (const pattern of [/Local:\s+https?:\/\/localhost:(\d+)(?:\/|$)/i, /http:\/\/localhost:(\d+)(?:\/|$)/i]) {
+  for (const pattern of [/Local:\s+https?:\/\/(localhost|127\.0\.0\.1):(\d+)(?:\/|$)/i, /http:\/\/(localhost|127\.0\.0\.1):(\d+)(?:\/|$)/i]) {
     const result = pattern.exec(clean);
-    if (result) return 'http://localhost:' + result[1];
+    if (result) return `http://${result[1].toLowerCase()}:${result[2]}`;
   }
   return null;
+}
+export function codespaceOrigin(port, env = process.env) {
+  const name = env.CODESPACE_NAME?.trim();
+  if (!name || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(name)) return null;
+  const domain = (env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN?.trim() || 'app.github.dev').replace(/^\.+/, '');
+  if (!domain.includes('.') || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(domain)) return null;
+  return `https://${name.toLowerCase()}-${port}.${domain.toLowerCase()}`;
 }
 export function parsePids(output, ownPid = process.pid) {
   const unique = new Set();
@@ -132,7 +139,16 @@ export class DevelopmentStack {
     this.stopping = false;
   }
   binary(name) { return resolve(this.apiDir, 'target/debug', name + (this.windows ? '.exe' : '')); }
-  origins() { return Array.from({ length: 11 }, (_, offset) => `http://localhost:${this.ports.web + offset}`); }
+  origins() {
+    const allowed = [];
+    for (let offset = 0; offset < 11; offset += 1) {
+      const port = this.ports.web + offset;
+      allowed.push(`http://localhost:${port}`, `http://127.0.0.1:${port}`);
+      const forwarded = codespaceOrigin(port, this.env);
+      if (forwarded) allowed.push(forwarded);
+    }
+    return allowed;
+  }
   health() { return `http://localhost:${this.ports.api}/health`; }
   start(command, args, options = {}) {
     const configuration = { cwd: options.cwd ?? root, env: { ...this.env, ...options.env },
@@ -413,7 +429,9 @@ export class DevelopmentStack {
   }
   async web() {
     this.log('Starting web dev server...');
+    const forwarded = codespaceOrigin(this.ports.web, this.env);
     const env = { VITE_RESTORE_AGENT_URL: `http://127.0.0.1:${this.ports.restoreAgent}` };
+    if (forwarded || this.env.CODESPACES === 'true') env.DEV_WEB_HOST = this.env.DEV_WEB_HOST ?? '0.0.0.0';
     for (const key of ['VITE_WS_URL', 'VITE_API_URL', 'VITE_PANDA_API_BASE_URL']) env[key] = this.env[key] ?? `http://localhost:${this.ports.api}`;
     const child = this.start(resolve(this.webDir, 'node_modules/.bin', this.windows ? 'vite.cmd' : 'vite'),
       ['--port', String(this.ports.web)], { cwd: this.webDir, env, stdio: ['ignore', 'pipe', 'pipe'], shell: this.windows });
@@ -421,6 +439,7 @@ export class DevelopmentStack {
     const url = await this.viteUrl(child);
     await this.waitHttp(url, child, 'web dev server');
     this.log(`Web dev server is responding at ${url}`);
+    if (forwarded) this.log(`Codespaces web URL: ${forwarded}`);
     return { child, url };
   }
   shutdown(code = 0) {
