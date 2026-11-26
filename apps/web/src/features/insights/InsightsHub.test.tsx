@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   status: null as null | { last_updated: string | null; telemetry_stale?: boolean },
   trips: [] as unknown[],
   charges: [] as unknown[],
+  parks: [] as unknown[],
+  parkedEnergy: [] as unknown[],
+  statePeriods: [] as unknown[],
   applyChargePlaceTag: vi.fn(),
 }));
 
@@ -39,7 +42,9 @@ vi.mock('@panda/hooks', async (importOriginal) => ({
   useDegradation: () => ({ data: [{ ts: '2026-10-07T18:00:00Z', usable_kwh: 91.4 }, { ts: '2026-10-15T18:00:00Z', usable_kwh: 91.2 }] }),
   useMe: () => ({ data: { user_id: 'u1' } }),
   useSavedPlaces: () => ({ data: places }),
-  usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'v1', periods: [] } }),
+  usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'v1', periods: mocks.parks } }),
+  useParkedEnergy: () => ({ data: { vehicle_id: 'v1', generated_at: '2026-10-15T18:00:00Z', source: 'rivian_reported', samples: mocks.parkedEnergy } }),
+  useStateTimeline: () => ({ data: { vehicle_id: 'v1', periods: mocks.statePeriods } }),
   useVehicleHealth: () => ({ data: { software_history: [{ version: '2026.30' }, { version: '2026.35' }] } }),
 }));
 
@@ -60,6 +65,9 @@ describe('Insights', () => {
     mocks.status = null;
     mocks.trips = trips;
     mocks.charges = sessions;
+    mocks.parks = [];
+    mocks.parkedEnergy = [];
+    mocks.statePeriods = [];
     window.localStorage.clear();
     setAppTimezone('America/Los_Angeles');
     vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
@@ -154,10 +162,126 @@ describe('Insights', () => {
   });
 
   it('Battery: health from usable capacity and the parked-loss card', () => {
+    const dayAt = (daysAgo: number, utcHour: number) => {
+      const base = new Date();
+      base.setUTCDate(base.getUTCDate() - daysAgo);
+      base.setUTCHours(utcHour, 0, 0, 0);
+      return base.toISOString();
+    };
+    const normalStart = dayAt(4, 6);
+    const normalEnd = dayAt(4, 18);
+    const spikeStart = dayAt(2, 8);
+    const spikeAwake = dayAt(2, 16);
+    const spikeEnd = dayAt(2, 20);
+
+    mocks.parks = [
+      {
+        period_start: normalStart,
+        period_end: normalEnd,
+        duration_hours: 12,
+        sleep_share_pct: 0.94,
+        state_coverage_pct: 1,
+        soc_start: 74,
+        soc_end: 73.5,
+        soc_lost_pct: 0.5,
+        drain_pct_per_hour: 0.04,
+        range_start_mi: 240,
+        range_end_mi: 238,
+        range_lost_mi: 2,
+        range_lost_per_hour_mi: 0.16,
+        energy_drained_kwh: 0.45,
+        avg_power_w: 38,
+        has_reduced_range: false,
+        validation_status: 'validated',
+        validation_reason: null,
+        sample_count: 10,
+        start_sample_at: normalStart,
+        end_sample_at: normalEnd,
+        movement_detected: false,
+        overlaps_trip: false,
+        overlaps_charge: false,
+      },
+      {
+        period_start: spikeStart,
+        period_end: spikeEnd,
+        duration_hours: 12,
+        sleep_share_pct: 0.65,
+        state_coverage_pct: 1,
+        soc_start: 70,
+        soc_end: 66.8,
+        soc_lost_pct: 3.2,
+        drain_pct_per_hour: 0.27,
+        range_start_mi: 230,
+        range_end_mi: 219,
+        range_lost_mi: 11,
+        range_lost_per_hour_mi: 0.92,
+        energy_drained_kwh: 2.9,
+        avg_power_w: 242,
+        has_reduced_range: true,
+        avg_outside_temp_c: -2,
+        avg_cabin_temp_c: 15,
+        wake_count: 4,
+        max_sleep_streak_minutes: 180,
+        gear_guard_active: true,
+        climate_active: false,
+        ota_active: true,
+        open_closure_detected: false,
+        doors_unlocked: false,
+        twelve_volt_attention: false,
+        plugged_in: false,
+        validation_status: 'validated',
+        validation_reason: null,
+        sample_count: 18,
+        start_sample_at: spikeStart,
+        end_sample_at: spikeEnd,
+        movement_detected: false,
+        overlaps_trip: false,
+        overlaps_charge: false,
+      },
+    ];
+    mocks.statePeriods = [
+      { id: 1, state: 'sleep', started_at: spikeStart, ended_at: spikeAwake, duration_seconds: 28800 },
+      { id: 2, state: 'idle', started_at: spikeAwake, ended_at: spikeEnd, duration_seconds: 14400 },
+    ];
+    mocks.parkedEnergy = [
+      {
+        window: '24h',
+        source_at: spikeEnd,
+        received_at: spikeEnd,
+        parked_started_at: spikeStart,
+        duration_minutes: 720,
+        total_kwh: 3.0,
+        vehicle_systems_kwh: 1.5,
+        climate_kwh: 0.6,
+        gear_guard_kwh: 0.9,
+        outlets_kwh: 0,
+        total_range_impact_km: null,
+        vehicle_systems_range_impact_km: null,
+        outlets_range_impact_km: null,
+        climate_range_impact_km: null,
+        gear_guard_range_impact_km: null,
+      },
+    ];
+
     renderTab('battery');
     expect(screen.getByText('0.2 kWh below the first day', { exact: false })).toBeInTheDocument();
     expect(screen.getByText('332 mi')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Parked loss, last 30 days' })).toBeInTheDocument();
+    const parkedCard = screen.getByRole('region', { name: 'Parked loss, last 30 days' });
+    expect(parkedCard).toBeInTheDocument();
+    expect(within(parkedCard).getByText('High drain day')).toBeInTheDocument();
+    expect(within(parkedCard).getByText(/Deep sleep · 8h/)).toBeInTheDocument();
+    expect(within(parkedCard).getByText(/Kept awake · 4h \(Gear Guard, OTA update\)/)).toBeInTheDocument();
+    expect(within(parkedCard).getByText('Below freezing · extra thermal draw')).toBeInTheDocument();
+
+    // Selecting the healthy night switches the card cleanly to the calm 1-line summary.
+    const normalBar = screen.getByRole('button', { name: /0\.5 percent lost/ });
+    fireEvent.click(normalBar);
+    expect(within(parkedCard).getByText('Healthy sleep')).toBeInTheDocument();
+    expect(within(parkedCard).getByText(/Normal overnight sleep/)).toBeInTheDocument();
+
+    const breakdownCard = screen.getByRole('region', { name: 'Where parked energy went' });
+    expect(within(breakdownCard).getByText('Vehicle systems')).toBeInTheDocument();
+    expect(within(breakdownCard).getByText('Gear Guard')).toBeInTheDocument();
     expect(screen.queryByText(/phantom/i)).toBeNull();
   });
 

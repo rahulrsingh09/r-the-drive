@@ -95,4 +95,38 @@ describe('activity timeline', () => {
   it('keeps a short trip without efficiency', () => {
     expect(toActivityTrip(trip('s', '2026-11-07T08:00:00Z', '2026-11-07T08:05:00Z', { efficiency_wh_mi: null }), [])!.whPerMile).toBeNull();
   });
+
+  it('replaces bundled legs in all and trips while keeping charges flat and totals exact', () => {
+    const roadTrip = {
+      kind: 'road_trip' as const,
+      id: 'rt-t1',
+      start: new Date('2026-11-07T15:00:00Z'),
+      end: new Date('2026-11-08T19:00:00Z'),
+      day: '2026-11-08',
+      name: 'Mountain Weekend',
+      defaultName: 'Mountain Weekend',
+      inferenceReason: 'Auto-bundled: 95 mi from Home',
+      miles: 52,
+      minutes: 95,
+      kwh: 0,
+      cost: 0,
+      unpricedCount: 0,
+      whPerMile: 300,
+      maxDistanceFromHomeMi: 95,
+      trips: data.trips.slice(0, 2),
+      charges: [],
+      events: data.trips.slice(0, 2),
+      days: [],
+      route: [],
+      memberIds: ['t1', 't2'],
+    };
+    const bundledData = { ...data, roadTrips: [roadTrip] };
+    const options = { filter: 'all' as const, period: 'all' as const, place: null, today: '2026-11-08' };
+    const feed = activityFeed(bundledData, options);
+    expect(feed.some((item) => item.kind === 'road_trip' && item.id === 'rt-t1')).toBe(true);
+    expect(feed.some((item) => item.id === 't1' || item.id === 't2')).toBe(false);
+    expect(activityFeed(bundledData, { ...options, filter: 'trips' }).map((item) => item.id)).toEqual(['t3', 'rt-t1']);
+    expect(detailOrder(feed).map((item) => item.id)).toEqual(['t3', 'rt-t1']);
+    expect(summarize(bundledData, options)).toMatchObject({ kind: 'trips', count: 3 });
+  });
 });

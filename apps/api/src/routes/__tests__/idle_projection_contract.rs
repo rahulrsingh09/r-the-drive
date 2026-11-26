@@ -29,6 +29,17 @@ fn row() -> PhantomCandidateRow {
         sleep_seconds: Some(41000.0),
         covered_state_seconds: Some(43200.0),
         has_reduced_range: Some(false),
+        avg_outside_temp_c: None,
+        avg_cabin_temp_c: None,
+        wake_count: None,
+        max_sleep_streak_minutes: None,
+        gear_guard_active: None,
+        climate_active: None,
+        ota_active: None,
+        open_closure_detected: None,
+        doors_unlocked: None,
+        twelve_volt_attention: None,
+        plugged_in: None,
     }
 }
 

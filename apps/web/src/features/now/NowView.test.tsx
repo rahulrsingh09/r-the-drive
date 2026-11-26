@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   activeTrip: null as unknown,
   backfilled: false,
   map: vi.fn(),
+  statusRefetch: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -52,7 +53,7 @@ vi.mock('@panda/hooks', async (importOriginal) => {
     },
     useAuthReady: () => true,
     useAuth: () => ({ accessToken: 'token' }),
-    useCurrentVehicleStatus: () => query(mocks.status),
+    useCurrentVehicleStatus: () => query(mocks.status, { refetch: mocks.statusRefetch }),
     useSavedPlaces: () => query([{ id: 'p', name: 'Home', latitude: 47.6, longitude: -122.3, radius_m: 100, is_home: true, is_work: false }]),
     useTrips: (_id: string, from: string | null) => from ? query({ items: mocks.trips })
       : query({ items: mocks.latestTrip ? [mocks.latestTrip] : [] }, { isLoading: mocks.latestLoading }),
@@ -128,6 +129,7 @@ beforeEach(() => {
     parks: [{ period_start: '2026-11-05T02:00:00Z', duration_hours: 12, soc_lost_pct: 0.4, validation_status: 'validated' }],
   });
   mocks.map.mockClear();
+  mocks.statusRefetch.mockClear();
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -187,6 +189,19 @@ describe('Now page, parked', () => {
     mocks.status = { ...parked, telemetry_stale: true };
     renderNow();
     expect(screen.getByText('Not updating · Home · Locked')).toBeInTheDocument();
+  });
+
+  it('refreshes live data when tapping the refresh button or returning to the foreground', async () => {
+    renderNow();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh vehicle data' }));
+    await waitFor(() => expect(mocks.statusRefetch).toHaveBeenCalledTimes(1));
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.setSystemTime(new Date('2026-11-07T20:01:00Z'));
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(mocks.statusRefetch).toHaveBeenCalledTimes(2));
   });
 });
 

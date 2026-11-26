@@ -1,13 +1,20 @@
 {
-  "name": "R",
+  "name": "R:The Drive",
   "short_name": "R",
   "description": "Your Rivian, understood.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#0c0d0f",
   "theme_color": "#0c0d0f",
   "icons": [
-    { "src": "/r-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "/r-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/r-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Now", "short_name": "Now", "url": "/" },
+    { "name": "Activity", "short_name": "Activity", "url": "/trips" },
+    { "name": "Insights", "short_name": "Insights", "url": "/insights" }
   ]
 }

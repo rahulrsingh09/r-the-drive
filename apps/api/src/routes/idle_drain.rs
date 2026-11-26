@@ -112,6 +112,28 @@ pub struct PhantomPeriod {
     pub energy_drained_kwh: Option<f64>,
     pub avg_power_w: Option<f64>,
     pub has_reduced_range: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_outside_temp_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_cabin_temp_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wake_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_sleep_streak_minutes: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gear_guard_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub climate_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ota_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_closure_detected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doors_unlocked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub twelve_volt_attention: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugged_in: Option<bool>,
     pub validation_status: ValidationStatus,
     pub validation_reason: Option<ValidationReason>,
     pub sample_count: i64,
@@ -156,6 +178,17 @@ struct PhantomCandidateRow {
     sleep_seconds: Option<f64>,
     covered_state_seconds: Option<f64>,
     has_reduced_range: Option<bool>,
+    avg_outside_temp_c: Option<f64>,
+    avg_cabin_temp_c: Option<f64>,
+    wake_count: Option<i64>,
+    max_sleep_streak_minutes: Option<f64>,
+    gear_guard_active: Option<bool>,
+    climate_active: Option<bool>,
+    ota_active: Option<bool>,
+    open_closure_detected: Option<bool>,
+    doors_unlocked: Option<bool>,
+    twelve_volt_attention: Option<bool>,
+    plugged_in: Option<bool>,
 }
 
 async fn idle_drain(
@@ -264,6 +297,17 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
         energy_drained_kwh: energy.kwh,
         avg_power_w: energy.average_watts,
         has_reduced_range: row.has_reduced_range,
+        avg_outside_temp_c: finite_optional(row.avg_outside_temp_c),
+        avg_cabin_temp_c: finite_optional(row.avg_cabin_temp_c),
+        wake_count: row.wake_count,
+        max_sleep_streak_minutes: finite_optional(row.max_sleep_streak_minutes),
+        gear_guard_active: row.gear_guard_active,
+        climate_active: row.climate_active,
+        ota_active: row.ota_active,
+        open_closure_detected: row.open_closure_detected,
+        doors_unlocked: row.doors_unlocked,
+        twelve_volt_attention: row.twelve_volt_attention,
+        plugged_in: row.plugged_in,
         validation_status,
         validation_reason,
         sample_count: row.sample_count,
@@ -400,6 +444,17 @@ mod tests {
             sleep_seconds: Some(41000.0),
             covered_state_seconds: Some(43200.0),
             has_reduced_range: Some(false),
+            avg_outside_temp_c: Some(14.5),
+            avg_cabin_temp_c: Some(16.0),
+            wake_count: Some(1),
+            max_sleep_streak_minutes: Some(680.0),
+            gear_guard_active: Some(false),
+            climate_active: Some(false),
+            ota_active: Some(false),
+            open_closure_detected: Some(false),
+            doors_unlocked: Some(false),
+            twelve_volt_attention: Some(false),
+            plugged_in: Some(false),
         }
     }
 
@@ -571,6 +626,26 @@ mod tests {
         assert_eq!(period.validation_status, ValidationStatus::Validated);
         assert_eq!(period.sleep_share_pct, None);
         assert!(period.state_coverage_pct.unwrap() < 0.5);
+    }
+
+    #[test]
+    fn diagnostic_telemetry_fields_map_cleanly() {
+        let mut row = candidate_row();
+        row.avg_outside_temp_c = Some(-3.5);
+        row.avg_cabin_temp_c = Some(f64::NAN);
+        row.wake_count = Some(7);
+        row.max_sleep_streak_minutes = Some(95.0);
+        row.gear_guard_active = Some(true);
+        row.ota_active = Some(true);
+        row.doors_unlocked = Some(true);
+        let period = derive_phantom_period(row);
+        assert_eq!(period.avg_outside_temp_c, Some(-3.5));
+        assert_eq!(period.avg_cabin_temp_c, None);
+        assert_eq!(period.wake_count, Some(7));
+        assert_eq!(period.max_sleep_streak_minutes, Some(95.0));
+        assert_eq!(period.gear_guard_active, Some(true));
+        assert_eq!(period.ota_active, Some(true));
+        assert_eq!(period.doors_unlocked, Some(true));
     }
 }
 

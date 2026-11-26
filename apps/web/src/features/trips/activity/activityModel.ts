@@ -75,8 +75,37 @@ export interface ActivityGap extends Timed {
   miles: number;
 }
 
-export type ActivityItem = ActivityTrip | ActivityCharge | ActivityParked | ActivityGap;
-export type ActivityEvent = ActivityTrip | ActivityCharge;
+export interface RoadTripDayBreakdown {
+  day: string;
+  miles: number;
+  kwh: number;
+  cost: number;
+  unpricedCount: number;
+  events: ActivityEvent[];
+}
+
+export interface ActivityRoadTrip extends Timed {
+  kind: 'road_trip';
+  name: string;
+  defaultName: string;
+  inferenceReason: string;
+  miles: number;
+  minutes: number;
+  kwh: number;
+  cost: number;
+  unpricedCount: number;
+  whPerMile: number | null;
+  maxDistanceFromHomeMi: number;
+  trips: ActivityTrip[];
+  charges: ActivityCharge[];
+  events: ActivityEvent[];
+  days: RoadTripDayBreakdown[];
+  route: RouteCoordinate[];
+  memberIds: string[];
+}
+
+export type ActivityItem = ActivityTrip | ActivityCharge | ActivityParked | ActivityGap | ActivityRoadTrip;
+export type ActivityEvent = ActivityTrip | ActivityCharge | ActivityRoadTrip;
 
 /* ---------------- days ---------------- */
 
@@ -183,10 +212,10 @@ export function toActivityCharge(session: ChargeSession, places: Place[]): Activ
 }
 
 /** Parked periods between consecutive trips and charges, with the battery loss. */
-export function parkedPeriods(events: ActivityEvent[]): ActivityParked[] {
+export function parkedPeriods(events: Array<ActivityTrip | ActivityCharge>): ActivityParked[] {
   const sorted = [...events].sort((a, b) => a.start.getTime() - b.start.getTime());
   const out: ActivityParked[] = [];
-  let previous: ActivityEvent | null = null;
+  let previous: ActivityTrip | ActivityCharge | null = null;
   for (const event of sorted) {
     if (previous && previous.end.getTime() < event.start.getTime()) {
       const hours = (event.start.getTime() - previous.end.getTime()) / 3_600_000;
@@ -221,6 +250,7 @@ export interface ActivityData {
   charges: ActivityCharge[];
   parked: ActivityParked[];
   gaps: ActivityGap[];
+  roadTrips?: ActivityRoadTrip[];
 }
 
 export function buildActivityData(trips: Trip[], sessions: ChargeSession[], places: Place[], routes: Map<string, RouteCoordinate[]> = new Map()): ActivityData {
@@ -249,13 +279,23 @@ function inPeriod(item: Timed, from: string | null, today: string) {
 export function activityFeed(data: ActivityData, { filter, period, place, today }: FeedOptions): ActivityItem[] {
   const from = periodStartDay(period, today);
   if (place) return sortNewest(data.charges.filter((charge) => samePlace(charge.place, place) && inPeriod(charge, from, today)));
-  let items: ActivityItem[] = [];
-  if (filter !== 'charges') items = items.concat(data.trips.filter((trip) => inPeriod(trip, from, today)));
-  if (filter !== 'trips') items = items.concat(data.charges.filter((charge) => inPeriod(charge, from, today)));
+  if (filter === 'charges') return sortNewest(data.charges.filter((charge) => inPeriod(charge, from, today)));
+
+  const roadTrips = (data.roadTrips ?? []).filter((rt) => inPeriod(rt, from, today));
+  const bundledIds = new Set(roadTrips.flatMap((rt) => rt.memberIds));
+  const insideRoadTrip = (item: Timed) => roadTrips.some(
+    (rt) => item.start.getTime() >= rt.start.getTime() && item.end.getTime() <= rt.end.getTime(),
+  );
+
+  let items: ActivityItem[] = [...roadTrips];
+  items = items.concat(
+    data.trips.filter((trip) => !bundledIds.has(trip.id) && inPeriod(trip, from, today)),
+  );
   if (filter === 'all') {
     items = items.concat(
-      data.parked.filter((parked) => parked.hours >= PARKED_MIN_HOURS && inPeriod(parked, from, today)),
-      data.gaps.filter((gap) => gap.miles >= ODOMETER_GAP_MIN_MI && inPeriod(gap, from, today)),
+      data.charges.filter((charge) => !bundledIds.has(charge.id) && inPeriod(charge, from, today)),
+      data.parked.filter((parked) => parked.hours >= PARKED_MIN_HOURS && inPeriod(parked, from, today) && !insideRoadTrip(parked)),
+      data.gaps.filter((gap) => gap.miles >= ODOMETER_GAP_MIN_MI && inPeriod(gap, from, today) && !insideRoadTrip(gap)),
     );
   }
   return sortNewest(items);
@@ -284,15 +324,15 @@ export function groupByDay(items: ActivityItem[]): DayGroup[] {
     const list = groups.get(day)!;
     return {
       day, items: list,
-      miles: list.reduce((sum, item) => sum + (item.kind === 'trip' ? item.miles : 0), 0),
-      kwh: list.reduce((sum, item) => sum + (item.kind === 'charge' ? item.kwh : 0), 0),
+      miles: list.reduce((sum, item) => sum + (item.kind === 'trip' || item.kind === 'road_trip' ? item.miles : 0), 0),
+      kwh: list.reduce((sum, item) => sum + (item.kind === 'charge' || item.kind === 'road_trip' ? item.kwh : 0), 0),
     };
   });
 }
 
-/** Trips and charges only, in timeline order: the newer/older order of the detail. */
+/** Trips, road trips and charges only, in timeline order: the newer/older order of the detail. */
 export function detailOrder(items: ActivityItem[]): ActivityEvent[] {
-  return items.filter((item): item is ActivityEvent => item.kind === 'trip' || item.kind === 'charge');
+  return items.filter((item): item is ActivityEvent => item.kind === 'trip' || item.kind === 'charge' || item.kind === 'road_trip');
 }
 
 /** Distance-weighted efficiency of trips that are 3 mi or longer. */

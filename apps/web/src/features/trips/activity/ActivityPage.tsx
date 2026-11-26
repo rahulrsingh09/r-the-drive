@@ -1,29 +1,32 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { ChevronDown, X, Zap } from 'lucide-react';
+import { ChevronDown, X } from 'lucide-react';
 import { useResolvedVehicleSelection } from '@panda/hooks';
 import { Button, Skeleton } from '@panda/ui/primitives';
-import { formatAppDate, formatAppTime } from '@panda/ui/lib/dateTime';
+import { formatAppDate } from '@panda/ui/lib/dateTime';
 import { AppLayout } from '../../../components/layout/AppLayout';
 import { NoVehicleState } from '../../../components/layout/NoVehicleState';
 import { RMissedDriveBanner } from '../../r-experience/RMissedDrives';
 import { RPageActions, useHidePageActions } from '../../r-experience/RAppLayout';
 import { useEfficiencyUnit } from '../../r-experience/efficiencyUnit';
 import { ChargeDetailPane, CATEGORY_COLOR } from '../../charging/detail/ChargeDetailPane';
+import { RoadTripDetailPane } from '../detail/RoadTripDetailPane';
 import { TripDetailPane } from '../detail/TripDetailPane';
 import {
-  activityFeed, CATEGORY_LABEL, chargeTitle, detailOrder, duration, groupByDay, n0, n1, shiftDay, shortPlace, SHORT_TRIP_MI,
-  summarize, tripTitle, usd, type ActivityData, type ActivityEvent, type ActivityFilter, type ActivityItem, type ActivityPeriod, type ChargeSummary,
+  activityFeed, detailOrder, groupByDay, n0, n1, shiftDay, shortPlace,
+  summarize, usd, type ActivityData, type ActivityEvent, type ActivityFilter, type ActivityItem, type ActivityPeriod, type ChargeSummary,
   type FeedOptions, type TripSummary,
 } from './activityModel';
-import { BarStrip, RouteGlyph } from './ActivityCharts';
-import { ActivityItemLink, searchFilter, searchPeriod, withFilter, withPeriod, type ActivitySearch } from './activitySearch';
+import type { ActivityRoadTrip } from './activityModel';
+import { BarStrip } from './ActivityCharts';
+import { ActivityListItem, type ActivityItemSelection } from './ActivityListItem';
+import { searchFilter, searchPeriod, withFilter, withoutRoadTrip, withPeriod, type ActivitySearch } from './activitySearch';
 import { DetailHeader, type DetailPosition } from './DetailHeader';
 import { Segmented } from './Segmented';
 import { useActivityData } from './useActivityData';
 import './activity.css';
 
-export type ActivitySelection = { kind: 'trip' | 'charge'; id: string } | null;
+export type ActivitySelection = ActivityItemSelection;
 
 const WIDE_QUERY = '(min-width: 960px)';
 
@@ -76,21 +79,59 @@ export function ActivityPage({ vehicleId, selection, search, canManage }: {
   const items = React.useMemo(() => activityFeed(activity.data, options), [activity.data, filter, period, place, activity.today]); // eslint-disable-line react-hooks/exhaustive-deps
   const order = React.useMemo(() => detailOrder(items), [items]);
   const first = order[0] ?? null;
-  // Desktop opens the newest trip or charge when nothing is selected.
-  const selected: ActivitySelection = selection ?? (wide && first ? { kind: first.kind, id: first.id } : null);
+  const roadTripSelection: ActivitySelection = selection == null && search.rt ? { kind: 'road_trip', id: search.rt } : null;
+  const explicitSelection = selection ?? roadTripSelection;
+  // Desktop opens the newest item when nothing is selected.
+  const selected: ActivitySelection = explicitSelection ?? (wide && first ? { kind: first.kind, id: first.id } : null);
   const memoryKey = JSON.stringify([filter, period, place]);
 
-  const goBack = () => navigate({ to: '/trips', search });
+  const goBack = () => navigate({ to: '/trips', search: withoutRoadTrip(search) });
+  const handleSplitRoadTrip = (id: string) => {
+    activity.roadTripControls.split(id);
+    if (search.rt === id) {
+      navigate({ to: '/trips', search: withoutRoadTrip(search) });
+    }
+  };
+  const selectedRoadTrip = selected?.kind === 'road_trip'
+    ? (activity.data.roadTrips ?? []).find((rt) => rt.id === selected.id) ?? null
+    : null;
   const header = selected ? <DetailHeader kind={selected.kind} position={positionOf(order, selected)} search={search} onBack={goBack} /> : null;
   const detail = selected ? (
-    selected.kind === 'trip'
-      ? <TripDetailPane key={selected.id} tripId={selected.id} vehicleId={vehicleId} routePreview={activity.routes.get(selected.id) ?? null} header={header} />
-      : <ChargeDetailPane key={selected.id} sessionId={selected.id} vehicleId={vehicleId} canManage={canManage} charges={activity.data.charges} header={header} />
+    selected.kind === 'road_trip' ? (
+      selectedRoadTrip ? (
+        <RoadTripDetailPane
+          key={selectedRoadTrip.id}
+          roadTrip={selectedRoadTrip}
+          today={activity.today}
+          search={search}
+          header={header}
+          onRename={activity.roadTripControls.rename}
+          onSplit={handleSplitRoadTrip}
+        />
+      ) : activity.loading ? (
+        <div className="r-act-detail" data-road-trip-detail="loading">
+          {header}
+          <div className="r-act-dbody" aria-busy="true">
+            <Skeleton className="h-72 w-full" />
+            <Skeleton className="mt-4 h-10 w-2/3" />
+          </div>
+        </div>
+      ) : (
+        <div className="r-act-detail" data-road-trip-detail="missing">
+          {header}
+          <div className="r-act-card pad"><p>This road trip was split or is not in the selected period.</p></div>
+        </div>
+      )
+    ) : selected.kind === 'trip' ? (
+      <TripDetailPane key={selected.id} tripId={selected.id} vehicleId={vehicleId} routePreview={activity.routes.get(selected.id) ?? null} header={header} />
+    ) : (
+      <ChargeDetailPane key={selected.id} sessionId={selected.id} vehicleId={vehicleId} canManage={canManage} charges={activity.data.charges} header={header} />
+    )
   ) : null;
 
   React.useEffect(() => { listMemory.animated = true; }, []);
 
-  if (!wide && selection) {
+  if (!wide && explicitSelection) {
     return <div className="r-act r-act-single" data-activity-detail-page><HidePageActions />{detail}</div>;
   }
 
@@ -219,6 +260,20 @@ function ActivityList({ data, items, options, search, selected, loading, error, 
   const navigate = useNavigate();
   const efficiency = useEfficiencyUnit();
   const groups = React.useMemo(() => groupByDay(items), [items]);
+  const [expandedIds, setExpandedIds] = React.useState<Set<string>>(() => new Set());
+  const chargeRoadTripMap = React.useMemo(() => {
+    const map = new Map<string, ActivityRoadTrip>();
+    for (const rt of data.roadTrips ?? []) {
+      for (const charge of rt.charges) map.set(charge.id, rt);
+    }
+    return map;
+  }, [data.roadTrips]);
+  const toggleExpanded = (id: string) => setExpandedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
   const animate = !listMemory.animated;
   let order = 0;
   const setFilter = (value: string) => navigate({ to: '/trips', search: withFilter(search, value as ActivityFilter) });
@@ -269,7 +324,19 @@ function ActivityList({ data, items, options, search, selected, loading, error, 
               </div>
               <div className="r-act-list">
                 {group.items.map((item) => (
-                  <ItemRow key={`${item.kind}-${item.id}`} efficiency={efficiency} item={item} index={Math.min(order++, 14)} animate={animate} search={search} selected={selected} onSelect={onSelect} />
+                  <ActivityListItem
+                    key={`${item.kind}-${item.id}`}
+                    efficiency={efficiency}
+                    item={item}
+                    index={Math.min(order++, 14)}
+                    animate={animate}
+                    search={search}
+                    selected={selected}
+                    expanded={item.kind === 'road_trip' ? expandedIds.has(item.id) : false}
+                    onToggleExpand={toggleExpanded}
+                    chargeRoadTrip={item.kind === 'charge' && options.filter === 'charges' ? chargeRoadTripMap.get(item.id) ?? null : null}
+                    onSelect={onSelect}
+                  />
                 ))}
               </div>
             </section>
@@ -285,62 +352,6 @@ function dayLabel(day: string, today: string) {
   if (day === today) return 'Today';
   if (day === shiftDay(today, -1)) return 'Yesterday';
   return formatAppDate(new Date(`${day}T12:00:00Z`), { weekday: 'short', month: 'short', day: 'numeric', year: undefined });
-}
-
-function ItemRow({ efficiency, item, index, animate, search, selected, onSelect }: {
-  efficiency: ReturnType<typeof useEfficiencyUnit>;
-  item: ActivityItem; index: number; animate: boolean; search: ActivitySearch; selected: ActivitySelection; onSelect: () => void;
-}) {
-  const style = { '--i': index } as React.CSSProperties;
-  const rise = animate ? ' rise' : '';
-  const current = selected && selected.kind === item.kind && selected.id === item.id ? 'true' : undefined;
-  if (item.kind === 'trip') {
-    const measured = item.whPerMile != null && item.miles >= SHORT_TRIP_MI ? efficiency.format(item.whPerMile) : null;
-    return (
-      <ActivityItemLink item={item} search={search} className={`r-act-item${rise}`} style={style} aria-current={current} onClick={onSelect} data-activity-item="trip">
-        <span className="r-act-ig"><RouteGlyph route={item.route} /></span>
-        <span className="r-act-main">
-          <span className="ttl">{tripTitle(item)}</span>
-          <span className="meta">{formatAppTime(item.start)} · {duration(item.minutes)}</span>
-        </span>
-        <span className="val num">{n1(item.miles)} mi<span className="muted">{measured ? `${measured} ${efficiency.label}` : 'Short trip'}</span></span>
-      </ActivityItemLink>
-    );
-  }
-  if (item.kind === 'charge') {
-    return (
-      <ActivityItemLink item={item} search={search} className={`r-act-item${rise}`} style={style} aria-current={current} onClick={onSelect} data-activity-item="charge">
-        <span className="r-act-ig bolt" style={{ color: CATEGORY_COLOR[item.category] }}><Zap aria-hidden="true" fill="currentColor" /></span>
-        <span className="r-act-main">
-          <span className="ttl">{chargeTitle(item)}</span>
-          <span className="meta">
-            {CATEGORY_LABEL[item.category]} · {formatAppTime(item.start)}
-            {item.socStart != null && item.socEnd != null ? ` · ${Math.round(item.socStart)}% → ${Math.round(item.socEnd)}%` : ''}
-          </span>
-        </span>
-        <span className="val num">
-          +{n1(item.kwh)} kWh
-          <span className="muted">{item.active ? 'Charging' : item.cost == null ? <span className="r-act-pill">Add cost</span> : item.cost === 0 ? 'Free' : usd(item.cost)}</span>
-        </span>
-      </ActivityItemLink>
-    );
-  }
-  if (item.kind === 'gap') {
-    return (
-      <div className={`r-act-item parked gap${rise}`} style={style} data-activity-item="gap">
-        <span className="r-act-ig p" aria-hidden="true" />
-        <span className="r-act-main"><span className="ttl">Odometer moved {n1(item.miles)} mi with no trip recorded</span></span>
-        <span className="val muted num">{formatAppTime(item.end)}</span>
-      </div>
-    );
-  }
-  return (
-    <div className={`r-act-item parked${rise}`} style={style} data-activity-item="parked">
-      <span className="r-act-ig p" aria-hidden="true" />
-      <span className="r-act-main"><span className="ttl">Parked {n0(item.hours)} h</span></span>
-      <span className="val muted num">{item.loss == null ? '' : item.loss > 0 ? `−${n1(item.loss)}%` : 'No loss'}</span>
-    </div>
-  );
 }
 
 function SummaryCard({ summary, efficiency }: { summary: TripSummary | ChargeSummary; efficiency: ReturnType<typeof useEfficiencyUnit> }) {

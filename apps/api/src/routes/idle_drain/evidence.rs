@@ -31,7 +31,18 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
             COALESCE(charge_overlap.charge_overlap_count, 0) AS charge_overlap_count,
             state_overlap.sleep_seconds,
             state_overlap.covered_state_seconds,
-            telemetry_window.has_reduced_range
+            telemetry_window.has_reduced_range,
+            telemetry_window.avg_outside_temp_c,
+            telemetry_window.avg_cabin_temp_c,
+            state_overlap.wake_count,
+            state_overlap.max_sleep_streak_minutes,
+            telemetry_window.gear_guard_active,
+            telemetry_window.climate_active,
+            telemetry_window.ota_active,
+            telemetry_window.open_closure_detected,
+            telemetry_window.doors_unlocked,
+            telemetry_window.twelve_volt_attention,
+            telemetry_window.plugged_in
         FROM filtered_candidates c
         LEFT JOIN LATERAL (
             SELECT
@@ -117,7 +128,59 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                         (t.outside_temp_c IS NOT NULL AND t.outside_temp_c < -5)
                         OR COALESCE(t.hvac_active, FALSE)
                     )
-                END AS has_reduced_range
+                END AS has_reduced_range,
+                AVG(t.outside_temp_c::float8) FILTER (WHERE t.outside_temp_c IS NOT NULL) AS avg_outside_temp_c,
+                AVG(t.cabin_temp_c::float8) FILTER (WHERE t.cabin_temp_c IS NOT NULL) AS avg_cabin_temp_c,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(
+                        LOWER(COALESCE(t.gear_guard_video_status, '')) NOT IN ('', 'disabled', 'off', 'idle', 'none')
+                    )
+                END AS gear_guard_active,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(COALESCE(t.hvac_active, FALSE))
+                END AS climate_active,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(
+                        LOWER(COALESCE(t.ota_status, '')) NOT IN ('', 'idle', 'none', 'available', 'up_to_date')
+                        OR LOWER(COALESCE(t.ota_current_status, '')) NOT IN ('', 'idle', 'none', 'up_to_date')
+                    )
+                END AS ota_active,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(
+                        t.closure_frunk_closed IS FALSE
+                        OR t.closure_liftgate_closed IS FALSE
+                        OR t.closure_tailgate_closed IS FALSE
+                        OR t.door_front_left_closed IS FALSE
+                        OR t.door_front_right_closed IS FALSE
+                        OR t.door_rear_left_closed IS FALSE
+                        OR t.door_rear_right_closed IS FALSE
+                    )
+                END AS open_closure_detected,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(
+                        t.door_front_left_locked IS FALSE
+                        OR t.door_front_right_locked IS FALSE
+                        OR t.door_rear_left_locked IS FALSE
+                        OR t.door_rear_right_locked IS FALSE
+                    )
+                END AS doors_unlocked,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(
+                        LOWER(COALESCE(t.twelve_volt_health, '')) NOT IN ('', 'ok', 'good', 'normal', 'healthy')
+                    )
+                END AS twelve_volt_attention,
+                CASE
+                    WHEN COUNT(*) = 0 THEN NULL
+                    ELSE BOOL_OR(
+                        LOWER(COALESCE(t.charger_state, '')) NOT IN ('', 'disconnected', 'unplugged', 'none')
+                    )
+                END AS plugged_in
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
               AND t.ts >= c.period_start
@@ -156,7 +219,18 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                             - GREATEST(v.started_at, c.period_start)
                         )
                     )
-                ))::float8 AS covered_state_seconds
+                ))::float8 AS covered_state_seconds,
+                COUNT(*) FILTER (WHERE v.state IN ('idle', 'awake', 'standby', 'ready'))::bigint AS wake_count,
+                (MAX(
+                    EXTRACT(
+                        EPOCH FROM (
+                            LEAST(COALESCE(v.ended_at, c.period_end), c.period_end)
+                            - GREATEST(v.started_at, c.period_start)
+                        )
+                    )
+                ) FILTER (
+                    WHERE v.state = 'sleep'
+                ) / 60.0)::float8 AS max_sleep_streak_minutes
             FROM panda.vehicle_state_periods v
             WHERE v.vehicle_id = $1
               AND v.started_at < c.period_end

@@ -935,7 +935,7 @@ fn log_openfreemap_failure(
 fn openfreemap_resource_class(resource: &str) -> &'static str {
     match resource.split('/').next() {
         Some("styles") => "style",
-        Some("planet") | Some("natural_earth") => "tile",
+        Some("planet") | Some("backup_planet") | Some("natural_earth") => "tile",
         Some("sprites") => "sprite",
         Some("fonts") => "font",
         _ => "unknown",
@@ -987,8 +987,8 @@ fn openfreemap_resource_is_allowed(resource: &str) -> bool {
     };
     match (*family, rest) {
         ("styles", [style]) => openfreemap_style_name(style),
-        ("planet", []) => true,
-        ("planet", [snapshot, z, x, y]) => {
+        ("planet" | "backup_planet", []) => true,
+        ("planet" | "backup_planet", [snapshot, z, x, y]) => {
             openfreemap_planet_snapshot(snapshot)
                 && [z, x].into_iter().all(|value| is_ascii_decimal(value))
                 && numeric_resource_with_suffix(y, ".pbf")
@@ -1817,7 +1817,8 @@ mod tests {
     use super::{
         active_endpoint, basemap_proxy_url, basemap_styles, carto_basemap_key_query,
         endpoint_is_private, is_forbidden_ip, is_private_ip, openfreemap_cache_key,
-        openfreemap_resource_is_allowed, parse_private_network_allowlist, resolve_basemap_provider,
+        openfreemap_resource_class, openfreemap_resource_is_allowed,
+        parse_private_network_allowlist, resolve_basemap_provider,
         resolve_effective_basemap_provider_update, rewrite_openfreemap_json,
         should_forward_basemap_bearer_token, should_forward_carto_api_key, validate_tile_template,
         UpdateConnectionBody, BASEMAP_RASTER_ROUTE, OPENFREEMAP_PROXY_ROUTE,
@@ -1892,6 +1893,15 @@ mod tests {
         assert!(openfreemap_resource_is_allowed(
             "planet/20260823_080002_pt/1/2/3.pbf"
         ));
+        assert!(openfreemap_resource_is_allowed("backup_planet"));
+        assert!(openfreemap_resource_is_allowed(
+            "backup_planet/20261122_124456_pt/10/164/357.pbf"
+        ));
+        assert_eq!(openfreemap_resource_class("backup_planet"), "tile");
+        assert_eq!(
+            openfreemap_resource_class("backup_planet/20261122_124456_pt/10/164/357.pbf"),
+            "tile"
+        );
         assert!(openfreemap_resource_is_allowed(
             "natural_earth/ne2sr/1/2/3.png"
         ));

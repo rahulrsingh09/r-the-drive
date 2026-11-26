@@ -4,6 +4,7 @@ import { api, useAuthReady, useSavedPlaces } from '@panda/hooks';
 import type { ChargeSession, Trip } from '@panda/types';
 import { startOfAppDay } from '@panda/ui/lib/dateTime';
 import { buildActivityData, dayKey, periodStartDay, shiftDay, type ActivityPeriod, type RouteCoordinate } from './activityModel';
+import { inferRoadTrips, useRoadTripOverrides } from './roadTripModel';
 
 /** The API returns at most 200 rows per page. */
 const PAGE_SIZE = 200;
@@ -65,20 +66,26 @@ export function useActivityData(vehicleId: string | null, period: ActivityPeriod
     meta: { persist: false },
   });
   const places = useSavedPlaces();
+  const roadTripOverrides = useRoadTripOverrides(vehicleId);
 
   const routeMap = React.useMemo(() => new Map<string, RouteCoordinate[]>(
     (routes.data?.routes ?? []).map((route) => [route.trip_id, route.coordinates as RouteCoordinate[]]),
   ), [routes.data]);
-  const data = React.useMemo(
-    () => buildActivityData(trips.data ?? [], charges.data ?? [], places.data ?? [], routeMap),
-    [charges.data, places.data, routeMap, trips.data],
-  );
+  const data = React.useMemo(() => {
+    const base = buildActivityData(trips.data ?? [], charges.data ?? [], places.data ?? [], routeMap);
+    const roadTrips = inferRoadTrips(base.trips, base.charges, places.data ?? [], roadTripOverrides.overrides);
+    return { ...base, roadTrips };
+  }, [charges.data, places.data, roadTripOverrides.overrides, routeMap, trips.data]);
 
   return {
     data,
     today,
     routes: routeMap,
     places: places.data ?? [],
+    roadTripControls: {
+      rename: roadTripOverrides.rename,
+      split: roadTripOverrides.split,
+    },
     loading: (trips.isLoading && !trips.data) || (charges.isLoading && !charges.data),
     error: (trips.isError && !trips.data) || (charges.isError && !charges.data),
     retry: () => { void trips.refetch(); void charges.refetch(); },

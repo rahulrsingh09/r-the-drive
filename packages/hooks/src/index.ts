@@ -34,6 +34,7 @@ export {
 	VEHICLE_CREDENTIALS_REFRESHED_EVENT,
 } from './useVehicleStatus';
 export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useParkedEnergy, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
+export { useStateTimeline } from './useStateTimeline';
 export {
 	useTrips,
 	useTripMapRoutes,

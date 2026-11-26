@@ -11,13 +11,14 @@ export interface DetailPosition {
 
 /** Detail header: back, "Trip · N of M", and newer/older buttons. */
 export function DetailHeader({ kind, position, search, onBack }: {
-  kind: 'trip' | 'charge';
+  kind: 'trip' | 'charge' | 'road_trip';
   position: DetailPosition | null;
   search: ActivitySearch;
   onBack: () => void;
 }) {
-  const nav = (item: ActivityEvent | null, label: string, Icon: typeof ChevronUp) => (item ? (
-    <ActivityItemLink item={item} search={search} className="r-act-iconbtn" aria-label={label} data-detail-nav={label.toLowerCase()}>
+  const label = kind === 'road_trip' ? 'Road trip' : kind === 'trip' ? 'Trip' : 'Charge';
+  const nav = (item: ActivityEvent | null, navLabel: string, Icon: typeof ChevronUp) => (item ? (
+    <ActivityItemLink item={item} search={search} className="r-act-iconbtn" aria-label={navLabel} data-detail-nav={navLabel.toLowerCase()}>
       <Icon aria-hidden="true" />
     </ActivityItemLink>
   ) : (
@@ -29,7 +30,7 @@ export function DetailHeader({ kind, position, search, onBack }: {
         <ChevronLeft aria-hidden="true" />
       </button>
       <h2 className="r-act-dhead-t" data-detail-position>
-        {kind === 'trip' ? 'Trip' : 'Charge'}
+        {label}
         {position ? <span className="muted"> · {position.index + 1} of {position.total}</span> : null}
       </h2>
       <div className="r-act-dnav">

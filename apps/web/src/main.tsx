@@ -8,6 +8,7 @@ import { ToastProvider } from './components/feedback/ToastProvider';
 import { AppErrorBoundary } from './components/feedback/AppErrorBoundary';
 import { queryClient } from './queryClient';
 import { installGlobalClientErrorHandlers } from '@panda/ui/lib/clientDiagnostics';
+import { registerPwa } from './lib/registerPwa';
 import './index.css';
 
 const router = createRouter({
@@ -23,6 +24,7 @@ declare module '@tanstack/react-router' {
 }
 
 installGlobalClientErrorHandlers();
+registerPwa();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

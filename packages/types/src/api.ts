@@ -116,6 +116,30 @@ export interface PhantomDrainPeriod {
   movement_detected: boolean;
   overlaps_trip: boolean;
   overlaps_charge: boolean;
+  avg_outside_temp_c?: number | null;
+  avg_cabin_temp_c?: number | null;
+  wake_count?: number | null;
+  max_sleep_streak_minutes?: number | null;
+  gear_guard_active?: boolean | null;
+  climate_active?: boolean | null;
+  ota_active?: boolean | null;
+  open_closure_detected?: boolean | null;
+  doors_unlocked?: boolean | null;
+  twelve_volt_attention?: boolean | null;
+  plugged_in?: boolean | null;
+}
+
+export interface StateTimelinePeriod {
+  id: number;
+  state: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds: number | null;
+}
+
+export interface StateTimelineResponse {
+  vehicle_id: string;
+  periods: StateTimelinePeriod[];
 }
 
 export interface IdleDrainResponse {

@@ -31,6 +31,18 @@
 .now-chip[data-state="driving"] { background: color-mix(in srgb, var(--now-acc) 16%, transparent); color: var(--rm-text-primary); }
 .now-chip[data-state="driving"] .now-dot { background: var(--now-acc); box-shadow: none; }
 .now-chip[data-state="charging"] { background: color-mix(in srgb, var(--now-other) 18%, transparent); color: var(--rm-text-primary); }
+.now-refresh-btn {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0;
+  border-radius: 14px; border: 1px solid var(--now-line); background: var(--now-s1);
+  color: var(--now-t2); cursor: pointer; flex: none; position: relative;
+}
+.now-refresh-btn::before { content: ""; position: absolute; inset: -8px; }
+.now-refresh-btn:hover { color: var(--rm-text-primary); border-color: var(--rm-border-strong); }
+.now-refresh-btn svg { width: 14px; height: 14px; }
+.now-refresh-btn[data-refreshing] svg { animation: now-spin .85s linear infinite; color: var(--now-acc); }
+.now-pull-hint {
+  text-align: center; font-size: 12px; color: var(--now-t3); padding: 4px 0 6px;
+}
 .now-bolt { width: 14px; height: 14px; color: var(--now-other); fill: currentColor; animation: now-beat 1.2s ease-in-out infinite; }
 @keyframes now-pulse { 50% { box-shadow: 0 0 0 6px transparent; } }
 @keyframes now-beat { 50% { transform: scale(1.3); } }

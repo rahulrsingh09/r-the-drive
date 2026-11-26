@@ -208,3 +208,27 @@ a.r-act-item:hover { background: var(--r-act-s2); }
 .r-act-confirm p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.45; color: var(--r-act-t2); }
 .r-act-confirm p b { color: var(--r-act-t1); }
 .r-act-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* road trips */
+.r-act-rt-wrap { border-top: 1px solid var(--r-act-line); }
+.r-act-rt-wrap:first-child { border-top: 0; }
+.r-act-rt-main { border-top: 0; }
+.r-act-rt-ttl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.r-act-rt-ttl > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-act-rt-pill { flex: none; display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; background: var(--r-act-accent-soft); color: var(--r-act-accent); font-size: 11px; font-weight: 700; letter-spacing: .01em; }
+.r-act-rt-toggle { display: block; width: 100%; min-height: 36px; padding: 4px 14px 8px 70px; border: 0; background: none; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--r-act-t3); cursor: pointer; }
+.r-act-rt-toggle:hover { color: var(--r-act-t1); background: var(--r-act-s2); }
+.r-act-rt-legs { border-top: 1px dashed var(--r-act-line); background: color-mix(in srgb, var(--r-act-s2) 55%, transparent); }
+.r-act-rt-leg { padding-left: 28px; min-height: 56px; }
+.r-act-rt-leg-ig { width: 34px; height: 34px; border-radius: 10px; }
+.r-act-rt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.r-act-rt-head .r-act-dtitle { margin-top: 6px; }
+.r-act-rt-kicker { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.r-act-rt-actions { display: flex; flex: none; gap: 8px; }
+.r-act-rt-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--r-act-line); background: var(--r-act-s1); color: var(--r-act-t2); font-size: 13px; font-weight: 650; cursor: pointer; }
+.r-act-rt-btn:hover { background: var(--r-act-s2); color: var(--r-act-t1); }
+.r-act-rt-btn svg { width: 14px; height: 14px; }
+.r-act-rt-rename-form { margin-top: 10px; }
+.r-act-rt-callout { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--r-act-line); background: var(--r-act-accent-soft); color: var(--r-act-t1); font-size: 13px; text-decoration: none; }
+.r-act-rt-callout svg { width: 18px; height: 18px; flex: none; color: var(--r-act-accent); }
+.r-act-rt-callout span { flex: 1; min-width: 0; line-height: 1.4; }

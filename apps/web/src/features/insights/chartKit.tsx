@@ -309,11 +309,13 @@ export function LineChart({ width: w, big, label, points, xDomain, yDomain, tick
 }
 
 export interface BarSegment { v: number; color: string; tip?: string }
-export interface Bar { label?: string; top?: string; zero?: boolean; segs: readonly BarSegment[] }
+export interface Bar { label?: string; top?: string; zero?: boolean; ariaLabel?: string; segs: readonly BarSegment[] }
 
 /** Stacked bars with direct value labels and no y axis. */
-export function BarChart({ width: w, big, label, bars, max, height = 150, pt = 20, pb = 22 }: {
+export function BarChart({ width: w, big, label, bars, max, height = 150, pt = 20, pb = 22, selectedIndex = null, onSelect }: {
   width: number; big: boolean; label: string; bars: readonly Bar[]; max?: number; height?: number; pt?: number; pb?: number;
+  selectedIndex?: number | null;
+  onSelect?: (index: number) => void;
 }) {
   const h = scaleH(height, big); const n = bars.length;
   if (!n) return <p className="ri-empty">No data yet.</p>;
@@ -331,8 +333,34 @@ export function BarChart({ width: w, big, label, bars, max, height = 150, pt = 2
       <line x1="0" x2={w} y1={h - pb} y2={h - pb} stroke="var(--ri-line2)" />
       {bars.map((bar, i) => {
         const x = i * (bw + gap); let y = h - pb; const total = bar.segs.reduce((s, x) => s + x.v, 0);
+        const isSelected = selectedIndex === i;
+        const barTip = bar.segs.find(s => s.tip)?.tip;
         return (
-          <g key={i}>
+          <g
+            key={i}
+            className={onSelect ? 'ri-bar-interactive' : undefined}
+            role={onSelect ? 'button' : undefined}
+            tabIndex={onSelect ? 0 : undefined}
+            aria-pressed={onSelect ? isSelected : undefined}
+            aria-label={onSelect ? (bar.ariaLabel ?? barTip?.replace(/\n/g, ': ') ?? `Bar ${i + 1}`) : undefined}
+            onClick={onSelect ? () => onSelect(i) : undefined}
+            onKeyDown={onSelect ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onSelect(i);
+              }
+            } : undefined}
+          >
+            {isSelected && (
+              <rect
+                x={x - 2}
+                y={Math.max(2, pt - 6)}
+                width={bw + 4}
+                height={h - pb - Math.max(2, pt - 6)}
+                rx={4}
+                className="ri-bar-sel"
+              />
+            )}
             {bar.segs.map((seg, j) => {
               const hh = H(seg.v); if (hh <= 0) return null;
               const last = bar.segs.slice(j + 1).every(z => !z.v); const r = last ? Math.min(4, bw / 2, hh) : 0;
@@ -341,6 +369,16 @@ export function BarChart({ width: w, big, label, bars, max, height = 150, pt = 2
               y = y2 - (!last && hh > 2 ? 2 : 0);
               return <path key={j} className="ri-grow" style={{ '--i': i } as React.CSSProperties} d={d} fill={seg.color} data-tip={seg.tip} />;
             })}
+            {onSelect && (
+              <rect
+                x={x}
+                y={0}
+                width={bw}
+                height={h - pb}
+                fill="transparent"
+                data-tip={barTip}
+              />
+            )}
             {bar.top && (total > 0 || bar.zero) && <text className="ri-lab" x={x + bw / 2} y={h - pb - H(total) - 6} textAnchor="middle">{bar.top}</text>}
           </g>
         );

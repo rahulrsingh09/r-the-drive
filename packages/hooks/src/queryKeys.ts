@@ -6,6 +6,8 @@ export const queryKeys = {
     all: ['vehicles'] as const,
     status: (vehicleId: string | null) => ['vehicles', 'status', vehicleId] as const,
     tripGaps: (vehicleId: string | null) => ['vehicles', 'trip-gaps', vehicleId] as const,
+    stateTimeline: (vehicleId: string | null, from: string | null, to: string | null, limit: number) =>
+      ['battery', 'state-timeline', vehicleId, from, to, limit] as const,
   },
   vehicle: {
     health: (vehicleId: string | null) => ['vehicles', 'health', vehicleId] as const,

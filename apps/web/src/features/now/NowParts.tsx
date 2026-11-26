@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from '@tanstack/react-router';
-import { CircleDot, Thermometer, Zap } from 'lucide-react';
+import { CircleDot, RefreshCw, Thermometer, Zap } from 'lucide-react';
 import type { ChargeSession, Place, TrackPoint, Trip, VehicleStatus } from '@panda/types';
 import { formatAppDate, formatAppTime } from '@panda/ui/lib/dateTime';
 import { useEfficiencyUnit } from '../r-experience/efficiencyUnit';
@@ -22,8 +22,9 @@ export const CATEGORY_COLOR: Record<ChargeCategory, string> = {
 export type ChipState = 'live' | 'stale' | 'waiting' | 'charging' | 'driving';
 
 /** Page header: the car name, one status chip and the update time. */
-export function NowHeader({ name, chip, chipState, sub, control }: {
+export function NowHeader({ name, chip, chipState, sub, control, onRefresh, refreshing = false }: {
   name: string; chip: React.ReactNode; chipState: ChipState; sub?: React.ReactNode; control?: React.ReactNode;
+  onRefresh?: () => void; refreshing?: boolean;
 }) {
   return <header className="now-top">
     <div className="now-top-text">
@@ -34,6 +35,19 @@ export function NowHeader({ name, chip, chipState, sub, control }: {
           {chip}
         </span>
         {sub && <span className="now-sub-text">{sub}</span>}
+        {onRefresh && (
+          <button
+            type="button"
+            className="now-refresh-btn"
+            aria-label="Refresh vehicle data"
+            title="Refresh live status"
+            disabled={refreshing}
+            onClick={onRefresh}
+            data-refreshing={refreshing || undefined}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
     {control}
