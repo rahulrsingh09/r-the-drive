@@ -4,8 +4,8 @@ import type { ChargeCurvePoint, ChargeSession, Trip } from '@panda/types';
 
 /** The list endpoints return at most this many rows per page. */
 const PAGE = 200;
-/** A guard against a runaway loop; 20 pages is 4,000 rows. */
-const MAX_PAGES = 20;
+/** A guard against a runaway loop; 100 pages is 20,000 rows while still breaking early once all items arrive. */
+const MAX_PAGES = 100;
 
 async function readAll<T>(load: (page: number) => Promise<{ items: T[]; total: number }>): Promise<T[]> {
   const out: T[] = [];

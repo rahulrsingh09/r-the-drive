@@ -255,11 +255,11 @@ describe('Insights', () => {
         climate_kwh: 0.6,
         gear_guard_kwh: 0.9,
         outlets_kwh: 0,
-        total_range_impact_km: null,
-        vehicle_systems_range_impact_km: null,
+        total_range_impact_km: 10,
+        vehicle_systems_range_impact_km: 5,
         outlets_range_impact_km: null,
-        climate_range_impact_km: null,
-        gear_guard_range_impact_km: null,
+        climate_range_impact_km: 2,
+        gear_guard_range_impact_km: 3,
       },
     ];
 
@@ -280,6 +280,8 @@ describe('Insights', () => {
     expect(within(parkedCard).getByText(/Normal overnight sleep/)).toBeInTheDocument();
 
     const breakdownCard = screen.getByRole('region', { name: 'Where parked energy went' });
+    expect(within(breakdownCard).getByText(/Latest 24h report · 3\.0 kWh total/)).toBeInTheDocument();
+    expect(within(breakdownCard).getByText(/~6\.2 mi range impact/)).toBeInTheDocument();
     expect(within(breakdownCard).getByText('Vehicle systems')).toBeInTheDocument();
     expect(within(breakdownCard).getByText('Gear Guard')).toBeInTheDocument();
     expect(screen.queryByText(/phantom/i)).toBeNull();

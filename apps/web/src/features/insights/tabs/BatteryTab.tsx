@@ -6,7 +6,7 @@ import { Kpi, Spec } from '../controls';
 import type { InsightsData } from '../InsightsContext';
 import { batteryHealthPct, usableCapacityNow } from '../../../lib/batteryHealth';
 import {
-  addDays, batteryBand, dayRange, monthDay, n0, n1, n2, sum, weekdayMonthDay, type CapacityDay,
+  addDays, batteryBand, dayKeyOf, dayRange, monthDay, n0, n1, n2, sum, weekdayMonthDay, type CapacityDay,
 } from '../insightsModel';
 import {
   buildParkedDaySummaries,
@@ -294,7 +294,11 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
                       value: `${selectedSummary.sleepPct != null && selectedSummary.sleepPct > 0 ? `${selectedSummary.sleepPct}%` : parkedTimeline?.sleepPct != null ? `${parkedTimeline.sleepPct}%` : '–'} · ${selectedSummary.wakeCount != null ? `${selectedSummary.wakeCount} ${selectedSummary.wakeCount === 1 ? 'wake' : 'wakes'}` : '–'}`,
                       note: selectedSummary.maxSleepStreakMinutes != null
                         ? `Longest sleep ${formatDurationMinutes(selectedSummary.maxSleepStreakMinutes)}`
-                        : undefined,
+                        : parkedTimeline && parkedTimeline.awakeMinutes > 0 && parkedTimeline.sleepMinutes === 0
+                          ? 'Stayed awake (no deep sleep)'
+                          : parkedTimeline?.sleepPct == null
+                            ? 'Sleep telemetry unavailable'
+                            : undefined,
                     },
                     {
                       label: 'Active triggers',
@@ -341,7 +345,9 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
 
       <Card
         title="Where parked energy went"
-        sub={energyBreakdown.totalKwh > 0 ? `last 30 days · ${n1(energyBreakdown.totalKwh)} kWh total` : 'last 30 days'}
+        sub={energyBreakdown.totalKwh > 0 && energyBreakdown.windowLabel
+          ? `Latest ${energyBreakdown.windowLabel} report · ${n1(energyBreakdown.totalKwh)} kWh total`
+          : 'Latest Rivian report'}
         wide
         index={4}
       >
@@ -365,13 +371,16 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
                 <div key={cat.key} className="ri-rowx4">
                   <span><i className="ri-sw" style={{ background: cat.color }} />{cat.label}</span>
                   <span className="ri-num ri-muted">{n0(cat.sharePct)}%</span>
-                  <span className="ri-num ri-muted">of parked</span>
+                  <span className="ri-num ri-muted">of snapshot</span>
                   <b className="ri-num">{n1(cat.kwh)} kWh</b>
                 </div>
               ))}
             </div>
             <p className="ri-note">
-              Rivian-reported parked energy usage across {energyBreakdown.sampleCount} reported {energyBreakdown.sampleCount === 1 ? 'window' : 'windows'}.
+              Rivian’s latest rolling parked-energy report
+              {energyBreakdown.durationMinutes != null ? ` (${formatDurationMinutes(energyBreakdown.durationMinutes)}` : ''}
+              {energyBreakdown.sourceAt ? `${energyBreakdown.durationMinutes != null ? ' · ' : ' ('}${monthDay(dayKeyOf(energyBreakdown.sourceAt, timezone))})` : energyBreakdown.durationMinutes != null ? ')' : ''}
+              {energyBreakdown.rangeImpactMi != null ? ` · ~${n1(energyBreakdown.rangeImpactMi)} mi range impact` : ''}. Rolling reports show the most recent window rather than a 30-day cumulative total.
             </p>
           </>
         ) : (

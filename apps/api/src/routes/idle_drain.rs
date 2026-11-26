@@ -647,6 +647,15 @@ mod tests {
         assert_eq!(period.ota_active, Some(true));
         assert_eq!(period.doors_unlocked, Some(true));
     }
+
+    #[test]
+    fn evidence_sql_guards_walk_away_buffer_and_unknown_enums() {
+        let sql = evidence::GAP_EVIDENCE;
+        assert!(sql.contains("c.period_start + INTERVAL '5 minutes'"));
+        assert!(sql.contains("c.period_end - INTERVAL '2 minutes'"));
+        assert!(sql.contains("'chrgr_sts_not_connected'"));
+        assert!(sql.contains("'unknown', 'unavailable'"));
+    }
 }
 
 #[cfg(test)]

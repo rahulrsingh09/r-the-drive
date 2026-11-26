@@ -108,12 +108,54 @@ describe('parkedDiagnostics', () => {
     ];
     const breakdown = summarizeParkedEnergy(samples, 'America/Los_Angeles');
     expect(breakdown.sampleCount).toBe(1);
+    expect(breakdown.window).toBe('24h');
+    expect(breakdown.windowLabel).toBe('24h');
     expect(breakdown.totalKwh).toBeCloseTo(2);
     expect(breakdown.categories.map((c) => [c.key, c.kwh])).toEqual([
       ['vehicle_systems', 1],
       ['climate', 0.5],
       ['gear_guard', 0.5],
     ]);
+
+    const withRangeAndFallback = summarizeParkedEnergy([
+      {
+        window: '8h',
+        source_at: '2026-10-14T18:00:00Z',
+        received_at: '2026-10-14T18:01:00Z',
+        parked_started_at: '2026-10-14T10:00:00Z',
+        duration_minutes: 480,
+        total_kwh: 0.4,
+        vehicle_systems_kwh: 0.4,
+        climate_kwh: 0,
+        gear_guard_kwh: 0,
+        outlets_kwh: 0,
+        total_range_impact_km: 2,
+        vehicle_systems_range_impact_km: 2,
+        outlets_range_impact_km: null,
+        climate_range_impact_km: null,
+        gear_guard_range_impact_km: null,
+      },
+      {
+        window: 'since_parked',
+        source_at: '2026-10-14T18:00:00Z',
+        received_at: '2026-10-14T18:01:00Z',
+        parked_started_at: '2026-10-14T06:00:00Z',
+        duration_minutes: 720,
+        total_kwh: 1.2,
+        vehicle_systems_kwh: 1.2,
+        climate_kwh: 0,
+        gear_guard_kwh: 0,
+        outlets_kwh: 0,
+        total_range_impact_km: 10,
+        vehicle_systems_range_impact_km: 10,
+        outlets_range_impact_km: null,
+        climate_range_impact_km: null,
+        gear_guard_range_impact_km: null,
+      },
+    ], 'America/Los_Angeles');
+    expect(withRangeAndFallback.window).toBe('since_parked');
+    expect(withRangeAndFallback.windowLabel).toBe('since parked');
+    expect(withRangeAndFallback.rangeImpactMi).toBeCloseTo(6.21371);
   });
 
   it('treats offline vehicle state as deep sleep and avoids false 100% awake on unknown gaps', () => {

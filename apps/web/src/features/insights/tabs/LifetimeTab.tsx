@@ -27,10 +27,10 @@ export function LifetimeTab({ data }: { data: InsightsData }) {
     if (i === allDays.length - 1 && odoNow != null) reading = Math.max(reading, odoNow);
     return { x: i, y: reading, tip: tip(`${n0(reading)} mi odometer`, monthDay(day)) };
   });
-  const odoMiles = odoStart != null && odoNow != null ? odoNow - odoStart : null;
+  const odoMiles = odoStart != null && odoNow != null && odoNow >= odoStart ? odoNow - odoStart : null;
   const gaps = odometerGaps(trips, timezone);
   const weeks = weeksFrom(first, today);
-  const cover = odoMiles ? Math.min(100, miles / odoMiles * 100) : null;
+  const cover = odoMiles != null && odoMiles > 0 ? Math.min(100, miles / odoMiles * 100) : null;
   const months = byMonth(trips, charges);
   const lo = odoStart != null ? Math.floor(odoStart / 100) * 100 : 0;
   const hi = odoNow != null ? Math.ceil(odoNow / 100) * 100 + 100 : lo + 100;

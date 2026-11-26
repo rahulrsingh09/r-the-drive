@@ -60,6 +60,11 @@ export interface ParkedEnergyCategoryRow {
 export interface ParkedEnergyBreakdown {
   totalKwh: number;
   sampleCount: number;
+  window: ParkedEnergySample['window'] | null;
+  windowLabel: string | null;
+  sourceAt: string | null;
+  durationMinutes: number | null;
+  rangeImpactMi: number | null;
   categories: ParkedEnergyCategoryRow[];
 }
 
@@ -272,41 +277,78 @@ export function formatDurationMinutes(minutes: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+const WINDOW_PRIORITY: readonly ParkedEnergySample['window'][] = ['24h', 'since_parked', '8h'];
+const WINDOW_LABELS: Record<ParkedEnergySample['window'], string> = {
+  '24h': '24h',
+  since_parked: 'since parked',
+  '8h': '8h',
+};
+const KM_TO_MI = 0.621371;
+
+function sampleEnergyKwh(sample: ParkedEnergySample): number {
+  const systems = Math.max(0, sample.vehicle_systems_kwh ?? 0);
+  const climate = Math.max(0, sample.climate_kwh ?? 0);
+  const gearGuard = Math.max(0, sample.gear_guard_kwh ?? 0);
+  const outlets = Math.max(0, sample.outlets_kwh ?? 0);
+  const partSum = systems + climate + gearGuard + outlets;
+  const reportedTotal = Math.max(0, sample.total_kwh ?? 0);
+  return Math.max(partSum, reportedTotal);
+}
+
 /**
- * Summarize Rivian-reported parked energy into flat category rows matching CostTab's Where you charge.
- * Prefers distinct daily `24h` samples (one latest sample per day), falling back to latest `since_parked` sample.
+ * Summarize the latest Rivian-reported parked energy snapshot (`24h`, `since_parked`, or `8h`).
+ * `/parked-energy` returns only the freshest snapshot per rolling window (not a 30-day cumulative sum).
  */
 export function summarizeParkedEnergy(
   samples: readonly ParkedEnergySample[],
-  timezone: string,
+  _timezone?: string,
 ): ParkedEnergyBreakdown {
-  if (!samples.length) return { totalKwh: 0, sampleCount: 0, categories: [] };
+  if (!samples.length) {
+    return {
+      totalKwh: 0,
+      sampleCount: 0,
+      window: null,
+      windowLabel: null,
+      sourceAt: null,
+      durationMinutes: null,
+      rangeImpactMi: null,
+      categories: [],
+    };
+  }
 
-  const daily24h = new Map<DayKey, ParkedEnergySample>();
-  let latestSinceParked: ParkedEnergySample | null = null;
+  const latestByWindow = new Map<ParkedEnergySample['window'], ParkedEnergySample>();
   for (const sample of samples) {
-    if (sample.window === '24h') {
-      const day = dayKeyOf(sample.source_at, timezone);
-      const prev = daily24h.get(day);
-      if (!prev || Date.parse(sample.source_at) >= Date.parse(prev.source_at)) {
-        daily24h.set(day, sample);
-      }
-    } else if (sample.window === 'since_parked') {
-      if (!latestSinceParked || Date.parse(sample.source_at) >= Date.parse(latestSinceParked.source_at)) {
-        latestSinceParked = sample;
-      }
+    const prev = latestByWindow.get(sample.window);
+    if (!prev || Date.parse(sample.source_at) >= Date.parse(prev.source_at)) {
+      latestByWindow.set(sample.window, sample);
     }
   }
 
-  const chosen = daily24h.size ? [...daily24h.values()] : latestSinceParked ? [latestSinceParked] : [samples[0]!];
-  const systems = sum(chosen, (s) => Math.max(0, s.vehicle_systems_kwh ?? 0));
-  const climate = sum(chosen, (s) => Math.max(0, s.climate_kwh ?? 0));
-  const gearGuard = sum(chosen, (s) => Math.max(0, s.gear_guard_kwh ?? 0));
-  const outlets = sum(chosen, (s) => Math.max(0, s.outlets_kwh ?? 0));
+  const ranked = WINDOW_PRIORITY
+    .map((win) => latestByWindow.get(win))
+    .filter((sample): sample is ParkedEnergySample => sample != null);
+  const chosen = ranked.find((sample) => sampleEnergyKwh(sample) > 0) ?? ranked[0] ?? samples[0]!;
+
+  const systems = Math.max(0, chosen.vehicle_systems_kwh ?? 0);
+  const climate = Math.max(0, chosen.climate_kwh ?? 0);
+  const gearGuard = Math.max(0, chosen.gear_guard_kwh ?? 0);
+  const outlets = Math.max(0, chosen.outlets_kwh ?? 0);
   const partSum = systems + climate + gearGuard + outlets;
-  const reportedTotal = sum(chosen, (s) => Math.max(0, s.total_kwh ?? 0));
+  const reportedTotal = Math.max(0, chosen.total_kwh ?? 0);
   const totalKwh = Math.max(partSum, reportedTotal);
-  if (totalKwh <= 0) return { totalKwh: 0, sampleCount: chosen.length, categories: [] };
+  const rangeImpactMi = chosen.total_range_impact_km != null && Number.isFinite(chosen.total_range_impact_km) && chosen.total_range_impact_km > 0
+    ? chosen.total_range_impact_km * KM_TO_MI
+    : null;
+  const baseMeta = {
+    window: chosen.window,
+    windowLabel: WINDOW_LABELS[chosen.window] ?? chosen.window,
+    sourceAt: chosen.source_at,
+    durationMinutes: chosen.duration_minutes != null && Number.isFinite(chosen.duration_minutes)
+      ? chosen.duration_minutes
+      : null,
+    rangeImpactMi,
+  };
+  if (totalKwh <= 0) return { ...baseMeta, totalKwh: 0, sampleCount: 1, categories: [] };
 
   const other = Math.max(0, totalKwh - partSum);
   const raw: Array<Omit<ParkedEnergyCategoryRow, 'sharePct'>> = [
@@ -327,8 +369,9 @@ export function summarizeParkedEnergy(
     }));
 
   return {
+    ...baseMeta,
     totalKwh,
-    sampleCount: chosen.length,
+    sampleCount: 1,
     categories,
   };
 }

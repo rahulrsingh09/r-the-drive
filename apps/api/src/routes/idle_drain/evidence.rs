@@ -134,7 +134,9 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                 CASE
                     WHEN COUNT(*) = 0 THEN NULL
                     ELSE BOOL_OR(
-                        LOWER(COALESCE(t.gear_guard_video_status, '')) NOT IN ('', 'disabled', 'off', 'idle', 'none')
+                        LOWER(COALESCE(t.gear_guard_video_status, '')) NOT IN (
+                            '', 'disabled', 'off', 'idle', 'none', 'unknown', 'unavailable', 'not_available', 'not_applicable'
+                        )
                     )
                 END AS gear_guard_active,
                 CASE
@@ -144,41 +146,51 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                 CASE
                     WHEN COUNT(*) = 0 THEN NULL
                     ELSE BOOL_OR(
-                        LOWER(COALESCE(t.ota_status, '')) NOT IN ('', 'idle', 'none', 'available', 'up_to_date')
-                        OR LOWER(COALESCE(t.ota_current_status, '')) NOT IN ('', 'idle', 'none', 'up_to_date')
+                        LOWER(COALESCE(t.ota_status, '')) NOT IN (
+                            '', 'idle', 'none', 'available', 'up_to_date', 'unknown', 'unavailable', 'not_available', 'not_applicable'
+                        )
+                        OR LOWER(COALESCE(t.ota_current_status, '')) NOT IN (
+                            '', 'idle', 'none', 'up_to_date', 'unknown', 'unavailable', 'not_available', 'not_applicable'
+                        )
                     )
                 END AS ota_active,
+                -- Exclude exit/entry grace periods (5m after parking, 2m before departure)
+                -- so normal door opening and walk-away locking do not flag parked sessions.
+                BOOL_OR(
+                    t.closure_frunk_closed IS FALSE
+                    OR t.closure_liftgate_closed IS FALSE
+                    OR t.closure_tailgate_closed IS FALSE
+                    OR t.door_front_left_closed IS FALSE
+                    OR t.door_front_right_closed IS FALSE
+                    OR t.door_rear_left_closed IS FALSE
+                    OR t.door_rear_right_closed IS FALSE
+                ) FILTER (
+                    WHERE t.ts >= c.period_start + INTERVAL '5 minutes'
+                      AND t.ts <= c.period_end - INTERVAL '2 minutes'
+                ) AS open_closure_detected,
+                BOOL_OR(
+                    t.door_front_left_locked IS FALSE
+                    OR t.door_front_right_locked IS FALSE
+                    OR t.door_rear_left_locked IS FALSE
+                    OR t.door_rear_right_locked IS FALSE
+                ) FILTER (
+                    WHERE t.ts >= c.period_start + INTERVAL '5 minutes'
+                      AND t.ts <= c.period_end - INTERVAL '2 minutes'
+                ) AS doors_unlocked,
                 CASE
                     WHEN COUNT(*) = 0 THEN NULL
                     ELSE BOOL_OR(
-                        t.closure_frunk_closed IS FALSE
-                        OR t.closure_liftgate_closed IS FALSE
-                        OR t.closure_tailgate_closed IS FALSE
-                        OR t.door_front_left_closed IS FALSE
-                        OR t.door_front_right_closed IS FALSE
-                        OR t.door_rear_left_closed IS FALSE
-                        OR t.door_rear_right_closed IS FALSE
-                    )
-                END AS open_closure_detected,
-                CASE
-                    WHEN COUNT(*) = 0 THEN NULL
-                    ELSE BOOL_OR(
-                        t.door_front_left_locked IS FALSE
-                        OR t.door_front_right_locked IS FALSE
-                        OR t.door_rear_left_locked IS FALSE
-                        OR t.door_rear_right_locked IS FALSE
-                    )
-                END AS doors_unlocked,
-                CASE
-                    WHEN COUNT(*) = 0 THEN NULL
-                    ELSE BOOL_OR(
-                        LOWER(COALESCE(t.twelve_volt_health, '')) NOT IN ('', 'ok', 'good', 'normal', 'healthy')
+                        LOWER(COALESCE(t.twelve_volt_health, '')) NOT IN (
+                            '', 'ok', 'good', 'normal', 'healthy', 'unknown', 'unavailable', 'not_available', 'not_applicable'
+                        )
                     )
                 END AS twelve_volt_attention,
                 CASE
                     WHEN COUNT(*) = 0 THEN NULL
                     ELSE BOOL_OR(
-                        LOWER(COALESCE(t.charger_state, '')) NOT IN ('', 'disconnected', 'unplugged', 'none')
+                        LOWER(COALESCE(t.charger_state, '')) NOT IN (
+                            '', 'disconnected', 'unplugged', 'none', 'unknown', 'unavailable', 'not_available', 'not_applicable', 'chrgr_sts_not_connected'
+                        )
                     )
                 END AS plugged_in
             FROM timeseries.telemetry t
@@ -220,7 +232,10 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                         )
                     )
                 ))::float8 AS covered_state_seconds,
-                COUNT(*) FILTER (WHERE v.state IN ('idle', 'awake', 'standby', 'ready', 'updating'))::bigint AS wake_count,
+                COUNT(*) FILTER (
+                    WHERE v.state IN ('idle', 'awake', 'standby', 'ready', 'updating')
+                      AND v.started_at > c.period_start + INTERVAL '5 minutes'
+                )::bigint AS wake_count,
                 (MAX(
                     EXTRACT(
                         EPOCH FROM (

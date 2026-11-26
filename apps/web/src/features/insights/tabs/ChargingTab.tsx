@@ -18,11 +18,17 @@ const CURVE_LIMIT = 150;
 
 export function ChargingTab({ data, capacityKwh }: { data: InsightsData; capacityKwh: number | null }) {
   const { charges, first, today, vehicleId, status } = data;
-  const ids = React.useMemo(() => charges.slice(-CURVE_LIMIT).map(c => c.id), [charges]);
+  // Always include DC fast charges first so heavy home AC charging never crowds out DC curves.
+  const { dc, ac, ids } = React.useMemo(() => {
+    const dcList = charges.filter(c => c.dc);
+    const acList = charges.filter(c => !c.dc);
+    const dcIds = dcList.slice(-CURVE_LIMIT).map(c => c.id);
+    const remaining = Math.max(0, CURVE_LIMIT - dcIds.length);
+    const acIds = remaining > 0 ? acList.slice(-remaining).map(c => c.id) : [];
+    return { dc: dcList, ac: acList, ids: [...dcIds, ...acIds] };
+  }, [charges]);
   const { curves } = useChargeCurves(vehicleId, ids);
   const kwh = sum(charges, c => c.kwh);
-  const dc = charges.filter(c => c.dc);
-  const ac = charges.filter(c => !c.dc);
   const weeks = weeksFrom(first, today);
   const limit = status?.battery_limit ?? null;
 
