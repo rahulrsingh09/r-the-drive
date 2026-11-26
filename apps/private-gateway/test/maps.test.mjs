@@ -180,7 +180,9 @@ test('valid resource paths have bounded tile coordinates, glyph ranges, and file
   for (const path of [
     'styles/dark',
     'planet',
+    'backup_planet',
     'planet/20261004_113936_pt/14/4567/6543.pbf',
+    'backup_planet/20261122_124456_pt/10/164/357.pbf',
     'natural_earth/ne2sr/6/3/4.png',
     'sprites/ofm_f384/ofm@2x.json',
     'sprites/ofm_f384/ofm.png',
@@ -233,13 +235,21 @@ test('styles and tile manifests keep all resource loads on the authenticated app
     assert(url.startsWith('https://panda.invalid' + MAP_PREFIX));
   }
   const manifest = await (
+    await mapResource(await request(MAP_PREFIX + 'backup_planet'), async () =>
+      Response.json({
+        tiles: ['https://tiles.openfreemap.org/backup_planet/20261122_124456_pt/{z}/{x}/{y}.pbf'],
+      })
+    )
+  ).json();
+  assert(manifest.tiles[0].startsWith('https://panda.invalid' + MAP_PREFIX));
+  const primaryManifest = await (
     await mapResource(await request(MAP_PREFIX + 'planet'), async () =>
       Response.json({
         tiles: ['https://__TILEJSON_DOMAIN__/planet/20261004_113936_pt/{z}/{x}/{y}.pbf'],
       })
     )
   ).json();
-  assert(manifest.tiles[0].startsWith('https://panda.invalid' + MAP_PREFIX));
+  assert(primaryManifest.tiles[0].startsWith('https://panda.invalid' + MAP_PREFIX));
   for (const url of [
     'https://evil.test/planet',
     'http://169.254.169.254/',

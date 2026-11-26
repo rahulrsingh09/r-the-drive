@@ -1032,7 +1032,7 @@ fn openfreemap_sprite_version(version: &str) -> bool {
 }
 
 fn openfreemap_sprite_asset(asset: &str) -> bool {
-    matches!(asset, "ofm.json" | "ofm.png" | "ofm@2x.png")
+    matches!(asset, "ofm.json" | "ofm@2x.json" | "ofm.png" | "ofm@2x.png")
 }
 
 fn is_ascii_decimal(value: &str) -> bool {
@@ -1906,6 +1906,9 @@ mod tests {
             "natural_earth/ne2sr/1/2/3.png"
         ));
         assert!(openfreemap_resource_is_allowed("sprites/ofm_f384/ofm.json"));
+        assert!(openfreemap_resource_is_allowed(
+            "sprites/ofm_f384/ofm@2x.json"
+        ));
         assert!(openfreemap_resource_is_allowed(
             "sprites/ofm_f384/ofm@2x.png"
         ));

@@ -64,10 +64,10 @@ function tile(z, x, y, maxZoom) {
 
 export function resourceKind(resource) {
   if (resource.length > 512 || /[\\?#%]|\.{2}|[\x00-\x1f\x7f]/.test(resource)) return null;
-  if (resource === 'planet') return 'tilejson';
+  if (resource === 'planet' || resource === 'backup_planet') return 'tilejson';
   const style = /^styles\/([^/]+)$/.exec(resource);
   if (style) return STYLES.includes(style[1]) ? 'style' : null;
-  const vector = /^planet\/[0-9]{8}_[0-9]{6}_pt\/([^/]+)\/([^/]+)\/([^/]+)\.pbf$/.exec(resource);
+  const vector = /^(?:planet|backup_planet)\/[0-9]{8}_[0-9]{6}_pt\/([^/]+)\/([^/]+)\/([^/]+)\.pbf$/.exec(resource);
   if (vector) return tile(vector[1], vector[2], vector[3], 14) ? 'pbf' : null;
   const raster = /^natural_earth\/ne2sr\/([^/]+)\/([^/]+)\/([^/]+)\.png$/.exec(resource);
   if (raster) return tile(raster[1], raster[2], raster[3], 6) ? 'png' : null;
