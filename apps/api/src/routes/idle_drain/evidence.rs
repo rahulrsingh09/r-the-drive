@@ -210,7 +210,7 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                         )
                     )
                 ) FILTER (
-                    WHERE v.state = 'sleep'
+                    WHERE v.state IN ('sleep', 'offline')
                 ))::float8 AS sleep_seconds,
                 (SUM(
                     EXTRACT(
@@ -220,7 +220,7 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                         )
                     )
                 ))::float8 AS covered_state_seconds,
-                COUNT(*) FILTER (WHERE v.state IN ('idle', 'awake', 'standby', 'ready'))::bigint AS wake_count,
+                COUNT(*) FILTER (WHERE v.state IN ('idle', 'awake', 'standby', 'ready', 'updating'))::bigint AS wake_count,
                 (MAX(
                     EXTRACT(
                         EPOCH FROM (
@@ -229,7 +229,7 @@ pub(super) const GAP_EVIDENCE: &str = r#"WITH candidate_periods AS (
                         )
                     )
                 ) FILTER (
-                    WHERE v.state = 'sleep'
+                    WHERE v.state IN ('sleep', 'offline')
                 ) / 60.0)::float8 AS max_sleep_streak_minutes
             FROM panda.vehicle_state_periods v
             WHERE v.vehicle_id = $1

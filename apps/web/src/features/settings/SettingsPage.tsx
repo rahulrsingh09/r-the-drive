@@ -3,12 +3,13 @@ import { RAppLayout, RPageHeader } from '../r-experience/RAppLayout';
 import { RAccountCard } from './RAccountCard';
 import { RSignInCard } from './RSignInCard';
 import { RRivianCard } from './RRivianCard';
+import { RExternalCard } from './RExternalCard';
 import { RRatesCard } from './RRatesCard';
 import { RBackupsCard } from './RBackupsCard';
 import '../r-experience/r-settings.css';
 
 /** The five Settings cards. Old `?section=` values open the card that replaced them. */
-export const R_SETTINGS_SECTIONS = ['account', 'sign-in', 'rivian', 'rates', 'backups'] as const;
+export const R_SETTINGS_SECTIONS = ['account', 'sign-in', 'rivian', 'maps', 'rates', 'backups'] as const;
 export type RSettingsSection = typeof R_SETTINGS_SECTIONS[number];
 
 const LEGACY_SECTIONS: Record<string, RSettingsSection> = {
@@ -48,6 +49,7 @@ export function SettingsContent({ initialSection, oidcFeedback, oidcFeedbackKind
         <RAccountCard />
         <RSignInCard />
         <RRivianCard />
+        <RExternalCard />
         <RRatesCard />
         <RBackupsCard />
       </div>

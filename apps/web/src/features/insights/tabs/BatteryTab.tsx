@@ -70,8 +70,10 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
     const starts = selectedSummary.periods.map(p => Date.parse(p.period_start!)).filter(Number.isFinite);
     const ends = selectedSummary.periods.map(p => (p.period_end ? Date.parse(p.period_end) : Date.now())).filter(Number.isFinite);
     if (!starts.length || !ends.length) return null;
+    // Look back 48h before period_start because state_timeline filters started_at >= from
+    // and sleep/offline intervals commonly start prior to a multi-day or overnight window.
     return {
-      fromIso: new Date(Math.min(...starts)).toISOString(),
+      fromIso: new Date(Math.min(...starts) - 48 * 3_600_000).toISOString(),
       toIso: new Date(Math.max(...ends)).toISOString(),
     };
   }, [selectedSummary]);
@@ -195,7 +197,7 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
             {!selectedSummary.isSpike ? (
               <p className="ri-park-calm" data-parked-normal>
                 Normal overnight sleep — {n1(selectedSummary.loss)}% over {n0(selectedSummary.hours)} h parked
-                {selectedSummary.sleepPct != null ? ` · ${selectedSummary.sleepPct}% deep sleep` : ''}.
+                {selectedSummary.sleepPct != null && selectedSummary.sleepPct > 0 ? ` · ${selectedSummary.sleepPct}% deep sleep` : ''}.
               </p>
             ) : (
               <div className="ri-park-spike" data-parked-spike>
@@ -204,7 +206,7 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
                     <div className="ri-park-tl-h">
                       <span className="ri-small">Parked sleep vs awake</span>
                       <span className="ri-muted ri-small ri-num">
-                        {parkedTimeline.sleepPct != null ? `${parkedTimeline.sleepPct}% deep sleep` : 'State coverage partial'}
+                        {parkedTimeline.sleepPct != null ? `${parkedTimeline.sleepPct}% deep sleep` : 'Sleep states not reported'}
                       </span>
                     </div>
                     <div
@@ -254,6 +256,12 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
                         Kept awake · {formatDurationMinutes(parkedTimeline.awakeMinutes)}
                         {parkedTimeline.awakeTriggers.length > 0 ? ` (${parkedTimeline.awakeTriggers.join(', ')})` : ''}
                       </span>
+                      {parkedTimeline.unreportedMinutes >= 15 && (
+                        <span className="ri-small">
+                          <i className="ri-sw" style={{ background: 'var(--ri-s3)' }} />
+                          Unreported · {formatDurationMinutes(parkedTimeline.unreportedMinutes)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -266,9 +274,11 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
                       value: selectedSummary.socStart != null && selectedSummary.socEnd != null
                         ? `${n0(selectedSummary.socStart)}% → ${n0(selectedSummary.socEnd)}%`
                         : `${n1(selectedSummary.loss)}% lost`,
-                      note: selectedSummary.drainPctPerHour != null
-                        ? `${n1(selectedSummary.loss)}% · ${n2(selectedSummary.drainPctPerHour)}%/h`
-                        : undefined,
+                      note: selectedSummary.periodCount > 1 && selectedSummary.primaryLoss != null
+                        ? `Largest of ${selectedSummary.periodCount} parks (${n1(selectedSummary.primaryLoss)}% of ${n1(selectedSummary.loss)}% total)`
+                        : selectedSummary.drainPctPerHour != null
+                          ? `${n1(selectedSummary.loss)}% · ${n2(selectedSummary.drainPctPerHour)}%/h`
+                          : undefined,
                     },
                     {
                       label: 'Outside / cabin temp',
@@ -281,7 +291,7 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
                     },
                     {
                       label: 'Sleep & wakes',
-                      value: `${selectedSummary.sleepPct != null ? `${selectedSummary.sleepPct}%` : '–'} · ${selectedSummary.wakeCount != null ? `${selectedSummary.wakeCount} ${selectedSummary.wakeCount === 1 ? 'wake' : 'wakes'}` : '–'}`,
+                      value: `${selectedSummary.sleepPct != null && selectedSummary.sleepPct > 0 ? `${selectedSummary.sleepPct}%` : parkedTimeline?.sleepPct != null ? `${parkedTimeline.sleepPct}%` : '–'} · ${selectedSummary.wakeCount != null ? `${selectedSummary.wakeCount} ${selectedSummary.wakeCount === 1 ? 'wake' : 'wakes'}` : '–'}`,
                       note: selectedSummary.maxSleepStreakMinutes != null
                         ? `Longest sleep ${formatDurationMinutes(selectedSummary.maxSleepStreakMinutes)}`
                         : undefined,
@@ -329,7 +339,12 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
         </p>
       </section>
 
-      <Card title="Where parked energy went" sub="last 30 days" wide index={4}>
+      <Card
+        title="Where parked energy went"
+        sub={energyBreakdown.totalKwh > 0 ? `last 30 days · ${n1(energyBreakdown.totalKwh)} kWh total` : 'last 30 days'}
+        wide
+        index={4}
+      >
         {energyBreakdown.categories.length ? (
           <>
             <div
@@ -349,9 +364,9 @@ export function BatteryTab({ data, capacity }: { data: InsightsData; capacity: C
               {energyBreakdown.categories.map(cat => (
                 <div key={cat.key} className="ri-rowx4">
                   <span><i className="ri-sw" style={{ background: cat.color }} />{cat.label}</span>
-                  <span className="ri-num ri-muted">{n1(cat.kwh)} kWh</span>
                   <span className="ri-num ri-muted">{n0(cat.sharePct)}%</span>
-                  <b className="ri-num">{n0(energyBreakdown.totalKwh)} kWh total</b>
+                  <span className="ri-num ri-muted">of parked</span>
+                  <b className="ri-num">{n1(cat.kwh)} kWh</b>
                 </div>
               ))}
             </div>

@@ -115,4 +115,47 @@ describe('parkedDiagnostics', () => {
       ['gear_guard', 0.5],
     ]);
   });
+
+  it('treats offline vehicle state as deep sleep and avoids false 100% awake on unknown gaps', () => {
+    const summaries = buildParkedDaySummaries([
+      makePeriod({
+        period_start: '2026-10-14T08:00:00Z',
+        period_end: '2026-10-14T16:00:00Z',
+        duration_hours: 8,
+        sleep_share_pct: 0,
+        soc_start: 70,
+        soc_end: 69.5,
+        soc_lost_pct: 0.5,
+      }),
+      makePeriod({
+        period_start: '2026-10-14T20:00:00Z',
+        period_end: '2026-10-15T04:00:00Z',
+        duration_hours: 8,
+        sleep_share_pct: 0.9,
+        soc_start: 68,
+        soc_end: 66.5,
+        soc_lost_pct: 1.5,
+      }),
+    ], 'America/Los_Angeles');
+
+    const day = summaries.get('2026-10-14')!;
+    expect(day.periodCount).toBe(2);
+    expect(day.socStart).toBe(68);
+    expect(day.socEnd).toBe(66.5);
+    expect(day.primaryLoss).toBe(1.5);
+
+    const timeline = buildParkedOnlyTimeline(day, [
+      { id: 1, state: 'offline', started_at: '2026-10-14T08:00:00Z', ended_at: '2026-10-14T16:00:00Z', duration_seconds: 28800 },
+      { id: 2, state: 'sleep', started_at: '2026-10-14T20:00:00Z', ended_at: '2026-10-15T04:00:00Z', duration_seconds: 28800 },
+    ]);
+    expect(timeline.sleepPct).toBe(100);
+    expect(timeline.awakeMinutes).toBe(0);
+
+    const unreported = buildParkedOnlyTimeline(
+      { ...day, sleepPct: 0 },
+      [{ id: 3, state: 'unknown', started_at: '2026-10-14T08:00:00Z', ended_at: '2026-10-15T04:00:00Z', duration_seconds: 57600 }],
+    );
+    expect(unreported.awakeMinutes).toBe(0);
+    expect(unreported.sleepPct).toBeNull();
+  });
 });

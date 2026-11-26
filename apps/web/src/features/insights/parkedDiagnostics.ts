@@ -9,6 +9,8 @@ export interface ParkedDaySummary {
   hours: number;
   loss: number;
   kwh: number;
+  periodCount: number;
+  primaryLoss: number | null;
   periods: PhantomDrainPeriod[];
   isSpike: boolean;
   sleepPct: number | null;
@@ -92,6 +94,13 @@ function nullableFlag(periods: readonly PhantomDrainPeriod[], read: (p: PhantomD
   return sawValue ? false : null;
 }
 
+function periodLoss(period: PhantomDrainPeriod): number | null {
+  const loss = period.soc_lost_pct ?? (
+    period.soc_start != null && period.soc_end != null ? period.soc_start - period.soc_end : null
+  );
+  return loss != null && Number.isFinite(loss) ? Math.max(0, loss) : null;
+}
+
 /** Group validated parked periods by the day parking started with aggregated diagnostics. */
 export function buildParkedDaySummaries(
   periods: readonly PhantomDrainPeriod[],
@@ -108,10 +117,7 @@ export function buildParkedDaySummaries(
   for (const [day, list] of byDay.entries()) {
     const ordered = [...list].sort((a, b) => Date.parse(a.period_start!) - Date.parse(b.period_start!));
     const hours = sum(ordered, (p) => Math.max(0, p.duration_hours ?? 0));
-    const loss = sum(ordered, (p) => {
-      const l = p.soc_lost_pct ?? (p.soc_start != null && p.soc_end != null ? p.soc_start - p.soc_end : null);
-      return l != null ? Math.max(0, l) : 0;
-    });
+    const loss = sum(ordered, (p) => periodLoss(p) ?? 0);
     const kwh = sum(ordered, (p) => (p.energy_drained_kwh != null && p.energy_drained_kwh > 0 ? p.energy_drained_kwh : 0));
     const sleepShare = weightedAverage(ordered, (p) => p.sleep_share_pct);
     const wakeValues = ordered.map((p) => p.wake_count).filter((v): v is number => v != null && Number.isFinite(v));
@@ -119,18 +125,27 @@ export function buildParkedDaySummaries(
       .map((p) => p.max_sleep_streak_minutes)
       .filter((v): v is number => v != null && Number.isFinite(v));
 
+    // For SoC start -> end, pick the single largest-loss (tie-break longest) parked interval
+    // so multi-park days never imply intermediate driving/charging SoC drops were parked loss.
+    const primary = [...ordered].sort((a, b) => (
+      (periodLoss(b) ?? 0) - (periodLoss(a) ?? 0)
+      || (b.duration_hours ?? 0) - (a.duration_hours ?? 0)
+    ))[0] ?? ordered[0]!;
+
     out.set(day, {
       day,
       hours,
       loss,
       kwh,
+      periodCount: ordered.length,
+      primaryLoss: periodLoss(primary),
       periods: ordered,
       isSpike: loss >= SPIKE_LOSS_PCT,
       sleepPct: sleepShare != null ? Math.round(sleepShare * 100) : null,
       drainPctPerHour: hours > 0 ? loss / hours : null,
       avgWatts: weightedAverage(ordered, (p) => p.avg_power_w),
-      socStart: ordered[0]?.soc_start ?? null,
-      socEnd: ordered.at(-1)?.soc_end ?? null,
+      socStart: primary.soc_start ?? null,
+      socEnd: primary.soc_end ?? null,
       avgOutsideTempC: weightedAverage(ordered, (p) => p.avg_outside_temp_c),
       avgCabinTempC: weightedAverage(ordered, (p) => p.avg_cabin_temp_c),
       wakeCount: wakeValues.length ? wakeValues.reduce((a, b) => a + b, 0) : null,
@@ -163,8 +178,10 @@ export function pickDefaultParkedDay(
   return null;
 }
 
-const SLEEP_STATES = new Set(['sleep']);
-const AWAKE_STATES = new Set(['idle', 'awake', 'standby', 'ready']);
+// VehicleState::Offline occurs whenever cellular/cloud telemetry is asleep (is_online = false),
+// alongside explicit PowerState::Sleep. Drive/charging states are excluded from parked breakdowns.
+const SLEEP_STATES = new Set(['sleep', 'offline']);
+const AWAKE_STATES = new Set(['idle', 'awake', 'standby', 'ready', 'updating']);
 
 /**
  * Build a parked-only Sleep vs Awake timeline strictly scoped to one day's parked periods.
@@ -214,16 +231,21 @@ export function buildParkedOnlyTimeline(
   let sleepMinutes = rawSlices.filter((s) => s.kind === 'sleep').reduce((acc, s) => acc + s.minutes, 0);
   let awakeMinutes = rawSlices.filter((s) => s.kind === 'awake').reduce((acc, s) => acc + s.minutes, 0);
 
-  // Fall back to period sleep_share_pct if state-timeline rows have not loaded yet.
-  if (sleepMinutes === 0 && awakeMinutes === 0 && summary.sleepPct != null && totalMinutes > 0) {
+  // Use server sleep_share_pct fallback only when timeline rows didn't cover known states AND sleepPct > 0;
+  // never synthesize "100% Kept awake" just because sleep/offline states were unrecorded.
+  if (sleepMinutes === 0 && awakeMinutes === 0 && summary.sleepPct != null && summary.sleepPct > 0 && totalMinutes > 0) {
     sleepMinutes = (summary.sleepPct / 100) * totalMinutes;
     awakeMinutes = Math.max(0, totalMinutes - sleepMinutes);
   }
 
   const coveredMinutes = sleepMinutes + awakeMinutes;
   const unreportedMinutes = Math.max(0, totalMinutes - coveredMinutes);
-  const denom = coveredMinutes > 0 ? coveredMinutes : totalMinutes;
-  const sleepPct = denom > 0 ? Math.round((sleepMinutes / denom) * 100) : summary.sleepPct;
+  const reliableCoverage = totalMinutes > 0 && coveredMinutes / totalMinutes >= 0.5;
+  const sleepPct = reliableCoverage && coveredMinutes > 0
+    ? Math.round((sleepMinutes / coveredMinutes) * 100)
+    : summary.sleepPct != null && summary.sleepPct > 0
+      ? summary.sleepPct
+      : null;
 
   return {
     slices: rawSlices,
@@ -313,7 +335,7 @@ export function summarizeParkedEnergy(
 
 export function formatParkedRateCopy(day: ParkedDaySummary): string {
   const parts = [`${n1(day.loss)}% over ${n0(day.hours)} h parked`];
-  if (day.sleepPct != null) parts.push(`${day.sleepPct}% deep sleep`);
+  if (day.sleepPct != null && day.sleepPct > 0) parts.push(`${day.sleepPct}% deep sleep`);
   if (day.avgWatts != null) parts.push(`${n0(day.avgWatts)} W avg`);
   return parts.join(' · ');
 }

@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
     changePassword: vi.fn(),
     updatePlace: vi.fn(),
     getBackupOverview: vi.fn(),
+    getExternalConnections: vi.fn(),
+    updateExternalConnection: vi.fn(),
   },
   logout: vi.fn(),
   navigate: vi.fn(),
@@ -50,6 +52,7 @@ vi.mock('@panda/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@panda/hooks')>();
   return {
     queryKeys: actual.queryKeys,
+    BASEMAP_CONFIG_QUERY_KEY: actual.BASEMAP_CONFIG_QUERY_KEY,
     api: mocks.api,
     invalidateChargingData: vi.fn(),
     useAuth: () => ({ clearSession: vi.fn(), logout: mocks.logout }),
@@ -114,19 +117,37 @@ beforeEach(() => {
     settings: { enabled: true, frequency: 'daily' }, artifacts: [{ id: 'a1' }, { id: 'a2' }], recent_runs: [{ status: 'succeeded' }],
     latest_successful_run: { completed_at: '2026-11-07T11:01:00Z', created_at: '2026-11-07T11:00:00Z' },
   });
+  mocks.api.getExternalConnections.mockResolvedValue({
+    can_manage: true,
+    connections: [
+      { id: 'basemap', name: 'Map basemap', purpose: 'Street context behind routes.', enabled: true, mode: 'remote', basemap_provider: 'openfreemap', last_error: null },
+      { id: 'nominatim', name: 'Place & address lookup', purpose: 'Street names for trips and charges.', enabled: false, mode: 'disabled', last_error: null },
+    ],
+  });
+  mocks.api.updateExternalConnection.mockResolvedValue({
+    can_manage: true,
+    connections: [
+      { id: 'basemap', name: 'Map basemap', purpose: 'Street context behind routes.', enabled: false, mode: 'disabled', basemap_provider: 'openfreemap', last_error: null },
+      { id: 'nominatim', name: 'Place & address lookup', purpose: 'Street names for trips and charges.', enabled: false, mode: 'disabled', last_error: null },
+    ],
+  });
 });
 
 describe('Settings page', () => {
-  it('shows only the five R cards, with the page title', async () => {
+  it('shows the R cards including Maps & connected services, with the page title', async () => {
     renderSettings();
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
-    for (const name of ['Account', 'Sign-in methods', 'Rivian account', 'Charging rates']) {
+    for (const name of ['Account', 'Sign-in methods', 'Rivian account', 'Maps & connected services', 'Charging rates']) {
       expect(screen.getByRole('heading', { level: 2, name })).toBeInTheDocument();
     }
     expect(screen.getByRole('region', { name: 'Backups' })).toBeInTheDocument();
     for (const removed of [/units/i, /api access/i, /dashboards/i, /external/i, /places/i, /jobs/i, /raw telemetry/i, /appearance/i]) {
       expect(screen.queryByRole('heading', { name: removed })).not.toBeInTheDocument();
     }
+    const mapSwitch = await screen.findByRole('switch', { name: 'Map basemap' });
+    expect(mapSwitch).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(mapSwitch);
+    await waitFor(() => expect(mocks.api.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({ enabled: false, mode: 'disabled' })));
   });
 
   it('shows the account and signs out the other devices', () => {

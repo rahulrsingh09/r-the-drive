@@ -132,7 +132,10 @@ export function RouteReplayMap({
       try {
         const background = cssColor('--rm-bg-elevated', mode === 'dark' ? '#1b1e1d' : '#e5ede7');
         const stylePromise: Promise<MapLibreStyleJson> = styleUrl
-          ? styleLoader(styleUrl, mode, tokenRef.current).catch(() => neutralStyle(background))
+          ? styleLoader(styleUrl, mode, tokenRef.current).catch((error: unknown) => {
+            reportClientError(error, { event: 'maplibre.style_load_failed', area: 'map', operation: 'route-replay-style', severity: 'error' });
+            return neutralStyle(background);
+          })
           : Promise.resolve(neutralStyle(background));
         const [maplibregl, style] = await Promise.all([mapLoader(), stylePromise]);
         if (cancelled || !containerRef.current) return;
