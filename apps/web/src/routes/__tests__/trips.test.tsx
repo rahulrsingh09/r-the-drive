@@ -276,4 +276,43 @@ describe('Charge detail', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Office' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Set your Office rate in Settings first.');
   });
+
+  it('keeps Road Trip accordion open, shows Back to Road Trip breadcrumb on leg detail, and collapses/closes the mobile drawer', async () => {
+    const away = { lat: 46.5, lng: -121.7 }; // ~90 mi away from Home
+    const rtOut = {
+      id: 'rt-out', vehicle_id: 'v1', started_at: iso(40), ended_at: iso(38), distance_mi: 92, duration_min: 120, energy_used_kwh: 31,
+      efficiency_wh_mi: 337, max_speed_mph: 70, drive_mode: 'all_purpose', soc_start: 90, soc_end: 55,
+      start_odometer_mi: 800, end_odometer_mi: 892, start_lat: HOME.lat, start_lng: HOME.lng, end_lat: away.lat, end_lng: away.lng,
+      start_place: 'Home', end_place: 'Ashford', start_address: null, end_address: null,
+    };
+    const rtBack = {
+      id: 'rt-back', vehicle_id: 'v1', started_at: iso(16), ended_at: iso(14), distance_mi: 92, duration_min: 120, energy_used_kwh: 30,
+      efficiency_wh_mi: 326, max_speed_mph: 70, drive_mode: 'all_purpose', soc_start: 55, soc_end: 20,
+      start_odometer_mi: 892, end_odometer_mi: 984, start_lat: away.lat, start_lng: away.lng, end_lat: HOME.lat, end_lng: HOME.lng,
+      start_place: 'Ashford', end_place: 'Home', start_address: null, end_address: null,
+    };
+    mocks.api.listTrips.mockResolvedValue({ items: [rtBack, rtOut], total: 2, page: 1, per_page: 200 });
+
+    const { rerender } = renderPage({ search: { rt: 'rt-rt-out' } });
+    expect(await screen.findByRole('region', { name: /Ashford.*legs/i })).toBeInTheDocument();
+
+    // Selecting an individual leg in mobile auto-collapses the drawer and renders Back to <Road Trip>.
+    const legLink = within(document.querySelector('[data-road-trip-drawer-list]')!).getByText('Home → Ashford').closest('a')!;
+    fireEvent.click(legLink);
+    expect(document.querySelector('[data-road-trip-drawer="collapsed"]')).toBeInTheDocument();
+
+    // Re-mounting with leg selected keeps Back to <Road Trip> breadcrumb visible.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    rerender(
+      <QueryClientProvider client={client}>
+        <ActivityPage vehicleId="v1" selection={{ kind: 'trip', id: 'rt-out' }} search={{}} canManage />
+      </QueryClientProvider>,
+    );
+    const backLink = await waitFor(() => document.querySelector('[data-road-trip-back]')!);
+    expect(backLink).toHaveTextContent(/Back to Ashford/);
+
+    // Close button on drawer hides it to the floating Legs reopen chip.
+    fireEvent.click(document.querySelector('[data-road-trip-drawer-close]')!);
+    expect(document.querySelector('[data-road-trip-drawer-reopen]')).toBeInTheDocument();
+  });
 });

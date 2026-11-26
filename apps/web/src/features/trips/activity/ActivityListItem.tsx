@@ -75,10 +75,11 @@ export function ActivityListItem({
         {expanded ? (
           <div className="r-act-rt-legs" data-road-trip-legs={item.id}>
             {item.events.map((ev) => {
+              const legCurrent = selected && selected.kind === ev.kind && selected.id === ev.id ? 'true' : undefined;
               if (ev.kind === 'trip') {
                 const eff = ev.whPerMile != null && ev.miles >= SHORT_TRIP_MI ? efficiency.format(ev.whPerMile) : null;
                 return (
-                  <ActivityItemLink key={`trip-${ev.id}`} item={ev} search={search} className="r-act-item r-act-rt-leg" onClick={onSelect}>
+                  <ActivityItemLink key={`trip-${ev.id}`} item={ev} search={search} className="r-act-item r-act-rt-leg" aria-current={legCurrent} onClick={onSelect}>
                     <span className="r-act-ig r-act-rt-leg-ig" aria-hidden="true" />
                     <span className="r-act-main">
                       <span className="ttl">{tripTitle(ev)}</span>
@@ -90,7 +91,7 @@ export function ActivityListItem({
               }
               if (ev.kind === 'charge') {
                 return (
-                  <ActivityItemLink key={`charge-${ev.id}`} item={ev} search={search} className="r-act-item r-act-rt-leg" onClick={onSelect}>
+                  <ActivityItemLink key={`charge-${ev.id}`} item={ev} search={search} className="r-act-item r-act-rt-leg" aria-current={legCurrent} onClick={onSelect}>
                     <span className="r-act-ig bolt r-act-rt-leg-ig" style={{ color: CATEGORY_COLOR[ev.category] }}>
                       <Zap aria-hidden="true" fill="currentColor" />
                     </span>

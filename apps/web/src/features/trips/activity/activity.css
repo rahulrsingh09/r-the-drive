@@ -232,3 +232,36 @@ a.r-act-item:hover { background: var(--r-act-s2); }
 .r-act-rt-callout { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--r-act-line); background: var(--r-act-accent-soft); color: var(--r-act-t1); font-size: 13px; text-decoration: none; }
 .r-act-rt-callout svg { width: 18px; height: 18px; flex: none; color: var(--r-act-accent); }
 .r-act-rt-callout span { flex: 1; min-width: 0; line-height: 1.4; }
+
+/* Parent road trip back pill in DetailHeader (desktop + mobile) */
+.r-act-dhead-wrap { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--r-act-bg) 86%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.r-act-dhead-wrap .r-act-dhead { position: static; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.r-act-rt-backbar { padding: 0 0 8px; }
+.r-act-rt-backpill { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; max-width: 100%; padding: 4px 12px 4px 8px; border-radius: 18px; border: 1px solid var(--r-act-line); background: var(--r-act-s2); color: var(--r-act-t1); font-size: 13px; text-decoration: none; }
+.r-act-rt-backpill:hover { background: var(--r-act-accent-soft); border-color: var(--r-act-accent); }
+.r-act-rt-backpill svg { width: 16px; height: 16px; flex: none; color: var(--r-act-accent); }
+.r-act-rt-backtitle { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 960px) { .r-act-pane .r-act-dhead-wrap { margin: 0 -18px; padding: 0 18px; background: color-mix(in srgb, var(--r-act-s1) 92%, transparent); } .r-act-pane .r-act-dhead { margin: 0; padding: 10px 0; background: none; } }
+
+/* Mobile bottom drawer for Road Trip legs */
+.r-act-single.has-rt-drawer .r-act-dbody { padding-bottom: 132px; }
+.r-act-drawer { position: fixed; z-index: 35; left: 10px; right: 10px; bottom: calc(74px + env(safe-area-inset-bottom)); background: var(--r-act-s1); border: 1px solid var(--r-act-line2); border-radius: 20px; box-shadow: var(--rm-shadow-lg, var(--rm-shadow-sm)); overflow: hidden; transition: transform .28s var(--r-act-ease); }
+.r-act-drawer-bar { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; background: var(--r-act-s2); border-bottom: 1px solid var(--r-act-line); }
+.r-act-drawer.collapsed .r-act-drawer-bar { border-bottom: 0; }
+.r-act-drawer-toggle { flex: 1; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 10px; border: 0; background: none; color: var(--r-act-t1); text-align: left; cursor: pointer; padding: 0; }
+.r-act-drawer-toggle svg { width: 18px; height: 18px; flex: none; color: var(--r-act-accent); }
+.r-act-drawer-title { display: flex; flex-direction: column; min-width: 0; }
+.r-act-drawer-title b { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-act-drawer-title .muted { font-size: 12px; }
+.r-act-drawer-close { width: 40px; height: 40px; border-radius: 20px; border: 0; background: none; color: var(--r-act-t3); display: grid; place-items: center; cursor: pointer; flex: none; }
+.r-act-drawer-close svg { width: 18px; height: 18px; }
+.r-act-drawer-list { max-height: min(46dvh, 340px); overflow-y: auto; overscroll-behavior: contain; }
+.r-act-drawer-row { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; padding: 10px 14px; min-height: 54px; border-top: 1px solid var(--r-act-line); color: inherit; text-decoration: none; }
+.r-act-drawer-row:first-child { border-top: 0; }
+.r-act-drawer-row[aria-current="true"] { background: var(--r-act-accent-soft); }
+.r-act-drawer-row .ttl { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-act-drawer-row .meta { font-size: 12px; color: var(--r-act-t3); }
+.r-act-drawer-row .val { text-align: right; font-size: 14px; font-weight: 700; white-space: nowrap; }
+.r-act-drawer-row .val .muted { display: block; font-size: 11.5px; font-weight: 500; }
+.r-act-drawer-fab { position: fixed; z-index: 35; right: 16px; bottom: calc(78px + env(safe-area-inset-bottom)); display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid var(--r-act-line2); background: var(--r-act-s1); color: var(--r-act-t1); font-size: 13px; font-weight: 700; box-shadow: var(--rm-shadow-sm); cursor: pointer; }
+.r-act-drawer-fab svg { width: 16px; height: 16px; color: var(--r-act-accent); }

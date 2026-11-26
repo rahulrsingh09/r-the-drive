@@ -20,6 +20,7 @@ import {
 import type { ActivityRoadTrip } from './activityModel';
 import { BarStrip } from './ActivityCharts';
 import { ActivityListItem, type ActivityItemSelection } from './ActivityListItem';
+import { RoadTripDrawer, type DrawerMode } from './RoadTripDrawer';
 import { searchFilter, searchPeriod, withFilter, withoutRoadTrip, withPeriod, type ActivitySearch } from './activitySearch';
 import { DetailHeader, type DetailPosition } from './DetailHeader';
 import { Segmented } from './Segmented';
@@ -45,9 +46,17 @@ function useWide() {
 
 /*
  * The app shell remounts the page on every URL change. These values keep the
- * list where the owner left it when a selection changes the URL.
+ * list position, expanded Road Trip accordions, and mobile drawer state where the owner left them.
  */
-const listMemory = { key: '', listTop: 0, windowTop: 0, animated: false };
+const listMemory = {
+  key: '',
+  listTop: 0,
+  windowTop: 0,
+  animated: false,
+  expandedIds: new Set<string>(),
+  drawerRoadTripId: '',
+  drawerMode: 'open' as DrawerMode,
+};
 
 /** Activity route content: vehicle gating, then the Activity page. */
 export function ActivityContent({ selection, search }: { selection: ActivitySelection; search: ActivitySearch }) {
@@ -95,7 +104,40 @@ export function ActivityPage({ vehicleId, selection, search, canManage }: {
   const selectedRoadTrip = selected?.kind === 'road_trip'
     ? (activity.data.roadTrips ?? []).find((rt) => rt.id === selected.id) ?? null
     : null;
-  const header = selected ? <DetailHeader kind={selected.kind} position={positionOf(order, selected)} search={search} onBack={goBack} /> : null;
+  const parentRoadTrip = selected && selected.kind !== 'road_trip'
+    ? (activity.data.roadTrips ?? []).find((rt) => rt.memberIds.includes(selected.id)) ?? null
+    : null;
+  const activeRoadTrip = selectedRoadTrip ?? parentRoadTrip;
+
+  const [drawerMode, setDrawerMode] = React.useState<DrawerMode>(() => {
+    if (activeRoadTrip && listMemory.drawerRoadTripId === activeRoadTrip.id) return listMemory.drawerMode;
+    return 'open';
+  });
+  React.useEffect(() => {
+    if (!activeRoadTrip) return;
+    if (listMemory.drawerRoadTripId !== activeRoadTrip.id) {
+      listMemory.drawerRoadTripId = activeRoadTrip.id;
+      listMemory.drawerMode = 'open';
+      setDrawerMode('open');
+    } else {
+      setDrawerMode(listMemory.drawerMode);
+    }
+  }, [activeRoadTrip?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const updateDrawerMode = React.useCallback((next: DrawerMode) => {
+    if (activeRoadTrip) listMemory.drawerRoadTripId = activeRoadTrip.id;
+    listMemory.drawerMode = next;
+    setDrawerMode(next);
+  }, [activeRoadTrip]);
+
+  const header = selected ? (
+    <DetailHeader
+      kind={selected.kind}
+      position={positionOf(order, selected)}
+      search={search}
+      parentRoadTrip={parentRoadTrip}
+      onBack={goBack}
+    />
+  ) : null;
   const detail = selected ? (
     selected.kind === 'road_trip' ? (
       selectedRoadTrip ? (
@@ -132,7 +174,21 @@ export function ActivityPage({ vehicleId, selection, search, canManage }: {
   React.useEffect(() => { listMemory.animated = true; }, []);
 
   if (!wide && explicitSelection) {
-    return <div className="r-act r-act-single" data-activity-detail-page><HidePageActions />{detail}</div>;
+    return (
+      <div className={`r-act r-act-single${activeRoadTrip ? ' has-rt-drawer' : ''}`} data-activity-detail-page>
+        <HidePageActions />
+        {detail}
+        {activeRoadTrip ? (
+          <RoadTripDrawer
+            roadTrip={activeRoadTrip}
+            selected={selected}
+            search={search}
+            mode={drawerMode}
+            onModeChange={updateDrawerMode}
+          />
+        ) : null}
+      </div>
+    );
   }
 
   const list = (
@@ -260,7 +316,17 @@ function ActivityList({ data, items, options, search, selected, loading, error, 
   const navigate = useNavigate();
   const efficiency = useEfficiencyUnit();
   const groups = React.useMemo(() => groupByDay(items), [items]);
-  const [expandedIds, setExpandedIds] = React.useState<Set<string>>(() => new Set());
+  const [expandedIds, setExpandedIds] = React.useState<Set<string>>(() => new Set(listMemory.expandedIds));
+  const selectedParentId = React.useMemo(() => {
+    if (!selected) return null;
+    if (selected.kind === 'road_trip') return null;
+    return (data.roadTrips ?? []).find((rt) => rt.memberIds.includes(selected.id))?.id ?? null;
+  }, [data.roadTrips, selected]);
+  React.useEffect(() => {
+    if (!selectedParentId || listMemory.expandedIds.has(selectedParentId)) return;
+    listMemory.expandedIds.add(selectedParentId);
+    setExpandedIds(new Set(listMemory.expandedIds));
+  }, [selectedParentId]);
   const chargeRoadTripMap = React.useMemo(() => {
     const map = new Map<string, ActivityRoadTrip>();
     for (const rt of data.roadTrips ?? []) {
@@ -268,12 +334,11 @@ function ActivityList({ data, items, options, search, selected, loading, error, 
     }
     return map;
   }, [data.roadTrips]);
-  const toggleExpanded = (id: string) => setExpandedIds((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    return next;
-  });
+  const toggleExpanded = (id: string) => {
+    if (listMemory.expandedIds.has(id)) listMemory.expandedIds.delete(id);
+    else listMemory.expandedIds.add(id);
+    setExpandedIds(new Set(listMemory.expandedIds));
+  };
   const animate = !listMemory.animated;
   let order = 0;
   const setFilter = (value: string) => navigate({ to: '/trips', search: withFilter(search, value as ActivityFilter) });
